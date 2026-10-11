@@ -58,18 +58,18 @@ unfiltered results as filtered.
 An HTTP version reads each input back from the answer instead: the echoed query, sort, filters
 and store or location in its own state.
 
-Apply the location or store first, then every filter and sort: a location change reloads the list
-and can drop a filter or sort set before it. Open only the groups the caller's inputs use. For a
-control inside a drawer or collapsed group, open the group first and wait for its panel to show
-and any loading overlay to clear; click the visible label or option, never a hidden input; when
-choosing reloads or navigates the results, wait for that reload to finish: the row identifiers or
-the results header changed and then settled (`waitForChange` on them), never every card's values
-holding still, since prices and other values that load lazily may not settle. Then read the choice
-back where the page shows it: an applied chip, the selected sort, the results header, or the
-reopened panel when nothing else shows it. A follow-up choice that will reload the results anyway
-can wait for that reload instead. Close a drawer or panel you opened with its own close control or
-Escape, and check it closed. After the last change, wait for the rows you return with
-`waitForChange`, as the core skill says.
+When setting one control reloads the result list, order matters: set that control, commonly a
+location or store, before the filters and sorts its reload would drop. Open only the groups the
+caller's inputs use. For a control inside a drawer or collapsed group, open the group first and
+wait for its panel to show and any loading overlay to clear; click the visible label or option,
+never a hidden input; when choosing reloads or navigates the results, wait for that reload to
+finish: the row identifiers or the results header changed and then settled (`waitForChange` on
+them), never every card's value holding still, since values that load lazily may never settle.
+Then read the choice back where the page shows it: an applied chip, the selected sort, the results
+header, or the reopened panel when nothing else shows it. A follow-up choice that will reload the
+results anyway can wait for that reload instead. Close a drawer or panel you opened with its own
+close control or Escape, and check it closed. After the last change, wait for the rows you return
+with `waitForChange`, as the core skill says.
 
 ## Location
 
@@ -90,21 +90,18 @@ Lean toward more information (core skill, output fields): return the facts on ea
 could reasonably use to choose among results, with full displayed values, and a maker or provider
 line in its own field, each fact once. Return only the site's results for these inputs, with
 related or recommended items, the filters the site offers and each card's whole text only as
-`include` sections (core skill, optional sections). When only some cards show a fact, its field is
-nullable and null exactly on the cards that don't. Read a price with a tolerant reader that takes
-what cards show: amounts with or without cents or thousands separators, "FREE" as zero, a range as
-its low and high, and text with no amount, such as "See price in cart". A shown price the reader
-cannot turn into a number is null on that card, with the site's text in a field saying why, never
-a thrown error that fails a run whose inputs applied. Read the results once the rows you return
-have their key fields, filled in and holding still (`waitForRows`). When the site marks results as
-suggestions rather than matches, such as "no exact matches, showing similar items", return that.
-Keep the matches apart from related items, recommendations and sponsored carousels, which go in
-their own list or are left out, never mixed into the results, and return each item once. A card
-that stands for a group of variants, such as "6 flavors" or "3 colors", says so in its own fields,
-such as a variant count, and that its link opens one member of the group. Check that the page's
-echo of the query, such as a results heading, matches it normalized, or for a proper noun fuzzily,
-never with exact case-sensitive equality. A search that applied every input and got the site's
-no-results message returns an empty list, never an error.
+`include` sections (core skill, optional sections). When only some cards show a fact, its field
+is nullable and null exactly on the cards that don't. Read the results once the rows you return
+have their key fields, filled in and holding still (`waitForRows`). When the site marks results
+as suggestions rather than matches, such as "no exact matches, showing similar items", return
+that. Keep the matches apart from related items, recommendations and sponsored carousels, which
+go in their own list or are left out, never mixed into the results, and return each item once. A
+card that stands for a group of variants, such as "6 flavors" or "3 colors", says so in its own
+fields, such as a variant count, and that its link opens one member of the group. Check that the
+page's echo of the query, such as a results heading, matches it normalized, or for a proper noun
+fuzzily, never with exact case-sensitive equality. A search
+that applied every input and got the site's no-results message returns an empty list, never an
+error.
 
 ## Answer quickly
 

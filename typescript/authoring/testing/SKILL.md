@@ -91,11 +91,10 @@ run that returns partly filled results, or passes only when run again, is missin
 content: fix the wait, not the retry, then run that input again a few times.
 
 A filter or sort case that fails because the results lost the choice is often order or waiting,
-not the control. Apply the location or store first, then every filter and sort, and after each
-control that reloads the list wait for that reload to finish, the list or the results header
-changing and then settling, never for every card's values to hold (search skill). A run whose
-inputs applied and that then fails reading a price needs a tolerant price reader, not a new route
-(search skill).
+not the control. When setting one control reloads the list, such as a location or store, set it
+before the filters and sorts its reload would drop, and after each reload wait for it to finish,
+the row identifiers or the results header changed and then settled, never for every card's value
+to hold (search skill).
 
 A case that keeps failing at the same control after two fixes is usually a custom widget, not a
 missing wait: a styled checkbox or option whose click does not change its state, a drawer that
