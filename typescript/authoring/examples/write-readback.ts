@@ -23,7 +23,7 @@ export default defineOperation(
     }),
     output: SavedTask,
     // The create request's own 201 with its Location confirms the write and names the new task,
-    // and that request carried the title and assignee, so no page is read for the output.
+    // so no page is read for the output.
     write: { confirmation: "readback", commits: ["create-task"] },
   },
   async ({
