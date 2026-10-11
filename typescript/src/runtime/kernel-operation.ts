@@ -142,10 +142,12 @@ export interface KernelOperationContext<
    */
   readonly waitPastChallenge: (options: { readonly ready: string }) => Promise<void>;
   /**
-   * Marks the run's write as landed, once a call has read it back from the site: the saved
-   * record or the confirmation with its reference, tied to this submission. Call `verified()`
+   * Marks the run's write as landed, once a call has confirmed it from the site: its commit
+   * request's 2xx or 3xx response with no error in its body or on the page after it, the
+   * confirmation the page shows after the click for this submission (a reference number, or a
+   * success message or toast with no error on the page), or the saved record. Call `verified()`
    * with no argument just before returning. A later execute call makes the effect possible again.
-   * Never call it for a missing or generic confirmation. An offline run ignores it. The run
+   * Never call it for a missing confirmation. An offline run ignores it. The run
    * reports a read-back, and a write declared `unverifiable` throws `WriteConfirmationRefused`,
    * since its declaration says there is none. `{ confirmation: "message" }` stays accepted for
    * revisions published before writes stopped passing it.
