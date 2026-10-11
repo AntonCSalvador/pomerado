@@ -206,11 +206,14 @@ export const locatedRefusal = (answer: typeof LocatedError.Type, named?: Readonl
 /**
  * A fill whose host click ran, even one whose submission the guard then refused as it fired, or
  * whose answer was lost, may have sent what it filled: the page's own handlers ran on the click.
+ * So may a fill whose page sent what was typed itself (`page`).
  */
 export const maySend = (stepReport: AutofillStepReport) =>
   stepReport.outcome === "uncertain" ||
   (stepReport.outcome === "filled" &&
-    (stepReport.submit === "clicked" || stepReport.clicked === true));
+    (stepReport.submit === "clicked" ||
+      stepReport.submit === "page" ||
+      stepReport.clicked === true));
 
 /** A failed fill's diagnostic phase when the call that lost its answer was a field's typing. */
 export const lostTypingPhase = "typing";

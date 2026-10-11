@@ -86,6 +86,7 @@ const filledNotices = {
     "The host filled the fields, but afterwards a field or the submit no longer sat or submitted where the host judged it (page code moved the form or changed how it submits), so the host did not click, or stopped the submission as it fired. Never click it yourself: inspect the changed form and correct the sign-in step.",
   stayed_disabled:
     "The host filled the fields, but the page kept the submit disabled through the host's wait for it to be enabled, so the host never clicked it. Never click it yourself: explore read-only to see what the page still needs before it enables the submit, such as another field, a checkbox or a choice (never read a field the host filled), then correct the sign-in step.",
+  page: "The host filled the fields, and the page may have sent them itself: once the last field was filled, the screen moved on, emptied its fields or stopped taking typing before the host clicked anything. Explore read-only to read the next screen (never read a field the host filled), then send its signInStep, or signInStep.signedIn with what shows the site signed in.",
 } as const;
 
 /** What the minter does after a screen the host inspected and maybe filled. */
