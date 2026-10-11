@@ -254,10 +254,9 @@ const executeAuthentication = (
     };
   });
 
-/** Whether no commit of the build has gone out or may have, by its finished steps. */
+/** Whether no finished step of the build has entered a commit or may have. */
 const commitsUnsent = (state: MintState) =>
   scriptCommitsUnsent({
-    effect: state.context.buildEffect,
     actSteps: state.writeSession.steps,
     writeSteps: [...state.runs].flatMap(([executionId, run]) =>
       run.action === "write" ? [executionId] : [],
@@ -295,9 +294,10 @@ const scriptQuestions = (
         };
         return yield* Effect.fail(new InputRequestFailure({ code: "Unauthorized" }));
       }
-      // A rerun of a step reuses the owner's answer to the same question while no commit of the
-      // build has gone out or may have. Guardian reviewed this ask all the same, and the reused
-      // answer reaches later reviews as a fresh one does.
+      // A later step reuses the owner's answer to the same question, once, while no earlier step
+      // has entered a commit or may have. Guardian reviewed this ask all the same, and the reused
+      // answer reaches later reviews as a fresh one does. It is always the owner's latest answer
+      // to its prompt (`forgetScriptAnswers`), so it never replaces a newer one in Guardian's list.
       const keys = yield* scriptQuestionKeys(candidate, (text) => projection.text(text));
       const reused = commitsUnsent(state)
         ? reusedScriptAnswers(candidate, keys, scriptAnswers.kept, {
@@ -305,8 +305,9 @@ const scriptQuestions = (
             nowMs: yield* Clock.currentTimeMillis,
           })
         : undefined;
+      if (reused !== undefined) scriptAnswers.kept = reused.kept;
       const answers =
-        reused ??
+        reused?.answers ??
         (yield* mintAsk(candidate, bounds).pipe(
           Effect.tap((fresh) =>
             Clock.currentTimeMillis.pipe(
