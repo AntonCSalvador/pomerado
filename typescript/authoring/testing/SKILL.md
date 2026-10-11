@@ -97,11 +97,12 @@ them. When the results URL then carries the choice, apply it through that URL (`
 "Work through the page's own controls"). When the page's own data request takes it as a field
 and its answer echoes what applied, apply it there in `src/tool-http.mjs`; when that version
 passes the cases, run the example on it, and the tool publishes `http` alone (http-mcp skill).
-Either way, read the input back from the site's committed state or the answer.
+That is a finished tool: stop fixing the Playwright version. Either way, read the input back
+from the site's committed state or the answer.
 
-After the example passes, read its returned fields once at the answer and again about 10 s later on the same page; a
-field that changed is filled late, so wait for it in source or describe it as live, such as a
-countdown. A run that sits idle after its answer showed, or opens controls its input did not use,
+After the example passes, read its returned fields once at the answer and again about 10 s later
+on the same page; a field that changed is filled late, so wait for it in source or describe it as
+live, such as a countdown. A run that sits idle after its answer showed, or opens controls its input did not use,
 works for more than it returns: trim it. Read every string in each result. After each run with
 output the host reports output checks: values that hold code, styles, markup or template
 leftovers, text read collapsed or cut short, a whole card's text, repeated entries or records, and
@@ -112,10 +113,11 @@ any case that catches a real risk. A tool that returns a list runs page two live
 page one returned, and reaches a last page (pagination skill).
 
 Results count only for the version, the source and the case as they ran: an edit makes them
-stale. Finish in this order: make your last edit, run the cases again on each version, run the
-example last, then call `finish_build`. Publication review reads the host's record of your cases (`publication/tests.json`),
-not your account of them, and judges them against what the tool claims: a failing case, or a
-claim no passing case tests while time remained, holds publication back. Deleting or changing a
+stale. Finish in this order: make your last edit, run the cases again on each version you ship,
+run the example last, then call `finish_build`. Publication review reads the host's record of
+your cases (`publication/tests.json`), not your account of them, and judges them against what
+the tool claims: a failing case, or a claim no passing case tests while time remained, holds
+publication back. Deleting or changing a
 case after it failed does not hide the failure: the record keeps its last result as retired, and
 so does a failure that passes when run again on the same code, as flaky. When
 `live_tests` answers `no_time`, run the example last and publish; the record says time ran out.
@@ -126,10 +128,13 @@ text; the host may limit how many.
 
 Test the HTTP version, `src/tool-http.mjs`, the same way as `src/tool.mjs`: run the same cases
 as a batch on it with `live_tests` entrypoint `src/tool-http.mjs`, in parallel, and fix it until
-every case does what it does on the Playwright version (http-mcp skill). Each version keeps its
-own result for each case: a batch on one never replaces or stales the other's, and `plan` shows
-the results of the entrypoint you name. The publication record shows each case's result on both
-versions, and the review judges each version from its own results. A test of `src/tool-http.mjs`
+every case passes on it (http-mcp skill). It need not wait for the Playwright version: when every
+case passes on the HTTP version, run the example on it and publish `http` alone, even while a
+case still fails on the Playwright version. Each version keeps its own result for each case: a
+batch on one never replaces or stales the other's, and `plan` shows the results of the entrypoint
+you name. The publication record shows each case's result on each version that ships, and the
+review judges each version from its own results; a version that does not ship is neither recorded
+nor judged. A test of `src/tool-http.mjs`
 counts for the HTTP version only for the source it ran. Where the host offers no `live_tests`,
 run its inputs one at a time with execute, entrypoint `src/tool-http.mjs` and `testInput`, and
 check `testInput` against the schema yourself first: a failed test marks the HTTP version's

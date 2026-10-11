@@ -462,8 +462,8 @@ Testing a read signed out is your job, never the caller's (.agents/testing/SKILL
 its own cases at the start, from what it saw on the site: different real values unlike the
 example's, smart combinations and edge cases. It refines them once the example passes, and runs
 as many as it needs, in parallel batches, and runs the same cases as a batch on its HTTP version.
-Finish in this order: your last edit, the cases again on each version, then the example last, before
-`finish_build`. A signed-in read and a write do the original task: the read's example, or the
+Finish in this order: your last edit, the cases again on each version you ship, then the example
+last, before `finish_build`. A signed-in read and a write do the original task: the read's example, or the
 write's act session, is the one run that proves the tool. They design no tests and run no live
 tests or offline test suites beyond it, and check their HTTP version once, against that run.
 The scope follows what the tool is now: a read that signs in or becomes a write keeps to the one
