@@ -5,13 +5,6 @@ import {
   type ValidAnswer,
   type ValidAnswers,
 } from "../runtime/input-request.js";
-import type { CommitEvidence } from "../runtime/run-outcome.js";
-
-/**
- * How long after the owner answers a script's question a later step of the same build may reuse
- * the answer instead of asking again.
- */
-export const scriptAnswerReuseMs = 30 * 60_000;
 
 /**
  * What a later ask must match to reuse an answer: its id, type, screened prompt, and its screened
@@ -26,21 +19,12 @@ export interface ScriptQuestionKey {
 }
 
 /**
- * One answer the owner gave a script's question in this build, which a later step may reuse: the
- * screened question, the answer as the asker returned it, and when and in which execution the
- * owner gave it.
+ * One answer the owner gave a script's question in this build, which a later ask may reuse: the
+ * screened question and the answer as the asker returned it.
  */
 export interface KeptScriptAnswer {
-  readonly executionId: string;
-  readonly answeredAtMs: number;
   readonly question: ScriptQuestionKey;
   readonly answer: ValidAnswer;
-}
-
-/** The step a script's ask runs in, and when it asks. */
-export interface ScriptAskStep {
-  readonly executionId: string;
-  readonly nowMs: number;
 }
 
 /**
@@ -74,48 +58,31 @@ export const scriptQuestionKeys = <E>(
 
 const sameQuestion = (left: ScriptQuestionKey, right: ScriptQuestionKey) =>
   JSON.stringify(left) === JSON.stringify(right);
-const fresh = (entry: KeptScriptAnswer, nowMs: number) =>
-  nowMs - entry.answeredAtMs < scriptAnswerReuseMs;
 
 /**
- * The kept answers a later step's ask may reuse, in a fresh answer's shape, with the kept answers
- * after it, or undefined to ask the owner. Every question needs an answer an execution other than
- * this one kept less than `scriptAnswerReuseMs` ago for the same question, and the answer must
- * still be valid for the question as asked now. One question that is a code, a secret or a login,
- * or that has no such answer, asks the owner again. A reused answer then counts as this
- * execution's, so each execution reuses it at most once: a step that asks again, as before a
- * second try at its commit, asks the owner.
+ * The kept answers a script's ask may reuse, in a fresh answer's shape, or undefined to ask the
+ * owner. Every question needs a kept answer to the same question, and the answer must still be
+ * valid for the question as asked now. One question that is a code, a secret or a login, or that
+ * has no such answer, asks the owner again. Any step may reuse a kept answer, the one that got it
+ * included, as often as the question comes back and however long ago the owner gave it, whether
+ * or not a step entered a commit since.
  */
 export const reusedScriptAnswers = (
   asked: InputRequest,
   keys: readonly (ScriptQuestionKey | undefined)[],
   kept: readonly KeptScriptAnswer[],
-  step: ScriptAskStep,
-): { readonly answers: ValidAnswers; readonly kept: readonly KeptScriptAnswer[] } | undefined => {
+): ValidAnswers | undefined => {
   const values: Record<string, unknown> = {};
-  const matched = new Set<KeptScriptAnswer>();
   for (const key of keys) {
     const entry =
       key === undefined
         ? undefined
-        : kept.find(
-            (candidate) =>
-              candidate.executionId !== step.executionId &&
-              fresh(candidate, step.nowMs) &&
-              sameQuestion(candidate.question, key),
-          );
+        : kept.find((candidate) => sameQuestion(candidate.question, key));
     if (key === undefined || entry === undefined) return undefined;
     values[key.id] = entry.answer.value;
-    matched.add(entry);
   }
   const valid = validateAnswer(asked, values);
-  if (Either.isLeft(valid)) return undefined;
-  return {
-    answers: valid.right,
-    kept: kept.map((entry) =>
-      matched.has(entry) ? { ...entry, executionId: step.executionId } : entry,
-    ),
-  };
+  return Either.isLeft(valid) ? undefined : valid.right;
 };
 
 /**
@@ -131,43 +98,19 @@ export const forgetScriptAnswers = (
 
 /**
  * The kept answers once the owner answered a script's question afresh: its reusable answers
- * replace any kept for the same prompt, and answers older than `scriptAnswerReuseMs` go.
+ * replace any kept for the same prompt.
  */
 export const keptScriptAnswers = (
   kept: readonly KeptScriptAnswer[],
   keys: readonly (ScriptQuestionKey | undefined)[],
   answers: ValidAnswers,
-  step: ScriptAskStep,
 ): readonly KeptScriptAnswer[] => {
   const latest = keys.flatMap((key): KeptScriptAnswer[] => {
     const answer = key === undefined ? undefined : answers[key.id];
-    return key === undefined || answer === undefined
-      ? []
-      : [{ executionId: step.executionId, answeredAtMs: step.nowMs, question: key, answer }];
+    return key === undefined || answer === undefined ? [] : [{ question: key, answer }];
   });
   return [
-    ...forgetScriptAnswers(
-      kept.filter((entry) => fresh(entry, step.nowMs)),
-      latest.map((entry) => entry.question.prompt),
-    ),
+    ...forgetScriptAnswers(kept, latest.map((entry) => entry.question.prompt)),
     ...latest,
   ];
 };
-
-/**
- * Whether no earlier step of the build has entered a commit or may have: each finished act step,
- * of any label, must have reported its declared commit steps and entered none (`not_entered`), and
- * each finished step Guardian labelled a write must be one of them. A missing report, a script that
- * declares no commit step, or a write in any other step counts as may have.
- */
-export const scriptCommitsUnsent = (facts: {
-  readonly actSteps: readonly {
-    readonly executionId: string;
-    readonly commit?: CommitEvidence | undefined;
-  }[];
-  readonly writeSteps: readonly string[];
-}) =>
-  facts.actSteps.every((step) => step.commit === "not_entered") &&
-  facts.writeSteps.every((executionId) =>
-    facts.actSteps.some((step) => step.executionId === executionId),
-  );
