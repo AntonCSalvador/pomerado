@@ -133,6 +133,17 @@ export interface WeakenedOutput {
   readonly change: "removed" | "optional" | "nullable" | "widened";
 }
 
+/**
+ * One input a publication changes against the published tool's inputs, and how: `removed` (the
+ * tool declares it and the publication drops it), now `required` (an input the tool declares as
+ * optional, or a new input), or otherwise `changed`. The host that refuses such a publication
+ * compares the input schemas.
+ */
+export interface BrokenInput {
+  readonly field: string;
+  readonly change: "removed" | "required" | "changed";
+}
+
 export class MintFailure extends Data.TaggedError("MintFailure")<{
   readonly rejectedCredential?: typeof CredentialRejectedField.Type;
   /** Sub-cause, operation, underlying error, stack and context; see ERROR-LOGGING-STANDARD.md. */
@@ -363,12 +374,19 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
     /** A repair loosens its registered tool's output contract; `weakenedOutputs` names each field. */
     | "output_obligation_weakened"
     /**
+     * The host refused a publication that changes inputs the published tool already declares;
+     * `brokenInputs` names each one.
+     */
+    | "input_contract_changed"
+    /**
      * The example's output holds code, styles, markup or template leftovers the minter did not
      * override with a reason; `outputFindings` names each path and check.
      */
     | "output_checks_blocked";
   /** For `output_obligation_weakened`, each registered output field the repair loosens and how. */
   readonly weakenedOutputs?: readonly WeakenedOutput[];
+  /** For `input_contract_changed`, each declared input the publication changes and how. */
+  readonly brokenInputs?: readonly BrokenInput[];
   /** What login URL and metadata feedback names: parts, parameter names and credential kinds, never values. */
   readonly publicationFeedback?: {
     readonly oneTimeParameters?: readonly string[];

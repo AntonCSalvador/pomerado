@@ -86,6 +86,14 @@ const feedback: Readonly<
 };
 
 /**
+ * What the minter is told when a host refuses a publication that changes inputs the published
+ * tool already declares (`input_contract_changed`), beside `brokenInputs`. Running the example
+ * again is part of the fix: the edited code needs its own execution.
+ */
+export const inputContractChangedInstruction =
+  "This publication changes inputs the published tool already declares, and a requested change may only add new optional inputs. brokenInputs names each one and how it changed. Restore each named input as the published tool declares it, keep every new input optional, run the example again with the edited code, and call finish_build with that execution.";
+
+/**
  * A refusal with no named check is treated as one the minter cannot fix. `problem` is the
  * registry's finite reason for an unusable login URL, which the minter sees with the fix.
  */
