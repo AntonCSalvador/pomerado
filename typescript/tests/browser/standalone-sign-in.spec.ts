@@ -356,6 +356,85 @@ test("a local build asks for its login once and publishes its sign-in without a 
   });
 });
 
+// Each unanswered question is decided by the build's state when it goes unanswered: asked signed
+// out, it goes back to the minter as no answer; asked once the build signed in, it ends the build.
+test("a local build hands back the question it asked signed out and ends as no response on the one it asked after signing in", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Original SDKs, Chromium and a scripted build that signs in between two questions",
+  });
+  test.setTimeout(60_000);
+  await withShop(async (shop, endpoint) => {
+    const mintRequests: ModelRequest[] = [];
+    const question = (id: string, prompt: string) =>
+      call(
+        "request_input",
+        { questions: [{ id, type: "text", prompt }], intent: "Only the caller knows this." },
+        id,
+      );
+    const steps: Output[] = [
+      [question("format", "Which format should the account summary use?")],
+      [
+        signInStep(
+          {
+            fields: [
+              { selector: "input[name=username]", accepts: ["username"] },
+              { selector: "input[name=password]", slot: "password" },
+            ],
+            submit: "button",
+          },
+          "sign_in",
+        ),
+      ],
+      [signInStep({ signedIn: { selector: "#account" } }, "signed_in")],
+      [question("period", "Which period should the account summary cover?")],
+    ];
+    const minter = provider(
+      (_request, index) => steps[index] ?? [message("Stopping.")],
+      mintRequests,
+    );
+    const asked: InputRequest[] = [];
+    const login = answers(asked);
+    // The caller answers the host's login question and leaves the minter's questions unanswered.
+    const ask: typeof login = (request, bounds) =>
+      request.source === "agent"
+        ? Effect.sync(() => {
+            asked.push(request);
+          }).pipe(Effect.zipRight(Effect.fail(new InputRequestFailure({ code: "NoResponse" }))))
+        : login(request, bounds);
+    const built = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* createPomerado({
+            browser: { endpoint },
+            minterProvider: minter,
+            guardianProvider: guardian(),
+            outcomeReviewerProvider: quietReviewer,
+            ask,
+            timeoutMs: 30_000,
+          });
+          return yield* service.mint({
+            url: `${shop.origin}/login`,
+            intent: "Read the account summary",
+            input: {},
+            effect: "read",
+          });
+        }),
+      ),
+    );
+    expect(built, JSON.stringify(built)).toMatchObject({
+      build: "incomplete",
+      noResponse: { possibleCommit: false },
+    });
+    expect(asked.map(({ questions }) => questions[0]?.id)).toEqual(["format", "login", "period"]);
+    // The first question went back as no answer, and the build went on to sign in.
+    expect(JSON.stringify(mintRequests[1]?.input)).toContain('\\"status\\":\\"no_answer\\"');
+    expect(shop.state.loginPosts).toBe(1);
+    // The second ended the build: the minter was not asked to go on.
+    expect(mintRequests).toHaveLength(steps.length);
+  });
+});
+
 /** Opens the account's note page and reports whether it shows the note form, signed in. */
 const openNote = `import { Schema } from "effect";
 import { defineOperation } from "../runtime/index.js";
