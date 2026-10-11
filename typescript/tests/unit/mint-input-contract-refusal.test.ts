@@ -63,6 +63,13 @@ const decisionLog = () => {
   return { recorded, publicationDecisions };
 };
 
+// The maintainer approved this instruction word for word, so any edit to it fails here first.
+it("keeps the approved input contract instruction word for word", () => {
+  expect(inputContractChangedInstruction).toBe(
+    "This publication changes inputs the published tool already declares, and a requested change may only add new optional inputs. brokenInputs names each one and how it changed. Restore each named input as the published tool declares it, keep every new input optional, run the example again with the edited code, and call finish_build with that execution.",
+  );
+});
+
 it("hands the minter a host's input contract refusal as exactly the fixed instruction and brokenInputs", async () => {
   const answers: Record<string, unknown>[] = [];
   let publishes = 0;

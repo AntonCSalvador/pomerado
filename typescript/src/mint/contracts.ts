@@ -134,9 +134,10 @@ export interface WeakenedOutput {
 }
 
 /**
- * One input the published tool already declares that a publication changes, and how: `removed`,
- * now `required` (an optional input, or one the tool did not declare), or otherwise `changed`. The
- * host that refuses such a publication compares the input schemas.
+ * One input a publication changes against the published tool's inputs, and how: `removed` (the
+ * tool declares it and the publication drops it), now `required` (an input the tool declares as
+ * optional, or a new input), or otherwise `changed`. The host that refuses such a publication
+ * compares the input schemas.
  */
 export interface BrokenInput {
   readonly field: string;
