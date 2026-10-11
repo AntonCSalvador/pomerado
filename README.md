@@ -30,10 +30,11 @@ Pomerado builds MCP integrations for websites, including sites without an API.
 
 ## How it works
 
-1. Pomerado generates a script that explores the site in Chromium
-2. Pomerado generates code that completes your example
-3. Pomerado turns that code into a general integration that takes new inputs
-4. Your agent calls the integration and gets validated output
+```text
+┌──────────────────────────────────────────────────────────────────────────┐
+│  explore the site → complete your example → generalize → agent calls it  │
+└──────────────────────────────────────────────────────────────────────────┘
+```
 
 For more details, see [How it works](docs/how-it-works.md).
 
@@ -149,8 +150,6 @@ Each integration appears to your agent as its own MCP server.
 - It also has `get_job`, `provide_input` and `cancel_job` for calls that need an answer or more time
 - A call returns output that matches the schema in `pomerado.json`, or a job ID to follow up on
 - A failed call returns a job with a `code`, `write_status`, `possible_commit` and `retry`. Read the site back before calling again when `possible_commit` is true
-- Each call without an `idempotency_key` is a new run. With write authority, calling again performs the write again
-- A write tool takes an optional `idempotency_key`. A call that repeats the key and input answers the first job and writes nothing, even after a server restart
 - An integration whose build signed in signs in on each call. It asks for the login, and any code or answer the site needs, and saves none of them
 - The integration runs on the Pomerado installation that minted it. For a stable path, install globally with `npm install -g pomerado` and use `pomerado-mcp` in place of `npx -y -p pomerado pomerado-mcp`
 
@@ -159,8 +158,8 @@ Each integration appears to your agent as its own MCP server.
 This repository is the complete Pomerado core, released under the MIT license. Everything you need to mint integrations and run them yourself is here, with no Pomerado account required.
 
 - The minter, which builds integrations in a real Chromium browser
-- The minting harness and prompts that Pomerado Cloud also builds on
-- Guardian, which reviews each browser action and the finished source while minting, not when an integration runs
+- The minting harness and prompts
+- Guardian, which reviews each browser action and the finished source while minting
 - The standalone host, which serves each integration as an MCP server on your own machine
 - The integrations themselves, saved as source code in your folder that you own
 
@@ -174,6 +173,7 @@ This repository is the complete Pomerado core, released under the MIT license. E
 
 ## Documentation for humans and agents
 
+- [docs.pomerado.ai](https://docs.pomerado.ai) has the full Pomerado docs, including Pomerado Cloud's API and hosted MCP.
 - [Getting started](docs/getting-started.md) covers install, client settings, a first integration and troubleshooting.
 - [Agent setup](docs/agent-setup.md) gives an AI agent the steps to install Pomerado for you.
 - [How it works](docs/how-it-works.md) covers the minter, Guardian, the runtime, jobs and the library.
