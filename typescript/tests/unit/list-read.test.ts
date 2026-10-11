@@ -276,6 +276,12 @@ describe.each(mechanisms)("a %s list read 20 at a time over 30 per segment", (me
     const gone = await call(site, mechanism, 20, removed.cursor);
     expect(gone.ids).toEqual(ids(46, 65));
     expect(gone.output.list_changed).toBe(true);
+    // A burst of new rows on top pushes the last returned row, and every row the cursor
+    // remembers, about one and a half segments on: the call finds it and returns the next twenty.
+    site.rows.unshift(...Array.from({ length: 45 }, (_, index) => `b${index + 1}`));
+    const burst = await call(site, mechanism, 20, gone.cursor);
+    expect(burst.ids).toEqual(ids(66, 85));
+    expect(burst.output.list_changed).toBe(true);
   });
 });
 
@@ -523,7 +529,7 @@ describe.each<ListMechanism>(["pages", "next_link", "api"])(
       // The last returned row moves from the third segment to the first.
       site.rows.splice(site.rows.indexOf("r2"), 12);
       const next = await call(site, mechanism, 15, first.cursor);
-      expect(next.ids).toEqual(["r16", "r17"]);
+      expect(next.ids).toEqual(ids(16, 22));
       expect(next.output.list_changed).toBe(true);
       const later: string[] = [];
       let cursor = next.cursor;
@@ -532,7 +538,7 @@ describe.each<ListMechanism>(["pages", "next_link", "api"])(
         later.push(...page.ids);
         cursor = page.cursor;
       }
-      expect(later).toEqual(ids(18, 60));
+      expect(later).toEqual(ids(23, 60));
     });
 
     it("starts over from the list's first row in one call after a burst further on than it looks", async () => {
