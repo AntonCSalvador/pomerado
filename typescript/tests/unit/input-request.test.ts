@@ -195,6 +195,30 @@ describe("validateAnswer", () => {
     });
   });
 
+  // Two offered labels that differ only by accents both repeat the typed text, so it picks
+  // neither and stays the owner's own answer.
+  it("keeps a choice's own text that repeats two labels apart from accents as the owner's text", () => {
+    const venue = Schema.decodeUnknownSync(InputRequest)({
+      id: "8d2e1f30-4b5c-4e6f-9a01-2b3c4d5e6f70",
+      source: "script",
+      questions: [
+        {
+          id: "venue",
+          type: "choice",
+          prompt: "Which venue?",
+          allowOther: true,
+          options: [
+            { id: "plain", label: "Abaca" },
+            { id: "accented", label: "Abacá" },
+          ],
+        },
+      ],
+    });
+    expect(Either.getOrThrow(validateAnswer(venue, { venue: { other: "Abaca" } }))).toEqual({
+      venue: { type: "choice", value: { other: "Abaca" } },
+    });
+  });
+
   it("takes a notice's yes or no, and a prompt dialog's text only when confirmed", () => {
     const notice = noticeRequest(
       "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
