@@ -4613,6 +4613,33 @@ it("ends a build that signed in partway as no_response when its example's script
   });
 });
 
+// The owner's cancel is a choice to stop: a signed-out build ends instead of going on without it.
+it("ends a signed-out build as no_response when the owner cancels the minter's question", async () => {
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        expect(
+          JSON.parse(yield* turn.actions.requestInput(textQuestion("Which format?"))),
+        ).toMatchObject({ status: "no_response" });
+        expect(turn.isComplete()).toBe(true);
+      }),
+    {
+      askInput: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "Unavailable",
+            noResponse: { possibleCommit: false },
+            ownerCancelled: true,
+          }),
+        ),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    build: "incomplete",
+    noResponse: { possibleCommit: false },
+  });
+});
+
 // A sign-in that reached nothing leaves the build signed out, so its question still goes back.
 it("hands back a question asked after a sign-in that sent nothing", async () => {
   const f = await fixture(
