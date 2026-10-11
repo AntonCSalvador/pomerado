@@ -117,6 +117,24 @@ describe("a sealed cursor", () => {
     });
   });
 
+  it("works for ten minutes after the call that returned it, and not a millisecond longer", () => {
+    const cursor = cursorOf(pageOne());
+    const tenMinutes = 10 * 60 * 1_000;
+    expect(pageOne().output).toMatchObject({
+      next_cursor_expires_at: new Date(issuedAt + tenMinutes).toISOString(),
+    });
+    expect(
+      admitListCursor({ ...input, cursor }, scope({ now: issuedAt + tenMinutes - 1 })),
+    ).toMatchObject({ ok: true });
+    expect(
+      admitListCursor({ ...input, cursor }, scope({ now: issuedAt + tenMinutes + 1 })),
+    ).toMatchObject({
+      ok: false,
+      reason: "expired",
+      message: expect.stringContaining("ten minutes"),
+    });
+  });
+
   it("refuses a cursor sent with other inputs", () => {
     const cursor = cursorOf(pageOne());
     expect(admitListCursor({ query: "desks", cursor }, scope())).toMatchObject({
@@ -293,6 +311,16 @@ describe("the rows a later page returns", () => {
     expect(selectRows(continuing(cursor, "api"), rows("c", "d"), keyOf)).toEqual({
       rows: rows("c", "d"),
       listChanged: false,
+    });
+  });
+
+  it("say the list changed when a token position into the anchor's own segment lacks it", () => {
+    // The token fetched the segment that holds the last returned row, and the position resumes
+    // inside it: that row gone from those rows is a change, as on a site page.
+    const cursor = cursorOf(pageOne({ offset: 2, token: "from-a" }, "api"));
+    expect(selectRows(continuing(cursor, "api"), rows("c", "d"), keyOf)).toEqual({
+      rows: rows("c", "d"),
+      listChanged: true,
     });
   });
 

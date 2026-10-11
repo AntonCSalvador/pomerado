@@ -160,7 +160,7 @@ const refusalText: { readonly [Reason in CursorRefusal]: string } = {
   other_tool: "The cursor belongs to another tool.",
   other_account: "The cursor was returned to another account or login.",
   inputs_changed: "The cursor was returned for other inputs; only limit may change between pages.",
-  expired: "The cursor expired; a cursor works for an hour after the call that returned it.",
+  expired: "The cursor expired; a cursor works for ten minutes after the call that returned it.",
   off_site: "The cursor points off the tool's site.",
   mechanism_changed: "This tool now pages the site another way, so the cursor no longer applies.",
   site_expired: "The site no longer accepts the position this cursor holds.",
@@ -257,12 +257,13 @@ export type DroppedListCursor = Extract<
 >;
 
 /**
- * Signs the `next_cursor` a run's output holds and fills `next_cursor_expires_at`, an hour from
- * `now`. `input` is the caller's input for the run, as sent. Only a runtime draft is signed; a
- * next cursor in any other form is the tool's own and the output passes unchanged. A draft that
- * does not decode, or whose site link is off the tool's site, is dropped: `next_cursor` becomes
- * null, `has_more` stays true, and both `next_cursor_unavailable` and `dropped` say why. Every
- * valid draft fits in a cursor, so none is dropped for its size.
+ * Signs the `next_cursor` a run's output holds and fills `next_cursor_expires_at`,
+ * `listCursorTtlMs` (ten minutes) from `now`. `input` is the caller's input for the run, as sent.
+ * Only a runtime draft is signed; a next cursor in any other form is the tool's own and the
+ * output passes unchanged. A draft that does not decode, or whose site link is off the tool's
+ * site, is dropped: `next_cursor` becomes null, `has_more` stays true, and both
+ * `next_cursor_unavailable` and `dropped` say why. Every valid draft fits in a cursor, so none is
+ * dropped for its size.
  */
 export const sealListOutput = (
   output: unknown,
