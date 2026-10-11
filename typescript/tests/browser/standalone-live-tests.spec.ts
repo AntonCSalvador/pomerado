@@ -277,3 +277,79 @@ test("refuses a case whose cursor the host never signed before the case touches 
     await site.close();
   }
 });
+
+/**
+ * A sorted search whose page resets a "rating" sort to its own default, and a store lookup on
+ * the deprecated name whose page keeps another store: each refuses loudly rather than return
+ * results computed without the caller's value.
+ */
+const unappliedTool = `import { Schema } from "effect";
+import { defineOperation } from "../runtime/index.js";
+export default defineOperation({name:"sorted_fixture",input:Schema.Struct({query:Schema.String,sort:Schema.Literal("relevance","rating"),zip:Schema.optional(Schema.String)}),output:Schema.Struct({results:Schema.Array(Schema.String)})},
+async ({kernel,sessionId,input,errors}) => {
+  const response = await kernel.browsers.playwright.execute(sessionId,{code:"return 'relevance'",timeout_sec:5});
+  if(!response.success) throw new Error(String(response.error));
+  if(input.zip !== undefined) throw new errors.LocationNotApplied("The page kept its own store", {field:"zip",requested:input.zip,applied:"00002",step:"set_store"});
+  if(response.result !== input.sort) throw new errors.InputNotApplied("The page reset the sort to its own default", {field:"sort",requested:input.sort,applied:String(response.result),step:"apply_sort"});
+  return {results:[input.query + " result"]};
+});`;
+
+test("passes a case that expects an error when the tool refuses an input the page did not apply", async () => {
+  // Chromium runs the batch's review and both cases in their own child processes.
+  test.setTimeout(60_000);
+  const site = await startSite((_request, response) =>
+    html(response, "<title>Search</title><h1>Search</h1>"),
+  );
+  try {
+    const guardian = recordingGuardian();
+    const { requests } = await mint({
+      effect: "read",
+      url: site.url,
+      guardian,
+      intent: "Search the fixture catalog in the caller's sort order",
+      timeoutMs: 600_000,
+      turns: [
+        () =>
+          patch({
+            "src/tool.mjs": unappliedTool,
+            "test/cases.json": JSON.stringify({
+              cases: [
+                {
+                  id: "sort-reset",
+                  purpose: "A sort the page resets to its default.",
+                  input: { query: "lamp", sort: "rating" },
+                  expect: "error",
+                },
+                {
+                  id: "store-kept",
+                  purpose: "A store the page does not switch to.",
+                  input: { query: "lamp", sort: "relevance", zip: "00001" },
+                  expect: "error",
+                },
+              ],
+            }),
+          }),
+        () => [
+          call("live_tests", {
+            intent: "Run the refusal cases",
+            action: "run",
+            entrypoint: "src/tool.mjs",
+            cases: null,
+            maxWorkers: 1,
+          }),
+        ],
+      ],
+    });
+    const ran = toolResult(requests[2], "live_tests") as {
+      readonly status: string;
+      readonly cases: readonly Readonly<Record<string, unknown>>[];
+    };
+    expect(ran.status).toBe("ran");
+    const byId = new Map(ran.cases.map((entry) => [entry["id"], entry]));
+    expect(byId.get("sort-reset")).toMatchObject({ status: "pass", got: "InputNotApplied" });
+    // The deprecated name is the same refusal.
+    expect(byId.get("store-kept")).toMatchObject({ status: "pass", got: "InputNotApplied" });
+  } finally {
+    await site.close();
+  }
+});

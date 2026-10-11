@@ -69,7 +69,7 @@ About 10 to 20 cases is typical. Write them in `test/cases.json`:
 ```
 
 `purpose` says in a sentence what the case establishes. `expect` is `result`, `empty`,
-`invalid_input` or `error`: a loud refusal the tool throws on purpose, `LocationNotApplied`; any
+`invalid_input` or `error`: a loud refusal the tool throws on purpose, `InputNotApplied`; any
 other throw is a bug and fails the case. Expect `empty`, `invalid_input` or `error` only for an
 input the site really has no results for, does not offer or cannot apply. Use real values the site offers, which you saw while
 exploring: listed options, places, dates, counts, records and retailers the site lists. Never use

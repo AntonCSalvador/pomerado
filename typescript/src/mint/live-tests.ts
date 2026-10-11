@@ -413,7 +413,11 @@ const inconclusiveDetail: Readonly<Record<LiveTestInconclusiveReason, string>> =
  * `error` passes on. Any other throw, an `OperationFailure` that wraps an unexpected exception
  * included, is a bug.
  */
-const declaredRefusals: ReadonlySet<string> = new Set(["LocationNotApplied"]);
+const declaredRefusals: ReadonlySet<string> = new Set([
+  "InputNotApplied",
+  // An older runtime's name for the same refusal.
+  "LocationNotApplied",
+]);
 
 /**
  * A case's verdict from its runs and what it expected. `list` is where a list read's results sit
