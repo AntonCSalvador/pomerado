@@ -120,7 +120,7 @@ import type {
 import type { SiteAccessDiagnostic } from "./site-access-contracts.js";
 import type { ModelDiagnosticTiming } from "../models/model-diagnostic-timing.js";
 import type { RuntimeRecordInput } from "../models/model-runtime-record.js";
-import { registryRefusal } from "./registry-feedback.js";
+import { inputContractChangedInstruction, registryRefusal } from "./registry-feedback.js";
 import { publicationBlockFeedback, workspacePath } from "./publication-block.js";
 import { outputChecksRefusal } from "./output-notes.js";
 import { lintOutput } from "../runtime/output-lint.js";
@@ -365,6 +365,8 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   "login_url_contains_credential",
   // An execution on the site the build moved away from: a fresh example on the current site.
   "example_before_site_change",
+  // Restored inputs change the code, which needs its own example.
+  "input_contract_changed",
 ]);
 /** How the minter goes on after a refusal that is neither an outage nor Guardian's. */
 const refusalRecovery = (reason: string | undefined, write: boolean): PublicationRecovery =>
@@ -4276,6 +4278,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         ? "Keep the schema as registered and fix the extraction from what the session already read, then call finish_build again with the same executionId; never run the write again for this."
                         : "Keep the schema as registered and fix the extraction so it returns each value, then run the example again and call finish_build with that new executionId."
                     } If the site no longer shows a value, propose mint_update with an output change for that field, which the tool's owner must confirm, and a reason when it removes the field; once it is updated, call finish_build again with the same executionId. Otherwise end with report_blocked, reason site_lacks_capability, naming the field.`,
+                  );
+                // A host's own comparison with the published tool's inputs: exactly its fixed
+                // instruction, with each broken input as data.
+                if (error.reason === "input_contract_changed")
+                  return notPublished(
+                    error.code,
+                    error.reason,
+                    { brokenInputs: error.brokenInputs ?? [] },
+                    inputContractChangedInstruction,
                   );
                 if (error.reason === "tool_name_taken")
                   return notPublished(
