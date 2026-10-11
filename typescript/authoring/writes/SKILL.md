@@ -102,15 +102,17 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   asking only at the step the session accepted it at, so the host refuses to publish
   a composed script that drops one.
 - Mark only the step whose click saves or submits. Opening or filling an unsaved
-  form is not a commit step. Mark every such step, including an autosave, a saved
-  form step and a payment submission whose next screen is unknown. Call
-  `enteringCommit("place-order")` right before the execute call that can send that
-  change, and declare the names in order as `write.commits`. Use the same marked
-  helper in the session and the composed script. If the call returns an unexpected
-  page or fails while waiting for an assumed review, read back before another
-  submission: the task may already be complete. The host cannot see a
-  commit sent as a GET link or over a websocket, so the mark is its evidence of
-  whether the commit step ran.
+  form is not a commit step. Mark every such step other than a hold that expires on
+  its own, including an autosave, a saved form step and a payment submission whose
+  next screen is unknown. Call `enteringCommit("place-order")` right before the
+  execute call that can send that change, and declare the names in order as
+  `write.commits`. Use the same marked helper in the session and the composed
+  script. If the call returns an unexpected page or fails while waiting for an
+  assumed review, read back before another submission: the task may already be
+  complete. The host cannot see a commit sent as a GET link or over a websocket, so
+  the mark is its evidence of whether the commit step ran.
+- Prefer marking the commit at the step that submits the booking or order. A hold that
+  expires on its own, such as a reserved table or a cart timer, is not the commit.
 - The host refuses an `act` step whose source is unchanged since it ran and sent
   state-changing requests: submitting it again could commit twice.
 - Read `stateChangingRequests` on every step. It lists the commit your step caused,
@@ -254,8 +256,10 @@ is not the write. An unreadable step output never justifies a run either: the wr
 publishes with its output recorded as unavailable.
 
 After a `not_published`, live `act` steps are open again while the write session is still
-open (a commit that recorded its confirmation stays done), on a fresh browser on a new,
-empty profile: read `page.url()` first and sign in again when the build signs in. Before
+open (a commit that recorded its confirmation stays done), on the same browser, still signed
+in: read `page.url()` first, and prefer not to sign in again. Only after a publication whose
+capture failed do they run on a fresh browser on a new, empty profile: read `page.url()`
+first and sign in again when the build signs in. Before
 running a commit again, run an `act` step that only reads the site or the account to see
 whether the earlier commit landed, and never resubmit one that did. If no read-back can
 tell, never submit again. Guardian reviews every

@@ -63,9 +63,9 @@ the source files, never captures.
   a read's example, or on each write act step that needs it (the first act step that passes it
   fixes it, and later steps repeat it or omit it and run it); each of its keys must be a schema
   input, required where the request needs it, and publication decodes that input.
-- `live_tests` plans and runs a read's live tests when the host offers it: the checklist it
-  derives from your schemas, your cases in `test/cases.json` and every result, run in parallel
-  batches on fresh browsers. Plan them as soon as you know the page and its inputs, and read
+- `live_tests` runs a read's live tests when the host offers it: the cases you design in
+  `test/cases.json` from what you saw on the site, and every result, run in parallel batches on
+  fresh browsers. Design them as soon as you know the page and its inputs, and read
   .agents/testing/SKILL.md first.
 - `retain_capture`, `finish_build` and `request_input` are described below and in their
   tool descriptions.
@@ -97,7 +97,8 @@ then read").
 When the site does not match the request exactly, tell two cases apart:
 
 - Work the request already covers proceeds without asking: finding the right field or route,
-  correcting your own code, or choosing among alternatives the request already allows.
+  correcting your own code, matching a proper noun to another usual form of it, or choosing
+  among alternatives the request already allows.
 - A supplied value that is incompatible with what the site offers, such as an unavailable
   option, date or quantity, changes the request. Ask the owner with `request_input` whether to
   revise it or stop: name the value and offer what the site actually has. Never substitute
@@ -164,14 +165,16 @@ than the controls, such as a record page at `/items/<id>` instead of crawling a 
 Either way, read the page's identity back from the page and fail if it does not match.
 
 When the controls flow lands on a URL the site produced, and two runs with different inputs show
-which parts of it carry which input, such as the query, dates, guests or party size, sort, page
-or a record's own identifier route, the tool may open that URL with the caller's values in those
+which parts of it carry which input, such as the query, dates, guests or party size, sort or a
+record's own identifier route, the tool may open that URL with the caller's values in those
 parts, built with `URLSearchParams` for a query part or `encodeURIComponent` for a path part and
 every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input
 back from the page, and when the landing is not an answer it named or a read-back differs, it
 runs the controls flow once instead, in a named function such as `throughControls`
 (`references/navigation.ts`). Never guess a parameter, never iterate on URL variants, and take an
-opaque filter code only from a link the page produced in this run. A POST form, a URL that
+opaque filter code only from a link the page produced in this run. A page number or offset is
+not such a part: the tool reaches a later page by the site's own link, which the cursor keeps,
+never by editing a number into the URL it opens (pagination skill). A POST form, a URL that
 carries a per-session token, a value that needs a typeahead pick to resolve, a location or store
 the site keeps in cookies, and every step on a write's path go through the controls.
 
@@ -188,17 +191,19 @@ HTTP version (`src/tool-http.mjs`), which may build its requests from the caller
 **Read back every input before returning.** Read the page's own display of each input the
 site shows, such as the date picker, selected time, party size, passengers, cabin, applied
 filters, sort and selected options, and refuse a mismatch: the tool's code fails the run
-(`OperationFailure`) and never returns results for an input that did not apply. Two cases return
-results with what applied instead: a number on a scale the site steps returns its applied bound,
-and a filter group the page disables for the results is reported as not offered
+(`OperationFailure`) and never returns results for an input that did not apply. Three cases
+return results with what applied instead: a number on a scale the site steps returns its applied
+bound, a filter group the page disables for the results is reported as not offered, and a value
+the page's choices do not hold returns the rows of a broader choice that covers it
 (.agents/search/SKILL.md). Echoed input, a
 URL the tool built, a URL parameter, a box checked before the site applied it or the option's
 name elsewhere on the page does not show an input applied; read the site's committed state, such
 as the applied chip, the selected control or the results' own state, and compare its text with
-the input normalized for case and whitespace. A location the caller supplied that did not apply
-throws `LocationNotApplied` instead (.agents/core/SKILL.md). A detail read also checks
-the page's stable identity (.agents/core/SKILL.md). Building or repairing a search or listing
-tool: read .agents/search/SKILL.md before you settle its inputs.
+the input, or the option a proper noun matched, normalized for case and whitespace. A location
+the caller supplied that did not apply throws `LocationNotApplied` instead
+(.agents/core/SKILL.md). A detail read also checks the page's stable identity
+(.agents/core/SKILL.md). Building or repairing a search or listing tool: read
+.agents/search/SKILL.md before you settle its inputs.
 
 **Load large content progressively.** Know a file's size before reading it:<!-- pomerado:section agents.file-lengths --> every `read_source` result gives
 the file's `total`. Read a large file in parts with `read_source` offset and limit. From a
@@ -300,9 +305,12 @@ product, such as moving from `https://app.example.io` to `https://app.example.cl
 or another product's workflow, such as booking on a different service after asking to list
 opening hours; the build then ends blocked and the caller gets your recommendation. A changed
 site origin alone decides neither. `reword` is feedback: revise and continue. No update removes
-the requested action itself or the rule against repeating a write that may have committed, adds
-a capability the site lacks, or waives a Guardian decision. A write the session already confirmed
-is done: compose and publish from its evidence, never run it again.
+the requested action itself or the rule against repeating a write that may have committed, adds a
+capability the site lacks, or waives a Guardian decision, except that the caller's confirmed
+answer can overturn one that held a step to their own request, such as a time, a value or a
+search setting. A caller's answer never overturns a decision made for safety or for a Pomerado
+scope limit. A write the session already confirmed is done: compose and publish from its
+evidence, never run it again.
 
 ## Authentication
 
@@ -450,8 +458,9 @@ fenced, regardless of the read flag. An authentication submission with an unknow
 always fenced.
 
 Testing a read is your job, never the caller's (.agents/testing/SKILL.md). A read signed out
-plans its tests at the start, from the checklist `live_tests` derives from its schemas, refines
-them once the example passes, and runs as many as it needs, in parallel batches. A signed-in read
+designs its own cases at the start, from what it saw on the site: different real values unlike
+the example's, smart combinations and edge cases. It refines them once the example passes, and
+runs as many as it needs, in parallel batches. A signed-in read
 runs up to four live tests with an input you choose (`testInput`), spent on the riskiest controls.
 Finish in this order: your last edit, the cases again, then the example last, before
 `finish_build`. Report skipped, unsupported or missing bodies honestly.
@@ -466,7 +475,8 @@ probes.
 pomerado:section agents.capture:end -->
 
 The host's `executionAvailability` reports attempt-local capacity, never authority.
-`not_published` leaves live execution open. A publication that took the browser's capture
+`not_published` leaves live execution open on the same browser, still signed in: read
+`page.url()` first, and prefer not to sign in again. Only a publication whose capture failed
 leaves the next live execution a fresh browser on a new, empty profile: read `page.url()` first
 and sign in again when the build signs in. A write build reads back first whether its earlier
 commit took effect and never submits one that did. `host_unavailable`
