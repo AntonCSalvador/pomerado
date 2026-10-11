@@ -27,8 +27,8 @@ saves data on the site, save or submit anything; a task that needs that is a wri
 Signed out, setting the session's store, location or delivery or pickup mode is part of a
 read, even through a Save button, and so is entering the details the caller gave to set it,
 unless the step creates an account or a lasting record on the site (core skill). While building,
-the example's step that enters a name, email or phone asks the owner first, as the execution
-review requires. Adding to a cart, a hold on inventory, a seat or a time slot, an upload and a draft stay writes,
+a live step, the example's or a test case's, that enters a name, email or phone asks the owner
+first, as the execution review requires; the answer keeps the build a read. Adding to a cart, a hold on inventory, a seat or a time slot, an upload and a draft stay writes,
 signed out too.
 
 ## When a read build finds it needs to write

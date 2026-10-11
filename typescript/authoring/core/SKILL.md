@@ -237,8 +237,9 @@ that asks.
     for and that it is sent to the site. Submit only what the caller gave; never invent or reuse
     details. A name, email or phone is offered only when the site won't apply the input without
     it. A step that creates an account or a lasting record on the site is a write, so a read
-    stops before it. While building, the example's step that enters a name, email or phone asks
-    the owner first (`request_input`), since the execution review escalates it otherwise.
+    stops before it. While building, a live step, the example's or a test case's, that enters a
+    name, email or phone asks the owner first (`request_input`), since the execution review
+    escalates it otherwise. The owner's answer keeps the build a read, with no `mint_update`.
   - Only when the site still won't apply what the caller gave, on a read: return what the site
     did show, with the value it actually applied (`applied_<input>`, null only when the page
     shows none) beside the one the caller asked for, and the site's message in a short note
