@@ -189,7 +189,7 @@ export const fillFailure = (step: AutofillStep, report: AutofillStepReport) => {
   if (typingRefusal(step, report)?.cause === "question_changed") return "question_changed";
   if (report.outcome !== "filled") return report.reason;
   if (report.fields.some((field) => field.status !== "filled")) return "fill_failed";
-  return report.submit === "clicked" || report.submit === "none"
+  return report.submit === "clicked" || report.submit === "none" || report.submit === "page"
     ? undefined
     : `submit_${report.submit}`;
 };

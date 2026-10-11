@@ -54,6 +54,8 @@ const FillAnswer = Schema.Union(
     url: Schema.String,
   }),
   Schema.Struct({ dated: Schema.Boolean, url: Schema.String }),
+  /** The submit call found that the page sent what was typed itself (`pageSentCode`). */
+  Schema.Struct({ pageSent: Schema.Literal(true), url: Schema.String }),
   Schema.Struct({
     /** `disabled`: the submit was disabled, so the call clicked nothing. */
     submit: Schema.Literal("clicked", "failed", "disabled", "none"),
@@ -139,12 +141,14 @@ interface FillProgress {
   judged: typeof Targets.Type;
   /** The id the page keeps `judged` under, as the call that found it kept it. */
   judgment: string | undefined;
+  /** The id the page keeps where it was as each field was typed under (`pageSentCode`). */
+  readonly typedAt: string;
 }
 
 const filledReport = (
   step: AutofillStep,
   progress: FillProgress,
-  submit: "clicked" | "failed" | "not_attempted" | "refused" | "stayed_disabled" | "none",
+  submit: "clicked" | "failed" | "not_attempted" | "refused" | "stayed_disabled" | "none" | "page",
   url: string,
   refusal?: AutofillRefusal,
   clicked?: true,
@@ -260,7 +264,10 @@ interface FillInput {
   readonly keyboard: CredentialKeyboard;
   /** How each value is typed; `paste` by default. */
   readonly typing?: CredentialTypingMode;
-  /** How long the page may take to navigate after the submit, then to load; 5 s by default. */
+  /**
+   * How long the page may take to navigate after the submit, then to load; 5 s by default. A step
+   * with no submit gives the page as long, at most `pageSendMs`, to send what was typed itself.
+   */
   readonly settleMs?: number;
 }
 
@@ -295,6 +302,15 @@ const rejudge = (
 };
 
 /**
+ * A submit call that found a field of the step gone, or its popup closed: once every field was
+ * typed, the page took the screen away itself, as a code widget does when it sends what its last
+ * box completed.
+ */
+const screenGone = (answer: typeof LocatedError.Type) =>
+  (answer.error === "not_found" && typeof answer.target === "number") ||
+  answer.error === "popup_missing";
+
+/**
  * One Kernel call of the fill, which first checks the field the host typed last. A call that finds
  * a control changed since the host last judged it does nothing, and the host judges the controls
  * it found again (`rejudge`), then calls again against that judgment, which the page kept as that
@@ -314,6 +330,7 @@ const fillCall =
               popupTargetId: input.inspection.popupTargetId,
               judged: progress.judgment,
               check: progress.check,
+              typedAt: progress.typedAt,
             }),
             call.kind === "focus" ? 15 : 30,
           )
@@ -324,10 +341,14 @@ const fillCall =
         if (answered._tag === "Left") return Either.left(answered.left);
         const answer = answered.right;
         if ("error" in answer)
-          return Either.right<Stop>({
-            refusal: locatedRefusal(answer, evidenceOrigins(input, progress)),
-            url: answer.url,
-          });
+          return Either.right<CallAnswer>(
+            call.kind === "submit" && input.step.fields.length > 0 && screenGone(answer)
+              ? { pageSent: true, url: answer.url ?? "" }
+              : {
+                  refusal: locatedRefusal(answer, evidenceOrigins(input, progress)),
+                  url: answer.url,
+                },
+          );
         if (!("changed" in answer)) return Either.right(answer);
         const changed = changedProperties(progress.judged, answer.changed);
         changes.count++;
@@ -355,27 +376,42 @@ const fillCall =
  * submit only on input, some after a short check of what was typed.
  */
 const submitEnableMs = 5_000;
-/** How often the host calls the submit again while the page keeps it disabled. */
-const submitEnablePollMs = 250;
+/**
+ * How long the host gives a step with no submit to send what was typed itself once every field is
+ * filled, as a code widget may a moment after its last box: the step's settle wait, at most 2 s,
+ * since a step that only shows more of the same screen has no submit either.
+ */
+const pageSendMs = 2_000;
+/** How often the host calls the submit again while it waits on the page. */
+const submitPollMs = 250;
 
-/** A submit call that clicked nothing because the submit was disabled. */
-const disabledSubmit = (answered: Either.Either<CallAnswer, Error>) =>
-  Either.isRight(answered) && "submit" in answered.right && answered.right.submit === "disabled";
+/** A submit call that clicked nothing because the submit was disabled, or the step names none. */
+const unclicked = (answered: Either.Either<CallAnswer, Error>, submit: "disabled" | "none") =>
+  Either.isRight(answered) && "submit" in answered.right && answered.right.submit === submit;
 
 /**
  * The step's submit call, made again while the page keeps the submit disabled, for up to
- * `submitEnableMs`. Each call judges every control again before it clicks, and none clicks a
- * disabled submit. The changes they find count across the whole wait, so a page that keeps
- * changing a control is refused however the changes fall between the calls.
+ * `submitEnableMs`, and while a step with fields and no submit has not seen the page send them
+ * itself, for up to `pageSendMs` from the first call that found no submit. Each call judges every
+ * control again before it clicks, and none clicks a disabled submit. The changes they find count
+ * across the whole wait, so a page that keeps changing a control is refused however the changes
+ * fall between the calls.
  */
 const submitWhenEnabled = (input: FillInput, progress: FillProgress, call: AutofillFillCall) =>
   Effect.gen(function* () {
-    const until = Date.now() + submitEnableMs;
+    const started = Date.now();
+    const sendMs = input.step.fields.length > 0 ? Math.min(input.settleMs ?? 5_000, pageSendMs) : 0;
+    let unsentSince: number | undefined;
     const changes = { count: 0 };
     for (;;) {
       const answered = yield* fillCall(input, progress, changes)(call);
-      if (!disabledSubmit(answered) || Date.now() >= until) return answered;
-      yield* Effect.sleep(submitEnablePollMs);
+      const unsent = unclicked(answered, "none");
+      if (unsent) unsentSince ??= Date.now();
+      const waiting = unclicked(answered, "disabled")
+        ? Date.now() - started < submitEnableMs
+        : unsent && Date.now() - (unsentSince ?? started) < sendMs;
+      if (!waiting) return answered;
+      yield* Effect.sleep(submitPollMs);
     }
   });
 
@@ -504,7 +540,12 @@ const afterFieldCall = (
  * the submit. That click ran, though, so the report says so (`clicked`): the page's own handlers
  * ran on it, and what the step filled may have gone out. A submit the page keeps disabled is never
  * clicked: the host waits for the page to enable it once the fields are filled, and when it stays
- * disabled the report says so (`stayed_disabled`).
+ * disabled the report says so (`stayed_disabled`). A page that moves on once every field is typed,
+ * before the host clicks anything, sent what was typed itself (`page`), never a refusal: the
+ * step's fields went away or were all disabled, its popup closed, its address moved to another
+ * path, or a step of several fields came back emptied. A step with no submit gives the page up to
+ * `pageSendMs` to do so. Guardian's refusals still come first: a control that moved off the site
+ * or changed how it submits refuses the submit as before.
  */
 export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepReport> =>
   Effect.gen(function* () {
@@ -520,6 +561,7 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
       check: null,
       judged: input.inspection.targets,
       judgment: input.inspection.judgment,
+      typedAt: randomUUID(),
     };
     for (let index = 0; index < step.fields.length; index++) {
       const ended = yield* fillField(input, progress, index);
@@ -543,6 +585,7 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
     if (clicked._tag === "Left")
       return failedCall(progress, clicked.left, { mayMutate: step.submit !== undefined });
     const answer = clicked.right;
+    if ("pageSent" in answer) return filledReport(step, progress, "page", answer.url);
     if ("refusal" in answer || "checked" in answer)
       return stopped(step, progress, answer, "submit");
     if ("submission" in answer)

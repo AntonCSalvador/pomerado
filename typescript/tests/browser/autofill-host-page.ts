@@ -147,7 +147,8 @@ const fixtureBindingWorld: CredentialBindingWorld = (cdp, { sessionId, frameId }
 
 /**
  * The host's typing on a local page, over a DevTools session of its own, as the recorder's socket
- * types on a worker. Each value it is given to type counts as typed on the page from then on.
+ * types on a worker. Each value it is given to type counts as typed on the page from then on,
+ * but a one-character value, such as a one-digit code box's, which any script holds by chance.
  * `beforeInsert` runs once the binding resolved, just before the atomic insertion's own call.
  */
 export const hostKeyboard = async (
@@ -200,7 +201,7 @@ export const hostKeyboard = async (
     insertText: (target, text) =>
       Effect.suspend(() => {
         const values = typed.get(page) ?? new Set<string>();
-        if (text !== "") typed.set(page, values.add(text));
+        if (text.length > 1) typed.set(page, values.add(text));
         return native.insertText(target, text);
       }),
   };
