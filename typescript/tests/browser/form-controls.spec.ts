@@ -289,6 +289,73 @@ test("chooseOption matches a name whatever its apostrophe style", async ({ page 
   expect(await submitted(page)).toEqual({ shop: "2" });
 });
 
+const places = `<form><label>Place<select name="place">
+<option value="">Choose</option><option value="1">Abacá</option><option value="2">St. Louis</option>
+<option value="3">Lyon</option></select></label></form>`;
+
+test("chooseOption matches a name whatever its accents", async ({ page }) => {
+  await page.setContent(places);
+  expect(await call(page, `return await chooseOption(page.getByLabel("Place"), "Abaca");`)).toEqual({
+    result: { shape: "select", label: "Abacá", value: "1" },
+  });
+  expect(await submitted(page)).toEqual({ place: "1" });
+});
+
+test("chooseOption matches a name with or without its periods", async ({ page }) => {
+  await page.setContent(places);
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Place"), "St Louis");`),
+  ).toEqual({ result: { shape: "select", label: "St. Louis", value: "2" } });
+  expect(await submitted(page)).toEqual({ place: "2" });
+});
+
+test("chooseOption matches a hyphenated name spelled with a space", async ({ page }) => {
+  const cities = [
+    ["SD", "Saint-Denis"],
+    ["SE", "Saint-Étienne"],
+    ["LY", "Lyon"],
+  ] as const;
+  await page.setContent(`<form>${dropdown("City", cities)}</form>`);
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("City"), "Saint Denis");`),
+  ).toEqual({ result: { shape: "combobox", label: "Saint-Denis", value: "SD" } });
+  expect(await submitted(page)).toEqual({ City: "SD" });
+});
+
+test("chooseOption refuses two options that differ only by accents", async ({ page }) => {
+  await page.setContent(`<form><label>Place<select name="place">
+<option value="1">Abaca</option><option value="2">Abacá</option></select></label></form>`);
+  expect(await call(page, `return await chooseOption(page.getByLabel("Place"), "Abaca");`)).toEqual({
+    error: "option_ambiguous",
+  });
+  expect(await submitted(page)).toEqual({ place: "1" });
+});
+
+test("chooseOption picks the one label that holds the whole phrase", async ({ page }) => {
+  await page.setContent(`<form><label>Customer<select name="customer">
+<option value="">Choose</option><option value="7">Acme insurance Customer</option>
+<option value="8">Acme Bank Customer</option></select></label></form>`);
+  const customer = 'page.getByLabel("Customer")';
+  expect(await call(page, `return await chooseOption(${customer}, "Acme insurance");`)).toEqual({
+    result: { shape: "select", label: "Acme insurance Customer", value: "7" },
+  });
+  // Only whole words count: part of a word matches nothing.
+  expect(await call(page, `return await chooseOption(${customer}, "Acme insur");`)).toEqual({
+    error: "option_missing",
+  });
+  expect(await submitted(page)).toEqual({ customer: "7" });
+});
+
+test("chooseOption refuses two labels that both hold the phrase", async ({ page }) => {
+  await page.setContent(`<form><label>Customer<select name="customer">
+<option value="">Choose</option><option value="7">Acme insurance Customer</option>
+<option value="9">Acme insurance Vendor</option></select></label></form>`);
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Customer"), "Acme insurance");`),
+  ).toEqual({ error: "option_ambiguous" });
+  expect(await submitted(page)).toEqual({ customer: "" });
+});
+
 test("a failure names its reason, never the value", async ({ page }) => {
   await page.setContent(`<form><label>Date of birth<input name="dob"></label>
 <label>Month<select name="month"><option>7</option></select></label></form>`);

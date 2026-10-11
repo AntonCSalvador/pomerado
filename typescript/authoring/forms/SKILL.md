@@ -83,7 +83,8 @@ Fill every dropdown and date control with the SDK's form controls: import
 functions on your verified locators. `chooseOption(control, wanted)` chooses the one
 option of a native select or a custom ARIA dropdown (a combobox, or a button that opens a
 listbox) whose label or value is one of `wanted`, a list of the input's spellings
-(`["CA", "California"]`). It opens the dropdown, searches only the listbox it owns, types
+(`["CA", "California"]`), ignoring case, accents, spacing and punctuation, or whose label
+holds one as whole words. It opens the dropdown, searches only the listbox it owns, types
 into one that filters as you type, scrolls one that renders options as it scrolls, refuses
 a missing, disabled or ambiguous option, and reads back the committed choice.
 `fillDate(control, isoDate, format)` fills an ISO date into whatever date control the page

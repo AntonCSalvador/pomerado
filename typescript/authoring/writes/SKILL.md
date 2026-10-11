@@ -68,8 +68,9 @@ During the session:
   discover whether one exists.
 - Make the commit step check that no option the input does not settle is selected,
   and fail before clicking commit if one is.
-- Before committing, read back from the page what you are about to submit and check
-  each value against the caller's input, in the session and on every branch of the
+- Before committing, read back from the page what you are about to submit and check each
+  value against the caller's input, normalized as the core skill's Confirm step says, in
+  the session and on every branch of the
   composed script. Fail before the commit if one does not match. Never read back a
   field filled with a secret handle.
 - When the write changes state that already exists, such as a saved record or a cart

@@ -174,7 +174,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   ["core", "- The code works for every value the schema accepts."],
   [
     "core",
-    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. When more than one option matches, list them for the caller instead of picking one.",
+    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. When more than one option matches, list them for the caller instead of picking one.",
   ],
   ["core", "Take the site origin from the context's `siteOrigin`."],
   ["core", "The tools and the files you may edit are in `AGENTS.md`."],
@@ -621,7 +621,7 @@ it("has the minter read back a write, accept recent-search saves and look before
   const text = (name: string) =>
     (contents(skills)[skills.findIndex((skill) => skill.name === name)] ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    "- Before committing, read back from the page what you are about to submit and check each value against the caller's input, in the session and on every branch of the composed script. Fail before the commit if one does not match. Never read back a field filled with a secret handle.",
+    "- Before committing, read back from the page what you are about to submit and check each value against the caller's input, normalized as the core skill's Confirm step says, in the session and on every branch of the composed script. Fail before the commit if one does not match. Never read back a field filled with a secret handle.",
   );
   expect(text("core")).toContain(
     "Telemetry, analytics and bot-sensor POSTs are normal and need no change. So is an anonymous recent-search, prefill or search-state save the site fires when you submit a search.",
@@ -726,17 +726,17 @@ it("renders the pinned standalone authoring", async () => {
     ...skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name]),
     ...[...guide.files].map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["520b967aed9f89134886f84d9fe2ce9563d342ef4e17e5127333999667376e4c", "core"],
+    ["8c11bbca0e7753867c9ba5a9e5666f65ea9f8a3ef004db1b7f66db3fa3fbd089", "core"],
     ["1efca9b1b5ce56096befc0c13df347228c111e6ab6e1dca7ddcfd30cbfd19f98", "search"],
     ["4b9f115a5e58daf028404a8803376055a60f8269e8f9a06735662f0f11520dad", "auth"],
     ["9a6bab49fd138beb664ba684b947f36ed8d36829ccba9bab430a946c3043bd0a", "testing"],
     ["ab913e2169b9be4ac767df8a88b29cf2e3e5f28779f29bfe9d7e175f07e56f8d", "pagination"],
-    ["262c84579471edb9922fc1d5fbdd03f91872051ec4c0dac417a1aa06b259310a", "forms"],
-    ["dfe956dc9bfadda3f8e829575a54e0b39f1ad445d8a8d220552e9d68c3c950de", "writes"],
+    ["3bf59e90aab39d23852f87ca63975f0c8102e775e9d0e5782554996b0695699d", "forms"],
+    ["baea729073ddf80935f3547993dd980f99d2f3eea40a095e36c6789705e52dab", "writes"],
     ["0bc4d6c765154139547ec2e4500d14bbd1d086995fdd6b385b8f53f4e7ae7255", "cart"],
     ["3c457792ca30c01b14b2a054aa2e275495b3d1e9db7132859a631f826e81044a", "caller-input"],
     ["c0334ed4d84ac4c807e108dcc3d0560ca7049fbb12013e03062d222dacce3655", "publication"],
-    ["78f0163caa806bea87680e5960af0f0251a12b48c436f788a8f2d204c9bc21b8", "workspace/AGENTS.md"],
+    ["0f6af69948c36c34fdf49fbcbd710db0f6e87c852494840655e713f504667872", "workspace/AGENTS.md"],
     ["e023d1b6f7bc3673118d4310d9813cfa878c554b68a353413e73592054d2704d", "workspace/README.md"],
   ]);
 });
