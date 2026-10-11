@@ -998,6 +998,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       let guardianRefused = recovered?.guardianRefused === true;
       /** Unanswered questions handed back to the minter in this build, up to the limit. */
       let noAnswerHandBacks = recovered?.noAnswerHandBacks ?? 0;
+      /**
+       * The host obtained a login partway (`requestLogin` answered `supplied` or `held`): an
+       * unanswered question asked after it ends the build instead of going back.
+       */
+      let loginHeld = recovered?.loginHeld === true;
       let destinationEvidenceRefusals = recovered?.destinationEvidenceRefusals ?? 0;
       let inputFeedbackRounds = recovered?.inputFeedbackRounds ?? 0;
       /** The last input-feedback review found a tool already public, which never falls back. */
@@ -1457,8 +1462,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             };
           // The owner never answered the example's question. The minter decides how to go on,
           // with the execution's `scriptQuestion` saying so, unless the question could gate a
-          // write repair's write, the tool runs signed in, or the build already handed back its
-          // limit: then the build ends as no_response.
+          // write repair's write, the build is signed in or holds a login, or it already handed
+          // back its limit: then the build ends as no_response.
           if (evidence.noResponse !== undefined && !handedBack && !stopUnavailableHost()) {
             noResponse ??= evidence.noResponse;
             terminal ??= {
@@ -1799,18 +1804,30 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         return undefined;
       };
       /**
+       * Whether the build is signed in or holds a login now: one bound from the start, one the
+       * host obtained in place, or one a sign-in in this build sent.
+       */
+      const signedInOrHoldsLogin = () =>
+        dependencies.websiteCredentialsAvailable === true ||
+        loginHeld ||
+        executions.some(
+          (entry) =>
+            entry.authentication !== undefined ||
+            (purposes.get(entry.executionId) === "authenticate" && entry.effect !== "not_sent"),
+        );
+      /**
        * Whether an unanswered question goes back to the minter as no answer, which then decides
-       * how the build goes on. Not when the question decides what the build may do: the
-       * read-or-write and capability questions, any question in a write repair, which could gate
-       * its write, and any in a build of a tool that runs signed in, which acts as the account's
-       * owner. Nor once the build handed back `noAnswerHandBackLimit`
-       * questions.
+       * how the build goes on, decided for each question when it goes unanswered. Not when the
+       * question decides what the build may do: the read-or-write and capability questions, any
+       * question in a write repair, which could gate its write, and any asked while the build is
+       * signed in or holds a login, which acts as the account's owner. Nor once the build handed
+       * back `noAnswerHandBackLimit` questions.
        */
       const handsBackNoAnswer = () =>
         request.effect !== "ask" &&
         dependencies.capabilityQuestion === undefined &&
         !(request.mode === "maintenance" && buildEffect === "write") &&
-        dependencies.websiteCredentialsAvailable !== true &&
+        !signedInOrHoldsLogin() &&
         noAnswerHandBacks < noAnswerHandBackLimit;
       /** Counts a question handed back and records it. */
       const questionHandedBack = Effect.sync(() => {
@@ -4478,6 +4495,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   const login = dependencies.requestLogin
                     ? yield* dependencies.requestLogin()
                     : ("unavailable" as const);
+                  if (login === "supplied" || login === "held") loginHeld = true;
                   if (login === "in_use")
                     return JSON.stringify({
                       status: "login_request",
@@ -5112,6 +5130,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ...(blockedReviewUnavailable ? { blockedReviewUnavailable: true as const } : {}),
         ...(guardianRefused ? { guardianRefused: true as const } : {}),
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),
+        ...(loginHeld ? { loginHeld: true as const } : {}),
         destinationEvidenceRefusals,
         inputFeedbackRounds,
         inputFeedbackPublicTool,

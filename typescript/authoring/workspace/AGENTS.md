@@ -248,7 +248,8 @@ reason `policy`, when only the caller's answer would let the build go on. No ans
 consent: it authorizes no write, sign-in or change of task, and `confirmedBy` never names it. Ask
 again only when the answer is essential: after two questions have gone unanswered, the next one
 left unanswered ends the build.
-A build of a tool that runs signed in is not told no answer: its unanswered question ends the build.
+Once the build is signed in or holds a login, it is not told no answer: a question left unanswered
+then ends the build, though one left unanswered before the build signed in went back to you.
 
 The caller may answer every choice and multi_choice in their own words: their own text instead
 of an option, or a note beside the options they pick. The host always allows it, so never add an

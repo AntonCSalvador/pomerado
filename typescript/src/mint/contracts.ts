@@ -1449,6 +1449,11 @@ export interface MintHarnessSnapshot {
    * checkpoint.
    */
   readonly noAnswerHandBacks?: number;
+  /**
+   * The host obtained a login partway (`requestLogin` answered `supplied` or `held`), so a
+   * question left unanswered after it ends the build. Optional for the same reason.
+   */
+  readonly loginHeld?: true;
   readonly destinationEvidenceRefusals: number;
   readonly inputFeedbackRounds: number;
   readonly inputFeedbackPublicTool: boolean;
@@ -1588,6 +1593,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   blockedReviewUnavailable: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   guardianRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   noAnswerHandBacks: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
+  loginHeld: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   destinationEvidenceRefusals: Schema.NonNegativeInt,
   inputFeedbackRounds: Schema.NonNegativeInt,
   inputFeedbackPublicTool: Schema.Boolean,

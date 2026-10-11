@@ -139,8 +139,8 @@ in time, the result carries `scriptQuestion` `unanswered` and the build goes on:
 how to continue without the answer, as when your own `request_input` returns
 `no_answer`. A write step that sent something before its question is reported as a
 possible change; verify the site's current state before any further write. In a write
-repair, or a build of a tool that runs signed in, an unanswered question still ends
-the build as `no_response`. Do not turn an
+repair, or once the build is signed in or holds a login, an unanswered question still
+ends the build as `no_response`. Do not turn an
 account-specific choice into a published input to work around a question; a value the
 caller can type, such as a member number, is a free-form input instead.
 

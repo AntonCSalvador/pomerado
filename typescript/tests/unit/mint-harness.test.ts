@@ -4488,6 +4488,161 @@ it("ends a signed-in build as no_response when its example's script question goe
   });
 });
 
+/** A sign-in the host verified. */
+const verifiedSignIn = {
+  executionId: "signed_in",
+  status: "completed" as const,
+  effect: "verified" as const,
+  authentication: { state: "authenticated" as const, effect: "verified" as const },
+  observations: "Signed in.",
+};
+
+// Whether a question goes back is decided when it goes unanswered, by whether the build is signed
+// in or holds a login then: a build that starts signed out and signs in partway hands back its
+// earlier question and ends on its later one.
+it.each([
+  {
+    how: "a verified sign-in",
+    signIn: (turn: MintTurn) =>
+      turn.actions.execute({ ...execution, purpose: "authenticate", target: "liveBrowser" }),
+    overrides: {
+      reviewAndExecute: () => Effect.succeed(verifiedSignIn),
+    },
+  },
+  {
+    how: "a failed sign-in that sent the login",
+    signIn: (turn: MintTurn) =>
+      turn.actions.execute({ ...execution, purpose: "authenticate", target: "liveBrowser" }),
+    overrides: {
+      reviewAndExecute: () =>
+        Effect.succeed({
+          executionId: "sign_in_failed",
+          status: "failed" as const,
+          effect: "possible" as const,
+          authentication: { state: "failed" as const, effect: "possible" as const },
+          observations: "The site refused the login.",
+        }),
+    },
+  },
+  {
+    how: "a sign-in that failed after submitting the login",
+    signIn: (turn: MintTurn) =>
+      turn.actions.execute({ ...execution, purpose: "authenticate", target: "liveBrowser" }),
+    overrides: {
+      reviewAndExecute: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "Unavailable",
+            authentication: {
+              phase: "credential_submit",
+              code: "CredentialTargetRefused",
+              afterSubmission: true,
+            },
+          }),
+        ),
+    },
+  },
+  {
+    how: "a login the caller supplied when asked for one",
+    signIn: (turn: MintTurn) =>
+      turn.actions.requestInput(textQuestion("Which account should it use?", "account")),
+    overrides: {
+      reviewQuestion: (submitted: AgentInputRequest) =>
+        Effect.succeed(
+          submitted.questions[0]?.id === "account"
+            ? { outcome: "authentication" as const, rationale: "It asks for a login." }
+            : { outcome: "allow_business" as const, rationale: "An ordinary choice." },
+        ),
+      requestLogin: () => Effect.succeed("supplied" as const),
+    },
+  },
+])(
+  "hands back a question asked signed out and ends on one asked after $how",
+  async ({ signIn, overrides }) => {
+    const replies: unknown[] = [];
+    const f = await fixture(
+      (turn) =>
+        Effect.gen(function* () {
+          replies.push(JSON.parse(yield* turn.actions.requestInput(textQuestion("Which format?"))));
+          expect(turn.isComplete()).toBe(false);
+          yield* signIn(turn);
+          replies.push(
+            JSON.parse(yield* turn.actions.requestInput(textQuestion("Which period?", "period"))),
+          );
+          expect(turn.isComplete()).toBe(true);
+        }),
+      overrides,
+    );
+    const outcome = await f.run();
+    expect(replies).toMatchObject([{ status: "no_answer" }, { status: "no_response" }]);
+    expect(outcome).toMatchObject({ build: "incomplete", noResponse: { possibleCommit: false } });
+  },
+);
+
+it("ends a build that signed in partway as no_response when its example's script question goes unanswered", async () => {
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        yield* turn.actions.execute({
+          ...execution,
+          purpose: "authenticate",
+          target: "liveBrowser",
+        });
+        const receipt: unknown = JSON.parse(yield* turn.actions.execute(execution));
+        expect(receipt).not.toHaveProperty("scriptQuestion");
+        expect(turn.isComplete()).toBe(true);
+      }),
+    {
+      reviewAndExecute: (submitted) =>
+        Effect.succeed(
+          submitted.purpose === "authenticate"
+            ? verifiedSignIn
+            : {
+                executionId: "asked",
+                status: "failed" as const,
+                effect: "not_sent" as const,
+                noResponse: { possibleCommit: false },
+                observations: "The script's question expired unanswered.",
+              },
+        ),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    build: "incomplete",
+    noResponse: { possibleCommit: false },
+  });
+});
+
+// A sign-in that reached nothing leaves the build signed out, so its question still goes back.
+it("hands back a question asked after a sign-in that sent nothing", async () => {
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        yield* turn.actions.execute({
+          ...execution,
+          purpose: "authenticate",
+          target: "liveBrowser",
+        });
+        expect(
+          JSON.parse(yield* turn.actions.requestInput(textQuestion("Which format?"))),
+        ).toMatchObject({ status: "no_answer" });
+        expect(turn.isComplete()).toBe(false);
+      }),
+    {
+      reviewAndExecute: () =>
+        Effect.succeed({
+          executionId: "sign_in_unsent",
+          status: "failed" as const,
+          effect: "not_sent" as const,
+          observations: "The sign-in page did not load.",
+        }),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({ build: "incomplete" });
+  expect(outcome).not.toHaveProperty("noResponse");
+});
+
 it("hands an example's unanswered script question back to the minter without ending the build", async () => {
   const f = await fixture(
     (turn) =>
