@@ -1030,6 +1030,70 @@ it("asks a new code after the site rejected one, and ends once three were reject
   );
 });
 
+// A code widget that sends itself when its last box is filled, with no button: the host clicks
+// nothing, and the page moving on is what says the code may have gone out.
+const selfSendingCode: SignInStep = { fields: [{ selector: "#code", slot: "code" }] };
+const isCode = (step: AutofillStep) => step.fields.some((field) => field.slot === "code");
+const pageSentHarness = (send: NonNullable<Options["send"]>) =>
+  harness({
+    held: account,
+    answers: { code: ["482913", "482913", "482913"] },
+    send,
+    report: (step) => ({
+      outcome: "filled",
+      fields: step.fields.map((field) => ({ slot: field.slot, status: "filled" as const })),
+      submit: isCode(step) ? "page" : "clicked",
+      url: `${origin}/next`,
+    }),
+  });
+
+it("tells the minter a code screen's page may have sent its code itself, and counts the code as filled, but verifies only once a request carried it", async () => {
+  // The page's own request for the code never reaches the host.
+  const unheard = pageSentHarness((step, values) => (isCode(step) ? [] : [formRequest(values)]));
+  await unheard.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(identifierOnly, undefined, Effect.void);
+      const screen = yield* recorder.step(selfSendingCode, undefined, Effect.void);
+      expect(screen.report).toMatchObject({ outcome: "filled", submit: "page" });
+      expect(screen.result["nextStep"]).toContain("the page may have sent them itself");
+      // It may have gone out, so it counts toward the code's two fills in one sign-in.
+      yield* recorder.step(selfSendingCode, undefined, Effect.void);
+      expect((yield* recorder.step(selfSendingCode, undefined, Effect.void)).result).toMatchObject({
+        step: { outcome: "refused", reason: "credential_already_filled" },
+      });
+      expect((yield* recorder.step(signedIn, undefined, Effect.void)).result).toMatchObject({
+        signedIn: false,
+        failed: "credentials_not_submitted",
+      });
+      expect(recorder.published()).toBeUndefined();
+    }),
+  );
+  expect(unheard.confirmed).toEqual([]);
+  // The page's own request carries the code, so the code proves the sign-in.
+  const heard = pageSentHarness((step, values) =>
+    isCode(step)
+      ? [
+          {
+            url: `${origin}/api/code`,
+            method: "POST",
+            body: JSON.stringify({ code: values[0] }),
+            channel: "http",
+            resourceType: "fetch",
+          },
+        ]
+      : [formRequest(values)],
+  );
+  expect(
+    await heard.run((recorder) =>
+      Effect.gen(function* () {
+        yield* recorder.step(identifierOnly, undefined, Effect.void);
+        yield* recorder.step(selfSendingCode, undefined, Effect.void);
+        return yield* recorder.step(signedIn, undefined, Effect.void);
+      }),
+    ),
+  ).toMatchObject({ verified: true, result: { signedIn: true } });
+});
+
 it("records a private answer's question selector in version 1, never its question or answer", async () => {
   const host = harness({
     held: account,

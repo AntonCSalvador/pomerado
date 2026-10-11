@@ -272,7 +272,8 @@ export type AutofillFieldStatus = "filled" | "failed" | "not_attempted";
 
 /**
  * What one host fill did, with no value in it. `filled` typed the fields in order and says what
- * became of the submit: `none` when the step names none. `uncertain` lost the call's answer, so
+ * became of the submit: `none` when the step names none, `page` when such a step's page sent what
+ * was typed itself. `uncertain` lost the call's answer, so
  * the fields and the submit may have gone out. Nothing is ever retried by itself (Kernel's fill
  * rule too: a lost answer can follow writes that landed).
  */
@@ -288,6 +289,11 @@ export type AutofillStepReport =
        * `refused`: after the fill the host refused a control where it then sat or submitted.
        * `stayed_disabled`: the submit stayed disabled after the fields were filled, through the
        * host's wait for the page to enable it, so the host never clicked it.
+       * `page`: on a step with no submit, once every field was typed, the page moved on before the
+       * host clicked anything, as a code widget that sends itself on its last box does: the step's
+       * fields went away or were all disabled, its popup closed, the page's address moved to
+       * another path, or a step of several fields came back with every field empty. What the step
+       * filled may have gone out (`maySend`); the sign-in's own check decides what it did.
        */
       readonly submit:
         | "clicked"
@@ -295,7 +301,8 @@ export type AutofillStepReport =
         | "not_attempted"
         | "refused"
         | "stayed_disabled"
-        | "none";
+        | "none"
+        | "page";
       /**
        * The host clicked a submit that is `refused`: its guard stopped the submission as it fired,
        * after the page's own handlers ran on the click, so what the step filled may have gone out.
