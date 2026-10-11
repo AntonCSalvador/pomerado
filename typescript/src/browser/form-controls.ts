@@ -82,24 +82,28 @@ export const CalendarDate = Schema.String.pipe(
  *   It returns `{ shape }`, never the value.
  * - `chooseOption(control, wanted, { timeout }?)`: chooses the one option of a native select or a
  *   custom dropdown whose label or value is one of `wanted` (a string or a list of alternate
- *   spellings, such as `["CA", "California"]`), ignoring case, spacing and apostrophe style
- *   (`’`, `‘` and `ʼ` read as `'`). A label that equals one wins over a value that does,
- *   which wins over a label that holds it as a whole word; two different options at the winning
+ *   spellings, such as `["CA", "California"]`), ignoring case, accents, spacing and punctuation.
+ *   A label that equals one wins over a value that does,
+ *   which wins over a label that holds it as whole words; two different options at the winning
  *   rank are ambiguous. A custom dropdown is opened, its own listbox found through `aria-controls`
  *   or `aria-owns` (else the one visible listbox), typed into when it filters as you type, and
  *   scrolled when it renders its options as you scroll. Returns `{ shape, label, value }`.
  */
 export const formControlsCode = String.raw`
 const formControlFailure = (reason) => Object.assign(new Error(reason), { name: "FormControlFailure" });
-/** Folds case, spacing and apostrophe style, so "Joe’s" and "joe's" name the same option. */
-const formControlText = (text) =>
-  String(text ?? "")
-    .normalize("NFKC")
-    .replace(/[‘’ʼ]/g, "'")
+/** Folds case, accents, spacing and punctuation, so "Joe’s Café" and "joes cafe" name the same option. */
+const formControlText = (text) => {
+  const folded = String(text ?? "")
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .normalize("NFC")
+    .replace(/(?<!\p{N})['‘’ʼ](?!\p{N})/gu, "")
+    .replace(/(?<!\p{N})[.,\-‐‑‒–—](?!\p{N})/gu, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .toLowerCase()
-    .replace(/\.$/, "");
+    .toLowerCase();
+  return folded === "" ? String(text ?? "").trim() : folded;
+};
 const formControlFrame = async (control) => {
   const handle = await control.elementHandle();
   const frame = handle === null ? null : await handle.ownerFrame();
@@ -136,14 +140,14 @@ const formControlDateCandidates = (iso, format, locale) => {
   if (kind === "D") candidates.push(formControlOrdinal(iso.slice(8)));
   return [...new Set(candidates)];
 };
-/** The one option a choice names, by rank: label, then value, then a whole word of the label. */
+/** The one option a choice names, by rank: label, then value, then whole words of the label. */
 const formControlPick = (options, wanted) => {
   const names = new Set(wanted.map(formControlText).filter((name) => name !== ""));
   const words = (label) => label.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   const ranks = [
     (option) => names.has(option.label),
     (option) => option.value !== "" && names.has(option.value),
-    (option) => words(option.label).some((word) => names.has(word)),
+    (option) => [...names].some((name) => (" " + words(option.label).join(" ") + " ").includes(" " + name + " ")),
   ];
   for (const rank of ranks) {
     const matched = options.filter(rank);

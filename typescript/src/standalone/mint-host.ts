@@ -27,6 +27,7 @@ import { localLiveTests } from "./mint-live-tests.js";
 import { askError, mintError } from "./errors.js";
 import { memoryPublicationDecisions } from "./publication-decisions.js";
 import { listed, signInOriginsToAsk } from "./sign-in-origin-question.js";
+import { forgetScriptAnswers } from "./script-answer-reuse.js";
 import type { FileHandles } from "../mint/file-handles.js";
 /**
  * Steps the local host refuses before review. It keeps no write maintenance, so it has no
@@ -90,6 +91,14 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
             answers,
           ),
         ),
+        // The owner's newer answer to a prompt a script asked replaces the one it kept.
+        Effect.tap(() =>
+          Effect.forEach(candidate.questions, (question) => projection.text(question.prompt)).pipe(
+            Effect.map((prompts) => {
+              state.scriptAnswers.kept = forgetScriptAnswers(state.scriptAnswers.kept, prompts);
+            }),
+          ),
+        ),
         Effect.map((answers) => handles.issue(answers)),
         Effect.tap((issued) => Effect.sync(() => context.askedByAgent(candidate, issued))),
         Effect.mapError(askError),
@@ -101,9 +110,15 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
         Effect.mapError(mintError),
       ),
     applyTaskUpdate: (application) =>
-      context
-        .applyTaskUpdate(application, (siteOrigin) => state.rebindSite(siteOrigin))
-        .pipe(Effect.mapError(mintError)),
+      context.applyTaskUpdate(application, (siteOrigin) => state.rebindSite(siteOrigin)).pipe(
+        // An answer the owner gave for the task as it was never stands for the updated task.
+        Effect.tap(() =>
+          Effect.sync(() => {
+            state.scriptAnswers.kept = [];
+          }),
+        ),
+        Effect.mapError(mintError),
+      ),
     repeatableRead: context.repeatableRead(),
     // A repeatable read's example claims nothing, so it may run again.
     claimExample: Effect.suspend(() =>

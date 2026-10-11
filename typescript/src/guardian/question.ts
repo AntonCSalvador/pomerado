@@ -169,7 +169,7 @@ export type AnsweredQuestion = typeof AnsweredQuestion.Type;
 /**
  * The answers to one request as Guardian sees them, screening every string through `screen`.
  * Protected answers (`isProtectedQuestion`: secrets and logins) never appear, not even their
- * prompts. Nor does a notice's confirm, which says only that the owner acted on the notice.
+ * prompts. Every other answer does, a confirm beside a notice included.
  */
 export const answersForReview = <E>(
   request: Pick<InputRequest, "notice" | "questions">,
@@ -177,11 +177,7 @@ export const answersForReview = <E>(
   screen: (text: string) => Effect.Effect<string, E>,
 ): Effect.Effect<readonly AnsweredQuestion[], E> =>
   Effect.forEach(
-    request.questions.filter(
-      (question) =>
-        !isProtectedQuestion(question) &&
-        !(request.notice !== undefined && question.type === "confirm"),
-    ),
+    request.questions.filter((question) => !isProtectedQuestion(question)),
     (question) =>
       Effect.gen(function* () {
         const given = answers[question.id];

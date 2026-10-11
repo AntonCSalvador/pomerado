@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Usage } from "@openai/agents";
 import type { AgentInputItem, ModelProvider, ModelRequest, ModelResponse } from "@openai/agents";
 import { Effect } from "effect";
@@ -203,6 +205,62 @@ it("keeps a write whose result was lost unknown and never runs it again", async 
     },
   ]);
   expect(review.recorded).toMatchObject([{ outcome: "unknown" }]);
+});
+
+// Fails when a write's digest follows the host runtime's relative import out of the workspace:
+// the workspace refuses that path, so the digest was undefined and a copy of the step under
+// another name ran the write again.
+it("tracks a write's source by content when it imports the host runtime, and refuses a copy of it", async () => {
+  const sdkStep = `import { defineOperation } from "../../runtime/index.js";\nexport default defineOperation;\n`;
+  const dispatched: string[] = [];
+  const f = await fixture(
+    (_request, index) =>
+      [
+        minter("execute", step("src/book.mjs"), "first"),
+        minter("execute", step("src/book-copy.mjs"), "copy"),
+        minter("execute", step("src/book-changed.mjs"), "changed"),
+      ][index] ?? respond(message("Stopped.")),
+    {
+      reviewAndExecute: allowedStep((entrypoint) =>
+        Effect.sync(() => {
+          dispatched.push(entrypoint);
+          return {
+            executionId: `write_${entrypoint}`,
+            status: "completed" as const,
+            effect: "possible" as const,
+            resultRef: "booking_result",
+            observations: { page: "Table booked." },
+          };
+        }),
+      ),
+      outcomeReview: reviewHost(scriptedReviewer(() => respond(message("Waiting."))).provider).host,
+    },
+    { effect: "write" },
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  for (const [path, text] of Object.entries({
+    "src/book.mjs": sdkStep,
+    "src/book-copy.mjs": sdkStep,
+    "src/book-changed.mjs": `${sdkStep}// Changed.\n`,
+  }))
+    await writeFile(join(root, path), text);
+  const outcome = await f.run();
+
+  // Each write is tracked with its source's digest, and a changed source has another digest.
+  const digests = (outcome.writes ?? []).map(({ write }) => [
+    write.entrypoint,
+    write.sourceDigest,
+  ]);
+  expect(digests).toEqual([
+    ["src/book.mjs", expect.any(String)],
+    ["src/book-changed.mjs", expect.any(String)],
+  ]);
+  expect(digests[0]?.[1]).not.toBe(digests[1]?.[1]);
+  // The copy is the same source, so it is refused as a repeat; the changed source runs.
+  expect(dispatched).toEqual(["src/book.mjs", "src/book-changed.mjs"]);
+  expect(toolOutput(f.requests[2] as ModelRequest, "copy")).toMatchObject({
+    status: "unsupported",
+  });
 });
 
 // Fails when the reviewer cannot see minter history from before a compaction: the request the
