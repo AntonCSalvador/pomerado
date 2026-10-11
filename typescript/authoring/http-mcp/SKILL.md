@@ -64,9 +64,9 @@ lead, not proof that a request made the data.
 
 **Location, store and dates.** Set them the way the page's own request does: a URL parameter, a
 cookie the page's location call sets, or the same POST. Read the applied value back from the
-answer. If the tool must apply a location or store and the HTTP version can't, don't use HTTP:
-rule it out with `location_not_applicable`. Results that differ from the example only because
-they used another location are a failed test, not a difference to note.
+answer. If the Playwright version applies a location or store and the HTTP version can't,
+don't use HTTP: rule it out with `location_not_applicable`. Results that differ from the example
+only because they used another location are a failed test, not a difference to note.
 
 ## When it can't port
 
@@ -245,8 +245,8 @@ refuses literal tokens.
   - Compare with the example: same records, IDs, fields and units. Differences in order, ranking,
     time or personalisation are notes for coverage, not a reason to delete a version that answers
     the input. A field the example has and yours lacks is a bug to fix. A location, store, filter
-    or other input that wasn't applied fails the test; if the HTTP version can't apply it, don't
-    use HTTP (`location_not_applicable`).
+    or other input the example applied and yours didn't fails the test; if the HTTP version
+    can't apply it, don't use HTTP (`location_not_applicable`).
 - **Read why it failed:** a failed execution's `result.cause.class` says where the failure
   came from. `transport`: the relay, proxy or provider could not complete the request, so the
   site's answer never came back; `cause.http` has the request, `transport`, `durationMs`, the

@@ -46,8 +46,9 @@ it; none is required, and one case may serve several:
   but greys out, such as a sold-out size, which a read returns as unavailable data;
 - page two, with `next_page` or a cursor copied from a result, holding other results than page
   one;
-- a location applied and read back, and one the site cannot apply (`error`, a loud failure, never
-  results for another place);
+- a location or other input that tailors the answer applied and read back, and one the site
+  won't apply (`result`, with the applied value beside the requested one and the site's message,
+  never presented as the requested one's results);
 - the example's own input once more, which runs on a fresh browser where the host has them;
 - whatever you saw this site could break on while exploring: a panel that loads late, a pop-up,
   a layout that changes with the number of results, a value written differently on another page.
@@ -72,7 +73,9 @@ About 10 to 20 cases is typical. Write them in `test/cases.json`:
 `purpose` says in a sentence what the case establishes. `expect` is `result`, `empty`,
 `invalid_input` or `error`: a loud refusal the tool throws on purpose, `InputNotApplied`; any
 other throw is a bug and fails the case. Expect `empty`, `invalid_input` or `error` only for an
-input the site really has no results for, does not offer or cannot apply. Use real values the site offers, which you saw while
+input the site really has no results for, does not offer or cannot apply; an input that tailors
+the answer and that the site won't apply expects `result`, labeled with the applied value. Use
+real values the site offers, which you saw while
 exploring: listed options, places, dates, counts, records and retailers the site lists. Never use
 a person's, account's or record's name, number or code, and never the caller's own values beyond
 the example's input. List under `notTested` anything the tool claims that you chose not to test,
@@ -84,8 +87,8 @@ Guardian review covers the batch; each case starts like the example, on its own 
 where the host has them, and you get every result: its status, what it returned, and a failure's
 error with the source line that threw. Name cases in action `plan` to read their full outputs,
 and check what they mean, not just pass or fail: every item matches the filters, the order follows
-the sort, the applied location is the one asked for, page 2 differs from page 1. A failing case is
-a bug in the tool: fix the code at that line. Never drop the input, narrow the schema or change a
+the sort, the applied location is the one asked for or labeled as another, page 2 differs from
+page 1. A failing case is a bug in the tool: fix the code at that line. Never drop the input, narrow the schema or change a
 case's expectation to match what it returned to make it pass; fix the code. A
 run that returns partly filled results, or passes only when run again, is missing a wait for
 content: fix the wait, not the retry, then run that input again a few times.
