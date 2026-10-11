@@ -137,6 +137,7 @@ describe("validateAnswer", () => {
     ["the MCP form's listed entry with a masked label", "card (Card ending 42)", "card"],
     ["one option's id with another's label", "go (Stop)", { other: "go (Stop)" }],
     ["a label two options share", "Same", { other: "Same" }],
+    ["a label without its accents", "Abaca", "abaca"],
     ["none", "Continue at https://y.invalid", { other: "Continue at https://y.invalid" }],
   ])("takes a choice's own text that repeats %s as a pick only of one option", (_, text, value) => {
     const choice = Schema.decodeUnknownSync(InputRequest)({
@@ -159,6 +160,7 @@ describe("validateAnswer", () => {
             },
             { id: "same_a", label: "Same" },
             { id: "same_b", label: "Same" },
+            { id: "abaca", label: "Abacá" },
           ],
         },
       ],
