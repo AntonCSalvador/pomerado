@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   armStep,
   decodeSignInRecipe,
+  keptValue,
   makeSentTracker,
   noteFormSubmit,
   openSignInRecord,
@@ -422,6 +423,26 @@ describe("the seen-sent rule", () => {
         ),
       ).toEqual(["code"]);
       expect([...signIn.submittedSlots].sort()).toEqual(["code", "email"]);
+    });
+
+    it("holds a code typed one character per box as one code, which a request carries whole", async () => {
+      const boxes = { fields: [1, 2, 3, 4, 5, 6].map((box) => ({ selector: `#otp-${box}`, slot: "code" as const })) };
+      const boxesScreen = { ...screen, targets: { fields: boxes.fields.map(() => target), submit: null } };
+      const signIn = openSignInRecord();
+      armStep(signIn, emailStep, screen, ["synthetic-email"], 0, signInOrigins);
+      await Effect.runPromise(noteFormSubmit(signIn, 1, emailRequest("email=synthetic-email"), carries));
+      armStep(signIn, boxes, boxesScreen, ["2", "4", "6", "8", "1", "0"], 2, signInOrigins);
+      expect(signIn.pending.get("code")).toBe("246810");
+      // A request with the last box's digit alone carries no code.
+      expect(await Effect.runPromise(noteFormSubmit(signIn, 3, verifyRequest("step=0"), carries))).toEqual([]);
+      expect(signIn.proofCarried).toBeUndefined();
+      expect(
+        await Effect.runPromise(noteFormSubmit(signIn, 4, verifyRequest("code=246810"), carries)),
+      ).toEqual(["code"]);
+      expect(signIn.proofCarried).toBe(true);
+      expect(keptValue(boxes, ["2", "4", "6", "8", "1", "0"], 5)).toBe("246810");
+      // A longer code field keeps its own value.
+      expect(keptValue(codeStep, ["246810"], 0)).toBe("246810");
     });
   });
 

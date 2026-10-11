@@ -39,6 +39,8 @@ interface FillReply {
   readonly kept?: readonly string[];
   /** The fill's own report, in place of a filled screen whose submit was clicked. */
   readonly report?: AutofillStepReport;
+  /** The page sent nothing, whatever the report says: no request goes out. */
+  readonly unheard?: true;
 }
 interface SiteScript {
   /** Each page's visible controls, by page name. */
@@ -133,7 +135,11 @@ const scriptedSite = (script: SiteScript) => {
         };
         // A clicked submit posts the screen's form; a page that sent the values itself sends them
         // from its own script.
-        if (report.outcome === "filled" && (report.submit === "clicked" || report.submit === "page"))
+        if (
+          reply.unheard !== true &&
+          report.outcome === "filled" &&
+          (report.submit === "clicked" || report.submit === "page")
+        )
           for (const listener of [...listeners])
             listener({
               url: at(page),
@@ -714,6 +720,25 @@ it("asks for one new code, saying the site refused the last, when a code screen 
   ]);
   expect(fake.filled("code")).toEqual([["111111"], [code]]);
   expect(codeRefusedPrompts(prompts)).toHaveLength(1);
+});
+
+it("never says the site refused a code that a code screen only seemed to send itself, as no request carried it", async () => {
+  const fake = scriptedSite({
+    entry: "login",
+    screens: { login: loginScreen, code: ["#code"], account: [] },
+    fill: (page, values) =>
+      page === "login"
+        ? signedLogin(values)
+          ? { next: "code" }
+          : {}
+        : { report: sentByPage("code"), unheard: true },
+  });
+  const { result, prompts } = await signIn(recipe(loginStep, pageSentStep), fake);
+  expect(result).toEqual(
+    Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "sign_in_check_failed" })),
+  );
+  expect(steps(fake)).toEqual(["ask:missing_credentials", "fill:login", "ask:code", "fill:code"]);
+  expect(codeRefusedPrompts(prompts)).toEqual([]);
 });
 
 it("never takes a code screen that sent its code itself for signed in while the site keeps showing it", async () => {
