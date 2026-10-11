@@ -289,6 +289,203 @@ test("chooseOption matches a name whatever its apostrophe style", async ({ page 
   expect(await submitted(page)).toEqual({ shop: "2" });
 });
 
+const places = `<form><label>Place<select name="place">
+<option value="">Choose</option><option value="1">Abacá</option><option value="2">St. Louis</option>
+<option value="3">Lyon</option></select></label></form>`;
+
+test("chooseOption matches a name whatever its accents", async ({ page }) => {
+  await page.setContent(places);
+  expect(await call(page, `return await chooseOption(page.getByLabel("Place"), "Abaca");`)).toEqual({
+    result: { shape: "select", label: "Abacá", value: "1" },
+  });
+  expect(await submitted(page)).toEqual({ place: "1" });
+});
+
+test("chooseOption matches a name with or without its periods", async ({ page }) => {
+  await page.setContent(places);
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Place"), "St Louis");`),
+  ).toEqual({ result: { shape: "select", label: "St. Louis", value: "2" } });
+  expect(await submitted(page)).toEqual({ place: "2" });
+});
+
+test("chooseOption matches a hyphenated name spelled with a space", async ({ page }) => {
+  const cities = [
+    ["SD", "Saint-Denis"],
+    ["SE", "Saint-Étienne"],
+    ["LY", "Lyon"],
+  ] as const;
+  await page.setContent(`<form>${dropdown("City", cities)}</form>`);
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("City"), "Saint Denis");`),
+  ).toEqual({ result: { shape: "combobox", label: "Saint-Denis", value: "SD" } });
+  expect(await submitted(page)).toEqual({ City: "SD" });
+});
+
+test("chooseOption refuses two options that differ only by accents", async ({ page }) => {
+  await page.setContent(`<form><label>Place<select name="place">
+<option value="1">Abaca</option><option value="2">Abacá</option></select></label></form>`);
+  expect(await call(page, `return await chooseOption(page.getByLabel("Place"), "Abaca");`)).toEqual({
+    error: "option_ambiguous",
+  });
+  expect(await submitted(page)).toEqual({ place: "1" });
+});
+
+test("chooseOption picks the one label that holds the whole phrase", async ({ page }) => {
+  await page.setContent(`<form><label>Customer<select name="customer">
+<option value="">Choose</option><option value="7">Acme insurance Customer</option>
+<option value="8">Acme Bank Customer</option></select></label></form>`);
+  const customer = 'page.getByLabel("Customer")';
+  expect(await call(page, `return await chooseOption(${customer}, "Acme insurance");`)).toEqual({
+    result: { shape: "select", label: "Acme insurance Customer", value: "7" },
+  });
+  // Only whole words count: part of a word matches nothing.
+  expect(await call(page, `return await chooseOption(${customer}, "Acme insur");`)).toEqual({
+    error: "option_missing",
+  });
+  expect(await submitted(page)).toEqual({ customer: "7" });
+});
+
+test("chooseOption refuses two labels that both hold the phrase", async ({ page }) => {
+  await page.setContent(`<form><label>Customer<select name="customer">
+<option value="">Choose</option><option value="7">Acme insurance Customer</option>
+<option value="9">Acme insurance Vendor</option></select></label></form>`);
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Customer"), "Acme insurance");`),
+  ).toEqual({ error: "option_ambiguous" });
+  expect(await submitted(page)).toEqual({ customer: "" });
+});
+
+// Symbols such as +, # and & are part of a name, so a name never loses them to match a label.
+for (const [wanted, labels] of [
+  ["C++", ["C", "Java"]],
+  ["C#", ["C"]],
+  ["+", ["&"]],
+  // main gives option_missing here too: the label's words drop its symbols.
+  ["C++", ["C++ Developer", "Java"]],
+] as const)
+  test(`chooseOption finds no option for ${wanted} among ${labels.join(", ")}`, async ({ page }) => {
+    const options = labels.map((label, index) => `<option value="${index + 1}">${label}</option>`);
+    await page.setContent(`<form><label>Skill<select name="skill">
+<option value="">Choose</option>${options.join("")}</select></label></form>`);
+    expect(
+      await call(page, `return await chooseOption(page.getByLabel("Skill"), ${JSON.stringify(wanted)});`),
+    ).toEqual({ error: "option_missing" });
+    expect(await submitted(page)).toEqual({ skill: "" });
+  });
+
+test("chooseOption still picks a label that holds the name as a word between symbols", async ({
+  page,
+}) => {
+  await page.setContent(`<form><label>Size<select name="size">
+<option value="">Choose</option><option value="m">Size (M)</option><option value="l">Size (L)</option>
+</select></label><label>Color<select name="color">
+<option value="">Choose</option><option value="bg">Blue/Green</option><option value="r">Red</option>
+</select></label><label>Month<select name="month">
+<option value="">Choose</option><option value="7">Month: July</option><option value="6">Month: June</option>
+</select></label></form>`);
+  expect(await call(page, `return await chooseOption(page.getByLabel("Size"), "M");`)).toMatchObject(
+    { result: { label: "Size (M)", value: "m" } },
+  );
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Color"), "Blue");`),
+  ).toMatchObject({ result: { label: "Blue/Green", value: "bg" } });
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Month"), "July");`),
+  ).toMatchObject({ result: { label: "Month: July", value: "7" } });
+  expect(await submitted(page)).toEqual({ size: "m", color: "bg", month: "7" });
+});
+
+// A period, comma or dash before a digit belongs to a number, as in -5, 1.5 and 1-5.
+for (const [wanted, labels, outcome] of [
+  ["5", ["+5", "0", "-5"], { error: "option_ambiguous" }],
+  ["-5", ["5", "10"], { error: "option_missing" }],
+  ["1.5 years", ["1-5 years", "6-10 years"], { error: "option_missing" }],
+  ["-5", ["-5", "5"], { result: { shape: "select", label: "-5", value: "a" } }],
+] as const)
+  test(`chooseOption keeps a number's sign and separators: ${wanted} among ${labels.join(", ")}`, async ({
+    page,
+  }) => {
+    const options = labels.map((label, index) => `<option value="${"abc"[index]}">${label}</option>`);
+    await page.setContent(`<form><label>Amount<select name="amount">
+<option value="">Choose</option>${options.join("")}</select></label></form>`);
+    expect(
+      await call(page, `return await chooseOption(page.getByLabel("Amount"), ${JSON.stringify(wanted)});`),
+    ).toEqual(outcome);
+    expect(await submitted(page)).toEqual({ amount: "result" in outcome ? outcome.result.value : "" });
+  });
+
+test("chooseOption still folds a period or hyphen before a letter beside numbers", async ({
+  page,
+}) => {
+  await page.setContent(`<form><label>Place<select name="place">
+<option value="">Choose</option><option value="1">St. Louis</option><option value="2">Saint-Denis</option>
+<option value="3">1-5 years</option><option value="4">1.5 miles</option></select></label></form>`);
+  const place = 'page.getByLabel("Place")';
+  expect(await call(page, `return await chooseOption(${place}, "St Louis");`)).toMatchObject({
+    result: { label: "St. Louis", value: "1" },
+  });
+  expect(await call(page, `return await chooseOption(${place}, "Saint Denis");`)).toMatchObject({
+    result: { label: "Saint-Denis", value: "2" },
+  });
+  expect(await submitted(page)).toEqual({ place: "2" });
+});
+
+// Punctuation next to a digit on either side belongs to the value, and a value of punctuation
+// alone names no option, not even one with an empty label.
+for (const [wanted, labels] of [
+  ["5-", ["5", "10"]],
+  ["5'10", ["510", "6'0"]],
+  ["-", ["", "Other"]],
+] as const)
+  test(`chooseOption finds no option for ${JSON.stringify(wanted)} among ${JSON.stringify(labels)}`, async ({
+    page,
+  }) => {
+    const options = labels.map((label, index) => `<option value="${"abc"[index]}">${label}</option>`);
+    await page.setContent(`<form><label>Height<select name="height">
+<option value="">Choose</option>${options.join("")}</select></label></form>`);
+    expect(
+      await call(page, `return await chooseOption(page.getByLabel("Height"), ${JSON.stringify(wanted)});`),
+    ).toEqual({ error: "option_missing" });
+    expect(await submitted(page)).toEqual({ height: "" });
+  });
+
+test("chooseOption still folds punctuation between letters beside a value with digits", async ({
+  page,
+}) => {
+  await page.setContent(`<form><label>Name<select name="name">
+<option value="">Choose</option><option value="1">St. Louis</option><option value="2">Saint-Denis</option>
+<option value="3">OBrien</option><option value="4">5'10</option><option value="5">1-5 years</option>
+</select></label></form>`);
+  const name = 'page.getByLabel("Name")';
+  expect(await call(page, `return await chooseOption(${name}, "St Louis");`)).toMatchObject({
+    result: { label: "St. Louis", value: "1" },
+  });
+  expect(await call(page, `return await chooseOption(${name}, "Saint Denis");`)).toMatchObject({
+    result: { label: "Saint-Denis", value: "2" },
+  });
+  expect(await call(page, `return await chooseOption(${name}, "O'Brien");`)).toMatchObject({
+    result: { label: "OBrien", value: "3" },
+  });
+  expect(await submitted(page)).toEqual({ name: "3" });
+});
+
+test("chooseOption keeps a value of punctuation alone as it is, never blank", async ({ page }) => {
+  await page.setContent(`<form><label>Code<select name="code">
+<option value="">Choose</option><option value="a"></option><option value="b">-</option>
+</select></label></form>`);
+  const code = 'page.getByLabel("Code")';
+  // "-" names the option labelled "-", never the one with an empty label.
+  expect(await call(page, `return await chooseOption(${code}, "-");`)).toEqual({
+    result: { shape: "select", label: "-", value: "b" },
+  });
+  // Blank stays blank and names nothing.
+  expect(await call(page, `return await chooseOption(${code}, "  ");`)).toEqual({
+    error: "option_missing",
+  });
+  expect(await submitted(page)).toEqual({ code: "b" });
+});
+
 test("a failure names its reason, never the value", async ({ page }) => {
   await page.setContent(`<form><label>Date of birth<input name="dob"></label>
 <label>Month<select name="month"><option>7</option></select></label></form>`);

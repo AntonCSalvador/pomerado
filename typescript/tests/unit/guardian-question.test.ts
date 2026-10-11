@@ -398,7 +398,7 @@ it("reviews every string the caller will see, screened, but no host-held login d
 
 // Later reviews hear each plain answer with its question, as the minter does, and
 // never a protected one, which only the broker or the credential store holds.
-it("gives a review every plain answer, screened and masked, and no secret, login or notice confirm", async () => {
+it("gives a review every plain answer, screened and masked, and no secret or login", async () => {
   const request: Pick<InputRequest, "questions"> = {
     questions: [
       {
@@ -487,17 +487,6 @@ it("gives a review every plain answer, screened and masked, and no secret, login
     { question: "<Which extras?>", answer: ["<Audit log>", "<Single sign-on>"] },
     { question: "<Continue?>", answer: { confirmed: true, text: "<Platform>" } },
   ]);
-  const notice = await Effect.runPromise(
-    answersForReview(
-      {
-        notice: "Approve the sign-in on your phone.",
-        questions: [{ id: "done", type: "confirm", prompt: "Did you do it?" }],
-      },
-      { done: { type: "confirm", value: { confirmed: true } } },
-      Effect.succeed,
-    ),
-  );
-  expect(notice).toEqual([]);
 });
 
 it("gives a review the owner's own option and note beside their picks, as the owner's own words", async () => {
@@ -634,4 +623,23 @@ it("takes an off-site origin named only in an option the owner picked or typed b
       ownerNamedOrigins: ["https://acme.tenant.example.org", "https://branch.example.net"],
     },
   });
+});
+
+// A minter's confirm question beside a notice is the owner's answer to that question, and later
+// reviews trust it like any other plain answer.
+it("gives a review the owner's confirm answer beside a notice", async () => {
+  const request: Pick<InputRequest, "notice" | "questions"> = {
+    notice: "Nothing has been submitted yet.",
+    questions: [{ id: "approve", type: "confirm", prompt: "Do you approve the site's terms?" }],
+  };
+  const reviewed = await Effect.runPromise(
+    answersForReview(
+      request,
+      { approve: { type: "confirm", value: { confirmed: true } } },
+      Effect.succeed,
+    ),
+  );
+  expect(reviewed).toEqual([
+    { question: "Do you approve the site's terms?", answer: { confirmed: true } },
+  ]);
 });
