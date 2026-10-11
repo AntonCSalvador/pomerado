@@ -639,11 +639,13 @@ const growing = (mechanism: ListMechanism) =>
  *
  * When the segment a later page opens (`pages`, `next_link`, `api`) shows neither that row nor any
  * row the cursor remembers, rows removed above may have pulled them back, or rows inserted above
- * pushed them on. It reads the previous segment by its page number, which finds them after
- * removals of up to about a segment's rows, but only when that fits within the call's reads with
- * one left to start over: a reader reaches a page by its number by following Next from the first
- * page, so that read costs one read per page and is never taken deep in a list. Then it looks up
- * to two segments on, keeping that read. When neither direction shows them, it starts over from
+ * pushed them on. It looks up to two segments on, keeping a read to start over, and reads the
+ * previous segment by its page number, which finds them after removals of up to about a segment's
+ * rows. A reader reaches a page by its number by following Next from the first page, so that read
+ * costs one read per page: when the previous segment is the list's first it is read before looking
+ * on, since a start over needs it too; an earlier one is read after, only when it fits within the
+ * call's reads with one left to start over, never deep in a list. When neither direction shows
+ * them, it starts over from
  * the list's first segment in the same call: after that row or the last remembered row when that
  * segment shows one, else from the list's first row, repeating rows rather than skipping any. A
  * step back or a start over sets `list_changed`. A start over, or a page continued from a
@@ -782,18 +784,26 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
     reads++;
     segments = [await reader.more(opened, Math.max(segmentRowsMax, opened.rows.length))];
   }
-  if (lost() && reads + (base - 1) + (base - 1 === 1 ? 0 : 1) <= budget && timeLeft()) {
-    // Removals above pull the anchor back into the previous segment more often than new rows
-    // push every remembered row a whole segment on, so that segment is read next, when reaching
-    // it fits within the call's reads with one left to start over.
+  // The previous segment, read whole: the call resumes there when it shows the anchor or a
+  // returned row.
+  const stepBack = async () => {
     const back = await readBack(base - 1);
     if (inSight(back.rows)) {
       steppedBack = true;
       base--;
       segments = back.more ? [back] : [back, ...segments];
     } else previous = { page: base - 1, segment: back };
-  }
+  };
+  // Removals above pull the anchor back into the previous segment. When that is the list's first,
+  // one read reaches it, and a start over needs it anyway: read it before looking on.
+  if (lost() && base === 2 && reads < budget && timeLeft()) await stepBack();
   await readOn();
+  // An earlier previous segment costs one read per page: read it only when that fits within the
+  // call's reads with one left to start over.
+  if (lost() && previous === undefined && reads + base <= budget && timeLeft()) {
+    await stepBack();
+    if (steppedBack) await readOn();
+  }
   if (lost() && (previous?.page === 1 || (reads + 1 <= budget && timeLeft()))) {
     // Neither direction shows them: start over from the list's first segment, continuing after
     // the anchor or a returned row when it shows one, else from its first row.
