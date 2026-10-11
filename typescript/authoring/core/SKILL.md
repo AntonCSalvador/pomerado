@@ -100,9 +100,9 @@ pomerado:section core.execute-calls:end -->
   `InvalidInput` at once, starting "Caller input error:" and naming the field and the rule.
   Hold in the input schema every rule it can express. The caller-input skill, "Validate it,
   and fail with the right error", lists the rules and when to throw each error.
-- When the page does not apply a valid value the caller supplied, such as a location, store,
-  filter, sort or date it ignored, reset or replaced with its own, after the tool's bounded
-  retries, throw
+- When the page does not apply a valid value the caller supplied, such as a filter, sort or
+  date it ignored, reset or replaced with its own (on a write, a location or store too), after
+  the tool's bounded retries, throw
   `new errors.InputNotApplied(message, { field, requested, applied, step, siteMessage })`:
   `field` the input's name, `requested` the caller's value, `applied` the value the page kept
   as read back (left out when it shows none), `step` the tool's step that failed, such as
@@ -110,7 +110,7 @@ pomerado:section core.execute-calls:end -->
   The run then fails and returns nothing computed without the caller's value. Never report the
   value as not applied in the output instead, such as a `sort_applied: false` flag or a
   "lookup-only" description, and never let an answer to a question make a supplied value
-  optional. An input that tailors the answer, such as a location or store, is the one
+  optional. An input that tailors the answer, such as a location or store, is an
   exception: when the site still won't apply it, a read returns the site's own answer labeled
   with the value it applied (the input schema, "Inputs that tailor the answer", below). On a
   write, check it before the first commit step: a write that may already have changed the site
@@ -237,12 +237,15 @@ that asks.
     for and that it is sent to the site. Submit only what the caller gave; never invent or reuse
     details. A name, email or phone is offered only when the site won't apply the input without
     it. A step that creates an account or a lasting record on the site is a write, so a read
-    stops before it.
-  - Only when the site still won't apply what the caller gave: return what the site did show,
-    with the value it actually applied (`applied_<input>`) beside the one the caller asked for,
-    and the site's message in a short note field. Never present it as the answer for the
-    caller's value. A location the site says it does not serve is such a case: return the
-    site's own answer with its message.
+    stops before it. While building, the example's step that enters a name, email or phone asks
+    the owner first (`request_input`), since the execution review escalates it otherwise.
+  - Only when the site still won't apply what the caller gave, on a read: return what the site
+    did show, with the value it actually applied (`applied_<input>`, null only when the page
+    shows none) beside the one the caller asked for, and the site's message in a short note
+    field, `<input>_note`, such as `zip_note`, which also says why when the applied value is
+    null. Never present it as the answer for the caller's value. A location the site says it
+    does not serve is such a case: return the site's own answer with its message. A write throws
+    `InputNotApplied` (above) before its first commit step instead.
   - Inputs that narrow the results (filters, sort, dates) stay strict: a value the page ignores
     throws `InputNotApplied` (above).
   - While building, ask the owner for a location or other tailoring value the result depends on
@@ -252,8 +255,8 @@ that asks.
   - Setting a location, store or delivery or pickup mode in the run's own browser is part of
     the read, never a write, even through a Save button: the run's browser is fresh and
     discarded, so nothing is saved, and a tool that never signs in has no account to change.
-    Entering a guest address or other detail the caller gave to apply it is part of the read
-    too, unless the step creates an account or a lasting record (above). In a signed-in tool,
+    Entering a guest address the caller gave to apply it is part of the read too; a name, email
+    or phone follows the rules above. In a signed-in tool,
     use the site's per-visit control and never save an address, default store or preference to
     the account.
 - A choice the request, the caller or the owner declined, or a step they said not to take (no

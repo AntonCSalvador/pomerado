@@ -180,10 +180,11 @@ such forms save each step as you go. A read build may not fill in or advance suc
 form (it asks the caller and changes its task to a write with `mint_update` first, as the
 writes skill says); a write build does the whole form as its one task. A search, filter or query form
 whose read semantics are established stays a read, and so does a signed-out store or location
-form filled only with details the caller gave, unless it creates an account or a lasting record
-(core skill). A signed-out quote or price form that only fetches is a read too, but
-entering a name, email, phone number or similar personal detail into it is a write: ask the
-caller first, as the writes skill says.
+form (core skill). A signed-out quote or price form that only fetches is a read too, but a form
+that sends a name, email, phone number or similar personal detail creates a lead or other
+lasting record on the site, so it is a write: ask the caller first, as the writes skill says. A
+step that only sets an input that tailors the answer, with details the caller gave and nothing
+saved, is part of the read (core skill, "Inputs that tailor the answer").
 
 - Walk every step for real, in the session, with the caller's values. Never infer a
   later step's fields, options or wording in place of reaching it; the page after
