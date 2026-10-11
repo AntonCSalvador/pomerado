@@ -48,8 +48,9 @@ inputs use (see "Apply and read back").
 
 ## Apply and read back
 
-On every run, set each input the site has a control for through that control, never by filtering
-the returned rows, then read it back from the site's committed state: the applied-filter chips,
+On every run, set each input the site has a control for through that control, or through the URL
+or data request the site itself uses for it when the control is unreliable (testing skill), never
+by filtering the returned rows, then read it back from the site's committed state: the applied-filter chips,
 the selected sort, an option the site shows selected, or the results header. A URL naming the
 input does not show it applied. When a filter did not apply, the tool throws `OperationFailure`
 naming it, so the run fails and the tool gets repaired; it never returns unfiltered results as

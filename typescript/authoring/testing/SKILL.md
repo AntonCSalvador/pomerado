@@ -87,8 +87,19 @@ the sort, the applied location is the one asked for, page 2 differs from page 1.
 a bug in the tool: fix the code at that line. Never drop the input, narrow the schema or change a
 case's expectation to match what it returned to make it pass; fix the code. A
 run that returns partly filled results, or passes only when run again, is missing a wait for
-content: fix the wait, not the retry, then run that input again a few times. After the example
-passes, read its returned fields once at the answer and again about 10 s later on the same page; a
+content: fix the wait, not the retry, then run that input again a few times.
+
+A case that keeps failing at the same control after two fixes is usually a custom widget, not a
+missing wait: a styled checkbox or option whose click does not change its state, a drawer that
+hydrates late, or a list that reloads and drops the choice. Stop reworking the click. Look at
+what the site did when that control did apply, in a probe or the captures where the host keeps
+them. When the results URL then carries the choice, apply it through that URL (`AGENTS.md`,
+"Work through the page's own controls"). When the page's own data request takes it as a field
+and its answer echoes what applied, apply it there in `src/tool-http.mjs`; when that version
+passes the cases, run the example on it, and the tool publishes `http` alone (http-mcp skill).
+Either way, read the input back from the site's committed state or the answer.
+
+After the example passes, read its returned fields once at the answer and again about 10 s later on the same page; a
 field that changed is filled late, so wait for it in source or describe it as live, such as a
 countdown. A run that sits idle after its answer showed, or opens controls its input did not use,
 works for more than it returns: trim it. Read every string in each result. After each run with
