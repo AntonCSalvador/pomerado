@@ -396,6 +396,41 @@ test("chooseOption still picks a label that holds the name as a word between sym
   expect(await submitted(page)).toEqual({ size: "m", color: "bg", month: "7" });
 });
 
+// A period, comma or dash before a digit belongs to a number, as in -5, 1.5 and 1-5.
+for (const [wanted, labels, outcome] of [
+  ["5", ["+5", "0", "-5"], { error: "option_ambiguous" }],
+  ["-5", ["5", "10"], { error: "option_missing" }],
+  ["1.5 years", ["1-5 years", "6-10 years"], { error: "option_missing" }],
+  ["-5", ["-5", "5"], { result: { shape: "select", label: "-5", value: "a" } }],
+] as const)
+  test(`chooseOption keeps a number's sign and separators: ${wanted} among ${labels.join(", ")}`, async ({
+    page,
+  }) => {
+    const options = labels.map((label, index) => `<option value="${"abc"[index]}">${label}</option>`);
+    await page.setContent(`<form><label>Amount<select name="amount">
+<option value="">Choose</option>${options.join("")}</select></label></form>`);
+    expect(
+      await call(page, `return await chooseOption(page.getByLabel("Amount"), ${JSON.stringify(wanted)});`),
+    ).toEqual(outcome);
+    expect(await submitted(page)).toEqual({ amount: "result" in outcome ? outcome.result.value : "" });
+  });
+
+test("chooseOption still folds a period or hyphen before a letter beside numbers", async ({
+  page,
+}) => {
+  await page.setContent(`<form><label>Place<select name="place">
+<option value="">Choose</option><option value="1">St. Louis</option><option value="2">Saint-Denis</option>
+<option value="3">1-5 years</option><option value="4">1.5 miles</option></select></label></form>`);
+  const place = 'page.getByLabel("Place")';
+  expect(await call(page, `return await chooseOption(${place}, "St Louis");`)).toMatchObject({
+    result: { label: "St. Louis", value: "1" },
+  });
+  expect(await call(page, `return await chooseOption(${place}, "Saint Denis");`)).toMatchObject({
+    result: { label: "Saint-Denis", value: "2" },
+  });
+  expect(await submitted(page)).toEqual({ place: "2" });
+});
+
 test("a failure names its reason, never the value", async ({ page }) => {
   await page.setContent(`<form><label>Date of birth<input name="dob"></label>
 <label>Month<select name="month"><option>7</option></select></label></form>`);

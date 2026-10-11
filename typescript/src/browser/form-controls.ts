@@ -98,7 +98,7 @@ const formControlText = (text) =>
     .replace(/[̀-ͯ]/g, "")
     .normalize("NFC")
     .replace(/['‘’ʼ]/g, "")
-    .replace(/[.,\-‐‑‒–—]/g, " ")
+    .replace(/[.,\-‐‑‒–—](?!\p{N})/gu, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
