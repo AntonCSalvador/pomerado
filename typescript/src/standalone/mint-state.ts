@@ -23,7 +23,6 @@ import { screenMintText } from "../mint/workspace.js";
 import { Deadline } from "../runtime/deadline.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import type { InputAsker } from "../runtime/input-request.js";
-import type { CommitEvidence } from "../runtime/run-outcome.js";
 import { askingValueHooks } from "../runtime/sign-in-values.js";
 import { mintSessionSignIns, signedInAtEntry } from "../runtime/session-sign-in.js";
 import {
@@ -247,16 +246,13 @@ export const mintState = (
     /**
      * The build's one write session: whether its first act step dispatched, and the agent's
      * `exampleInput` it runs when the caller sent none (fixed by the first act step that passed
-     * one), its act steps in order for publication's checks with what each one's commit report
-     * proved, and the confirm popups its act steps accepted.
+     * one), its act steps in order for publication's checks, and the confirm popups its act
+     * steps accepted.
      */
     const writeSession: {
       started: boolean;
       input: Readonly<Record<string, unknown>> | undefined;
-      readonly steps: (WriteSessionMarks & {
-        readonly executionId: string;
-        readonly commit: CommitEvidence;
-      })[];
+      readonly steps: (WriteSessionMarks & { readonly executionId: string })[];
     } & ConfirmSession = {
       started: false,
       input: undefined,
@@ -264,7 +260,7 @@ export const mintState = (
       acceptedConfirms: [],
       confirmSteps: new Set(),
     };
-    /** The owner's answers to scripts' questions a rerun of their step may reuse. */
+    /** The owner's answers to scripts' questions that the same question asked again reuses. */
     const scriptAnswers: { kept: readonly KeptScriptAnswer[] } = { kept: [] };
     /** Each one-time login URL publication already asked about, so finishing again publishes it. */
     const oneTimeLoginUrlsAsked = new Set<string>();

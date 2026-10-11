@@ -1,7 +1,7 @@
-// Failure modes covered: a later step asks the owner again for an answer it may reuse, or changes
-// its shape; a step reuses an answer twice, too old, to another question, no longer valid for the
-// question as asked, to a code, secret or login, after the owner answered its prompt anew, or
-// after an earlier step entered a commit or may have.
+// Failure modes covered: a script's ask asks the owner again for an answer it may reuse, whether in
+// the step that got it, again in one run or long after the owner gave it, or changes its shape; a
+// step reuses an answer to another question, no longer valid for the question as asked, to a code,
+// secret or login, or after the owner answered its prompt anew.
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import type { InputRequest, ValidAnswers } from "../../src/runtime/input-request.js";
@@ -9,8 +9,6 @@ import {
   forgetScriptAnswers,
   keptScriptAnswers,
   reusedScriptAnswers,
-  scriptAnswerReuseMs,
-  scriptCommitsUnsent,
   scriptQuestionKeys,
   type KeptScriptAnswer,
 } from "../../src/standalone/script-answer-reuse.js";
@@ -34,10 +32,10 @@ const plan = request([
 const answered: ValidAnswers = { plan: { type: "choice", value: "gold" } };
 const keys = (asked: InputRequest) =>
   Effect.runSync(scriptQuestionKeys(asked, (text) => Effect.succeed(text)));
-const kept = (asked: InputRequest, answers: ValidAnswers, nowMs = 0) =>
-  keptScriptAnswers([], keys(asked), answers, { executionId: "first", nowMs });
-const later = (asked: InputRequest, entries: readonly KeptScriptAnswer[], nowMs = 1) =>
-  reusedScriptAnswers(asked, keys(asked), entries, { executionId: "later", nowMs })?.answers;
+const kept = (asked: InputRequest, answers: ValidAnswers) =>
+  keptScriptAnswers([], keys(asked), answers);
+const later = (asked: InputRequest, entries: readonly KeptScriptAnswer[]) =>
+  reusedScriptAnswers(asked, keys(asked), entries);
 
 describe("a later step's script question", () => {
   it("reuses the owner's answer to the same question in a fresh answer's shape", () => {
@@ -48,26 +46,14 @@ describe("a later step's script question", () => {
     expect(later(approve, kept(approve, declined))).toEqual(declined);
   });
 
-  it("asks again within the step that asked, and once the answer is as old as the window", () => {
+  it("reuses an answer as often as the question comes back, and keeps it until replaced", () => {
     const entries = kept(plan, answered);
-    expect(
-      reusedScriptAnswers(plan, keys(plan), entries, { executionId: "first", nowMs: 1 }),
-    ).toBeUndefined();
-    // A step reuses an answer once: asking again, as before a second try at its commit, asks.
-    const reused = reusedScriptAnswers(plan, keys(plan), entries, { executionId: "two", nowMs: 1 });
-    expect(reused?.answers).toEqual(answered);
-    const after = reused?.kept ?? [];
-    expect(reusedScriptAnswers(plan, keys(plan), after, { executionId: "two", nowMs: 2 })).toBe(
-      undefined,
-    );
-    expect(
-      reusedScriptAnswers(plan, keys(plan), after, { executionId: "three", nowMs: 2 })?.answers,
-    ).toEqual(answered);
-    expect(later(plan, entries, scriptAnswerReuseMs - 1)).toEqual(answered);
-    expect(later(plan, entries, scriptAnswerReuseMs)).toBeUndefined();
-    // A later answer drops the expired one.
-    const late = { executionId: "late", nowMs: scriptAnswerReuseMs };
-    expect(keptScriptAnswers(entries, keys(request([])), {}, late)).toEqual([]);
+    // Reusing leaves the kept answer in place, so every later ask of the same question reuses it.
+    for (let ask = 0; ask < 3; ask++) expect(later(plan, entries)).toEqual(answered);
+    // A kept answer carries no time and no step, so neither age nor the asking step ends it.
+    expect(entries).toEqual([{ question: keys(plan)[0], answer: answered["plan"] }]);
+    // Only a newer answer to the same prompt replaces it; another prompt's answer keeps it.
+    expect(keptScriptAnswers(entries, keys(request([])), {})).toEqual(entries);
   });
 
   it("asks again when the question's id, type, prompt, options or follow-up changed", () => {
@@ -120,6 +106,24 @@ describe("a later step's script question", () => {
     ]);
     const codeAnswer: ValidAnswers = { code: { type: "secret", value: "{{secret.s1}}" } };
     expect(kept(code, codeAnswer)).toEqual([]);
+    const protectedOnes = request([
+      { id: "pin", type: "secret", secretKind: "private_text", prompt: "What is your PIN?" },
+      {
+        id: "login",
+        type: "credential",
+        prompt: "Sign in to the site",
+        fields: "username_password",
+        reason: "missing_credentials",
+        allowSave: false,
+        siteOrigin: "https://example.com",
+      },
+    ]);
+    expect(keys(protectedOnes)).toEqual([undefined, undefined]);
+    const protectedAnswers: ValidAnswers = {
+      pin: { type: "secret", value: "{{secret.s2}}" },
+      login: { type: "credential", value: { username: "a", password: "b", saveLogin: false } },
+    };
+    expect(kept(protectedOnes, protectedAnswers)).toEqual([]);
     // One protected question in a request asks the whole request again.
     const both = request([...plan.questions, ...code.questions]);
     expect(later(both, kept(both, { ...answered, ...codeAnswer }))).toBeUndefined();
@@ -137,30 +141,8 @@ describe("a later step's script question", () => {
       { ...question, options: [...question.options, { id: "bronze", label: "Bronze" }] },
     ]);
     const bronze: ValidAnswers = { plan: { type: "choice", value: "bronze" } };
-    const step = { executionId: "second", nowMs: 1 };
-    const newer = keptScriptAnswers(entries, keys(wider), bronze, step);
-    expect(later(plan, newer, 2)).toBeUndefined();
-    expect(later(wider, newer, 2)).toEqual(bronze);
-  });
-});
-
-describe("whether a build's commits are still unsent", () => {
-  const act = (commit: "not_entered" | "entered" | "undeclared" | "unreported") => ({
-    executionId: "act",
-    commit,
-  });
-
-  it("holds while every finished act step entered none of its declared commits", () => {
-    expect(scriptCommitsUnsent({ actSteps: [], writeSteps: [] })).toBe(true);
-    expect(scriptCommitsUnsent({ actSteps: [act("not_entered")], writeSteps: ["act"] })).toBe(true);
-  });
-
-  it("fails once an earlier step entered a commit or may have", () => {
-    for (const commit of ["entered", "undeclared", "unreported"] as const)
-      expect(scriptCommitsUnsent({ actSteps: [act(commit)], writeSteps: [] })).toBe(false);
-    // A step Guardian labelled a write that is no act step has no commit report to rely on.
-    expect(scriptCommitsUnsent({ actSteps: [act("not_entered")], writeSteps: ["example"] })).toBe(
-      false,
-    );
+    const newer = keptScriptAnswers(entries, keys(wider), bronze);
+    expect(later(plan, newer)).toBeUndefined();
+    expect(later(wider, newer)).toEqual(bronze);
   });
 });

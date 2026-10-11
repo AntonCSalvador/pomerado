@@ -16,6 +16,7 @@ import {
   isIdentifier,
   isSecret,
   keepNamedOrigins,
+  keptValue,
   makeSentTracker,
   namedUntrustedOrigins,
   openSignInRecord,
@@ -492,9 +493,10 @@ export const makeSignInRecorder = <E>(input: {
           ]),
         );
         if (named !== undefined) return named;
-        // A value the site rejected is never sent again, whoever gave it.
+        // A value the site rejected is never sent again, whoever gave it. A code typed into
+        // one-character boxes is one code.
         const recorded = step.fields.flatMap((field, index) => {
-          const value = filledValues[index];
+          const value = keptValue(step, filledValues, index);
           return field.slot === "private_answer" || value === undefined
             ? []
             : [{ field: field.slot, value }];

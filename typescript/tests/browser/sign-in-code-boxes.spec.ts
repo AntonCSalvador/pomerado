@@ -1,0 +1,224 @@
+import { expect, test, type Page } from "@playwright/test";
+import type { Request } from "playwright";
+import { Effect } from "effect";
+import { localSignInLogin, makeSignInBrowser } from "../../src/standalone/authentication.js";
+import { makeInputAsker } from "../../src/inputs/callback.js";
+import { makeRunSecrets } from "../../src/inputs/secrets.js";
+import type { SignInRequest } from "../../src/destinations/sign-in-recipe.js";
+import { signInForRun } from "../../src/runtime/sign-in-replay.js";
+import { askingValueHooks } from "../../src/runtime/sign-in-values.js";
+import { expectNotCarried, hostKeyboard, hostPage } from "./autofill-host-page.js";
+
+// A run's sign-in whose code screen is six one-character boxes with no form and no button, whose
+// own script sends the code once every box holds a digit. The run asks for the code once, types
+// one digit in each box, and counts the code as sent once the page's request carries it whole.
+
+const site = "https://bank.example.test";
+const host = "bank.example.test";
+const code = "246810";
+const login = { username: "owner@bank.example.test", password: "synthetic-password" };
+// A sign-in screen, then six boxes filled one focus and one insertion at a time, and a refused
+// code's wait for the account: more than the default 30 s allows on a busy machine.
+test.describe.configure({ timeout: 120_000 });
+
+const boxes = [1, 2, 3, 4, 5, 6]
+  .map(
+    (box) =>
+      `<input id="otp-${box}" name="d${box}" class="otp" maxlength="1" inputmode="numeric" aria-label="Digit ${box}"${box === 1 ? ' autocomplete="one-time-code"' : ""}>`,
+  )
+  .join("");
+
+/**
+ * The code screen: once every box holds a digit, the widget puts a "Verifying" line in place of
+ * the boxes, or with `quiet` sends nothing and draws its boxes again, empty, a moment later. An
+ * accepted code shows the account; a refused one draws the boxes again, empty, under an error.
+ */
+const widget = (quiet: boolean) => `<main id="view">${boxes}</main><p id="error"></p>
+<script>
+const view = document.getElementById("view");
+const boxes = () => [...document.querySelectorAll(".otp")];
+let sending = false;
+const again = (error) => {
+  sending = false;
+  view.innerHTML = ${JSON.stringify(boxes)};
+  document.getElementById("error").textContent = error;
+  listen();
+  boxes()[0].focus();
+};
+const listen = () => boxes().forEach((box, index) => box.addEventListener("input", () => {
+  const next = boxes()[index + 1];
+  if (box.value !== "" && next) next.focus();
+  const typed = boxes().map((each) => each.value).join("");
+  if (sending || !/^[0-9]{6}$/.test(typed)) return;
+  sending = true;
+  view.replaceChildren(Object.assign(document.createElement("p"), { id: "verifying", textContent: "Verifying" }));
+  if (${JSON.stringify(quiet)}) {
+    setTimeout(() => again("Try again"), 500);
+    return;
+  }
+  fetch("/api/code", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: typed }) })
+    .then((response) => {
+      if (response.ok) view.innerHTML = '<p id="account">Signed in</p>';
+      else again("Wrong code");
+    });
+}));
+listen();
+</script>`;
+
+/**
+ * The site: a sign-in form at /login that posts to /session, whose page sends the browser on to
+ * the code screen at /verify. It keeps each code the widget sends and each sign-in form post.
+ */
+const serve = async (page: Page, quiet = false) => {
+  const sent: string[] = [];
+  const posted: string[] = [];
+  await page.route(`${site}/**`, async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "POST" && path === "/api/code") {
+      const body: unknown = JSON.parse(request.postData() ?? "{}");
+      const typed: unknown = Reflect.get(Object(body), "code");
+      sent.push(typeof typed === "string" ? typed : "");
+      await route.fulfill({ status: typed === code ? 200 : 400, contentType: "application/json", body: "{}" });
+    } else if (request.method() === "POST" && path === "/session") {
+      posted.push(request.postData() ?? "");
+      await route.fulfill({ contentType: "text/html", body: '<script>location.replace("/verify")</script>' });
+    } else if (path === "/verify")
+      await route.fulfill({ contentType: "text/html", body: widget(quiet) });
+    else
+      await route.fulfill({
+        contentType: "text/html",
+        body: '<form method="post" action="/session"><label>Email<input id="email" name="email"></label><label>Password<input id="password" name="password" type="password"></label><button id="sign-in">Sign in</button></form>',
+      });
+  });
+  return { sent, posted };
+};
+
+const recipe = {
+  version: 2,
+  steps: [
+    {
+      page: `${site}/login`,
+      fields: [{ selector: "#email", accepts: ["email"] }, { selector: "#password", slot: "password" }],
+      submit: "#sign-in",
+      submittedBy: "host",
+    },
+    {
+      page: `${site}/verify`,
+      fields: [1, 2, 3, 4, 5, 6].map((box) => ({ selector: `#otp-${box}`, slot: "code" as const })),
+    },
+  ],
+  signedIn: { selector: "#account" },
+} as const;
+
+/** Each request `page` sends, as the executor reports it, until the returned function stops it. */
+const pageRequests = (page: Page) => (listener: (request: SignInRequest) => void) => {
+  const heard = (request: Request) => {
+    const document = request.isNavigationRequest();
+    listener({
+      url: request.url(),
+      method: request.method(),
+      body: request.postData(),
+      channel: document ? "navigation" : "http",
+      ...(document ? { frame: request.frame() === page.mainFrame() ? "main" : "sub" } : {}),
+      resourceType: request.resourceType(),
+    });
+  };
+  page.on("request", heard);
+  return () => page.off("request", heard);
+};
+
+/**
+ * One run's sign-in with the recipe, answering each code ask with the next of `codes`, and every
+ * ask after those with the last, as an owner asked again for the code just given would.
+ */
+const run = async (page: Page, codes: readonly string[]) => {
+  const browser = await hostPage(page);
+  const { keyboard } = await hostKeyboard(page);
+  const secrets = makeRunSecrets();
+  const prompts: string[] = [];
+  const queue = [...codes];
+  const ask = makeInputAsker((request) =>
+    Effect.sync(() => {
+      const question = request.questions[0];
+      prompts.push(question?.type === "credential" ? "login" : (question?.prompt ?? ""));
+      return question?.type === "credential"
+        ? { login: { ...login, saveLogin: false } }
+        : { [question?.id ?? "code"]: (queue.length > 1 ? queue.shift() : queue[0]) ?? "" };
+    }),
+  );
+  const result = await Effect.runPromise(
+    Effect.either(
+      signInForRun({
+        recipe,
+        entryUrl: `${site}/login`,
+        browser: makeSignInBrowser({
+          page: browser,
+          keyboard,
+          siteOrigin: site,
+          authenticationOrigins: [],
+          onRequest: pageRequests(page),
+          typing: { typed: false },
+        }),
+        login: localSignInLogin({ ask, register: secrets.register, siteOrigin: site }),
+        values: askingValueHooks({ ask, register: secrets.register, site: host, siteOrigin: site }),
+        carries: secrets.carries,
+        site: host,
+        siteOrigin: site,
+        timing: { stepWaitMs: 8_000, pollMs: 250 },
+      }),
+    ),
+  );
+  for (const value of [...codes, login.password]) expectNotCarried(browser.calls, value);
+  return { result, prompts };
+};
+
+const codePrompt = `Enter the sign-in code ${host} sent you.`;
+const refusedPrompt = `The site did not accept the last code, so it needs a new one. ${codePrompt}`;
+
+test("a run signs in through six code boxes that send themselves, asking for the code once, and the site gets it once", async ({
+  page,
+}) => {
+  const { sent, posted } = await serve(page);
+  const { result, prompts } = await run(page, [code]);
+  expect(result).toMatchObject({ _tag: "Right", right: { alreadySignedIn: false } });
+  expect(prompts).toEqual(["login", codePrompt]);
+  expect(sent).toEqual([code]);
+  expect(posted).toHaveLength(1);
+  await expect(page.locator("#account")).toBeVisible();
+});
+
+test("a run asks for one new code, saying the site refused the last, when six code boxes that sent a wrong code show again", async ({
+  page,
+}) => {
+  const { sent } = await serve(page);
+  const { result, prompts } = await run(page, ["135791", code]);
+  expect(result).toMatchObject({ _tag: "Right", right: { alreadySignedIn: false } });
+  expect(prompts).toEqual(["login", codePrompt, refusedPrompt]);
+  expect(sent).toEqual(["135791", code]);
+});
+
+test("a run never says the site refused a code that six code boxes only seemed to send", async ({
+  page,
+}) => {
+  const { sent } = await serve(page, true);
+  const { result, prompts } = await run(page, [code, "135791"]);
+  expect(result).toMatchObject({
+    _tag: "Left",
+    left: { code: "RecipeFailed", reason: "sign_in_check_failed" },
+  });
+  expect(prompts).toEqual(["login", codePrompt]);
+  expect(sent).toEqual([]);
+});
+
+test("a run types nothing into six code boxes for a code that does not fit them", async ({ page }) => {
+  const { sent } = await serve(page);
+  const { result, prompts } = await run(page, ["12345"]);
+  expect(result).toMatchObject({
+    _tag: "Left",
+    left: { code: "NeedsInput", reason: "sign_in_value" },
+  });
+  expect(prompts).toEqual(["login", codePrompt]);
+  expect(sent).toEqual([]);
+  for (const box of [1, 2, 3, 4, 5, 6]) await expect(page.locator(`#otp-${box}`)).toHaveValue("");
+});

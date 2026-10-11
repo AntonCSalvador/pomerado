@@ -377,8 +377,14 @@ export const makeSignInValues = <E>(hooks: SignInValueHooks<E>, site: string) =>
         ),
       );
     });
-  /** A code, asked again after a rejection twice at most, never one the site rejected. */
-  const codeValue = (context: StepValueContext) =>
+  /**
+   * A code, asked again after a rejection twice at most, never one the site rejected. For a
+   * screen of `boxes` code fields, one-character boxes, it is the code without the spaces and
+   * hyphens it is often written with (`123 456`), masked as such, so what the host types and
+   * rules out after a refusal is the code the site gets. One that then leaves other than one
+   * character per box cannot be the screen's code, so none is filled (`code_shape`).
+   */
+  const codeValue = (context: StepValueContext, boxes = 1) =>
     Effect.gen(function* () {
       const code = context.code;
       while (true) {
@@ -387,8 +393,12 @@ export const makeSignInValues = <E>(hooks: SignInValueHooks<E>, site: string) =>
           code.requests.current += 1;
         }
         const answered = yield* hooks.code(code?.again === "rejected" ? { again: "rejected" } : {});
-        if (answered instanceof Unanswered || code?.rejected.has(answered.value) !== true)
-          return answered;
+        if (answered instanceof Unanswered) return answered;
+        const bare = answered.value.replaceAll(/[\s-]/gu, "");
+        if (boxes > 1 && Array.from(bare).length !== boxes) return new Unanswered("code_shape");
+        const value = boxes > 1 ? bare : answered.value;
+        if (value !== answered.value) yield* hooks.register("code", value);
+        if (code?.rejected.has(value) !== true) return { ...answered, value };
         if (code.again !== "rejected") return new Unanswered("code_already_rejected");
       }
     });
@@ -421,13 +431,31 @@ export const makeSignInValues = <E>(hooks: SignInValueHooks<E>, site: string) =>
   return {
     /**
      * The step's values in field order, and the step with the kind each identifier field was sent,
-     * which an answer to a field that takes several kinds decides; else why one is missing.
+     * which an answer to a field that takes several kinds decides; else why one is missing. A
+     * step's code fields share one code, asked once, one character in each of its boxes; a code
+     * that does not fit them fills none (`code_shape`).
      */
     valuesFor: (step: AutofillStep, context: StepValueContext) =>
       Effect.gen(function* () {
         const values: string[] = [];
         const fields: AutofillField[] = [];
+        // A screen carries one code, asked once: several code fields are one-character boxes,
+        // which take one of its characters each, in order.
+        const boxes = step.fields.filter((field) => field.slot === "code").length;
+        let characters: readonly string[] | undefined;
+        let box = 0;
         for (const [index, field] of step.fields.entries()) {
+          if (field.slot === "code" && boxes > 1) {
+            if (characters === undefined) {
+              const found = yield* codeValue(context, boxes);
+              if (found instanceof Unanswered) return found;
+              characters = Array.from(found.value);
+            }
+            values.push(characters[box] ?? "");
+            box += 1;
+            fields.push(field);
+            continue;
+          }
           const found = yield* valueFor(field, index, context);
           if (found instanceof Unanswered) return found;
           values.push(found.value);

@@ -392,7 +392,7 @@ const laterAsk = async (steps: {
   }
 };
 
-test("a later step before any commit went out reuses the owner's answer to its script's question", async () => {
+test("a later step reuses the owner's answer to its script's question", async () => {
   test.setTimeout(90_000);
   const { scriptAsks, guardian } = await laterAsk({
     first: askThenFail,
@@ -406,23 +406,30 @@ test("a later step before any commit went out reuses the owner's answer to its s
   ]);
 });
 
-test("a later step asks the owner again once an earlier step entered its commit", async () => {
+test("a later step reuses the owner's answer even after an earlier step entered its commit", async () => {
   test.setTimeout(90_000);
   const { scriptAsks } = await laterAsk({
     first: "await ask('approve'); enteringCommit('submit'); throw new Error('Failed after it.');",
     later: "return { approve: await ask('approve') };",
   });
-  expect(scriptAsks).toHaveLength(2);
+  expect(scriptAsks).toHaveLength(1);
 });
 
-test("a later step reuses the owner's answer once, so asking again before a second try asks the owner", async () => {
+test("a step reuses the owner's answer each time its script asks the same question", async () => {
   test.setTimeout(90_000);
-  const { scriptAsks } = await laterAsk({
+  const { scriptAsks, guardian, last } = await laterAsk({
     first: askThenFail,
     later:
       "const first = await ask('approve'); enteringCommit('submit'); return { first, second: await ask('approve') };",
   });
-  expect(scriptAsks).toHaveLength(2);
+  expect(scriptAsks).toHaveLength(1);
+  // Guardian reviewed each of the three asks.
+  expect(guardian.reviews.filter((review) => review.kind === "question")).toHaveLength(3);
+  // Both asks got the owner's yes.
+  const observed: unknown = JSON.parse(String(toolResult(last, "later")?.["observations"]));
+  expect(observed).toMatchObject({
+    output: { first: { confirmed: true }, second: { confirmed: true } },
+  });
 });
 
 test("a later step asks the owner again once the owner answered its prompt anew", async () => {
