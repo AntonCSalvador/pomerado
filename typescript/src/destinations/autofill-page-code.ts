@@ -44,7 +44,8 @@ return {
  *   the focus.
  * - `date`: fills a date of birth with the authoring library's `fillDate`, which needs the page's
  *   own options, so this call's code holds the date (`iso`).
- * - `submit`: guards the submission as it fires (`submissionGuardCode`, under the host's
+ * - `submit`: first reads whether the page sent what was typed itself (`pageSentCode`). Otherwise
+ *   it guards the submission as it fires (`submissionGuardCode`, under the host's
  *   `guardKey` and armed for `guardCall`, with every form action and link destination as the
  *   step's inspection found them, which the page kept under `inspection`, the submission's method
  *   as judged, and how each field's secret is found by value, if it is one), clicks the submit,
@@ -96,6 +97,7 @@ const fillCallCode = (
   call: AutofillFillCall,
   judgedId: string | undefined,
   check: number | null,
+  typedAt: string,
 ) => `const judgment = await kept(${JSON.stringify(judgedId ?? null)});
 const judged = judgment?.targets ?? null;
 const questions = fields.map(({ described }) => described.questionText ?? null);
@@ -125,15 +127,64 @@ if (
   await keep(observed, { targets: found, questions });
   return { changed: found, located, url: primary.url() };
 }
+// Where the page was as the host typed each field, kept in the page under the fill's id, so the
+// submit call compares against it with no address in its code.
+const typedAt = ${JSON.stringify(typedAt)};
+${call.kind === "submit" ? pageSentCode : "await keep(typedAt, primary.url());"}
 const check = ${JSON.stringify(check)};
 if (check !== null) {
   // Its length only, never its value.
   const holds = await fields[check].locator
     .evaluate((element) => typeof element.value === "string" && element.value.length > 0)
     .catch(() => false);
-  if (!holds) return { checked: false, url: primary.url() };
+  if (!holds) {
+    ${call.kind === "submit" ? "if (await allEmptied()) return { pageSent: true, url: primary.url() };" : ""}
+    return { checked: false, url: primary.url() };
+  }
 }
 ${fillCallBody(call)}`;
+
+/**
+ * Page code for the submit call of a step with fields and no submit, once every field is typed and
+ * found as the host judged it: the page sent what was typed itself, as a code widget does on its
+ * last box, when its address names another page than the one the host typed the last field on
+ * (`typedAt`, by origin and path, so a query or hash the page writes as it goes is no move; a
+ * window replaced since keeps no address to compare), or every field is disabled. A step whose
+ * fields are gone was sent too; the host reads that from the call's own refusal to find them.
+ * `allEmptied`, for the check of the field typed last, reads whether the page emptied every field
+ * of such a step of several, as a widget does when it draws its boxes again after the site refused
+ * what it sent: the host saw each earlier field hold its value when it typed the next. Lengths
+ * only, never a value. A step with a submit is the host's to click: a form that locks, moves or
+ * redraws itself while it checks what was typed has not sent it, and the submit call waits on it
+ * or refuses as before.
+ */
+const pageSentCode = `const originAndPath = (url) => {
+  try {
+    const at = new URL(url);
+    return at.origin + at.pathname;
+  } catch {
+    return null;
+  }
+};
+if (fields.length > 0 && submit === null) {
+  const typedPage = await kept(typedAt);
+  if (typeof typedPage === "string" && originAndPath(typedPage) !== originAndPath(primary.url()))
+    return { pageSent: true, url: primary.url() };
+  const fieldsDisabled = await Promise.all(
+    fields.map(({ locator }) => locator.isDisabled({ timeout: 1000 }).catch(() => false)),
+  );
+  if (fieldsDisabled.every(Boolean)) return { pageSent: true, url: primary.url() };
+}
+const allEmptied = async () => {
+  if (fields.length < 2 || submit !== null) return false;
+  for (const { locator } of fields) {
+    const empty = await locator
+      .evaluate((element) => typeof element.value === "string" && element.value.length === 0)
+      .catch(() => false);
+    if (!empty) return false;
+  }
+  return true;
+};`;
 
 const fillCallBody = (call: AutofillFillCall) => {
   if (call.kind === "focus")
@@ -289,6 +340,8 @@ export const autofillStepCode = (
     readonly call: AutofillFillCall;
     readonly judged: string | undefined;
     readonly check: number | null;
+    /** The fill's id for where the page was as each field was typed. */
+    readonly typedAt: string;
   },
 ) => `${autofillPageCode(targetId, step.popup)}
 let popupTargetId;
@@ -319,7 +372,7 @@ if (submit !== null && "error" in submit) return { ...submit, target: "submit", 
 if (submit !== null && submit.inert)
   return { error: "not_editable", target: "submit", located: submit.located, url: primary.url() };
 const located = { fields: fields.map((field) => field.located), submit: submit === null ? null : submit.located };
-${fill === undefined ? inspectCode : fillCallCode(fill.call, fill.judged, fill.check)}`;
+${fill === undefined ? inspectCode : fillCallCode(fill.call, fill.judged, fill.check, fill.typedAt)}`;
 
 /** What named a control when the host inspected it, each as `clip` keeps it. */
 export interface ControlIdentity {
