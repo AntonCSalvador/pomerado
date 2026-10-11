@@ -33,8 +33,9 @@ not mechanical variations of the example's input. Start as soon as you know the 
 inputs, and refine the cases once the example passes. Consider each of these where the site has
 it; none is required, and one case may serve several:
 - every input, alone and together with the others;
-- smart combinations: controls that share a panel, a drawer or a page reload, controls that could
-  undo or hide each other, and the combination a real caller would most likely send;
+- smart combinations: controls that share a panel, a drawer or a page reload, a location or store
+  set with a filter, controls that could undo or hide each other, and the combination a real
+  caller would most likely send;
 - different real values unlike the example's: another retailer, store or seller, another
   category, a record whose page is laid out differently (a single option, grouped options, a
   multi-item page, sold out); for other reads, another route, date range or region, another
@@ -89,6 +90,13 @@ case's expectation to match what it returned to make it pass; fix the code. A
 run that returns partly filled results, or passes only when run again, is missing a wait for
 content: fix the wait, not the retry, then run that input again a few times.
 
+A filter or sort case that fails because the results lost the choice is often order or waiting,
+not the control. Apply the location or store first, then every filter and sort, and after each
+control that reloads the list wait for that reload to finish, the list or the results header
+changing and then settling, never for every card's values to hold (search skill). A run whose
+inputs applied and that then fails reading a price needs a tolerant price reader, not a new route
+(search skill).
+
 A case that keeps failing at the same control after two fixes is usually a custom widget, not a
 missing wait: a styled checkbox or option whose click does not change its state, a drawer that
 hydrates late, or a list that reloads and drops the choice. Stop reworking the click. Look at
@@ -102,43 +110,42 @@ from the site's committed state or the answer.
 
 After the example passes, read its returned fields once at the answer and again about 10 s later
 on the same page; a field that changed is filled late, so wait for it in source or describe it as
-live, such as a countdown. A run that sits idle after its answer showed, or opens controls its input did not use,
-works for more than it returns: trim it. Read every string in each result. After each run with
-output the host reports output checks: values that hold code, styles, markup or template
-leftovers, text read collapsed or cut short, a whole card's text, repeated entries or records, and
-fields that never vary or are always empty. Check each against the page: fix a wrong value at the
-read in source, never by cleaning the string afterwards; a correct value needs no change
-(publication skill). Set each `include` value the tool offers in at least one live run, and add
-any case that catches a real risk. A tool that returns a list runs page two live with the cursor
-page one returned, and reaches a last page (pagination skill).
+live, such as a countdown. A run that sits idle after its answer showed, or opens controls its
+input did not use, works for more than it returns: trim it. Read every string in each result.
+After each run with output the host reports output checks: values that hold code, styles, markup
+or template leftovers, text read collapsed or cut short, a whole card's text, repeated entries or
+records, and fields that never vary or are always empty. Check each against the page: fix a wrong
+value at the read in source, never by cleaning the string afterwards; a correct value needs no
+change (publication skill). Set each `include` value the tool offers in at least one live run, and
+add any case that catches a real risk. A tool that returns a list runs page two live with the
+cursor page one returned, and reaches a last page (pagination skill).
 
-Results count only for the version, the source and the case as they ran: an edit makes them
-stale. Finish in this order: make your last edit, run the cases again on each version you ship,
-run the example last, then call `finish_build`. Publication review reads the host's record of
-your cases (`publication/tests.json`), not your account of them, and judges them against what
-the tool claims: a failing case, or a claim no passing case tests while time remained, holds
-publication back. Deleting or changing a
-case after it failed does not hide the failure: the record keeps its last result as retired, and
-so does a failure that passes when run again on the same code, as flaky. When
-`live_tests` answers `no_time`, run the example last and publish; the record says time ran out.
+Results count only for the version, the source and the case as they ran: an edit makes them stale.
+Finish in this order: make your last edit, run the cases again on each version you ship, run the
+example last, then call `finish_build`. Publication review reads the host's record of your cases
+(`publication/tests.json`), not your account of them, and judges them against what the tool
+claims: a failing case, or a claim no passing case tests while time remained, holds publication
+back. Deleting or changing a case after it failed does not hide the failure: the record keeps its
+last result as retired, and so does a failure that passes when run again on the same code, as
+flaky. When `live_tests` answers `no_time`, run the example last and publish; the record says time
+ran out.
 
 When the host offers no `live_tests`, a read signed out runs its cases one input at a time
 instead: execute purpose `test`, target `liveBrowser`, with `testInput`, the tool's input as JSON
 text; the host may limit how many.
 
-Test the HTTP version, `src/tool-http.mjs`, the same way as `src/tool.mjs`: run the same cases
-as a batch on it with `live_tests` entrypoint `src/tool-http.mjs`, in parallel, and fix it until
+Test the HTTP version, `src/tool-http.mjs`, the same way as `src/tool.mjs`: run the same cases as
+a batch on it with `live_tests` entrypoint `src/tool-http.mjs`, in parallel, and fix it until
 every case passes on it (http-mcp skill). It need not wait for the Playwright version: when every
-case passes on the HTTP version, run the example on it and publish `http` alone, even while a
-case still fails on the Playwright version. Each version keeps its own result for each case: a
-batch on one never replaces or stales the other's, and `plan` shows the results of the entrypoint
-you name. The publication record shows each case's result on each version that ships, and the
-review judges each version from its own results; a version that does not ship is neither recorded
-nor judged. A test of `src/tool-http.mjs`
-counts for the HTTP version only for the source it ran. Where the host offers no `live_tests`,
-run its inputs one at a time with execute, entrypoint `src/tool-http.mjs` and `testInput`, and
-check `testInput` against the schema yourself first: a failed test marks the HTTP version's
-latest live test failed until a later one passes.
+case passes on the HTTP version, run the example on it and publish `http` alone, even while a case
+still fails on the Playwright version. Each version keeps its own result for each case: a batch on
+one never replaces or stales the other's, and `plan` shows the results of the entrypoint you name.
+The publication record shows each case's result on each version that ships, and the review judges
+each version from its own results; a version that does not ship is neither recorded nor judged. A
+test of `src/tool-http.mjs` counts for the HTTP version only for the source it ran. Where the host
+offers no `live_tests`, run its inputs one at a time with execute, entrypoint `src/tool-http.mjs`
+and `testInput`, and check `testInput` against the schema yourself first: a failed test marks the
+HTTP version's latest live test failed until a later one passes.
 
 The example uses the caller's input, or your `exampleInput` when that input is empty, and offline
 tests always use the caller's input. If a test shows the schema must widen, widen it in source;
