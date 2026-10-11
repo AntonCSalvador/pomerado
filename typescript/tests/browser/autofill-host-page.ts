@@ -73,13 +73,16 @@ export const hostPage = async (
             (script, origin) => script.replaceAll(JSON.stringify(origin), ""),
             withoutIds(code),
           );
+          // One character turns up in any script by chance. A test checks a value typed one
+          // character per field, such as a code in boxes, whole with `expectNotCarried`.
           for (const value of typed.get(page) ?? [])
-            expect
-              .soft(
-                holds(checked, value),
-                "A typed value reached a Kernel call's script",
-              )
-              .toBe(false);
+            if (value.length > 1)
+              expect
+                .soft(
+                  holds(checked, value),
+                  "A typed value reached a Kernel call's script",
+                )
+                .toBe(false);
           const run: unknown = runInThisContext(
             `(async (page, context, browser) => {\n${code}\n})`,
           );
