@@ -1312,13 +1312,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       const keepAnswers = (submitted: AgentInputRequest, answers: ValidAnswers) =>
         Effect.forEach(submitted.questions, (question) =>
-          answersForReview(
-            {
-              ...(submitted.notice === undefined ? {} : { notice: submitted.notice }),
-              questions: [question],
-            },
-            answers,
-            (text) => screenMintText(dependencies, text),
+          answersForReview({ questions: [question] }, answers, (text) =>
+            screenMintText(dependencies, text),
           ).pipe(
             Effect.tap(([entry]) =>
               Effect.sync(() => {
