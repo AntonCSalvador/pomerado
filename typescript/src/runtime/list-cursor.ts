@@ -82,6 +82,8 @@ export interface ListCursorScope {
 }
 
 const wirePrefix = "pc1";
+/** How far apart two hosts' clocks may be when one checks a cursor's age from another's. */
+const clockSkewMs = 5_000;
 const keyedDigestLength = 16;
 
 /** The signed part of a cursor: the draft, the tool, the inputs, the caller and its lifetime. */
@@ -243,7 +245,11 @@ export const admitListCursor = (input: unknown, scope: ListCursorScope): ListCur
   if (signed.op !== bound?.op) return refused("other_tool");
   if (signed.sub !== bound.sub) return refused("other_account");
   if (signed.ih !== bound.ih) return refused("inputs_changed");
-  if (scope.now >= signed.exp * 1000) return refused("expired");
+  // A cursor ends at its own expiry, and never later than this host's lifetime after it was
+  // issued, with a few seconds for clocks that differ: a host with a longer lifetime may have
+  // signed it.
+  const ends = Math.min(signed.exp * 1000, signed.iat * 1000 + listCursorTtlMs + clockSkewMs);
+  if (scope.now >= ends) return refused("expired");
   if (signed.pos.href !== undefined && !onSite(signed.pos.href, scope.siteOrigin))
     return refused("off_site");
   const { v: _v, op: _op, ih: _ih, sub: _sub, iat: _iat, exp: _exp, ...draft } = signed;

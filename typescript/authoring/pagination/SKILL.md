@@ -104,18 +104,24 @@ by key as they show. Never treat a repeated click as safe if it could submit or 
 
 Lists change between calls. `readList` reads from the segment that holds the last row the
 previous call returned and continues after that row, wherever it now is: rows inserted above it
-push the window down, and `readList` reads more of the segment or the next one so the call still
-returns `limit` rows. It drops rows already returned and says
-`list_changed` when that row is gone or a returned row came back; when that row is gone, it
-repeats rows rather than skipping them. When the site applied a context the caller did not set,
-such as a location it picked, return it as the segment's `context`, so a different one sets
-`list_changed`. Never promise a snapshot the site does not keep.
+push the window down, and `readList` reads more of the segment or the next ones, looking for that
+row when new rows pushed it past its segment, so the call still returns `limit` rows. It drops
+rows already returned. `list_changed` is true when anything changed at or above that row: it
+moved from where the cursor saw it, because rows were inserted above it (rows the caller never
+gets) or rows it already got were removed, within its segment or across into another; it is gone;
+or a returned row came back. Rows that change below it are simply returned. When that row and
+every row the cursor remembers are gone, it starts its segment over, repeating rows rather than
+skipping them. When the site applied a context the caller did not set, such as a location it
+picked, return it as the segment's `context`, so a different one sets `list_changed`. Never
+promise a snapshot the site does not keep.
 
 ## Stop
 
 `readList` returns as soon as it holds `limit` rows. Per call it reads at most 5 site pages or
 API responses, or 10 steps, within `remainingMs()`; when a bound stops it, it returns what it
-read with a position that continues. `next_cursor` is null, with `has_more` true and
+read with a position that continues; a call the run's time stopped before it read past its
+position hands back that same position, which a call with more time continues. `next_cursor` is
+null, with `has_more` true and
 `next_cursor_unavailable` saying why, past the deepest position a tool can rebuild without the
 site's link or token (10 site pages or 20 steps, `depth_cap`), when the site's link or token is
 too long for a cursor (`position_too_long`), or when a later call returned no rows and its next
@@ -139,8 +145,11 @@ the host before your code runs, page two and later too, so `open` reaches the po
 signed-in page; after it loads a page, call `ensureSignedIn()`, and open the page again when the
 host signed in again. A cursor never carries a credential or session data: the saved profile
 restores the sign-in, not a page, a server's cursor, drafts or form state, and a site link that
-carries a session, such as `;jsessionid=` or a `sid` parameter, is left out of the cursor, so the
-next call reaches that page by its number. Keep a list's scope, such as a year or tab, in the
+carries a session, a key or a signature, such as `;jsessionid=`, a `sid`, `api_key` or `token`
+parameter or a signed URL, is left out of the cursor, so the next call reaches that page by its
+number. A link whose path names the account, such as its ID, is an account's value too: give such
+segments no `href`, so the position keeps only the page number, and reach the list from the
+site's own navigation. Keep a list's scope, such as a year or tab, in the
 segment's `scope` as the site's own value. Never recreate a hold, draft, upload, payment token or
 write in order to page.
 

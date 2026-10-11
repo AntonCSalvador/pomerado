@@ -141,11 +141,12 @@ test("a list pages by signed cursors across changes and refuses a stale cursor b
           expect(ids(second)).toEqual(["L3", "L4"]);
           expect(second.list_changed).toBe(false);
 
-          // A listing added above the last returned row repeats nothing and skips nothing.
+          // A listing added above the last returned row repeats nothing and skips nothing; the
+          // caller never gets it, so the list says it changed.
           site.listings.unshift("N0");
           const third = yield* run({ query: "lamps", limit: 2, cursor: second.next_cursor });
           expect(ids(third)).toEqual(["L5", "L6"]);
-          expect(third.list_changed).toBe(false);
+          expect(third.list_changed).toBe(true);
 
           // The last returned row is gone: the list says it changed, and the last page has no cursor.
           site.listings.splice(site.listings.indexOf("L6"), 1);
@@ -219,7 +220,7 @@ test("a list whose call size differs from the site's page size returns exact win
   test.info().annotations.push({
     type: "slow",
     description:
-      "Eleven runs of the reference tool on a fixture site with 30 rows per page, each in a fresh run",
+      "Twelve runs of the reference tool on a fixture site with 30 rows per page, each in a fresh run",
   });
   test.setTimeout(150_000);
   const ids = (from: number, to: number) =>
@@ -277,21 +278,29 @@ test("a list whose call size differs from the site's page size returns exact win
           expect(rest).toMatchObject({ next_cursor: null, has_more: false });
 
           // A row inserted above the last returned row pushes the window down its site page:
-          // the call reads on in the same page and still returns exactly its limit.
+          // the call reads on in the same page and still returns exactly its limit. The caller
+          // never gets the inserted row, so the list says it changed.
           site.listings.unshift("N0");
           const inserted = yield* run({ query: "lamps", limit: 5, cursor: first.next_cursor });
           expect(idsOf(inserted)).toEqual(ids(21, 25));
-          expect(inserted.list_changed).toBe(false);
-          // A row removed above it: no gap, no repeat.
+          expect(inserted.list_changed).toBe(true);
+          // A row the caller got removed above it: no gap, no repeat, and the list changed.
           site.listings.splice(site.listings.indexOf("L3"), 1);
           const removed = yield* run({ query: "lamps", limit: 20, cursor: inserted.next_cursor });
           expect(idsOf(removed)).toEqual(ids(26, 45));
-          expect(removed.list_changed).toBe(false);
+          expect(removed.list_changed).toBe(true);
           // The last returned row removed: nothing skipped, and the list says it changed.
           site.listings.splice(site.listings.indexOf("L45"), 1);
           const changed = yield* run({ query: "lamps", limit: 20, cursor: removed.next_cursor });
           expect(idsOf(changed)).toEqual(ids(46, 65));
           expect(changed.list_changed).toBe(true);
+          // A burst of new rows on top pushes the last returned row, and every row the cursor
+          // remembers, past the site page it was on: the call reads on to find it, and returns
+          // the next twenty rather than rows it returned before.
+          site.listings.unshift(...Array.from({ length: 45 }, (_, index) => `B${index + 1}`));
+          const burst = yield* run({ query: "lamps", limit: 20, cursor: changed.next_cursor });
+          expect(idsOf(burst)).toEqual(ids(66, 85));
+          expect(burst.list_changed).toBe(true);
 
           // Ten minutes and a millisecond after it was returned, a cursor ends the run before
           // the site.

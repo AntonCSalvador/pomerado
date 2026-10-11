@@ -22,8 +22,9 @@ export const listCursorMaxLength = 2_048;
 /** How long a cursor can be used after the run that returned it: ten minutes. */
 export const listCursorTtlMs = 600_000;
 /**
- * The most row-key digests a cursor keeps from the rows returned before it: the tail of the last
- * page, which is what a later page needs to drop rows it already returned.
+ * The most row-key digests a cursor keeps from the rows returned before it: the last rows
+ * returned, across calls, which is what a later page needs to drop rows it already returned and
+ * to find its place when the last returned row is gone.
  */
 export const listSeenMax = 16;
 /**
@@ -296,16 +297,20 @@ const pickRows = <Row>(
   let changed = false;
   const position = list.position;
   if (position !== undefined) {
+    // A site token that starts right after the anchor (offset 0) reads rows that cannot hold it.
+    const pastAnchor = position.token !== undefined && position.offset === 0;
     const anchor = list.anchor === undefined ? -1 : digests.lastIndexOf(list.anchor);
-    if (anchor >= 0) start = anchor + 1;
-    else {
+    if (anchor >= 0) {
+      start = anchor + 1;
+      // The anchor moved from where the cursor saw it: rows were inserted or removed above it.
+      // An inserted row is one the caller never gets, and a removed one is gone from rows it got.
+      if (!pastAnchor && anchor !== position.offset - 1) changed = true;
+    } else {
       // The anchor is gone: continue after the last returned row still here, so a removal
       // repeats rows rather than skipping them. A position names the segment that holds the
-      // anchor, so its absence there is a change. Only a site token that starts right after the
-      // anchor (offset 0) reads rows that cannot hold it.
+      // anchor, so its absence there is a change.
       const lastSeen = digests.findLastIndex((digest) => list.seen.has(digest));
       start = lastSeen + 1;
-      const pastAnchor = position.token !== undefined && position.offset === 0;
       if (lastSeen >= 0 || (list.anchor !== undefined && !pastAnchor)) changed = true;
     }
     if (
@@ -336,9 +341,11 @@ const pickRows = <Row>(
  * previous page returned. It continues after the anchor, wherever that row now is. When the
  * anchor is gone, it continues after the last row the previous page returned that is still
  * there, else from the first row, so a change repeats rows rather than skipping them. It drops
- * rows the previous page returned and any key twice. `listChanged` is true when the anchor is
- * gone, a returned row came back or the context the site applied (such as a location it chose)
- * differs. A position whose site `token` starts right after the anchor (offset 0) reads rows that
+ * rows the previous page returned and any key twice. `listChanged` is true when anything changed
+ * at or above the anchor: it moved from the offset the cursor saw it at (rows were inserted or
+ * removed above it, within its segment or across into another), it is gone, a returned row came
+ * back, or the context the site applied (such as a location it chose) differs. Rows that changed
+ * below the anchor are simply returned. A position whose site `token` starts right after the anchor (offset 0) reads rows that
  * cannot hold it, so there the anchor's absence is no change. A key is the row's stable ID; give
  * a promoted copy of a row its own key, such as `sponsored:` plus the ID, to keep both.
  * `readList` calls it for you.
@@ -381,22 +388,27 @@ const fits = (next: ListPosition) =>
   (next.token?.length ?? 0) <= tokenMaxLength &&
   (next.scope?.length ?? 0) <= scopeMaxLength;
 
-/** Parameter names that carry a session or a credential, compared without case. */
+/** Parameter names that carry a session, a credential or a URL signature, compared without case. */
 const sessionParameter =
-  /^(?:j?sessionid|session(?:_?id|_?token|_?key)?|phpsessid|aspsessionid\w*|sid|access_?token|id_?token|auth_?token|password|passwd)$/iu;
+  /^(?:j?sessionid|session_?(?:id|token|key)|php_?sessid|sessid|aspsessionid\w*|sid|cfid|cftoken|access_?token|id_?token|auth_?token|authenticity_?token|csrf_?token|token|api_?key|password|passwd|sig|signature|x-amz-(?:signature|credential|security-token)|x-goog-(?:signature|credential))$/iu;
+
+/** An ASP.NET cookieless session path segment, such as `(S(a1b2c3))`. */
+const cookielessSegment = /^\((?:[A-Z]\([^()]*\))+\)$/u;
 
 /**
- * Whether a site link carries a session or a credential: a user name or password, a path
- * parameter such as `;jsessionid=`, or a session parameter in its query or fragment. A cursor
- * never carries one: the next call signs in through the host instead.
+ * Whether a site link carries a session, a credential or a signature: a user name or password, a
+ * path parameter such as `;jsessionid=`, a cookieless session path segment, or such a parameter
+ * in its query or fragment. A cursor never carries one: the next call signs in through the host
+ * instead.
  */
 const carriesSession = (href: string) => {
   const url = URL.parse(href);
   if (url === null) return false;
   if (url.username !== "" || url.password !== "") return true;
+  const segments = url.pathname.split("/");
+  if (segments.some((segment) => cookielessSegment.test(segment))) return true;
   const names = [
-    ...url.pathname
-      .split("/")
+    ...segments
       .flatMap((segment) => segment.split(";").slice(1))
       .map((parameter) => parameter.split("=")[0] ?? ""),
     ...url.searchParams.keys(),
@@ -421,6 +433,8 @@ const withoutSession = (next: ListPosition): ListPosition => {
  * link or token too long for a cursor, a later page that returned no rows and stayed at the
  * position it started from, such as a list that stalls while the site still offers more (so a
  * caller paging until `has_more` is false still ends), or a host that does not sign cursors. A
+ * call that the run's time stopped before it could read past its position passes `bounded`: its
+ * next cursor then holds the same position, since a call with more time continues there. A
  * site link that carries a session or a credential is left out of the cursor, so the next call
  * reaches that page by its number. The host signs `next_cursor` and fills
  * `next_cursor_expires_at` after the run. `readList` calls it for you.
@@ -435,6 +449,8 @@ export const finishList = <Row>(
     readonly totalResults: number | null;
     readonly listChanged: boolean;
     readonly context?: string;
+    /** The run's time stopped this call before it read past its position; not a stall. */
+    readonly bounded?: boolean;
   },
 ): ListOutput => {
   if (page.rows.length > list.limit)
@@ -460,6 +476,7 @@ export const finishList = <Row>(
   const next = withoutSession(page.next);
   if (
     page.rows.length === 0 &&
+    page.bounded !== true &&
     list.position !== undefined &&
     samePosition(next, list.position)
   )
@@ -469,7 +486,8 @@ export const finishList = <Row>(
   if (!list.signed) return ended("unsigned_host");
   const digests = page.rows.map((row) => listDigest(page.keyOf(row)));
   const anchor = digests.at(-1) ?? list.anchor;
-  const seen = digests.length > 0 ? digests : [...list.seen];
+  // The last rows returned across calls, this call's last.
+  const seen = [...[...list.seen].filter((digest) => !digests.includes(digest)), ...digests];
   const context = page.context === undefined ? list.context : listDigest(page.context);
   const draft = Schema.decodeUnknownEither(ListDraft)({
     m: list.mechanism,
@@ -550,6 +568,9 @@ export interface ListReader<Row, Segment extends ListSegment<Row>> {
   readonly readOnMs?: number;
 }
 
+/** How many segments past the opened one readList looks for an anchor no remembered row shows. */
+const blindSegments = 2;
+
 /** A list read as one growing document: the segment after a step holds every row before it too. */
 const growing = (mechanism: ListMechanism) =>
   mechanism === "append" || mechanism === "scroll" || mechanism === "offset";
@@ -563,8 +584,10 @@ const growing = (mechanism: ListMechanism) =>
  * the last returned row (the site page and its link, the API token, or the fewest steps that load
  * it) and the offset after that row within it, so the next call reaches that segment again and
  * resumes there. Rows inserted or removed in between keep the anchor's guarantees: no row
- * repeated, none skipped, and `list_changed` when the anchor is gone. A list that stops growing
- * while the site still offers more stops this call with `has_more` true.
+ * repeated, none skipped, and `list_changed` when anything changed at or above the anchor. When
+ * new rows pushed the anchor past its segment, it reads on to find it. A list that stops growing
+ * while the site still offers more stops this call with `has_more` true, and a call the run's
+ * time stopped before it read past its position hands back that same position.
  */
 export const readList = async <Row, Segment extends ListSegment<Row>>(
   list: ListStart,
@@ -589,26 +612,74 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
   const budget = whole ? listCallBounds.steps : listCallBounds.sitePages - 1;
   const timeLeft = () =>
     reader.remainingMs === undefined || reader.remainingMs() > (reader.readOnMs ?? 5_000);
+  // Whether the anchor may lie further on: it is not among the rows read, and no row returned
+  // before is either, or those rows run to the last row read. Rows inserted above the anchor push
+  // it on, maybe past the segment the position names; once a returned row is followed by rows
+  // never returned, the anchor is gone instead. With no returned row in sight at all, it looks at
+  // most `blindSegments` segments on, since a removal can also move the anchor back.
+  let blind = 0;
+  const seeking = () => {
+    if (start === undefined || list.anchor === undefined) return false;
+    if (start.token !== undefined && start.offset === 0) return false;
+    const keys = rowsRead().map((row) => listDigest(reader.keyOf(row)));
+    if (keys.includes(list.anchor)) return false;
+    const lastSeen = keys.findLastIndex((key) => list.seen.has(key));
+    if (lastSeen < 0) return blind < blindSegments;
+    return lastSeen === keys.length - 1;
+  };
   let picked = pick();
-  for (let reads = 0; picked.indices.length < list.limit && reads < budget && timeLeft(); reads++) {
+  let outOfTime = false;
+  for (let reads = 0; ; reads++) {
+    const looking = seeking();
+    if (!looking && picked.indices.length >= list.limit) break;
     const last = segments.at(-1);
-    if (last === undefined) break;
-    const lacking = list.limit - picked.indices.length;
+    if (last === undefined || !(last.more || last.hasNext) || reads >= budget) break;
+    if (!timeLeft()) {
+      outOfTime = true;
+      break;
+    }
+    // Looking for the anchor reads a segment at least as large as the last one.
+    const lacking = looking
+      ? Math.max(list.limit, last.rows.length)
+      : list.limit - picked.indices.length;
     if (last.more) {
-      // Rows of this segment still unread come before the next one.
+      // Rows of this segment still unread come before the next one; looking for the anchor
+      // reads all of them at once.
       if (reader.more === undefined) break;
-      const reread = await reader.more(last, last.rows.length + lacking);
+      const reread = await reader.more(
+        last,
+        looking ? Number.MAX_SAFE_INTEGER : last.rows.length + lacking,
+      );
       segments[segments.length - 1] = reread;
       if (reread.rows.length <= last.rows.length) break;
-    } else if (last.hasNext) {
+    } else {
       if (reader.next === undefined) break;
+      if (looking) blind++;
       const following = await reader.next(last, whole ? last.rows.length + lacking : lacking);
       segments.push(following);
       // A list that did not grow after a step stalls while the site still offers more.
       if (whole && following.rows.length <= last.rows.length) break;
-    } else break;
+    }
     picked = pick();
   }
+  const applied = context();
+  // The run's time ran out before this call read past its position, or before it found the
+  // anchor rows inserted above pushed further on: the next call continues from the same position,
+  // which is no stall.
+  if (outOfTime && start !== undefined && (pick().indices.length === 0 || seeking()))
+    return {
+      rows: [],
+      output: finishList(list, {
+        rows: [],
+        keyOf: reader.keyOf,
+        next: start,
+        hasMore: true,
+        totalResults: segments[0]?.totalResults ?? null,
+        listChanged: pick().listChanged,
+        ...(applied === undefined ? {} : { context: applied }),
+        bounded: true,
+      }),
+    };
   picked = pick();
   const read = rowsRead();
   const results = picked.indices.slice(0, list.limit).flatMap((index) => {
@@ -669,7 +740,6 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
         return common;
     }
   };
-  const applied = context();
   return {
     rows: results,
     output: finishList(list, {

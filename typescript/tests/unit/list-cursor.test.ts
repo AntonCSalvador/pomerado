@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { Effect } from "effect";
 import { readFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
@@ -128,11 +129,29 @@ describe("a sealed cursor", () => {
     ).toMatchObject({ ok: true });
     expect(
       admitListCursor({ ...input, cursor }, scope({ now: issuedAt + tenMinutes + 1 })),
-    ).toMatchObject({
-      ok: false,
-      reason: "expired",
-      message: expect.stringContaining("ten minutes"),
-    });
+    ).toMatchObject({ ok: false, reason: "expired" });
+  });
+
+  it("refuses a cursor an older host signed for longer, once ten minutes have passed", () => {
+    // Re-sign a cursor as a host with a longer lifetime would have: same key, an hour's expiry.
+    const sealed = cursorOf(pageOne());
+    const [prefix, keyId, body] = sealed.split(".");
+    const payload = JSON.parse(Buffer.from(body ?? "", "base64url").toString("utf8")) as {
+      iat: number;
+      exp: number;
+    };
+    const longer = Buffer.from(JSON.stringify({ ...payload, exp: payload.iat + 3_600 })).toString(
+      "base64url",
+    );
+    const signed = `${prefix}.${keyId}.${longer}`;
+    const cursor = `${signed}.${createHmac("sha256", new Uint8Array(32).fill(1)).update(signed).digest("base64url")}`;
+    const tenMinutes = 10 * 60 * 1_000;
+    expect(
+      admitListCursor({ ...input, cursor }, scope({ now: issuedAt + tenMinutes - 1 })),
+    ).toMatchObject({ ok: true });
+    expect(
+      admitListCursor({ ...input, cursor }, scope({ now: issuedAt + 30 * 60 * 1_000 })),
+    ).toMatchObject({ ok: false, reason: "expired" });
   });
 
   it("refuses a cursor sent with other inputs", () => {
@@ -286,7 +305,23 @@ describe("the rows a later page returns", () => {
       rows: rows("c", "d"),
       listChanged: false,
     });
-    expect(continued(rows("new", "a", "b", "c"))).toEqual({ rows: rows("c"), listChanged: false });
+    // The caller never gets the inserted row, so the list says it changed.
+    expect(continued(rows("new", "a", "b", "c"))).toEqual({ rows: rows("c"), listChanged: true });
+  });
+
+  it("say the list changed for a row removed above the last returned one, within its page or across", () => {
+    // Page one returned a and b, which end at offset 2 of their site page.
+    const cursor = cursorOf(pageOne({ page: 1, offset: 2, href: "https://www.example.test/s?q=lamps" }));
+    // A row above them removed: b moves up within the page.
+    expect(selectRows(continuing(cursor), rows("b", "c", "d"), keyOf)).toEqual({
+      rows: rows("c", "d"),
+      listChanged: true,
+    });
+    // Enough removed that b moves back to the page before: the page starts after it.
+    expect(selectRows(continuing(cursor), rows("c", "d"), keyOf)).toEqual({
+      rows: rows("c", "d"),
+      listChanged: true,
+    });
   });
 
   it("continue after the last returned row still there, and say so, when the anchor is gone", () => {
