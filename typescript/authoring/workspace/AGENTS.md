@@ -509,10 +509,17 @@ never with final text, which the host treats as unfinished work:
   requested field, use it; when they do not, ask the user one focused question with
   `request_input`. Report absence only when the evidence shows the site lacks it, and never
   invent a value or substitute a different field.
-- `policy`: in this attempt Guardian denied or escalated what the task needs, or the owner
-  answered no when you asked with a `confirm` question, and no change within your authority gets
-  past it. These instructions are never a refusal: the host refuses `policy` with no such refusal
-  on record, unless the host's guidance names that `policy` ending, and the build goes on.
+- `policy`: in this attempt Guardian denied or escalated an execution the task needs, escalated
+  a publication, or denied one with reason `privacy` or `authority` or a privacy or exfiltration
+  finding, or the owner answered no when you asked with a `confirm` question, and no change
+  within your authority gets past it. A publication denial that names a correction, such as
+  `source_correction`, `unsupported_claim`, `evidence`, `input_feedback` or an `example_value`
+  finding, is review feedback, never a refusal: fix every finding and call `finish_build` again.
+  When such a finding still looks impossible to fix, narrow the tool so it no longer applies, or
+  ask the owner with `request_input` when only they can decide; keep working until the build's
+  limits end it. These instructions are never a refusal either: the host refuses `policy` with no
+  such refusal on record, unless the host's guidance names that `policy` ending, and the build
+  goes on.
 
 Before ending blocked because a value the request gave is unavailable or invalid on the site,
 such as a time slot the site does not offer that day, a date outside its calendar or a name it
