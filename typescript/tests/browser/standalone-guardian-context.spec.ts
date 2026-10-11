@@ -342,6 +342,59 @@ async ({ ask }) => ({ note: await ask("note") }));`,
   }
 });
 
+/** A write step whose script asks the owner to approve the site's terms, then runs `then`. */
+const approvingStep = (then: string) => `import { Schema } from "effect";
+import { defineOperation } from "../runtime/index.js";
+export default defineOperation({name:"approve_terms",input:Schema.Unknown,output:Schema.Unknown,questions:{approve:{type:"confirm",prompt:"Do you approve the site terms for this booking?"}},write:{confirmation:"message",commits:["submit"]}},
+async ({ ask, enteringCommit }) => { const approve = await ask("approve"); ${then} });`;
+/** Mints a write whose step asks, fails as `failure` runs, and is then rerun fixed. */
+const rerunAfter = async (failure: string) => {
+  const site = await startSite((_request, response) =>
+    html(response, "<title>Fixture</title><h1>Public fixture</h1>"),
+  );
+  const guardian = recordingGuardian();
+  try {
+    const minted = await mint({
+      effect: "write",
+      url: site.url,
+      guardian,
+      answer: () => ({ approve: { confirmed: true } }),
+      turns: [
+        () => patch({ "src/tool.mjs": approvingStep(failure), "explore/look.mjs": probe() }),
+        () => [call("execute", act("src/tool.mjs"), "failed")],
+        // The fixed step, which asks the same question.
+        () => patch({ "src/again.mjs": approvingStep("return { approve };") }),
+        () => [call("execute", act("src/again.mjs"), "rerun")],
+        () => [call("execute", execution("explore", "explore/look.mjs"), "look")],
+      ],
+    });
+    expect(toolResult(minted.last, "failed")).toMatchObject({ status: "failed" });
+    expect(toolResult(minted.last, "rerun")).toMatchObject({ status: "completed" });
+    return { ...minted, guardian };
+  } finally {
+    await site.close();
+  }
+};
+
+test("a step rerun before any commit went out reuses the owner's answer to its script's question", async () => {
+  test.setTimeout(90_000);
+  const { asked, guardian } = await rerunAfter("throw new Error('Failed before its commit.');");
+  expect(asked).toHaveLength(1);
+  // Guardian reviewed the rerun's ask, and later reviews hold the owner's answer it reused.
+  expect(guardian.reviews.filter((review) => review.kind === "question")).toHaveLength(2);
+  expect(authorityOf(executions(guardian.reviews).at(-1)!)["answeredQuestions"]).toEqual([
+    { question: "Do you approve the site terms for this booking?", answer: { confirmed: true } },
+  ]);
+});
+
+test("a step rerun after its commit may have gone out asks the owner again", async () => {
+  test.setTimeout(90_000);
+  const { asked } = await rerunAfter(
+    "enteringCommit('submit'); throw new Error('Failed after its commit.');",
+  );
+  expect(asked).toHaveLength(2);
+});
+
 test("a step asks only what its entrypoint declares as a plain literal", async () => {
   test.setTimeout(90_000);
   const site = await startSite((_request, response) =>
