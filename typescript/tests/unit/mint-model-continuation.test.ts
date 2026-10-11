@@ -511,6 +511,103 @@ it("ends a policy block once Guardian denied an execution in the attempt", async
   });
 });
 
+/** A publication review that denies with `review`, then publishes the next submission. */
+const denyPublicationOnce = (review: NonNullable<MintFailure["review"]>) => {
+  let publications = 0;
+  return {
+    publications: () => publications,
+    publish: () =>
+      Effect.suspend(() =>
+        ++publications === 1
+          ? Effect.fail(new MintFailure({ code: "ReviewDenied", review }))
+          : Effect.succeed({ publicationRef: "corrected_revision", diagnostics: [] }),
+      ),
+  };
+};
+
+const finding = (category: "example_value" | "exfiltration" | "customer_data") => ({
+  path: "src/tool.ts",
+  byteStart: 0,
+  byteEnd: 6,
+  category,
+  explanation: "Synthetic finding explanation.",
+});
+
+// A publication denial that asks for a correction is feedback, not a refusal: the minter that
+// reports a policy block after one hears policy_not_refused, fixes the source and publishes.
+it.each([
+  { reason: "source_correction" as const, findings: [finding("example_value")] },
+  { reason: "unsupported_claim" as const, findings: [] },
+  { reason: "evidence" as const, findings: [] },
+])(
+  "refuses a policy block after a correctable publication denial ($reason) and publishes the correction",
+  async ({ reason, findings }) => {
+    const review = denyPublicationOnce({
+      outcome: "deny",
+      reason,
+      reviewId: "review_correctable",
+      rationale: "The input schema pins the example's value. Accept any value of that kind.",
+      findings,
+    });
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("execute", execution),
+          call("finish_build", publication, "denied_publication"),
+          call("report_blocked", {
+            reason: "policy",
+            explanation: "Guardian refused to publish this tool.",
+          }),
+          call("finish_build", publication, "corrected_publication"),
+        ][index] ?? prose(),
+      { publish: review.publish },
+    );
+    const outcome = await f.run();
+    expect(outcome).toMatchObject({ build: "published", publicationRef: "corrected_revision" });
+    expect(outcome.blocked).toBeUndefined();
+    expect(JSON.stringify(f.requests[3]?.input)).toContain("policy_not_refused");
+    expect(review.publications()).toBe(2);
+  },
+);
+
+// Only a refusal no correction within the minter's authority gets past ends the build blocked.
+it.each([
+  { outcome: "deny" as const, reason: "privacy" as const, findings: [finding("customer_data")] },
+  { outcome: "deny" as const, reason: "authority" as const, findings: [] },
+  {
+    outcome: "deny" as const,
+    reason: "source_correction" as const,
+    findings: [finding("exfiltration")],
+  },
+  { outcome: "escalate" as const, reason: "source_correction" as const, findings: [] },
+])(
+  "ends a policy block after an unfixable publication refusal ($outcome, $reason)",
+  async ({ outcome, reason, findings }) => {
+    const explanation = "Guardian refused what this tool needs to publish.";
+    const review = denyPublicationOnce({
+      outcome,
+      reason,
+      reviewId: "review_unfixable",
+      rationale: "Synthetic refusal.",
+      findings,
+    });
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("execute", execution),
+          call("finish_build", publication),
+          call("report_blocked", { reason: "policy", explanation }),
+        ][index] ?? prose("Stopping."),
+      { publish: review.publish },
+    );
+    expect(await f.run()).toMatchObject({
+      build: "incomplete",
+      blocked: { reason: "policy", explanation },
+    });
+    expect(review.publications()).toBe(1);
+  },
+);
+
 it("ends a policy block once the owner answered no", async () => {
   const explanation = "The owner declined the only way to finish this task.";
   const f = await fixture(

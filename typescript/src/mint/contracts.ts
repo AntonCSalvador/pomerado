@@ -939,7 +939,8 @@ export type PublicationRequest = typeof PublicationRequest.Type;
 /**
  * How the minter ends a build its task makes impossible as asked:
  * `site_lacks_capability`, the site does not offer what the task needs; `policy`, Guardian
- * denied or escalated something in this attempt, or the owner answered no or left a question
+ * denied or escalated an execution, or refused a publication for a reason no correction gets past
+ * (`publicationRefusalUnfixable`), in this attempt, or the owner answered no or left a question
  * unanswered, and nothing within authority gets past it. The host refuses `policy` without such a
  * refusal or unanswered question on record. A target on
  * another registrable domain is never a reason by itself: Guardian reviews such work.
@@ -1469,8 +1470,10 @@ export interface MintHarnessSnapshot {
    */
   readonly blockedReviewUnavailable?: true;
   /**
-   * Guardian denied or escalated an execution, or denied a publication, in this attempt: the
-   * refusal a `policy` block needs unless the owner answered no.
+   * Guardian denied or escalated an execution, or refused a publication for a reason no
+   * correction gets past (`publicationRefusalUnfixable`), in this attempt: the refusal a `policy`
+   * block needs unless the owner answered no. A publication denial that names a correction never
+   * sets it.
    */
   readonly guardianRefused?: true;
   /**

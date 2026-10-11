@@ -66,6 +66,39 @@ export const publicationReasons = [
   "host_owned",
 ] as const;
 
+/**
+ * A publication refusal no correction within the minter's authority gets past: the tool would
+ * expose private data or send it off the site, or needs authority the build does not have. Every
+ * other denial names a correction, so it never ends a build as a `policy` block.
+ */
+export const unfixablePublicationReasons = [
+  "privacy",
+  "authority",
+] as const satisfies readonly PublicationReason[];
+export const unfixableFindingCategories = [
+  "private_literal",
+  "credential",
+  "customer_data",
+  "exfiltration",
+  "unsafe_logging",
+  "safety_default",
+] as const satisfies readonly (typeof publicationFindingCategories)[number][];
+
+/**
+ * Whether a publication review's deny or escalation is a refusal a `policy` block may stand on:
+ * an escalation, an unfixable reason, or an unfixable finding under any reason.
+ */
+export const publicationRefusalUnfixable = (review: {
+  readonly outcome: "deny" | "escalate";
+  readonly reason?: PublicationReason | undefined;
+  readonly findings?: readonly { readonly category: string }[] | undefined;
+}) =>
+  review.outcome === "escalate" ||
+  unfixablePublicationReasons.some((reason) => reason === review.reason) ||
+  (review.findings ?? []).some((finding) =>
+    unfixableFindingCategories.some((category) => category === finding.category),
+  );
+
 /** The parts of one route in a host-generated routes.json that a finding can point at. */
 export const routePointerParts = [
   "request_field",
