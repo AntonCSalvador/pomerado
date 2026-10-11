@@ -1054,12 +1054,15 @@ for (const mode of ["ambiguous", "no_commit"] as const)
     await expect(page.getByRole("textbox", { name: "Selected catalog key" })).toHaveValue("A");
   });
 
-for (const confirmation of ["saved", "missing", "stale-id"] as const)
+for (const confirmation of ["saved", "folded", "missing", "stale-id"] as const)
   test(`write example submits once and waits for its own response: ${confirmation}`, async ({
     page,
   }) => {
     const origin = "https://tasks.example.invalid";
     const requested = { title: "Review draft", assignee: "demo-user" };
+    // The page may show the saved values in its own case and accents.
+    const shown =
+      confirmation === "folded" ? { title: "REVIEW DRAFT", assignee: "démo-user" } : requested;
     let submissions = 0;
     await page.route(`${origin}/**`, async (route) => {
       const request = route.request();
@@ -1085,14 +1088,14 @@ for (const confirmation of ["saved", "missing", "stale-id"] as const)
         return;
       }
       await route.fulfill({
-        contentType: "text/html",
+        contentType: "text/html; charset=utf-8",
         body:
           confirmation === "missing"
             ? "<p>Task saved</p>"
             : `<section role="region" aria-label="Saved task">
                 <label>Task ID<input readonly value="${confirmation === "stale-id" ? "old-task" : "task-123"}"></label>
-                <label>Title<input readonly value="${requested.title}"></label>
-                <label>Assignee<input readonly value="${requested.assignee}"></label>
+                <label>Title<input readonly value="${shown.title}"></label>
+                <label>Assignee<input readonly value="${shown.assignee}"></label>
               </section>`,
       });
     });
@@ -1103,23 +1106,16 @@ for (const confirmation of ["saved", "missing", "stale-id"] as const)
     expect(submissions).toBe(1);
     expect(calls).toHaveLength(1);
     expect(createTask.write).toEqual({ confirmation: "readback", commits: ["create-task"] });
-    // Only the matched read-back records the write as landed, and as a read-back; the one
-    // submission entered its commit mark either way.
-    expect({ effect, ...recorded }).toEqual(
-      confirmation === "saved"
-        ? {
-            effect: "verified",
-            confirmation: "readback",
-            commits: [{ name: "create-task", state: "confirmed" }],
-          }
-        : {
-            effect: "may_have_dispatched",
-            confirmation: undefined,
-            commits: [{ name: "create-task", state: "sent" }],
-          },
-    );
-    if (confirmation === "saved")
-      expect(result).toEqual(Either.right({ id: "task-123", ...requested }));
+    // The 201 with its Location records the write as landed, whether or not the page it opens
+    // shows the saved task; the one submission entered its commit mark.
+    expect({ effect, ...recorded }).toEqual({
+      effect: "verified",
+      confirmation: "readback",
+      commits: [{ name: "create-task", state: "confirmed" }],
+    });
+    // A missing or stale detail page leaves only the output missing, never the write uncertain.
+    if (confirmation === "saved" || confirmation === "folded")
+      expect(result).toEqual(Either.right({ id: "task-123", ...shown }));
     else expect(failure(result)).toMatchObject({ _tag: "OperationFailure", dispatch: "sent" });
   });
 

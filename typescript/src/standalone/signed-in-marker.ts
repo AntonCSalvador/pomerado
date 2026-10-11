@@ -1,4 +1,4 @@
-import { Duration, Effect, Schema } from "effect";
+import { Clock, Duration, Effect, Schema } from "effect";
 import {
   openAutofillLogin,
   type AutofillPage,
@@ -201,8 +201,11 @@ const redirects = await within(
 ).catch(() => late);
 return redirects === late || redirects === 0;`;
 
-/** How long a loaded page may take to show the marker, as checks one interval apart. */
-const markerSettle = { checks: 6, interval: Duration.millis(500) };
+/**
+ * How long a loaded page may take to show the marker: the host checks it again each interval
+ * until `totalMs` after its first check, by the clock, however long each check takes.
+ */
+const markerSettle = { totalMs: 10_000, intervalMs: 500 };
 
 /** The most pages a build notes as explored signed in, newest last. */
 const keptPaths = 10;
@@ -245,13 +248,17 @@ export const makeMarkerChecks = (input: {
   /** Pages the build explored once its sign-in sent the login, as paths, oldest first. */
   const exploredPaths: string[] = [];
   let firstScreen = true;
-  // A page that renders after it loads gets a few seconds to show the marker.
+  // A page that renders after it loads gets up to 10 seconds to show the marker. Only the first
+  // check loads it; each later one reads the page as it is. Any failure but a marker not shown
+  // ends the wait.
   const load = (indicator: AutofillSignedIn, path: string) =>
     Effect.gen(function* () {
       let checked = yield* input.check({ ...indicator, openPath: path });
-      for (let check = 1; check < markerSettle.checks; check++) {
-        if (checked.signedIn || checked.failed !== "indicator_not_visible") break;
-        yield* Effect.sleep(markerSettle.interval);
+      const until = (yield* Clock.currentTimeMillis) + markerSettle.totalMs;
+      while (!checked.signedIn && checked.failed === "indicator_not_visible") {
+        const left = until - (yield* Clock.currentTimeMillis);
+        if (left <= 0) break;
+        yield* Effect.sleep(Duration.millis(Math.min(markerSettle.intervalMs, left)));
         checked = yield* input.check(indicator);
       }
       return checked;

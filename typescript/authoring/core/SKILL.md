@@ -162,7 +162,8 @@ that asks.
   query, as in a search box, autocomplete, typeahead or searchable combobox, look the value
   up the way a person would. Type the caller's value into the site's own search and read
   every suggestion or result it shows. Prefer matching names loosely, ignoring case,
-  punctuation, apostrophe style and a location the site adds to the name, such as a
+  accents, spacing, punctuation, apostrophe style and a location the site adds to the
+  name, such as a
   neighborhood or an airport code in brackets, over waiting for an element named exactly as
   the caller typed it. A whole-name or code match outranks a partial one, so an airport code
   picks that airport, not its city. Then count the matches at the best rank. With none,
@@ -171,8 +172,9 @@ that asks.
   question whose options are those matches as the site labels them
   (.agents/caller-input/SKILL.md).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
-  match that accepts the usual forms of the same name, such as a city alone or with its
-  state and country, or a company with or without Ltd. or Inc. Never require an exact match.
+  match that accepts the usual forms of the same name, such as a name with or without its
+  accents (Abaca for Abacá), a city alone or with its state and country, or a company with
+  or without Ltd. or Inc. Never require an exact match.
   When more than one option matches, list them for the caller instead of picking one.
 - On a write, every choice the session met is an input: each option on the path,
   add-ons and pre-selected defaults included. Make it required when the site requires
@@ -424,8 +426,9 @@ that depends on them:
    that depend on it with `waitForChange`: changed, or confirmed unchanged once the page's
    loading sign came and went; a value read before the page updates belongs to the previous
    choice. Compare text read back with the caller's value normalized, or for a proper noun with
-   the option it matched: ignore case, repeated whitespace and typographic punctuation such as
-   curly quotes, never exact case-sensitive equality, since a page may echo a query or name in
+   the option it matched: ignore case, accents, repeated whitespace and punctuation such as
+   curly quotes, periods and hyphens, never exact case-sensitive equality, since a page may
+   echo a query or name in
    its own case. When the page kept another value after the tool's bounded retries, throw
    `InputNotApplied` (above); never read on with the page's value. A number snapped to the
    nearest step inside the caller's bound and returned as applied, a filter group the page

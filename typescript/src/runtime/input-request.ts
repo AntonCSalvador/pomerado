@@ -40,22 +40,30 @@ export const publicOptionLabel = (option: InputOption) =>
 /** How the MCP form lists an offered option in a free-text field's description. */
 export const listedOption = (option: InputOption, label: string) => `${option.id} (${label})`;
 
+/** Folds case, accents and spacing, as `chooseOption` does, without its punctuation step. */
+const foldedAnswer = (text: string) =>
+  text
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .normalize("NFC")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
 /**
  * The offered options a choice's own text repeats: text the owner was shown for it, its label,
- * masked label or listed MCP form entry ("id (label)"), ignoring surrounding whitespace and letter
+ * masked label or listed MCP form entry ("id (label)"), ignoring accents, spacing and letter
  * case. A free-text field lists the options, so an owner may type or paste one back instead of
  * picking it. A bare id never counts: the Dashboard hides ids, so text equal to one (an owner's
  * carrier "O2" against a hidden `o2`) is the owner's own answer.
  */
 export const optionsRepeatedBy = (options: readonly InputOption[], text: string) => {
-  const said = text.trim().toLowerCase();
+  const said = foldedAnswer(text);
   return options.filter((option) =>
     [option.label, option.maskedLabel].some(
       (shown) =>
         shown !== undefined &&
-        [shown, listedOption(option, shown)].some(
-          (offered) => offered.trim().toLowerCase() === said,
-        ),
+        [shown, listedOption(option, shown)].some((offered) => foldedAnswer(offered) === said),
     ),
   );
 };

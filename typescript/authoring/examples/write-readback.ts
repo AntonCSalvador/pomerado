@@ -26,8 +26,8 @@ export default defineOperation(
       }),
     }),
     output: SavedTask,
-    // One read-back confirms the write: the saved task's own detail view, the one this
-    // submission's receipt names. It shows every output field, so nothing reads another page.
+    // The create request's own 201 with its Location confirms the write. The page the commit
+    // opens, that task's detail, shows every output field, so nothing opens another page.
     write: { confirmation: "readback", commits: ["create-task"] },
   },
   async ({
@@ -100,8 +100,8 @@ export default defineOperation(
         const response = receipt.value;
         const location = response.headers()["location"] ?? "";
         if (response.status() !== 201 || !location.startsWith("/tasks/")) return { failure: "not_saved" };
-        // Read one view, reached by the identity this write produced: the Location in its own
-        // receipt. Read only the fields the output promises, from that record alone.
+        // The 201 with its Location confirmed the write. Read the output from the page it opens,
+        // the record that Location names, and only the fields the output promises.
         await page.waitForURL(current.origin + location, { timeout: 10000 });
         const detail = page.getByRole("region", { name: "Saved task", exact: true });
         if (!(await detail.isVisible())) return { failure: "readback_missing" };
@@ -116,28 +116,28 @@ export default defineOperation(
     if (!answer.success)
       throw new errors.OperationFailure(String(answer.error), { stderr: answer.stderr });
     const result = Schema.decodeUnknownSync(Outcome)(answer.result);
-    if ("failure" in result)
+    if ("failure" in result && result.failure !== "readback_missing")
       throw new errors.OperationFailure(result.failure, {
         dispatch:
           result.failure === "form_changed" || result.failure === "not_submitted"
             ? "not_sent"
             : "sent",
       });
-    const { saved, location } = result;
-    // A page left from before the write can show another task ID, and one that has not loaded
-    // this record shows none. Neither confirms the write nor shows it failed: the write stays
-    // possibly sent.
+    // The 201 with its Location confirmed the write. Record it now, with no further call.
+    verified();
+    // A page left from before the write can show another task, and one that has not loaded
+    // shows none. The write still landed; only its output is missing.
+    const fold = (text: string) =>
+      text.normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
     if (
-      location !== `/tasks/${saved.id}` ||
-      saved.title !== input.title ||
-      saved.assignee !== input.assignee
+      "failure" in result ||
+      result.location !== `/tasks/${result.saved.id}` ||
+      fold(result.saved.title) !== fold(input.title) ||
+      fold(result.saved.assignee) !== fold(input.assignee)
     )
-      throw new errors.OperationFailure("The saved task does not match the request", {
+      throw new errors.OperationFailure("The saved task did not show on the page the commit opened", {
         dispatch: "sent",
       });
-    // The first read-back that matches confirms the write: this record's own ID and the
-    // entered values. Stop here, with no further call.
-    verified();
-    return saved;
+    return result.saved;
   },
 );
