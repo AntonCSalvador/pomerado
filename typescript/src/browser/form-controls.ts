@@ -145,7 +145,7 @@ const formControlPick = (options, wanted) => {
   const ranks = [
     (option) => names.has(option.label),
     (option) => option.value !== "" && names.has(option.value),
-    (option) => [...names].some((name) => (" " + words(option.label).join(" ") + " ").includes(" " + words(name).join(" ") + " ")),
+    (option) => [...names].some((name) => (" " + words(option.label).join(" ") + " ").includes(" " + name + " ")),
   ];
   for (const rank of ranks) {
     const matched = options.filter(rank);

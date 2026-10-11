@@ -356,6 +356,46 @@ test("chooseOption refuses two labels that both hold the phrase", async ({ page 
   expect(await submitted(page)).toEqual({ customer: "" });
 });
 
+// Symbols such as +, # and & are part of a name, so a name never loses them to match a label.
+for (const [wanted, labels] of [
+  ["C++", ["C", "Java"]],
+  ["C#", ["C"]],
+  ["+", ["&"]],
+  // main gives option_missing here too: the label's words drop its symbols.
+  ["C++", ["C++ Developer", "Java"]],
+] as const)
+  test(`chooseOption finds no option for ${wanted} among ${labels.join(", ")}`, async ({ page }) => {
+    const options = labels.map((label, index) => `<option value="${index + 1}">${label}</option>`);
+    await page.setContent(`<form><label>Skill<select name="skill">
+<option value="">Choose</option>${options.join("")}</select></label></form>`);
+    expect(
+      await call(page, `return await chooseOption(page.getByLabel("Skill"), ${JSON.stringify(wanted)});`),
+    ).toEqual({ error: "option_missing" });
+    expect(await submitted(page)).toEqual({ skill: "" });
+  });
+
+test("chooseOption still picks a label that holds the name as a word between symbols", async ({
+  page,
+}) => {
+  await page.setContent(`<form><label>Size<select name="size">
+<option value="">Choose</option><option value="m">Size (M)</option><option value="l">Size (L)</option>
+</select></label><label>Color<select name="color">
+<option value="">Choose</option><option value="bg">Blue/Green</option><option value="r">Red</option>
+</select></label><label>Month<select name="month">
+<option value="">Choose</option><option value="7">Month: July</option><option value="6">Month: June</option>
+</select></label></form>`);
+  expect(await call(page, `return await chooseOption(page.getByLabel("Size"), "M");`)).toMatchObject(
+    { result: { label: "Size (M)", value: "m" } },
+  );
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Color"), "Blue");`),
+  ).toMatchObject({ result: { label: "Blue/Green", value: "bg" } });
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Month"), "July");`),
+  ).toMatchObject({ result: { label: "Month: July", value: "7" } });
+  expect(await submitted(page)).toEqual({ size: "m", color: "bg", month: "7" });
+});
+
 test("a failure names its reason, never the value", async ({ page }) => {
   await page.setContent(`<form><label>Date of birth<input name="dob"></label>
 <label>Month<select name="month"><option>7</option></select></label></form>`);
