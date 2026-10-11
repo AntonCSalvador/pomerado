@@ -145,15 +145,18 @@ if (check !== null) {
 ${fillCallBody(call)}`;
 
 /**
- * Page code for the submit call of a step with fields, once every field is typed and found as the
- * host judged it: the page sent what was typed itself, as a code widget does on its last box, when
- * its address names another page than the one the host typed the last field on (`typedAt`, by
- * origin and path, so a query or hash the page writes as it goes is no move; a window replaced
- * since keeps no address to compare), or every field is disabled. A step whose fields are gone was
- * sent too; the host reads that from the call's own refusal to find them. `allEmptied`, for the
- * check of the field typed last, reads whether the page emptied every field of a step of several,
- * as a widget does when it draws its boxes again after the site refused what it sent: the host saw
- * each earlier field hold its value when it typed the next. Lengths only, never a value.
+ * Page code for the submit call of a step with fields and no submit, once every field is typed and
+ * found as the host judged it: the page sent what was typed itself, as a code widget does on its
+ * last box, when its address names another page than the one the host typed the last field on
+ * (`typedAt`, by origin and path, so a query or hash the page writes as it goes is no move; a
+ * window replaced since keeps no address to compare), or every field is disabled. A step whose
+ * fields are gone was sent too; the host reads that from the call's own refusal to find them.
+ * `allEmptied`, for the check of the field typed last, reads whether the page emptied every field
+ * of such a step of several, as a widget does when it draws its boxes again after the site refused
+ * what it sent: the host saw each earlier field hold its value when it typed the next. Lengths
+ * only, never a value. A step with a submit is the host's to click: a form that locks, moves or
+ * redraws itself while it checks what was typed has not sent it, and the submit call waits on it
+ * or refuses as before.
  */
 const pageSentCode = `const originAndPath = (url) => {
   try {
@@ -163,7 +166,7 @@ const pageSentCode = `const originAndPath = (url) => {
     return null;
   }
 };
-if (fields.length > 0) {
+if (fields.length > 0 && submit === null) {
   const typedPage = await kept(typedAt);
   if (typeof typedPage === "string" && originAndPath(typedPage) !== originAndPath(primary.url()))
     return { pageSent: true, url: primary.url() };
@@ -173,7 +176,7 @@ if (fields.length > 0) {
   if (fieldsDisabled.every(Boolean)) return { pageSent: true, url: primary.url() };
 }
 const allEmptied = async () => {
-  if (fields.length < 2) return false;
+  if (fields.length < 2 || submit !== null) return false;
   for (const { locator } of fields) {
     const empty = await locator
       .evaluate((element) => typeof element.value === "string" && element.value.length === 0)

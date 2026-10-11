@@ -73,13 +73,16 @@ export const hostPage = async (
             (script, origin) => script.replaceAll(JSON.stringify(origin), ""),
             withoutIds(code),
           );
+          // One character turns up in any script by chance. A test checks a value typed one
+          // character per field, such as a code in boxes, whole with `expectNotCarried`.
           for (const value of typed.get(page) ?? [])
-            expect
-              .soft(
-                holds(checked, value),
-                "A typed value reached a Kernel call's script",
-              )
-              .toBe(false);
+            if (value.length > 1)
+              expect
+                .soft(
+                  holds(checked, value),
+                  "A typed value reached a Kernel call's script",
+                )
+                .toBe(false);
           const run: unknown = runInThisContext(
             `(async (page, context, browser) => {\n${code}\n})`,
           );
@@ -147,8 +150,7 @@ const fixtureBindingWorld: CredentialBindingWorld = (cdp, { sessionId, frameId }
 
 /**
  * The host's typing on a local page, over a DevTools session of its own, as the recorder's socket
- * types on a worker. Each value it is given to type counts as typed on the page from then on,
- * but a one-character value, such as a one-digit code box's, which any script holds by chance.
+ * types on a worker. Each value it is given to type counts as typed on the page from then on.
  * `beforeInsert` runs once the binding resolved, just before the atomic insertion's own call.
  */
 export const hostKeyboard = async (
@@ -201,7 +203,7 @@ export const hostKeyboard = async (
     insertText: (target, text) =>
       Effect.suspend(() => {
         const values = typed.get(page) ?? new Set<string>();
-        if (text.length > 1) typed.set(page, values.add(text));
+        if (text !== "") typed.set(page, values.add(text));
         return native.insertText(target, text);
       }),
   };

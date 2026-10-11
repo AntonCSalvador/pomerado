@@ -302,13 +302,16 @@ const rejudge = (
 };
 
 /**
- * A submit call that found a field of the step gone, or its popup closed: once every field was
- * typed, the page took the screen away itself, as a code widget does when it sends what its last
- * box completed.
+ * A submit call for a step with fields and no submit that found a field gone, or its popup closed:
+ * once every field was typed, the page took the screen away itself, as a code widget does when it
+ * sends what its last box completed. A step with a submit is the host's to click, so there the
+ * same answer stays a refusal.
  */
-const screenGone = (answer: typeof LocatedError.Type) =>
-  (answer.error === "not_found" && typeof answer.target === "number") ||
-  answer.error === "popup_missing";
+const screenGone = (step: AutofillStep, answer: typeof LocatedError.Type) =>
+  step.fields.length > 0 &&
+  step.submit === undefined &&
+  ((answer.error === "not_found" && typeof answer.target === "number") ||
+    answer.error === "popup_missing");
 
 /**
  * One Kernel call of the fill, which first checks the field the host typed last. A call that finds
@@ -342,7 +345,7 @@ const fillCall =
         const answer = answered.right;
         if ("error" in answer)
           return Either.right<CallAnswer>(
-            call.kind === "submit" && input.step.fields.length > 0 && screenGone(answer)
+            call.kind === "submit" && screenGone(input.step, answer)
               ? { pageSent: true, url: answer.url ?? "" }
               : {
                   refusal: locatedRefusal(answer, evidenceOrigins(input, progress)),
@@ -540,12 +543,13 @@ const afterFieldCall = (
  * the submit. That click ran, though, so the report says so (`clicked`): the page's own handlers
  * ran on it, and what the step filled may have gone out. A submit the page keeps disabled is never
  * clicked: the host waits for the page to enable it once the fields are filled, and when it stays
- * disabled the report says so (`stayed_disabled`). A page that moves on once every field is typed,
- * before the host clicks anything, sent what was typed itself (`page`), never a refusal: the
- * step's fields went away or were all disabled, its popup closed, its address moved to another
- * path, or a step of several fields came back emptied. A step with no submit gives the page up to
- * `pageSendMs` to do so. Guardian's refusals still come first: a control that moved off the site
- * or changed how it submits refuses the submit as before.
+ * disabled the report says so (`stayed_disabled`). On a step with fields and no submit, a page
+ * that moves on once every field is typed sent what was typed itself (`page`), never a refusal:
+ * the step's fields went away or were all disabled, its popup closed, its address moved to another
+ * path, or a step of several fields came back emptied. The host gives the page up to `pageSendMs`
+ * to do so. A step with a submit is the host's to click, whatever its page does meanwhile.
+ * Guardian's refusals still come first: a control that moved off the site or changed how it
+ * submits refuses the submit as before.
  */
 export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepReport> =>
   Effect.gen(function* () {

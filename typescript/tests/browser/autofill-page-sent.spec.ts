@@ -8,7 +8,7 @@ import {
 } from "../../src/destinations/autofill-step.js";
 import { fillAutofillStep } from "../../src/destinations/autofill-fill.js";
 import { maySend } from "../../src/destinations/autofill-refusal.js";
-import { hostKeyboard, hostPage } from "./autofill-host-page.js";
+import { expectNotCarried, hostKeyboard, hostPage } from "./autofill-host-page.js";
 
 // A code widget that sends itself when its last box is filled: six one-character boxes, often with
 // no form and no button, whose own script sends the code as soon as every box holds a digit, then
@@ -114,28 +114,38 @@ const serve = async (page: Page, screen: string) => {
   return { sent, posted, release };
 };
 
-/** The host's inspection and fill of `step` with one digit of `typed` in each box. */
+/**
+ * The host's inspection and fill of `step` with `values`, its calls made through `wrap` when
+ * given. No call's script or answer holds a value, nor a code typed one digit per box as a whole.
+ */
 const fill = async (
   page: Page,
   step: AutofillStep,
-  typed: string,
-  { host, settleMs = 500 }: { readonly host?: AutofillPage; readonly settleMs?: number } = {},
+  values: readonly string[],
+  {
+    wrap = (host) => host,
+    settleMs = 500,
+  }: { readonly wrap?: (host: AutofillPage) => AutofillPage; readonly settleMs?: number } = {},
 ) => {
-  const calls = host ?? (await hostPage(page));
+  const host = await hostPage(page);
+  const calls = wrap(host);
   const inspection = await Effect.runPromise(
     inspectAutofillStep({ step, page: calls, siteOrigin: site, authenticationOrigins: [] }),
   );
   if ("outcome" in inspection) throw new Error(`Inspection refused: ${inspection.reason}`);
-  return Effect.runPromise(
+  const report = await Effect.runPromise(
     fillAutofillStep({
       step,
-      values: Array.from(typed),
+      values,
       inspection,
       page: calls,
       keyboard: (await hostKeyboard(page)).keyboard,
       settleMs,
     }),
   );
+  for (const value of new Set([values.join(""), ...values.filter((each) => each.length > 1)]))
+    expectNotCarried(host.calls, value);
+  return report;
 };
 
 const filledBoxes = boxesStep.fields.map(() => ({ slot: "code", status: "filled" }));
@@ -150,7 +160,7 @@ for (const [move, shown] of [
   }) => {
     const { sent, release } = await serve(page, widget(move));
     try {
-      const report = await fill(page, boxesStep, code);
+      const report = await fill(page, boxesStep, [...code]);
       expect(report).toMatchObject({ outcome: "filled", fields: filledBoxes, submit: "page" });
       expect(maySend(report)).toBe(true);
       expect(report).not.toHaveProperty("clicked");
@@ -168,10 +178,9 @@ test("a refused code whose widget draws its boxes again before the host looks is
   page,
 }) => {
   const { sent, release } = await serve(page, widget("removes"));
-  const host = await hostPage(page);
   // The host's submit call waits until the site refused the code and the widget drew its boxes
   // again, empty, so the call finds them back where they were.
-  const redrawnFirst: AutofillPage = {
+  const redrawnFirst = (host: AutofillPage): AutofillPage => ({
     ...host,
     execute: (script, timeout) =>
       script.includes("guardCall")
@@ -180,13 +189,13 @@ test("a refused code whose widget draws its boxes again before the host looks is
             await expect(page.locator("#error")).toHaveText("Wrong code");
           }).pipe(Effect.zipRight(host.execute(script, timeout)))
         : host.execute(script, timeout),
-  };
-  const refused = await fill(page, boxesStep, "135790", { host: redrawnFirst });
+  });
+  const refused = await fill(page, boxesStep, [..."135790"], { wrap: redrawnFirst });
   expect(refused).toMatchObject({ outcome: "filled", fields: filledBoxes, submit: "page" });
   expect(maySend(refused)).toBe(true);
   for (const box of boxesStep.fields) await expect(page.locator(box.selector)).toHaveValue("");
   // The code screen is back, so a new code is filled into it as the first was.
-  expect(await fill(page, boxesStep, code)).toMatchObject({ submit: "page" });
+  expect(await fill(page, boxesStep, [...code])).toMatchObject({ submit: "page" });
   expect(sent).toEqual(["135790", code]);
   await expect(page.locator("#account")).toBeVisible();
 });
@@ -195,7 +204,7 @@ test("a refused code whose widget disabled its boxes while it waited is reported
   page,
 }) => {
   const { sent, release } = await serve(page, widget("disables"));
-  const report = await fill(page, boxesStep, "135790").finally(release);
+  const report = await fill(page, boxesStep, [..."135790"]).finally(release);
   expect(report).toMatchObject({ outcome: "filled", fields: filledBoxes, submit: "page" });
   await expect(page.locator("#error")).toHaveText("Wrong code");
   for (const box of boxesStep.fields) {
@@ -209,17 +218,19 @@ test("a widget with no button that moves on only once the site answers, after th
   page,
 }) => {
   const { sent, release } = await serve(page, widget("waits"));
-  const host = await hostPage(page);
   // The site answers only once the host's first submit call found the boxes as they were, so the
   // page loads the account while the host still waits on it.
-  const answeredAfterFirstLook: AutofillPage = {
+  const answeredAfterFirstLook = (host: AutofillPage): AutofillPage => ({
     ...host,
     execute: (script, timeout) =>
       script.includes("guardCall")
         ? host.execute(script, timeout).pipe(Effect.tap(() => Effect.sync(release)))
         : host.execute(script, timeout),
-  };
-  const report = await fill(page, boxesStep, code, { host: answeredAfterFirstLook, settleMs: 5_000 });
+  });
+  const report = await fill(page, boxesStep, [...code], {
+    wrap: answeredAfterFirstLook,
+    settleMs: 5_000,
+  });
   expect(report).toMatchObject({ outcome: "filled", fields: filledBoxes, submit: "page" });
   expect(maySend(report)).toBe(true);
   expect(sent).toEqual([code]);
@@ -231,7 +242,7 @@ test("a widget with no button that sends nothing is filled with no submit once t
 }) => {
   const { sent } = await serve(page, widget("stays"));
   const started = Date.now();
-  const report = await fill(page, boxesStep, code);
+  const report = await fill(page, boxesStep, [...code]);
   // The host gave the page its settle wait to move on before it said there was no submit.
   expect(Date.now() - started).toBeGreaterThanOrEqual(500);
   expect(report).toMatchObject({ outcome: "filled", fields: filledBoxes, submit: "none" });
@@ -252,7 +263,7 @@ boxes.forEach((box, index) => box.addEventListener("input", () => {
 
 test("code boxes in a form with a button are filled and the host clicks it", async ({ page }) => {
   const { sent, posted } = await serve(page, form());
-  const report = await fill(page, formStep, code);
+  const report = await fill(page, formStep, [...code]);
   expect(report).toMatchObject({ outcome: "filled", fields: filledBoxes, submit: "clicked" });
   expect(posted.map((received) => [1, 2, 3, 4, 5, 6].map((box) => received.get(`d${box}`)).join(""))).toEqual([code]);
   expect(sent).toEqual([]);
@@ -273,7 +284,7 @@ for (const [name, script] of [
     const requested: string[] = [];
     page.on("request", (request) => requested.push(request.url()));
     const { posted } = await serve(page, form(script));
-    const report = await fill(page, formStep, code);
+    const report = await fill(page, formStep, [...code]);
     expect(report).toMatchObject({
       outcome: "filled",
       fields: filledBoxes,
@@ -284,3 +295,61 @@ for (const [name, script] of [
     expect(posted).toEqual([]);
     expect(requested.filter((url) => new URL(url).origin !== site)).toEqual([]);
   });
+
+// A step with a submit is the host's to click, whatever its page does while it checks what was
+// typed: a form that locks every control for a moment, puts a new path in the address or draws
+// itself again has sent nothing, so none of that is the page sending it.
+const username = "synthetic-user";
+const password = "synthetic-pass-1";
+const loginStep: AutofillStep = {
+  fields: [
+    { selector: "#username", slot: "username", accepts: ["username"] },
+    { selector: "#password", slot: "password" },
+  ],
+  submit: "#sign-in",
+};
+const login = (onPassword: string) =>
+  `<form action="/session" method="post"><label>Username<input id="username" name="username" autocomplete="username"></label><label>Password<input id="password" name="password" type="password" autocomplete="current-password"></label><button id="sign-in">Sign in</button></form><script>
+const form = document.forms[0];
+document.getElementById("password").addEventListener("input", () => { ${onPassword} }, { once: true });
+</script>`;
+
+for (const [name, onPassword] of [
+  [
+    // Long enough to outlast the host's first two submit calls on a busy machine, and within the
+    // 5 s it waits for a disabled submit.
+    "locks every field and its button for 3 s while it checks the password",
+    "const controls = [...form.elements]; controls.forEach((control) => { control.disabled = true; }); setTimeout(() => controls.forEach((control) => { control.disabled = false; }), 3000);",
+  ],
+  ["puts a new path in the address as the password is typed", 'history.pushState(null, "", "/verify/checked");'],
+] as const)
+  test(`a sign-in form with a button that ${name} is clicked once`, async ({ page }) => {
+    const { posted } = await serve(page, login(onPassword));
+    const report = await fill(page, loginStep, [username, password]);
+    expect(report).toMatchObject({
+      outcome: "filled",
+      fields: [
+        { slot: "username", status: "filled" },
+        { slot: "password", status: "filled" },
+      ],
+      submit: "clicked",
+    });
+    expect(posted.map((received) => Object.fromEntries(received))).toEqual([{ username, password }]);
+  });
+
+test("a sign-in form with a button that draws itself again, empty, once the password is typed is never clicked nor taken as sent by the page", async ({
+  page,
+}) => {
+  const { posted } = await serve(page, login("form.innerHTML = form.innerHTML;"));
+  const report = await fill(page, loginStep, [username, password]);
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: [
+      { slot: "username", status: "filled" },
+      { slot: "password", status: "failed" },
+    ],
+    submit: "not_attempted",
+  });
+  expect(maySend(report)).toBe(false);
+  expect(posted).toEqual([]);
+});
