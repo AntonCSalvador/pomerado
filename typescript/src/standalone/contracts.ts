@@ -28,7 +28,7 @@ export interface PomeradoOptions {
   /**
    * How a list tool's cursors are signed and timed. `keys` sign them; without keys, this process
    * signs with a random key, so its cursors work until it exits. `now` is the clock that dates
-   * them, `Date.now` by default. A cursor works for an hour, and a run refuses one this host did
+   * them, `Date.now` by default. A cursor works for ten minutes, and a run refuses one this host did
    * not sign for that tool and those inputs before it signs in or loads a page.
    */
   readonly listCursors?: { readonly keys?: ListCursorKeys; readonly now?: () => number };
