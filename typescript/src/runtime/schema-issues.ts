@@ -27,7 +27,15 @@ const leafMessages = {
 
 type Issue = { readonly message: string; readonly path: readonly PropertyKey[] };
 
-/** A struct's or union's failures: a union of plain values that all fail is one issue. */
+const sameIssue = (left: Issue, right: Issue) =>
+  left.message === right.message &&
+  left.path.length === right.path.length &&
+  left.path.every((segment, index) => segment === right.path[index]);
+
+/**
+ * A struct's or union's failures, each once, in the order its members report them: a union of
+ * plain values that all fail is one issue.
+ */
 const compositeIssues = (issue: ParseResult.Composite, path: readonly PropertyKey[]): Issue[] => {
   // An optional field's `undefined` branch failing says nothing a caller can act on.
   const inner = ("_tag" in issue.issues ? [issue.issues] : issue.issues).filter(
@@ -35,7 +43,11 @@ const compositeIssues = (issue: ParseResult.Composite, path: readonly PropertyKe
   );
   if (issue.ast._tag === "Union" && inner.every((member) => member._tag === "Type"))
     return [{ path, message: `expected ${expected(issue.ast)}` }];
-  return inner.flatMap((member) => valueFreeIssues(member, path));
+  const issues = inner.flatMap((member) => valueFreeIssues(member, path));
+  // A union's members can fail alike, as two object shapes refusing a field neither declares.
+  return issues.filter(
+    (candidate, index) => issues.findIndex((other) => sameIssue(other, candidate)) === index,
+  );
 };
 
 /**

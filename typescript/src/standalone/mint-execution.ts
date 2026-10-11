@@ -58,6 +58,11 @@ import {
   trustsSignInOrigins,
 } from "./sign-in-origin-question.js";
 import type { MintState } from "./mint-state.js";
+import {
+  keptScriptAnswers,
+  reusedScriptAnswers,
+  scriptQuestionKeys,
+} from "./script-answer-reuse.js";
 import { error, mintError } from "./errors.js";
 import { mintSessionSignInFailure, type SessionSignInFailed } from "./session-sign-in.js";
 type Execution = Parameters<MintDependencies["reviewAndExecute"]>[0];
@@ -254,7 +259,7 @@ const scriptQuestions = (
   input: unknown,
   sourceMap: ReadonlyMap<string, string>,
 ) => {
-  const { context, mintAsk } = state;
+  const { context, mintAsk, scriptAnswers } = state;
   const { projection } = state.session;
   let scriptQuestion: ScriptQuestionOutcome | undefined;
   let unanswered = false;
@@ -278,9 +283,23 @@ const scriptQuestions = (
         };
         return yield* Effect.fail(new InputRequestFailure({ code: "Unauthorized" }));
       }
-      return yield* mintAsk(candidate, bounds).pipe(
-        Effect.tap((answers) => context.answered(candidate, answers)),
-      );
+      // The same question asked again reuses the owner's answer, however long ago they gave it
+      // and whether or not a step entered a commit since. Guardian reviewed this ask all the same,
+      // and the reused answer reaches later reviews as a fresh one does. It is always the owner's
+      // latest answer to its prompt (`forgetScriptAnswers`), so it never replaces a newer one in
+      // Guardian's list.
+      const keys = yield* scriptQuestionKeys(candidate, (text) => projection.text(text));
+      const answers =
+        reusedScriptAnswers(candidate, keys, scriptAnswers.kept) ??
+        (yield* mintAsk(candidate, bounds).pipe(
+          Effect.tap((fresh) =>
+            Effect.sync(() => {
+              scriptAnswers.kept = keptScriptAnswers(scriptAnswers.kept, keys, fresh);
+            }),
+          ),
+        ));
+      yield* context.answered(candidate, answers);
+      return answers;
     }).pipe(
       Effect.mapError((cause) =>
         cause instanceof InputRequestFailure

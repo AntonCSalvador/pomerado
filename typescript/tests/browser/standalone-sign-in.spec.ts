@@ -2410,6 +2410,33 @@ test("the local minter's marker check after the signedIn step compares the signe
   });
 });
 
+test("the local minter's marker check waits for a loaded page that draws the marker seconds later", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Original SDKs, Chromium, a host sign-in and a marker check that waits 4 seconds",
+  });
+  test.setTimeout(60_000);
+  await withShop(async (shop, endpoint) => {
+    const mintRequests = await markerBuild(endpoint, `${shop.origin}/login`, [
+      [signInFields()],
+      [signInStep({ signedIn: { selector: "#account" } }, "signed_in")],
+      () => {
+        // The account page, loaded again, draws its element 4 seconds after its script runs. A
+        // check that loaded it again would start that wait over and never see the element.
+        shop.state.accountRenderMs = 4_000;
+        return [checkMarker({ selector: "#account", openPath: "/account" }, "account")];
+      },
+    ]);
+    expect(markerResult(mintRequests, "account")).toEqual({
+      kind: "host_signed_in_marker",
+      status: "passed",
+      signedOutSnapshot: "absent",
+      signedInNow: true,
+      freshLoad: true,
+    });
+  });
+});
+
 test("a later build in the same session keeps no signed-in page as a signed-out page", async () => {
   test.info().annotations.push({
     type: "slow",

@@ -43,6 +43,7 @@ import {
   makeRejectableLogin,
   mintSessionSignInFailure,
 } from "./session-sign-in.js";
+import type { KeptScriptAnswer } from "./script-answer-reuse.js";
 import type { StandaloneSession } from "./session.js";
 import type { RequestContext } from "./request-context.js";
 import type { PomeradoRequest } from "./contracts.js";
@@ -259,6 +260,8 @@ export const mintState = (
       acceptedConfirms: [],
       confirmSteps: new Set(),
     };
+    /** The owner's answers to scripts' questions that the same question asked again reuses. */
+    const scriptAnswers: { kept: readonly KeptScriptAnswer[] } = { kept: [] };
     /** Each one-time login URL publication already asked about, so finishing again publishes it. */
     const oneTimeLoginUrlsAsked = new Set<string>();
     const afterSubmit = makeAfterSubmit({ workspace, screen: secrets.json });
@@ -412,6 +415,7 @@ export const mintState = (
       runs,
       assessments,
       writeSession,
+      scriptAnswers,
       oneTimeLoginUrlsAsked,
       afterSubmit,
       get recorder() {

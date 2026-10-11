@@ -39,6 +39,8 @@ interface FillReply {
   readonly kept?: readonly string[];
   /** The fill's own report, in place of a filled screen whose submit was clicked. */
   readonly report?: AutofillStepReport;
+  /** The page sent nothing, whatever the report says: no request goes out. */
+  readonly unheard?: true;
 }
 interface SiteScript {
   /** Each page's visible controls, by page name. */
@@ -131,15 +133,21 @@ const scriptedSite = (script: SiteScript) => {
           submit: "clicked",
           url: at(reply.next ?? page),
         };
-        if (report.outcome === "filled" && report.submit === "clicked")
+        // A clicked submit posts the screen's form; a page that sent the values itself sends them
+        // from its own script.
+        if (
+          reply.unheard !== true &&
+          report.outcome === "filled" &&
+          (report.submit === "clicked" || report.submit === "page")
+        )
           for (const listener of [...listeners])
             listener({
               url: at(page),
               method: "POST",
               body: new URLSearchParams(values.map((value, index) => [`field${index}`, value])).toString(),
-              channel: "navigation",
-              frame: "main",
-              resourceType: "document",
+              ...(report.submit === "page"
+                ? { channel: "http" as const, resourceType: "fetch" }
+                : { channel: "navigation" as const, frame: "main" as const, resourceType: "document" }),
             });
         if (reply.signIn === true) state.signedIn = true;
         if (reply.next !== undefined) go(reply.next);
@@ -657,6 +665,89 @@ it("ends a screen with fields whose submit the page kept disabled", async () => 
     Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "submit_stayed_disabled" })),
   );
   expect(fake.filled("login")).toHaveLength(1);
+});
+
+// A code widget that sends itself when its last box is filled: the host clicks nothing, and the
+// page moving on says the code may have gone out, so the recipe's own check decides what it did.
+const pageSentStep = {
+  page: `${origin}/code`,
+  fields: [{ selector: "#code", slot: "code" as const }],
+};
+const sentByPage = (page: string): AutofillStepReport => ({
+  outcome: "filled",
+  fields: [{ slot: "code", status: "filled" }],
+  submit: "page",
+  url: `${origin}/${page}`,
+});
+/** Its site: the right code shows the account, and any other draws the code box again, empty. */
+const pageSentSite = () =>
+  scriptedSite({
+    entry: "login",
+    screens: { login: loginScreen, code: ["#code"], account: [] },
+    fill: (page, values) =>
+      page === "login"
+        ? signedLogin(values)
+          ? { next: "code" }
+          : {}
+        : values[0] === code
+          ? { next: "account", signIn: true, report: sentByPage("account") }
+          : { report: sentByPage("code") },
+  });
+const codeRefusedPrompts = (prompts: readonly string[]) =>
+  prompts.filter((prompt) => prompt.includes("The site did not accept the last code"));
+
+it("signs in through the recipe's check when a code screen sends its code itself", async () => {
+  const fake = pageSentSite();
+  const { result, prompts } = await signIn(recipe(loginStep, pageSentStep), fake);
+  expect(result).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(steps(fake)).toEqual(["ask:missing_credentials", "fill:login", "ask:code", "fill:code"]);
+  expect(codeRefusedPrompts(prompts)).toEqual([]);
+});
+
+it("asks for one new code, saying the site refused the last, when a code screen that sent its code itself shows its box again", async () => {
+  const fake = pageSentSite();
+  const { result, prompts } = await signIn(recipe(loginStep, pageSentStep), fake, {
+    codes: ["111111", code],
+  });
+  expect(result).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(steps(fake)).toEqual([
+    "ask:missing_credentials",
+    "fill:login",
+    "ask:code",
+    "fill:code",
+    "ask:code",
+    "fill:code",
+  ]);
+  expect(fake.filled("code")).toEqual([["111111"], [code]]);
+  expect(codeRefusedPrompts(prompts)).toHaveLength(1);
+});
+
+it("never says the site refused a code that a code screen only seemed to send itself, as no request carried it", async () => {
+  const fake = scriptedSite({
+    entry: "login",
+    screens: { login: loginScreen, code: ["#code"], account: [] },
+    fill: (page, values) =>
+      page === "login"
+        ? signedLogin(values)
+          ? { next: "code" }
+          : {}
+        : { report: sentByPage("code"), unheard: true },
+  });
+  const { result, prompts } = await signIn(recipe(loginStep, pageSentStep), fake);
+  expect(result).toEqual(
+    Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "sign_in_check_failed" })),
+  );
+  expect(steps(fake)).toEqual(["ask:missing_credentials", "fill:login", "ask:code", "fill:code"]);
+  expect(codeRefusedPrompts(prompts)).toEqual([]);
+});
+
+it("never takes a code screen that sent its code itself for signed in while the site keeps showing it", async () => {
+  const fake = pageSentSite();
+  const { result } = await signIn(recipe(loginStep, pageSentStep), fake, {
+    codes: ["111111", "222222", "333333", code],
+  });
+  expect(result).toEqual(Either.left(new SignInRunFailed({ code: "CredentialsRejected", reason: "code" })));
+  expect(fake.filled("code")).toEqual([["111111"], ["222222"], ["333333"]]);
 });
 
 // An approval before any request carried the login's identifier is refused, never asked.

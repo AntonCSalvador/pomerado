@@ -9,9 +9,13 @@ import {
 } from "../destinations/page-controls.js";
 import type { LocalWorkspace } from "../execution/local-workspace.js";
 
-/** Whether a step did not resolve: refused, uncertain, or filled without its submit going out. */
+/**
+ * Whether a step did not resolve: refused, uncertain, or filled without its submit going out, by
+ * the host's click or the page's own send.
+ */
 const failed = (report: AutofillStepReport) =>
-  report.outcome !== "filled" || (report.submit !== "clicked" && report.submit !== "none");
+  report.outcome !== "filled" ||
+  (report.submit !== "clicked" && report.submit !== "none" && report.submit !== "page");
 
 /**
  * Each sign-in step's result as the minter reads it. After a clicked submit the host saves the

@@ -137,6 +137,7 @@ describe("validateAnswer", () => {
     ["the MCP form's listed entry with a masked label", "card (Card ending 42)", "card"],
     ["one option's id with another's label", "go (Stop)", { other: "go (Stop)" }],
     ["a label two options share", "Same", { other: "Same" }],
+    ["a label without its accents", "Abaca", "abaca"],
     ["none", "Continue at https://y.invalid", { other: "Continue at https://y.invalid" }],
   ])("takes a choice's own text that repeats %s as a pick only of one option", (_, text, value) => {
     const choice = Schema.decodeUnknownSync(InputRequest)({
@@ -159,6 +160,7 @@ describe("validateAnswer", () => {
             },
             { id: "same_a", label: "Same" },
             { id: "same_b", label: "Same" },
+            { id: "abaca", label: "Abacá" },
           ],
         },
       ],
@@ -190,6 +192,30 @@ describe("validateAnswer", () => {
     });
     expect(Either.getOrThrow(validateAnswer(carrier, { carrier: { other: "O2" } }))).toEqual({
       carrier: { type: "choice", value: { other: "O2" } },
+    });
+  });
+
+  // Two offered labels that differ only by accents both repeat the typed text, so it picks
+  // neither and stays the owner's own answer.
+  it("keeps a choice's own text that repeats two labels apart from accents as the owner's text", () => {
+    const venue = Schema.decodeUnknownSync(InputRequest)({
+      id: "8d2e1f30-4b5c-4e6f-9a01-2b3c4d5e6f70",
+      source: "script",
+      questions: [
+        {
+          id: "venue",
+          type: "choice",
+          prompt: "Which venue?",
+          allowOther: true,
+          options: [
+            { id: "plain", label: "Abaca" },
+            { id: "accented", label: "Abacá" },
+          ],
+        },
+      ],
+    });
+    expect(Either.getOrThrow(validateAnswer(venue, { venue: { other: "Abaca" } }))).toEqual({
+      venue: { type: "choice", value: { other: "Abaca" } },
     });
   });
 
