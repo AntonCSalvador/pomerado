@@ -971,6 +971,34 @@ test("a password beside one-character code boxes is still found on its own", asy
   });
 });
 
+// Only one-character code fields join: two code fields that each hold the whole code are each
+// found on their own, so the code in the action is refused, not a doubled code that never stands.
+test("two code fields that each hold the whole code are each found on their own", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const { report, received, requested } = await fillAfterTyping(
+    page,
+    '<input id="code" name="code" inputmode="numeric" aria-label="Code"><input id="again" name="again" inputmode="numeric" aria-label="Code again">',
+    {
+      fields: [
+        { selector: "#code", slot: "code" },
+        { selector: "#again", slot: "code" },
+      ],
+      submit: "#continue",
+    },
+    [boxCode, boxCode],
+    "this.form.action = '/verify?otp=' + this.form.code.value",
+  );
+  expect(requested.filter((url) => url.includes(boxCode))).toEqual([]);
+  expect(received).toEqual([]);
+  expect(report).toMatchObject({
+    submit: "refused",
+    clicked: true,
+    failureDetail: { context: { changed: "submission.action", submissionActionOrigin: site } },
+  });
+});
+
 // A private answer is found inside any text, like a password: the guard finds it even where
 // letters adjoin it in a path.
 test("a private answer the click handler puts inside the action's path is refused as it fires", async ({
