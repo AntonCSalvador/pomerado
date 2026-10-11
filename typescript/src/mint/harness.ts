@@ -56,7 +56,10 @@ import {
   withOwnWords,
 } from "./contracts.js";
 import { answersForReview, type AnsweredQuestion } from "../guardian/question.js";
-import type { PublicationFinding } from "../guardian/review-contracts.js";
+import {
+  publicationRefusalUnfixable,
+  type PublicationFinding,
+} from "../guardian/review-contracts.js";
 import {
   taskUpdateForReview,
   type PendingTaskUpdate,
@@ -1001,7 +1004,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         error.code === "ReviewDenied" ||
         error.review !== undefined ||
         error.execution !== undefined;
-      /** Guardian denied or escalated an execution, or denied a publication, in this attempt. */
+      /**
+       * Guardian denied or escalated an execution, or refused a publication for a reason no
+       * correction gets past, in this attempt. A publication denial that names a correction is not one.
+       */
       let guardianRefused = recovered?.guardianRefused === true;
       /** Unanswered questions handed back to the minter in this build, up to the limit. */
       let noAnswerHandBacks = recovered?.noAnswerHandBacks ?? 0;
@@ -2755,8 +2761,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "explanation_too_long",
             "Private values in the explanation made it longer than 500 characters once screened. Shorten it, leave private values out, and call report_blocked again.",
           );
-        // A policy block stands on a refusal on record: Guardian's deny or escalation, or the
-        // owner's no to a confirm question, unless the host's own guidance names the ending. The
+        // A policy block stands on a refusal on record: Guardian's deny or escalation of an
+        // execution, its publication refusal no correction gets past, or the owner's no to a
+        // confirm question, unless the host's own guidance names the ending. The
         // minter's reading of its own instructions is none. A question handed back unanswered
         // also lets the minter stop: no answer is no consent, so it may end the build safely
         // instead of going on past what it asked.
@@ -2772,7 +2779,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         )
           return refused(
             "policy_not_refused",
-            "Nothing in this attempt refused this: Guardian denied or escalated nothing, and the owner answered no to nothing. Your instructions are not a refusal, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no to a confirm question is a refusal. Use site_lacks_capability only when the site does not offer what the task needs.",
+            "Nothing in this attempt refused this: Guardian denied or escalated no execution, refused no publication for privacy or authority or escalated one, and the owner answered no to nothing. A publication denial that names a correction is not a refusal: fix every finding and each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no to a confirm question is a refusal. Use site_lacks_capability only when the site does not offer what the task needs.",
           );
         return undefined;
       };
@@ -4062,7 +4069,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               }
               const denial = publication._tag === "Left" ? publication.left.review : undefined;
               const deniedCategory = denial?.findings?.[0]?.category;
-              if (publication._tag === "Left" && publication.left.code === "ReviewDenied")
+              if (
+                publication._tag === "Left" &&
+                publication.left.code === "ReviewDenied" &&
+                denial !== undefined &&
+                publicationRefusalUnfixable(denial)
+              )
                 guardianRefused = true;
               publicationDenial =
                 publication._tag === "Left" && publication.left.code === "ReviewDenied"
