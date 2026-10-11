@@ -3,8 +3,6 @@ import { defineOperation, timeoutDefaults } from "../../src/browser/index.js";
 
 const SavedTask = Schema.Struct({
   id: Schema.NonEmptyString.annotations({ description: "ID the site gave the saved task" }),
-  title: Schema.NonEmptyString.annotations({ description: "Title the task was saved with" }),
-  assignee: Schema.NonEmptyString.annotations({ description: "Assignee the task was saved with" }),
 });
 const Outcome = Schema.Union(
   Schema.Struct({ id: Schema.NonEmptyString }),
@@ -91,14 +89,16 @@ export default defineOperation(
             return request.method() === "POST" && request.url() === current.origin + "/tasks" &&
               fields.get("title") === title && fields.get("assignee") === assignee;
           }, { timeout: Math.min(35000, available) }),
-          form.getByRole("button", { name: "Create task", exact: true }).click({ timeout: Math.min(${timeoutDefaults.answerCap}, available - 1000) }),
+          form.getByRole("button", { name: "Create task", exact: true }).click({ noWaitAfter: true, timeout: Math.min(${timeoutDefaults.answerCap}, available - 1000) }),
         ]);
         if (submission.status === "rejected") throw submission.reason;
         if (receipt.status === "rejected") throw receipt.reason;
         const response = receipt.value;
-        const location = response.headers()["location"] ?? "";
-        const id = location.startsWith("/tasks/") ? location.slice("/tasks/".length) : "";
-        if (response.status() !== 201 || !/^[^/?#]+$/.test(id)) return { failure: "not_saved" };
+        const posted = new URL(response.url());
+        const location = new URL(response.headers()["location"] ?? "", posted);
+        const id = location.pathname.startsWith("/tasks/") ? location.pathname.slice("/tasks/".length) : "";
+        if (response.status() !== 201 || location.origin !== posted.origin || !/^[^/]+$/.test(id))
+          return { failure: "not_saved" };
         // The 201 with its Location confirmed the write and gave the new task's id. Return now:
         // the page it opens may still be loading, and nothing here waits for it.
         return { id };
@@ -117,6 +117,6 @@ export default defineOperation(
       });
     // The 201 with its Location confirmed the write. Record it now, with no further call.
     verified();
-    return { id: result.id, title: input.title, assignee: input.assignee };
+    return { id: result.id };
   },
 );

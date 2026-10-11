@@ -1056,12 +1056,13 @@ for (const mode of ["ambiguous", "no_commit"] as const)
 
 /**
  * The task site the write example was written against: the form posts the task, the site answers
- * `status` with `location`, and the page then opens that location, answered as `detail` says.
+ * `status` with `location`, if any, and the page then opens that location, answered as `detail`
+ * says.
  */
 const taskSite = async (
   page: Page,
   origin: string,
-  answer: { readonly status: number; readonly location: string },
+  answer: { readonly status: number; readonly location?: string },
   detail: (route: Route) => Promise<void>,
 ) => {
   let submissions = 0;
@@ -1069,7 +1070,10 @@ const taskSite = async (
     const request = route.request();
     if (request.method() === "POST") {
       submissions += 1;
-      await route.fulfill({ status: answer.status, headers: { location: answer.location } });
+      await route.fulfill({
+        status: answer.status,
+        headers: answer.location === undefined ? {} : { location: answer.location },
+      });
       return;
     }
     if (request.url() === `${origin}/tasks/new`) {
@@ -1148,15 +1152,44 @@ for (const detail of ["shown", "stale", "missing", "slow"] as const)
       confirmation: "readback",
       commits: [{ name: "create-task", state: "confirmed" }],
     });
-    // The id comes from the Location, and the title and assignee are the ones the request sent.
-    expect(result).toEqual(Either.right({ id: "task-123", ...requested }));
+    // The output is the id from the Location alone, with no echo of the input.
+    expect(result).toEqual(Either.right({ id: "task-123" }));
   });
 
-// A create that did not answer 201 with a Location naming the new task confirms nothing: the run
-// fails as sent, without recording the write as landed.
+// Sites often send Location as an absolute URL. One on the response's own origin names the task
+// as a path does.
+test("write example takes its id from an absolute Location on its own origin", async ({ page }) => {
+  const origin = "https://tasks.example.invalid";
+  const site = await taskSite(
+    page,
+    origin,
+    { status: 201, location: `${origin}/tasks/task-123` },
+    (route) => route.fulfill({ contentType: "text/html", body: "<p>Task saved</p>" }),
+  );
+  const { result, calls, effect } = await runExample(
+    page,
+    createTask,
+    { title: "Review draft", assignee: "demo-user" },
+    { siteOrigin: origin },
+  );
+  expect(site.submissions()).toBe(1);
+  expect(calls).toHaveLength(1);
+  expect(effect).toBe("verified");
+  expect(result).toEqual(Either.right({ id: "task-123" }));
+});
+
+// A create that did not answer 201 with a Location naming the new task on the response's own
+// origin confirms nothing: the run fails as sent, without recording the write as landed.
 for (const [label, answer] of [
   ["a 200", { status: 200, location: "/tasks/task-123" }],
+  ["a 4xx", { status: 422, location: "/tasks/task-123" }],
+  ["no Location", { status: 201 }],
   ["a Location naming no task", { status: 201, location: "/tasks/" }],
+  ["a Location with a trailing slash", { status: 201, location: "/tasks/123/" }],
+  [
+    "a Location on another origin",
+    { status: 201, location: "https://other.example.invalid/tasks/task-123" },
+  ],
 ] as const)
   test(`write example fails as not_saved on ${label}`, async ({ page }) => {
     const origin = "https://tasks.example.invalid";
@@ -1223,7 +1256,7 @@ test("write example waits for a delayed submit control and its own receipt befor
     siteOrigin: origin,
     deadlineMs: 25_000,
   });
-  expect(result).toEqual(Either.right({ id: "task-123", ...requested }));
+  expect(result).toEqual(Either.right({ id: "task-123" }));
   expect(submissions).toBe(1);
   expect(calls).toHaveLength(1);
 });
