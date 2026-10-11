@@ -201,7 +201,8 @@ the page's choices do not hold returns the rows of a broader choice that covers 
 URL the tool built, a URL parameter, a box checked before the site applied it or the option's
 name elsewhere on the page does not show an input applied; read the site's committed state, such
 as the applied chip, the selected control or the results' own state, and compare its text with
-the input, or the option a proper noun matched, normalized for case and whitespace. A detail
+the input, or the option a proper noun matched, normalized for case, accents, whitespace and
+punctuation. A detail
 read also checks the page's stable identity (.agents/core/SKILL.md). Building or repairing a search or listing tool: read
 .agents/search/SKILL.md before you settle its inputs.
 
@@ -482,8 +483,9 @@ The host's `executionAvailability` reports attempt-local capacity, never authori
 `not_published` leaves live execution open on the same browser, still signed in: read
 `page.url()` first, and prefer not to sign in again. Only a publication whose capture failed
 leaves the next live execution a fresh browser on a new, empty profile: read `page.url()` first
-and sign in again when the build signs in. A write build reads back first whether its earlier
-commit took effect and never submits one that did. `host_unavailable`
+and sign in again when the build signs in. A write build whose earlier commit recorded no
+confirmation reads back first whether it took effect and never submits one that did.
+`host_unavailable`
 ends live execution: preserve receipts and unresolved effects; do not retry execution or request
 user input to restore the host. An eligible retained receipt may still publish with
 `finish_build` while the source it ran is unchanged. Any source correction, the schemas
