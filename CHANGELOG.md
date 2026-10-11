@@ -319,6 +319,7 @@
 - Guardian's task update policy says the host, not the agent, sets `update_review.effect`: for a write build no change needs to make it a write, and the confirmation need not cover the write. It also says a task update review's empty `trusted_authority.allowedEffects`, like the read-only `allowedEffects` of earlier exploration reviews, says nothing about the build's effect.
 - Guardian's execution policy, beside its sign-in screen rules, and `publicationSafetyDefaultPolicy` say to prefer leaving a site's own "Remember me" or "Keep me signed in" choice at its default on the tool's own sign-in: it keeps the account owner's session, which later runs rely on, it is not a safety default, and neither review denies the host's own sign-in step over it.
 - Guardian's task update policy, its execution policy, the `mint_update` tool description and the workspace guide say an update never overturns a Guardian decision, except that the caller's confirmed answer can overturn one that held a step to their own request, such as a time, a value or a search setting. A caller's answer never overturns a decision made for safety or for a Pomerado scope limit.
+- The caller-input skill says `ask` returns one answer per question id only with an array or an object of questions. `ask("id")` with one id returns that answer itself, as the line before it says.
 
 ### Fixes
 
