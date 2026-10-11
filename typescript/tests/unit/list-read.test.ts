@@ -141,16 +141,24 @@ const listSite = (rows: string[], pageSize: number) => {
     },
   };
   // Which segment each call's `open` reached: the site page, API response or steps it loaded,
-  // and how many reads the readers did since `reads.count` was last reset.
+  // and the pages the readers loaded since `loads.count` was last reset. Like the reference
+  // reader, a site page or response reached by its number alone starts the list and follows Next
+  // to it, one load per page.
   const opened: number[] = [];
-  const reads = { count: 0 };
+  const loads = { count: 0 };
   const logged = Object.fromEntries(
     Object.entries(readers).map(([mechanism, reader]) => [
       mechanism,
       {
         ...reader,
         open: async (position: ListPosition | undefined, count: number) => {
-          reads.count++;
+          const byNumber =
+            mechanism !== "append" &&
+            mechanism !== "scroll" &&
+            mechanism !== "offset" &&
+            position?.href === undefined &&
+            position?.token === undefined;
+          loads.count += byNumber ? (position?.page ?? 1) : 1;
           const segment = await reader.open(position, count);
           opened.push(segment.at);
           return segment;
@@ -159,7 +167,7 @@ const listSite = (rows: string[], pageSize: number) => {
           ? {}
           : {
               more: async (segment: SiteSegment, count: number) => {
-                reads.count++;
+                loads.count++;
                 return reader.more?.(segment, count) as Promise<SiteSegment>;
               },
             }),
@@ -167,14 +175,14 @@ const listSite = (rows: string[], pageSize: number) => {
           ? {}
           : {
               next: async (segment: SiteSegment, count: number) => {
-                reads.count++;
+                loads.count++;
                 return reader.next?.(segment, count) as Promise<SiteSegment>;
               },
             }),
       },
     ]),
   ) as Record<ListMechanism, ListReader<Row, SiteSegment>>;
-  return { rows, readers: logged, opened, reads };
+  return { rows, readers: logged, opened, loads };
 };
 
 /** One call: its list from the input and the cursor the host admitted, then its rows and fields. */
@@ -362,7 +370,7 @@ const seeded = (seed: number) => () => {
 describe.each(mechanisms)("a %s list that changes between calls", (mechanism) => {
   const whole = mechanism === "append" || mechanism === "scroll" || mechanism === "offset";
 
-  it("skips no row, and returns none only when its reads run out, through bursts of new rows on top and removals of returned rows", async () => {
+  it("skips no row, repeats rows only with list_changed and returns none only when its reads run out, through bursts of new rows on top and removals of returned rows", async () => {
     const random = seeded(mechanisms.indexOf(mechanism) + 1);
     for (let trial = 0; trial < 60; trial++) {
       const pageSize = 1 + Math.floor(random() * 30);
@@ -375,18 +383,26 @@ describe.each(mechanisms)("a %s list that changes between calls", (mechanism) =>
       let cursor: string | undefined;
       let inserted = 0;
       for (let calls = 0; calls < 1_000; calls++) {
-        site.reads.count = 0;
+        site.loads.count = 0;
         const page = await call(site, mechanism, limit, cursor);
+        // A call loads at most its bound, and repeats a row only while it says the list changed.
+        const allLoads = whole ? 1 + listCallBounds.steps : listCallBounds.sitePages;
+        const repeated = page.ids.some((id) => returned.includes(id));
+        expect({ pageSize, limit, loads: site.loads.count <= allLoads }).toEqual({
+          pageSize,
+          limit,
+          loads: true,
+        });
+        if (repeated) expect(page.output.list_changed).toBe(true);
         returned.push(...page.ids);
         cursor = page.cursor;
         if (cursor === undefined) break;
         // Only the call's reads stop a call with no rows here: the run's time never runs out.
-        const allReads = 1 + (whole ? listCallBounds.steps : listCallBounds.sitePages - 1);
         if (page.ids.length === 0)
-          expect({ pageSize, limit, reads: site.reads.count }).toEqual({
+          expect({ pageSize, limit, loads: site.loads.count }).toEqual({
             pageSize,
             limit,
-            reads: allReads,
+            loads: allLoads,
           });
         // A newest-first burst of up to two segments' new rows above everything returned.
         if (random() < 0.5 && inserted < pageSize * 8) {
@@ -527,6 +543,34 @@ describe.each<ListMechanism>(["pages", "next_link", "api"])(
       const next = await call(site, mechanism, 20, first.cursor);
       expect(next.ids).toEqual(burst.slice(0, 20));
       expect(next.output.list_changed).toBe(true);
+    });
+
+    it("never steps back further than a call can read, and says the list changed on every page after starting over", async () => {
+      const site = listSite(ids(1, 600), 20);
+      let cursor: string | undefined;
+      for (let calls = 0; calls < 5; calls++)
+        cursor = (await call(site, mechanism, 50, cursor)).cursor;
+      // The last returned row, r250, moves from site page 13 to page 12, which only a replay of
+      // twelve pages reaches.
+      site.rows.splice(site.rows.indexOf("r100"), 12);
+      site.opened.length = 0;
+      site.loads.count = 0;
+      const next = await call(site, mechanism, 50, cursor);
+      expect(site.loads.count).toBeLessThanOrEqual(listCallBounds.sitePages);
+      expect(site.opened).toEqual([13, 1]);
+      // It started over from the list's first row.
+      expect(next.ids.slice(0, 3)).toEqual(ids(1, 3));
+      const returned = [...next.ids];
+      const changed = [next.output.list_changed];
+      cursor = next.cursor;
+      while (cursor !== undefined) {
+        const page = await call(site, mechanism, 50, cursor);
+        returned.push(...page.ids);
+        changed.push(page.output.list_changed);
+        cursor = page.cursor;
+      }
+      expect(changed.every((value) => value)).toBe(true);
+      expect(returned.filter((id) => !ids(1, 250).includes(id))).toEqual(ids(251, 600));
     });
   },
 );

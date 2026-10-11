@@ -21,7 +21,8 @@ in the site's order; rows the site promotes stay in place, count toward `limit` 
 mark as a boolean. `total_results` is the site's own exact count, null when it shows none or an
 approximate one. The description says: "Returns up to `limit` results per call (default 20).
 When `next_cursor` is not null, call again within ten minutes with the same inputs and `cursor`
-set to it for the results that follow," and names how the site pages and its page size.
+set to it for the results that follow. When `list_changed` is true, results may repeat earlier
+ones: de-duplicate by key," and names how the site pages and its page size.
 
 ## The cursor
 
@@ -103,18 +104,25 @@ by key as they show. Never treat a repeated click as safe if it could submit or 
 ## Changed lists
 
 Lists change between calls. `readList` reads from the segment that holds the last row the
-previous call returned and continues after that row, wherever it now is, and drops rows already
-returned. Rows inserted above it push the window down: `readList` reads more of the segment or
-the next ones. Rows removed above it can pull it back into an earlier segment: `readList` reads
-the previous segment by its page number, then up to two segments on. When neither shows that row
-or any row the cursor remembers, it starts over from the list's first segment in the same call,
-repeating rows rather than skipping any. So `open` must reach a position that has only a `page`,
-as the mechanisms below say. `list_changed` is true when anything changed at or above that row:
-it moved from where the cursor saw it, because rows were inserted above it (rows the caller
-never gets) or rows it already got were removed; it is gone; or a returned row came back. Rows
-that change below it are simply returned. When the site applied a context the caller did not
-set, such as a location it picked, return it as the segment's `context`, so a different one sets
-`list_changed`. Never promise a snapshot the site does not keep.
+previous call returned, continues after that row wherever it now is, and drops the last 16 rows
+returned, which the cursor remembers. Rows inserted above it push the window down: `readList`
+reads more of the segment or up to two segments on. Rows removed above it can pull it back into
+the previous segment: `readList` reads that segment by its page number when that fits within the
+call's reads, counting one read per page, since `open` reaches a page by its number by following
+Next from the first page. When neither shows that row or any remembered row, it starts over from
+the list's first segment in the same call, repeating rows rather than skipping any. So `open`
+must reach a position that has only a `page`, as the mechanisms below say. `list_changed` is
+true when anything changed at or above that row: it moved from where the cursor saw it, because
+rows were inserted above it (rows the caller never gets) or rows it already got were removed; it
+is gone; or a remembered row came back. After a start over, or a page continued from a segment's
+first row with no remembered row in sight, later pages can repeat rows returned before the
+remembered ones, so `list_changed` stays true on that page and every later page from its cursor:
+a caller that needs no repeats de-duplicates by key once `list_changed` is true, as the
+description says. On a site with very few rows per page and constant new rows on top, a list can
+start over again and again. Rows that change below the last returned row are simply returned.
+When the site applied a context the caller did not set, such as a location it picked, return it
+as the segment's `context`, so a different one sets `list_changed`. Never promise a snapshot the
+site does not keep.
 
 ## Stop
 
