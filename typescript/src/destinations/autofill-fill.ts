@@ -392,28 +392,42 @@ const submitPollMs = 250;
 const unclicked = (answered: Either.Either<CallAnswer, Error>, submit: "disabled" | "none") =>
   Either.isRight(answered) && "submit" in answered.right && answered.right.submit === submit;
 
+/** A submit call that found the page sent what was typed itself. */
+const pageSent = (answered: Either.Either<CallAnswer, Error>) =>
+  Either.isRight(answered) && "pageSent" in answered.right;
+
 /**
  * The step's submit call, made again while the page keeps the submit disabled, for up to
  * `submitEnableMs`, and while a step with fields and no submit has not seen the page send them
  * itself, for up to `pageSendMs` from the first call that found no submit. Each call judges every
  * control again before it clicks, and none clicks a disabled submit. The changes they find count
  * across the whole wait, so a page that keeps changing a control is refused however the changes
- * fall between the calls.
+ * fall between the calls. On a step with no submit the call only reads the page, so one that fails
+ * there, as when the page navigates or draws itself again while the call reads it, is a look lost:
+ * the host looks again, at least once after it, even past the wait. When a later look finds the
+ * page sent what was typed, the fill reports that; otherwise the first failure stands.
  */
 const submitWhenEnabled = (input: FillInput, progress: FillProgress, call: AutofillFillCall) =>
   Effect.gen(function* () {
     const started = Date.now();
     const sendMs = input.step.fields.length > 0 ? Math.min(input.settleMs ?? 5_000, pageSendMs) : 0;
+    const readsOnly = input.step.submit === undefined && sendMs > 0;
     let unsentSince: number | undefined;
+    let lost: Either.Either<CallAnswer, Error> | undefined;
+    let lastLost = false;
     const changes = { count: 0 };
     for (;;) {
       const answered = yield* fillCall(input, progress, changes)(call);
-      const unsent = unclicked(answered, "none");
+      const failed = readsOnly && Either.isLeft(answered);
+      const unsent = unclicked(answered, "none") || failed;
       if (unsent) unsentSince ??= Date.now();
       const waiting = unclicked(answered, "disabled")
         ? Date.now() - started < submitEnableMs
-        : unsent && Date.now() - (unsentSince ?? started) < sendMs;
-      if (!waiting) return answered;
+        : unsent &&
+          (Date.now() - (unsentSince ?? started) < sendMs || (failed && !lastLost));
+      if (failed) lost ??= answered;
+      lastLost = failed;
+      if (!waiting) return lost === undefined || pageSent(answered) ? answered : lost;
       yield* Effect.sleep(submitPollMs);
     }
   });
@@ -547,7 +561,8 @@ const afterFieldCall = (
  * that moves on once every field is typed sent what was typed itself (`page`), never a refusal:
  * the step's fields went away or were all disabled, its popup closed, its address moved to another
  * path, or a step of several fields came back emptied. The host gives the page up to `pageSendMs`
- * to do so. A step with a submit is the host's to click, whatever its page does meanwhile.
+ * to do so, and a submit call that fails meanwhile is followed by another look (`submitWhenEnabled`).
+ * A step with a submit is the host's to click, whatever its page does meanwhile.
  * Guardian's refusals still come first: a control that moved off the site or changed how it
  * submits refuses the submit as before.
  */

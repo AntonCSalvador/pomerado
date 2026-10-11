@@ -27,6 +27,7 @@ import {
   saveNote,
   saveSite,
   saveStep,
+  type Turn,
 } from "./standalone-mint-fixture.js";
 
 const sourcesOf = (review: RecordedReview, key: string) =>
@@ -337,6 +338,141 @@ async ({ ask }) => ({ note: await ask("note") }));`,
     expect(historyOf(question)).toEqual([
       expect.objectContaining({ purpose: "explore", status: "running", effect: "possible" }),
     ]);
+  } finally {
+    await site.close();
+  }
+});
+
+const approvalPrompt = "Do you approve the site terms for this booking?";
+const approvalQuestions = `{approve:{type:"confirm",prompt:${JSON.stringify(approvalPrompt)}}}`;
+/** A write step whose script asks the owner to approve the site's terms, then runs `then`. */
+const approvingStep = (then: string) => `import { Schema } from "effect";
+import { defineOperation } from "../runtime/index.js";
+export default defineOperation({name:"approve_terms",input:Schema.Unknown,output:Schema.Unknown,questions:${approvalQuestions},write:{confirmation:"message",commits:["submit"]}},
+async ({ ask, enteringCommit }) => { ${then} });`;
+const askThenFail = "await ask('approve'); throw new Error('Failed before its commit.');";
+/**
+ * Mints a write whose first step asks and then runs `first`, after the turns `between` a later
+ * step runs `later`, and a last step explores; every question is answered yes.
+ */
+const laterAsk = async (steps: {
+  readonly first: string;
+  readonly later: string;
+  readonly between?: readonly Turn[];
+}) => {
+  const site = await startSite((_request, response) =>
+    html(response, "<title>Fixture</title><h1>Public fixture</h1>"),
+  );
+  const guardian = recordingGuardian();
+  try {
+    const minted = await mint({
+      effect: "write",
+      url: site.url,
+      guardian,
+      answer: () => ({ approve: { confirmed: true } }),
+      turns: [
+        () =>
+          patch({
+            "src/tool.mjs": approvingStep(steps.first),
+            "src/again.mjs": approvingStep(steps.later),
+            "explore/look.mjs": probe(),
+          }),
+        () => [call("execute", act("src/tool.mjs"), "first")],
+        ...(steps.between ?? []),
+        () => [call("execute", act("src/again.mjs"), "later")],
+        () => [call("execute", execution("explore", "explore/look.mjs"), "look")],
+      ],
+    });
+    expect(toolResult(minted.last, "first")).toMatchObject({ status: "failed" });
+    expect(toolResult(minted.last, "later")).toMatchObject({ status: "completed" });
+    const scriptAsks = minted.asked.filter((request) => request.source === "script");
+    return { ...minted, guardian, scriptAsks };
+  } finally {
+    await site.close();
+  }
+};
+
+test("a later step before any commit went out reuses the owner's answer to its script's question", async () => {
+  test.setTimeout(90_000);
+  const { scriptAsks, guardian } = await laterAsk({
+    first: askThenFail,
+    later: "return { approve: await ask('approve') };",
+  });
+  expect(scriptAsks).toHaveLength(1);
+  // Guardian reviewed the later step's ask, and later reviews hold the owner's answer it reused.
+  expect(guardian.reviews.filter((review) => review.kind === "question")).toHaveLength(2);
+  expect(authorityOf(executions(guardian.reviews).at(-1)!)["answeredQuestions"]).toEqual([
+    { question: approvalPrompt, answer: { confirmed: true } },
+  ]);
+});
+
+test("a later step asks the owner again once an earlier step entered its commit", async () => {
+  test.setTimeout(90_000);
+  const { scriptAsks } = await laterAsk({
+    first: "await ask('approve'); enteringCommit('submit'); throw new Error('Failed after it.');",
+    later: "return { approve: await ask('approve') };",
+  });
+  expect(scriptAsks).toHaveLength(2);
+});
+
+test("a later step reuses the owner's answer once, so asking again before a second try asks the owner", async () => {
+  test.setTimeout(90_000);
+  const { scriptAsks } = await laterAsk({
+    first: askThenFail,
+    later:
+      "const first = await ask('approve'); enteringCommit('submit'); return { first, second: await ask('approve') };",
+  });
+  expect(scriptAsks).toHaveLength(2);
+});
+
+test("a later step asks the owner again once the owner answered its prompt anew", async () => {
+  test.setTimeout(90_000);
+  const { asked, scriptAsks } = await laterAsk({
+    first: askThenFail,
+    later: "return { approve: await ask('approve') };",
+    between: [
+      () => [
+        call("request_input", {
+          intent: "Ask the caller about the terms",
+          questions: [{ id: "approve", type: "confirm", prompt: approvalPrompt }],
+        }),
+      ],
+    ],
+  });
+  expect(asked.map((request) => request.source)).toEqual(["script", "agent", "script"]);
+  expect(scriptAsks).toHaveLength(2);
+});
+
+test("a script's question after a task update asks the owner again", async () => {
+  test.setTimeout(90_000);
+  const site = await startSite((_request, response) =>
+    html(response, "<title>Fixture</title><h1>Public fixture</h1>"),
+  );
+  const guardian = recordingGuardian();
+  try {
+    const { last, asked } = await mint({
+      effect: "read",
+      url: site.url,
+      guardian,
+      answer: (request) =>
+        request.source === "script" ? { approve: { confirmed: true } } : { save: "save" },
+      turns: [
+        () =>
+          patch({
+            "explore/ask.mjs": `import { Schema } from "effect";
+import { defineOperation } from "../runtime/index.js";
+export default defineOperation({name:"approve_terms",input:Schema.Unknown,output:Schema.Unknown,questions:${approvalQuestions}},
+async ({ ask }) => ({ approve: await ask("approve") }));`,
+          }),
+        () => [call("execute", execution("explore", "explore/ask.mjs"), "before")],
+        () => [call("request_input", saveQuestion, "ask")],
+        () => [call("mint_update", toWrite(["save"]), "update")],
+        () => [call("execute", execution("explore", "explore/ask.mjs"), "after")],
+      ],
+    });
+    expect(toolResult(last, "update")).toMatchObject({ status: "updated" });
+    expect(toolResult(last, "after")).toMatchObject({ status: "completed" });
+    expect(asked.map((request) => request.source)).toEqual(["script", "agent", "script"]);
   } finally {
     await site.close();
   }

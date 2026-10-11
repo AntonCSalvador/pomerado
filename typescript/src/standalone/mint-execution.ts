@@ -4,7 +4,7 @@ import {
   lintOutput,
   outputChecksNotice,
 } from "../runtime/output-lint.js";
-import { Effect, Either } from "effect";
+import { Clock, Effect, Either } from "effect";
 import {
   runLocalOperation,
   LocalOperationFailure,
@@ -58,6 +58,12 @@ import {
   trustsSignInOrigins,
 } from "./sign-in-origin-question.js";
 import type { MintState } from "./mint-state.js";
+import {
+  keptScriptAnswers,
+  reusedScriptAnswers,
+  scriptCommitsUnsent,
+  scriptQuestionKeys,
+} from "./script-answer-reuse.js";
 import { error, mintError } from "./errors.js";
 import { mintSessionSignInFailure, type SessionSignInFailed } from "./session-sign-in.js";
 type Execution = Parameters<MintDependencies["reviewAndExecute"]>[0];
@@ -248,14 +254,24 @@ const executeAuthentication = (
     };
   });
 
+/** Whether no finished step of the build has entered a commit or may have. */
+const commitsUnsent = (state: MintState) =>
+  scriptCommitsUnsent({
+    actSteps: state.writeSession.steps,
+    writeSteps: [...state.runs].flatMap(([executionId, run]) =>
+      run.action === "write" ? [executionId] : [],
+    ),
+  });
+
 const scriptQuestions = (
   state: MintState,
-  entrypoint: string,
+  step: { readonly id: string; readonly entrypoint: string },
   input: unknown,
   sourceMap: ReadonlyMap<string, string>,
 ) => {
-  const { context, mintAsk } = state;
+  const { context, mintAsk, scriptAnswers } = state;
   const { projection } = state.session;
+  const { entrypoint } = step;
   let scriptQuestion: ScriptQuestionOutcome | undefined;
   let unanswered = false;
   const scriptAsk: InputAsker = (candidate, bounds) =>
@@ -278,9 +294,34 @@ const scriptQuestions = (
         };
         return yield* Effect.fail(new InputRequestFailure({ code: "Unauthorized" }));
       }
-      return yield* mintAsk(candidate, bounds).pipe(
-        Effect.tap((answers) => context.answered(candidate, answers)),
-      );
+      // A later step reuses the owner's answer to the same question, once, while no earlier step
+      // has entered a commit or may have. Guardian reviewed this ask all the same, and the reused
+      // answer reaches later reviews as a fresh one does. It is always the owner's latest answer
+      // to its prompt (`forgetScriptAnswers`), so it never replaces a newer one in Guardian's list.
+      const keys = yield* scriptQuestionKeys(candidate, (text) => projection.text(text));
+      const reused = commitsUnsent(state)
+        ? reusedScriptAnswers(candidate, keys, scriptAnswers.kept, {
+            executionId: step.id,
+            nowMs: yield* Clock.currentTimeMillis,
+          })
+        : undefined;
+      if (reused !== undefined) scriptAnswers.kept = reused.kept;
+      const answers =
+        reused?.answers ??
+        (yield* mintAsk(candidate, bounds).pipe(
+          Effect.tap((fresh) =>
+            Clock.currentTimeMillis.pipe(
+              Effect.map((nowMs) => {
+                scriptAnswers.kept = keptScriptAnswers(scriptAnswers.kept, keys, fresh, {
+                  executionId: step.id,
+                  nowMs,
+                });
+              }),
+            ),
+          ),
+        ));
+      yield* context.answered(candidate, answers);
+      return answers;
     }).pipe(
       Effect.mapError((cause) =>
         cause instanceof InputRequestFailure
@@ -330,6 +371,7 @@ const actOutcome = (
   const sent = journal.effect === "not_sent" ? 0 : undefined;
   const commit: CommitEvidence = reported ? commitEvidenceOf(journal.commits) : "unreported";
   return {
+    commit,
     marks: {
       ...(journal.confirmation === undefined ? {} : { confirmation: journal.confirmation }),
       ...(action === undefined ? {} : { action }),
@@ -575,7 +617,12 @@ const authoredExecution = (
       // Guardian allowed the step on this input, so the session runs it from here on.
       if (selected.mark === "intent_derived") writeSession.input = selected.input;
     }
-    const questions = scriptQuestions(state, execution.entrypoint, input, sourceMap);
+    const questions = scriptQuestions(
+      state,
+      { id, entrypoint: execution.entrypoint },
+      input,
+      sourceMap,
+    );
     const { scriptAsk } = questions;
     // The confirm popups the owner accepts during this execution, host-only.
     const accepted: ObservedConfirm[] = [];
@@ -670,7 +717,8 @@ const authoredExecution = (
             writeSession,
             yield* acceptedConfirmsKept({ write: true, accepted, screen: secrets.assertAbsent }),
           );
-        if (act !== undefined) writeSession.steps.push({ executionId: id, ...act.marks });
+        if (act !== undefined)
+          writeSession.steps.push({ executionId: id, commit: act.commit, ...act.marks });
         if (execution.purpose === "example" && executed._tag === "Right")
           context.setInputSchema(executed.right.schemas.input);
         const receipt = {

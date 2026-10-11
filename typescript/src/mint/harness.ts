@@ -120,7 +120,7 @@ import type {
 import type { SiteAccessDiagnostic } from "./site-access-contracts.js";
 import type { ModelDiagnosticTiming } from "../models/model-diagnostic-timing.js";
 import type { RuntimeRecordInput } from "../models/model-runtime-record.js";
-import { registryRefusal } from "./registry-feedback.js";
+import { inputContractChangedInstruction, registryRefusal } from "./registry-feedback.js";
 import { publicationBlockFeedback, workspacePath } from "./publication-block.js";
 import { outputChecksRefusal } from "./output-notes.js";
 import { lintOutput } from "../runtime/output-lint.js";
@@ -365,6 +365,8 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   "login_url_contains_credential",
   // An execution on the site the build moved away from: a fresh example on the current site.
   "example_before_site_change",
+  // Restored inputs change the code, which needs its own example.
+  "input_contract_changed",
 ]);
 /** How the minter goes on after a refusal that is neither an outage nor Guardian's. */
 const refusalRecovery = (reason: string | undefined, write: boolean): PublicationRecovery =>
@@ -1312,13 +1314,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       const keepAnswers = (submitted: AgentInputRequest, answers: ValidAnswers) =>
         Effect.forEach(submitted.questions, (question) =>
-          answersForReview(
-            {
-              ...(submitted.notice === undefined ? {} : { notice: submitted.notice }),
-              questions: [question],
-            },
-            answers,
-            (text) => screenMintText(dependencies, text),
+          answersForReview({ questions: [question] }, answers, (text) =>
+            screenMintText(dependencies, text),
           ).pipe(
             Effect.tap(([entry]) =>
               Effect.sync(() => {
@@ -2437,21 +2434,30 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const acceptedAnswers: unknown[] = [];
       /**
        * The digest of what `entrypoint`'s import closure holds in the workspace now, without
-       * paths; undefined when it cannot be read.
+       * paths; undefined when it cannot be read, and a failed read is reported to the host.
        */
       const stepDigest = (entrypoint: string) =>
-        Effect.promise(async () => {
-          try {
+        Effect.tryPromise({
+          try: async () => {
             const files = await readImportClosure(async (path) => {
               if ((await session.pathExists?.(path)) === false) return undefined;
               const text: unknown = await session.readFile?.({ path });
               return typeof text === "string" ? text : undefined;
             }, entrypoint);
             return files.size === 0 ? undefined : contentDigest(files);
-          } catch {
-            return undefined;
-          }
-        });
+          },
+          catch: (error) => error,
+        }).pipe(
+          Effect.catchAll((error) =>
+            reportFailure(error, {
+              component: "mint",
+              operation: "stepDigest",
+              phase: "source_digest",
+              subCause: "mint_host_dependency_failed",
+              correlation: dependencies.reportCorrelation ?? "process",
+            }).pipe(Effect.as(undefined)),
+          ),
+        );
       /** A write Guardian labelled, as the outcome reviewer tracks it. */
       const trackedWrite = (
         executionId: string,
@@ -4276,6 +4282,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         ? "Keep the schema as registered and fix the extraction from what the session already read, then call finish_build again with the same executionId; never run the write again for this."
                         : "Keep the schema as registered and fix the extraction so it returns each value, then run the example again and call finish_build with that new executionId."
                     } If the site no longer shows a value, propose mint_update with an output change for that field, which the tool's owner must confirm, and a reason when it removes the field; once it is updated, call finish_build again with the same executionId. Otherwise end with report_blocked, reason site_lacks_capability, naming the field.`,
+                  );
+                // A host's own comparison with the published tool's inputs: exactly its fixed
+                // instruction, with each broken input as data.
+                if (error.reason === "input_contract_changed")
+                  return notPublished(
+                    error.code,
+                    error.reason,
+                    { brokenInputs: error.brokenInputs ?? [] },
+                    inputContractChangedInstruction,
                   );
                 if (error.reason === "tool_name_taken")
                   return notPublished(

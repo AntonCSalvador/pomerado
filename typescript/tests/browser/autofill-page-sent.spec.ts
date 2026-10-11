@@ -251,6 +251,112 @@ test("a widget with no button that sends nothing is filled with no submit once t
   expect(sent).toEqual([]);
 });
 
+/**
+ * A widget with no button that moves on while one of the host's submit calls reads it, so the call
+ * fails. It sends the code on its last digit, then waits for the host's next read of its first box,
+ * the first box a call reads, and moves on right then. The host's test page marks each element it
+ * reads with a `data-fixture-` attribute (`isolatedLocatorPage`), which the widget sees. On
+ * `navigates`, 1.5 s after the last digit, the widget loads the account page. It holds its old page
+ * for a moment, so the new page replaces it before the call reads on. On `redraws`, once the site
+ * refused the code, it draws its boxes again, empty, under an error.
+ */
+type InCallMove = "navigates" | "redraws";
+const inCallWidget = (move: InCallMove) => `<main id="view">${boxes}</main><p id="error"></p>
+<script>
+const view = document.getElementById("view");
+const boxes = () => [...document.querySelectorAll(".otp")];
+let moveOn = null;
+new MutationObserver((records) => {
+  const read = records.some((record) => record.target.id === "otp-1" && record.attributeName.startsWith("data-fixture-"));
+  if (moveOn === null || !read) return;
+  const move = moveOn;
+  moveOn = null;
+  move();
+}).observe(view, { attributes: true, subtree: true });
+boxes().forEach((box, index) => box.addEventListener("input", () => {
+  const next = boxes()[index + 1];
+  if (box.value !== "" && next) next.focus();
+  const typed = boxes().map((each) => each.value).join("");
+  if (!/^[0-9]{6}$/.test(typed)) return;
+  const sending = fetch("/api/code", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: typed }) });
+  ${
+    move === "navigates"
+      ? `setTimeout(() => {
+    moveOn = () => {
+      location.assign("/account");
+      const until = Date.now() + 1000;
+      while (Date.now() < until);
+    };
+  }, 1500);`
+      : `sending.then((response) => {
+    if (response.ok) return;
+    moveOn = () => {
+      view.innerHTML = ${JSON.stringify(boxes)};
+      document.getElementById("error").textContent = "Wrong code";
+    };
+  });`
+  }
+}));
+</script>`;
+
+test("a widget with no button that loads the next page 1.5 s after its last digit, while a submit call of the host reads it, is reported sent by the page", async ({
+  page,
+}) => {
+  const { sent, release } = await serve(page, inCallWidget("navigates"));
+  release();
+  // A read the navigation left waiting on a box that is gone ends, as a browser call that waits
+  // too long does.
+  page.setDefaultTimeout(5_000);
+  const report = await fill(page, boxesStep, [...code], { settleMs: 5_000 });
+  expect(report).toMatchObject({ outcome: "filled", fields: filledBoxes, submit: "page" });
+  expect(maySend(report)).toBe(true);
+  expect(report).not.toHaveProperty("clicked");
+  expect(report).not.toHaveProperty("failureDetail");
+  expect(sent).toEqual([code]);
+  await expect(page.locator("#account")).toBeVisible();
+});
+
+test("a refused code whose widget draws its boxes again while a submit call of the host reads them is reported sent by the page", async ({
+  page,
+}) => {
+  const { sent, release } = await serve(page, inCallWidget("redraws"));
+  release();
+  const report = await fill(page, boxesStep, [..."135790"], { settleMs: 5_000 });
+  expect(report).toMatchObject({ outcome: "filled", fields: filledBoxes, submit: "page" });
+  expect(maySend(report)).toBe(true);
+  expect(report).not.toHaveProperty("failureDetail");
+  await expect(page.locator("#error")).toHaveText("Wrong code");
+  for (const box of boxesStep.fields) await expect(page.locator(box.selector)).toHaveValue("");
+  expect(sent).toEqual(["135790"]);
+});
+
+/** The host's calls, its first submit call failing as a call that never reached the page does. */
+const firstSubmitFails =
+  (submits: { count: number }) =>
+  (host: AutofillPage): AutofillPage => ({
+    ...host,
+    execute: (script, timeout) => {
+      if (!script.includes("guardCall")) return host.execute(script, timeout);
+      submits.count++;
+      return submits.count === 1
+        ? Effect.fail(new Error("Browser call failed"))
+        : host.execute(script, timeout);
+    },
+  });
+
+test("a widget with no button whose submit call fails while the page stays as it was reports the failed call", async ({
+  page,
+}) => {
+  const { sent } = await serve(page, widget("stays"));
+  const submits = { count: 0 };
+  const report = await fill(page, boxesStep, [...code], { wrap: firstSubmitFails(submits) });
+  expect(report).toMatchObject({ outcome: "uncertain", reason: "fill_call_failed", typed: true });
+  // The host looked again and found the page as it was, so the failed call stands.
+  expect(submits.count).toBeGreaterThan(1);
+  await expect(page.locator("#otp-6")).toHaveValue(code.slice(-1));
+  expect(sent).toEqual([]);
+});
+
 const formStep: AutofillStep = { ...boxesStep, submit: "#verify" };
 const form = (script = "") =>
   `<form action="/verify" method="post">${boxes}<button id="verify">Verify</button></form><script>
@@ -266,6 +372,18 @@ test("code boxes in a form with a button are filled and the host clicks it", asy
   const report = await fill(page, formStep, [...code]);
   expect(report).toMatchObject({ outcome: "filled", fields: filledBoxes, submit: "clicked" });
   expect(posted.map((received) => [1, 2, 3, 4, 5, 6].map((box) => received.get(`d${box}`)).join(""))).toEqual([code]);
+  expect(sent).toEqual([]);
+});
+
+test("code boxes in a form with a button whose submit call fails report the failed call after that one call", async ({
+  page,
+}) => {
+  const { sent, posted } = await serve(page, form());
+  const submits = { count: 0 };
+  const report = await fill(page, formStep, [...code], { wrap: firstSubmitFails(submits) });
+  expect(report).toMatchObject({ outcome: "uncertain", reason: "fill_call_failed", typed: true });
+  expect(submits.count).toBe(1);
+  expect(posted).toEqual([]);
   expect(sent).toEqual([]);
 });
 
