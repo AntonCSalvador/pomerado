@@ -12,9 +12,9 @@ bad value before the tool touches the site, and fail loudly whenever the run can
 the caller asked for. Never return results computed without a value the caller supplied.
 
 1. Express in the input schema everything it can hold, so the host refuses a bad value before
-   the script runs: each field's type, an enum of the site's full set of options, a minimum and
-   maximum for numbers, counts and lengths, a format such as a date-only `CalendarDate` or a
-   pattern for a code, and which fields are required.
+   the script runs: each field's type, an enum of the site's full set of options when the
+   options are fixed, a minimum and maximum for numbers, counts and lengths, a format such as a
+   date-only `CalendarDate` or a pattern for a code, and which fields are required.
 2. Check every rule the schema cannot hold before any site action, and throw
    `new errors.InvalidInput(message, { field })` at once, starting "Caller input error:" and
    naming the field and the rule. Such rules include:
@@ -36,7 +36,10 @@ the caller asked for. Never return results computed without a value the caller s
      value (core skill, "Configure, then read"). Throw
      `new errors.InputNotApplied(message, { field, requested, applied, step, siteMessage })`
      as the core skill says. A read, or a run that left the site untouched, may run again with
-     the same request.
+     the same request. Not this error: a number on a stepped scale set to the nearest step
+     inside the caller's bound and returned as applied, a filter group the page disables
+     reported as not offered, or a broader choice that covers the value (core and search
+     skills).
    - An option the page lists but greys out, such as a booked date or a sold-out size, on a
      read: not an error. Return it unavailable, with the page's reason and alternatives, and the
      run succeeds. A write throws `InvalidInput` with `available` instead.
@@ -48,7 +51,8 @@ the caller asked for. Never return results computed without a value the caller s
 
    Never pick another value for the caller, such as a near match, the page's default or the
    first option, and never report a refused or unapplied value in the output instead of
-   throwing, such as a `sort_applied: false` flag or a "best-effort" description.
+   throwing, such as a `sort_applied: false` flag or a "best-effort" description. The three
+   cases above that return results with what applied are the only exceptions.
 
 ## Ask the caller during a run
 

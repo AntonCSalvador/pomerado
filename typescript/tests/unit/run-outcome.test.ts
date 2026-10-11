@@ -337,10 +337,6 @@ describe("an input the page did not apply", () => {
   it.each([
     { name: "a read", evidence: {} },
     { name: "a write that sent nothing", evidence: { tool_effect: "write", effect: "rejected" } },
-    {
-      name: "a record an earlier release kept as location_not_applied",
-      evidence: { failure_reason: "location_not_applied" },
-    },
   ] as const)("may run again with the same request for $name", ({ evidence }) => {
     expect(classifyRun(failed(evidence))).toMatchObject({
       code: "input_not_applied",
@@ -366,5 +362,19 @@ describe("an input the page did not apply", () => {
     expect(outcome?.code).not.toBe("input_not_applied");
     expect(outcome?.retry).not.toBe("same_key");
     if ("code" in expected) expect(outcome?.code).toBe(expected.code);
+  });
+
+  it("keeps the detail of a record an earlier release kept for a location", () => {
+    const { unapplied_input: _, ...rest } = failed({});
+    const old: RunEvidence = {
+      ...rest,
+      failure_reason: "location_not_applied",
+      location: { field: "zip", requested: "00001", applied: "00002", step: "store_save" },
+    };
+    expect(classifyRun(old)).toMatchObject({
+      code: "input_not_applied",
+      retry: "same_key",
+      details: { field: "zip", requested: "00001", applied: "00002", step: "store_save" },
+    });
   });
 });

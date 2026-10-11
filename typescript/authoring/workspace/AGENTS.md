@@ -190,8 +190,9 @@ HTTP version (`src/tool-http.mjs`), which may build its requests from the caller
 
 **Read back every input before returning.** Read the page's own display of each input the
 site shows, such as the date picker, selected time, party size, passengers, cabin, applied
-filters, sort and selected options, and refuse a mismatch: the tool's code fails the run
-(`OperationFailure`) and never returns results for an input that did not apply. Three cases
+filters, sort and selected options, and refuse a mismatch: the tool throws `InputNotApplied`
+(.agents/core/SKILL.md) and never returns results for an input that did not apply; a control
+the tool could not find or read is `OperationFailure`. Three cases
 return results with what applied instead: a number on a scale the site steps returns its applied
 bound, a filter group the page disables for the results is reported as not offered, and a value
 the page's choices do not hold returns the rows of a broader choice that covers it
@@ -199,10 +200,8 @@ the page's choices do not hold returns the rows of a broader choice that covers 
 URL the tool built, a URL parameter, a box checked before the site applied it or the option's
 name elsewhere on the page does not show an input applied; read the site's committed state, such
 as the applied chip, the selected control or the results' own state, and compare its text with
-the input, or the option a proper noun matched, normalized for case and whitespace. A valid
-value the caller supplied that did not apply, such as a location, filter or sort the page reset,
-throws `InputNotApplied` instead (.agents/core/SKILL.md). A detail read also checks the page's stable identity
-(.agents/core/SKILL.md). Building or repairing a search or listing tool: read
+the input, or the option a proper noun matched, normalized for case and whitespace. A detail
+read also checks the page's stable identity (.agents/core/SKILL.md). Building or repairing a search or listing tool: read
 .agents/search/SKILL.md before you settle its inputs.
 
 **Load large content progressively.** Know a file's size before reading it:<!-- pomerado:section agents.file-lengths --> every `read_source` result gives

@@ -420,7 +420,10 @@ that depends on them:
    the option it matched: ignore case, repeated whitespace and typographic punctuation such as
    curly quotes, never exact case-sensitive equality, since a page may echo a query or name in
    its own case. When the page kept another value after the tool's bounded retries, throw
-   `InputNotApplied` (above); never read on with the page's value.
+   `InputNotApplied` (above); never read on with the page's value. A number snapped to the
+   nearest step inside the caller's bound and returned as applied, a filter group the page
+   disables reported as not offered, and a broader choice that covers the value (search skill)
+   are not unapplied inputs.
 4. Read. Only then read the values the choices affect. Return the applied choices beside
    them. Return a group's offered options as a list when the page shows them without extra
    clicks, as a record page shows its variants, or when the caller asks (search skill).

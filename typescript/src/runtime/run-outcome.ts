@@ -138,6 +138,8 @@ export interface RunEvidence {
   readonly rejected_field?: string | undefined;
   /** The input the caller supplied that the page did not apply, and what it kept instead. */
   readonly unapplied_input?: RunUnappliedInputEvidence | undefined;
+  /** @deprecated A record an earlier release kept: read only when `unapplied_input` is absent. */
+  readonly location?: RunUnappliedInputEvidence | undefined;
 }
 
 /** An input the page did not apply, as a run's record keeps it. */
@@ -258,7 +260,7 @@ export const runError = (view: RunEvidence): RunFailure => {
       // Only a read or an untouched site may run again as is; a write that applied or may have,
       // or a run that judged a step may have committed, keeps its own outcome.
       if (!unappliedRetryable(view)) break;
-      const unapplied = view.unapplied_input;
+      const unapplied = view.unapplied_input ?? view.location;
       return failure("input_not_applied", {
         possible_commit: false,
         ...(view.refusal_reason === undefined ? {} : { reason: view.refusal_reason }),
