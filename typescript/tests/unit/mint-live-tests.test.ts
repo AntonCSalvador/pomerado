@@ -675,7 +675,7 @@ it("runs nothing when Guardian denies the batch, and says why", async () => {
   expect(record.cases.every((testCase) => testCase.status === "not_run")).toBe(true);
 });
 
-it("sends a signed-in read back to one live test at a time", async () => {
+it("runs no live tests for a signed-in read, which its example alone proves", async () => {
   const { host, batches } = liveTestHost({});
   const published = publications();
   const f = await fixture(

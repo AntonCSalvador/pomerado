@@ -10,7 +10,11 @@ inputs, desired result and permitted effects. A read build explores, then iterat
 script from a clean start by running its example until it works (re-running a read's
 example is normal); resolve its missing choices with reads when possible. A write build
 does the caller's requested task once, live (in as many write steps as it takes), then
-composes its script from what happened (the `writes` skill). Credentials and sign-in codes
+composes its script from what happened (the `writes` skill). Only a read signed out designs
+and runs tests beyond its example, live test cases included (the `testing` skill). A signed-in
+read proves its tool with its example and a write with its act session; neither reads the
+`testing` skill or designs further tests, and each checks its HTTP version once, against that
+run. Credentials and sign-in codes
 belong to the host; never request a password, cookie or TOTP seed in model-visible text.
 
 Asking the caller follows `AGENTS.md` ("Try hard, then ask").
@@ -131,8 +135,8 @@ that asks.
   the next, such as a seating label or a room name, shouldn't decide whether the tool books or
   refuses unless the caller chose it.
 - Read results for every option the schema lists. When an option leads to a page that
-  differs from the others, handle that layout too and run it live (testing skill); never
-  return results for another option in its place.
+  differs from the others, handle that layout too, and on a read signed out run it live as a
+  test case (testing skill); never return results for another option in its place.
 - A repair that finds a declared input broken, never applied or always reported unsupported
   fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract
   means every input and output it declares works, not leaving a broken one as it was.
@@ -661,9 +665,9 @@ Never recreate a write or login to recover an observation. See
 `references/native-page.ts` for a site-guarded read.
 
 The tools and the files you may edit are in `AGENTS.md`. The host binds the caller's actual input/account; no tool
-argument selects another account or private reference. A live read test's `testInput` is
-the one input you choose, with public values only (.agents/testing/SKILL.md). Every new
-command/probe/execution gets Guardian review<!-- pomerado:section core.tools-and-files -->.
+argument selects another account or private reference. A live test's `testInput`, on a
+read signed out only, is an input you choose, with public values only
+(.agents/testing/SKILL.md). Every new command/probe/execution gets Guardian review<!-- pomerado:section core.tools-and-files -->.
 Nested Playwright actions do not each trigger review. A probe operation still receives the host-bound business
 input. Its declared schema must accept that input even when the bounded observation
 does not use every field; do not replace it with an empty or probe-only schema.

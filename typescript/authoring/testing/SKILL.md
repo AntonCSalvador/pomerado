@@ -1,26 +1,23 @@
 ---
 name: testing
-description: Choose meaningful parser, saved HTTP, static DOM and authorized live checks.
+description: Design and run live test cases for a read signed out. A signed-in read or a write skips this skill and proves its tool with one run.
 ---
 
-# Test the contract you authored
+# Test a read signed out
+
+This skill is for a read signed out only. A signed-in read or a write does the original task: it
+proves its tool with one run, the read's example (run again after each fix, as the core skill
+says) or the write's act session (writes skill). It designs no tests beyond that run: no
+`test/cases.json`, no live test on an input it chose and no offline test suite. Its HTTP version
+is checked once, against that run (http-mcp skill). Report what that run did not exercise as
+untested in `coverage`. Stop reading here unless the build is a read that has not signed in.
 
 Use execute with purpose=test, target, relative entrypoint/test file, fixtureRefs,
 caseFilter, maxWorkers and timeoutSeconds. Fixtures are host-authorized immutable
 inputs. Offline cases may use isolated workers; a live test is one read-only flow. It starts
-like the example: the site origin page, with the session saved right after sign-in for a
-signed-in read. A read proves its operation with purpose=example and iterates from that
-clean start; running the example or a live test again is normal for a read. A write
-happens once, in its act session (the writes skill), so a write build tests only
-offline: pureFiles, savedDOM and savedHTTP.
-
-An entry page with a saved signed-in session is not a signed-out browser. These example and live
-tests verify business navigation and results after authentication; they do not prove that the
-recorded sign-in works from the published `loginUrl`. For autofill, follow the auth skill's entry
-recording guidance: required navigation from that URL must precede the credential screens in the
-recorded steps, not just in an exploration script or the business script (which runs after sign-in).
-Report sign-in replay as unverified unless a separate registered run actually starts signed out
-at that URL and completes the recorded steps. Do not clear a live session or repeat a write merely to test this.
+like the example: the site origin page, with exploration cookies and site storage cleared. A
+read proves its operation with purpose=example and iterates from that clean start; running the
+example or a live test again is normal.
 
 ## Test a read signed out as much as it needs
 
@@ -109,19 +106,22 @@ case after it failed does not hide the failure: the record keeps its last result
 so does a failure that passes when run again on the same code, as flaky. When
 `live_tests` answers `no_time`, run the example last and publish; the record says time ran out.
 
-A signed-in read tests one input at a time instead: up to four live tests per attempt with an
-input you choose (`testInput`, the tool's input as JSON text, with purpose `test` and target
-`liveBrowser`), spent on the riskiest controls and a record whose page differs. When the host offers no
-`live_tests`, a read signed out tests the same way, one input at a time; the host may limit how many.
-Live tests of `src/tool-http.mjs` never count toward either limit.
+When the host offers no `live_tests`, a read signed out runs its cases one input at a time
+instead: execute purpose `test`, target `liveBrowser`, with `testInput`, the tool's input as JSON
+text; the host may limit how many.
+
+Test the HTTP version, `src/tool-http.mjs`, the same way as `src/tool.mjs`: on several of your
+cases' inputs, not only the example's, after each fix, until it matches the Playwright version
+(http-mcp skill). `live_tests` batches record `src/tool.mjs`, so run each HTTP input with execute
+purpose `test`, target `liveBrowser`, entrypoint `src/tool-http.mjs` and its `testInput`. A test
+of `src/tool-http.mjs` counts for the HTTP version only for the source it ran. Check `testInput`
+against the schema yourself first: a failed test of `src/tool-http.mjs` marks the HTTP version's
+latest live test failed until a later one passes; fix it and test again.
 
 The example uses the caller's input, or your `exampleInput` when that input is empty, and offline
 tests always use the caller's input. If a test shows the schema must widen, widen it in source;
 publication reads the schemas from current source, and only a changed flow needs a fresh example
-(publication skill). A live test of `src/tool-http.mjs` counts for the HTTP version only for the
-source it ran (HTTP skill). Check `testInput` against the schema yourself first: a failed test of
-`src/tool-http.mjs` marks the HTTP version's latest live test failed until a later one passes; fix
-it and test again (http-mcp skill), as often as it takes, since HTTP tests have no cap.<!-- pomerado:section testing.offline-fixtures -->
+(publication skill).<!-- pomerado:section testing.offline-fixtures -->
 
 - pureFiles: parsers/calculation with ordinary files and meaningful assertions.<!-- pomerado:section testing.saved-targets -->
 - liveBrowser: authorized fresh observation for real-site behavior. Optional read

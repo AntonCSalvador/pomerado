@@ -115,11 +115,12 @@ the whole list.
 
 ## Test it
 
-Run page one, then page two live with the cursor page one returned: page two continues the
-order and repeats no row. Reach a last page, for example with a narrow query, and check that
-`next_cursor` is null. `references/pagination.ts` is a compiling pattern for a paged site with a
-Next link, and for a "Show more" list (`readRooms`); its reads are site logic, not a pagination
-engine.
+On a read signed out, run page one, then page two live with the cursor page one returned: page
+two continues the order and repeats no row. Reach a last page, for example with a narrow query,
+and check that `next_cursor` is null (testing skill). A signed-in read proves the list with its
+example alone and reports later pages as untested. `references/pagination.ts` is a compiling
+pattern for a paged site with a Next link, and for a "Show more" list (`readRooms`); its reads
+are site logic, not a pagination engine.
 <!-- pomerado:section pagination.cursor-scope:start
 
 ## Standalone cursor scope

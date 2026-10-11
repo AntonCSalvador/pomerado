@@ -26,74 +26,39 @@ const agentTest = (input: unknown) =>
     target: "liveBrowser",
     testInput: typeof input === "string" ? input : JSON.stringify(input),
   });
-const chosen = { input: "agent_chosen" as const };
 
 describe("preflightTestInput", () => {
-  it("runs a signed-in read's live tests on inputs the agent picks, at most four", () => {
-    const scope = (history: readonly { readonly input?: "agent_chosen" }[]) => ({
-      buildEffect: "read" as const,
-      executionHistory: history,
-      signedIn: true,
-    });
-    const ran = (count: number) => Array.from({ length: count }, () => chosen);
-    expect(preflightTestInput(agentTest({ amountMinor: 12 }), scope([]))).toBeUndefined();
-    expect(preflightTestInput(agentTest({ amountMinor: 45 }), scope(ran(1)))).toBeUndefined();
-    expect(preflightTestInput(agentTest({ amountMinor: 78 }), scope(ran(3)))).toBeUndefined();
-    expect(preflightTestInput(agentTest({ amountMinor: 91 }), scope(ran(4)))).toEqual({
+  const httpTest = (input: unknown) => ({ ...agentTest(input), entrypoint: "src/tool-http.mjs" });
+
+  it("runs as many inputs as a read signed out chooses, on either version", () => {
+    const scope = { buildEffect: "read" as const, signedIn: false };
+    for (const amountMinor of [12, 45, 78, 91, 104]) {
+      expect(preflightTestInput(agentTest({ amountMinor }), scope)).toBeUndefined();
+      expect(preflightTestInput(httpTest({ amountMinor }), scope)).toBeUndefined();
+    }
+  });
+
+  it("runs no input a signed-in read chooses, on either version, only the caller's", () => {
+    const scope = { buildEffect: "read" as const, signedIn: true };
+    for (const submitted of [agentTest({ amountMinor: 12 }), httpTest({ amountMinor: 12 })])
+      expect(preflightTestInput(submitted, scope)).toEqual({
+        supported: false,
+        reason: expect.stringContaining("Nothing was executed."),
+      });
+    // A live test without testInput runs the caller's input: the HTTP version's one check.
+    expect(preflightTestInput(request({ purpose: "test", target: "liveBrowser" }), scope)).toBeUndefined();
+    expect(
+      preflightTestInput(
+        request({ purpose: "test", target: "liveBrowser", entrypoint: "src/tool-http.mjs" }),
+        scope,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("treats a read the host does not say is signed out as signed in", () => {
+    expect(preflightTestInput(agentTest({ amountMinor: 12 }), { buildEffect: "read" })).toMatchObject({
       supported: false,
-      reason: expect.stringContaining("already ran 4 live tests with an input you chose, the most a signed-in read allows"),
     });
-    // A step without testInput is the caller's input, whatever the count.
-    expect(preflightTestInput(request(), scope(ran(4)))).toBeUndefined();
-  });
-
-  it("never caps the HTTP version's live tests, nor counts them toward the cap", () => {
-    const httpTest = (input: unknown) => ({ ...agentTest(input), entrypoint: "src/tool-http.mjs" });
-    const scope = (history: readonly { readonly input?: "agent_chosen"; readonly entrypoint?: string }[]) => ({
-      buildEffect: "read" as const,
-      executionHistory: history,
-    });
-    const playwright = Array.from({ length: 4 }, () => ({ ...chosen, entrypoint: "src/tool.mjs" }));
-    const http = Array.from({ length: 6 }, () => ({ ...chosen, entrypoint: "src/tool-http.mjs" }));
-    // A fifth agent-chosen test runs on the HTTP version after four on the Playwright version.
-    expect(preflightTestInput(httpTest({ amountMinor: 12 }), scope(playwright))).toBeUndefined();
-    expect(preflightTestInput(httpTest({ amountMinor: 45 }), scope([...playwright, ...http]))).toBeUndefined();
-    // HTTP tests leave the Playwright version's four untouched.
-    expect(preflightTestInput(agentTest({ amountMinor: 78 }), scope(http))).toBeUndefined();
-  });
-
-  it("runs as many as a read signed out needs, and keeps the limit where the host does not say", () => {
-    const ran = Array.from({ length: 12 }, () => chosen);
-    expect(
-      preflightTestInput(agentTest({ amountMinor: 12 }), {
-        buildEffect: "read",
-        executionHistory: ran,
-        signedIn: false,
-      }),
-    ).toBeUndefined();
-    expect(
-      preflightTestInput(agentTest({ amountMinor: 12 }), {
-        buildEffect: "read",
-        executionHistory: ran,
-      }),
-    ).toMatchObject({ supported: false });
-  });
-
-  it("counts an agent-chosen input the operation rejected, and not a test Guardian denied", () => {
-    // A rejected run is in the history with its mark; a denied test never ran and left none.
-    const rejected = [{ ...chosen }, {}];
-    expect(
-      preflightTestInput(agentTest({ amountMinor: 45 }), {
-        buildEffect: "read",
-        executionHistory: rejected,
-      }),
-    ).toBeUndefined();
-    expect(
-      preflightTestInput(agentTest({ amountMinor: 78 }), {
-        buildEffect: "read",
-        executionHistory: [...rejected, chosen, chosen, chosen],
-      }),
-    ).toMatchObject({ supported: false });
   });
 
   it.each([
@@ -107,7 +72,7 @@ describe("preflightTestInput", () => {
     ["malformed JSON", agentTest("{x"), "read"],
     ["a write build's live test", agentTest({ amountMinor: 12 }), "write"],
   ] as const)("refuses an agent-chosen input on %s", (_, submitted, buildEffect) => {
-    expect(preflightTestInput(submitted, { buildEffect, executionHistory: [] })).toMatchObject({
+    expect(preflightTestInput(submitted, { buildEffect, signedIn: false })).toMatchObject({
       supported: false,
       reason: expect.stringContaining("Nothing was executed."),
     });

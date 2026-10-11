@@ -108,7 +108,9 @@ first:
   your live test cases and gives the review that record (`publication/tests.json`): each case's
   purpose, input, expectation and result on the source you publish, and what you listed under
   `notTested` with why. Guardian judges the tool's claims no passing case tests, and failing and
-  stale cases, and checks every `notTested` reason against the captures and the request.
+  stale cases, and checks every `notTested` reason against the captures and the request. A
+  signed-in read or a write reports its one run, the example or the act session, and lists what
+  that run did not exercise as untested without testing it; the review judges that run alone.
 - **Errors.** A thrown message states the cause the code observed, such as a status or a missing
   element, never a guessed one.
 - **Write options.** Each option on the path is an input even when the caller left the choice to

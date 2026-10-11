@@ -3030,7 +3030,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const liveTestOutputs = new Map<string, unknown>();
       /** Whether a passing example's receipt already carried the test plan. */
       let testPlanSent = (recovered?.liveTests ?? []).length > 0;
-      /** A read that signed in tests one input at a time, at most four (execute testInput). */
+      /**
+       * Whether this read signed in. Only a read signed out designs and runs live tests; a
+       * signed-in read proves its tool with its example alone.
+       */
       const signedIn = () =>
         executions.some((entry) => entry.authentication?.state === "authenticated");
       const liveTestsOffered = () =>
@@ -4140,7 +4143,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     {},
                     (error.reason === "http_implementation_stale"
                       ? "Not published yet: src/tool-http.mjs changed since its last passing live test, and a test counts only for the source it ran. Run execute purpose test, target liveBrowser, entrypoint src/tool-http.mjs on the current file, or restore the version that passed, then call finish_build again with the same executionId."
-                      : "Not published yet: this read has no HTTP version that passed a live test. Read .agents/http-mcp/SKILL.md from the top, find where the example's data comes from (step 1), write src/tool-http.mjs and test it live with execute purpose test, target liveBrowser, entrypoint src/tool-http.mjs. Fix and test again until its output matches the example's; there is no limit on these tests, and a request refused before sending never counts. Then call finish_build again with the same executionId.") +
+                      : "Not published yet: this read has no HTTP version that passed a live test. Read .agents/http-mcp/SKILL.md from the top, find where the example's data comes from (step 1), write src/tool-http.mjs and test it live with execute purpose test, target liveBrowser, entrypoint src/tool-http.mjs. Fix and test again until its output matches the example's; a request refused before sending never counts. A read signed out then tests it on several inputs, as it tests src/tool.mjs (testing skill); a signed-in read checks it once, against the example. Then call finish_build again with the same executionId.") +
                       " If it can't port, call finish_build again with httpVersion naming the signal from the skill's \"When it can't port\", the requestId it rests on and a short note; don't write or run a stub. The host asks only once.",
                   );
                 if (error.reason === "login_url_one_time")
@@ -4790,8 +4793,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         status: "unavailable",
                         instruction:
                           buildEffect === "write"
-                            ? "A write build never runs live tests; test it offline (pureFiles, savedDOM or savedHTTP)."
-                            : "This read signed in, so it runs up to four live tests one at a time: execute purpose test, target liveBrowser, with testInput.",
+                            ? "A write build runs no live tests: its act session is the one run that proves it. Compose the script from the session and publish."
+                            : "This read signed in, so it runs no live tests: its example alone proves the tool. Run the example last, after your last edit, and publish.",
                       });
                     if (request.action === "plan")
                       return JSON.stringify(

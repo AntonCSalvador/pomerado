@@ -31,7 +31,8 @@ const catalog = [
   },
   {
     name: "testing",
-    description: "Meaningful offline/live checks and honest missing evidence",
+    description:
+      "Only for a read signed out: design live test cases and run them in parallel. A signed-in read or a write skips it and proves its tool with one run",
     references: [],
   },
   {

@@ -153,6 +153,7 @@ order, sponsored ones in place.
 ## Describe and test it
 
 The description briefly states the design decisions, limits and interpretations a caller needs,
-such as the site's default location, how many results one call returns and how the site pages. Set every input
-you expose in at least one live run before publishing, as the testing skill says, and give each
-an `examples` value the site offers for a typical query.
+such as the site's default location, how many results one call returns and how the site pages. A
+search signed out sets every input you expose in at least one live run before publishing, as the
+testing skill says; a signed-in one proves the tool with its example. Give each input an
+`examples` value the site offers for a typical query.
