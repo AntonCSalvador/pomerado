@@ -30,14 +30,10 @@ Pomerado builds MCP integrations for websites, including sites without an API.
 
 ## How it works
 
-```mermaid
-flowchart LR
-  try["<b>1. Explore the site</b><br/>Pomerado generates<br/>a script that explores<br/>the site in Chromium"]
-  complete["<b>2. Complete the example</b><br/>Pomerado generates<br/>code that completes<br/>your example"]
-  publish["<b>3. Generalize and publish</b><br/>Pomerado turns that code<br/>into a general integration<br/>that takes new inputs"]
-  use["<b>4. Your agent calls it</b><br/>Your agent calls<br/>the integration and<br/>gets validated output"]
-  try --> complete --> publish --> use
-```
+1. Pomerado generates a script that explores the site in Chromium
+2. Pomerado generates code that completes your example
+3. Pomerado turns that code into a general integration that takes new inputs
+4. Your agent calls the integration and gets validated output
 
 For more details, see [How it works](docs/how-it-works.md).
 
