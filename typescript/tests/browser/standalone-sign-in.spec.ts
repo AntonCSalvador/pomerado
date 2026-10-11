@@ -9,6 +9,7 @@ import { Effect, Either, Schema } from "effect";
 import { createPomerado } from "../../src/standalone/pomerado.js";
 import { makeInputAsker } from "../../src/inputs/callback.js";
 import { InputRequestFailure, type InputRequest } from "../../src/runtime/input-request.js";
+import { OwnerCancelled } from "../../src/inputs/terminal.js";
 import type { MintArtifact } from "../../src/standalone/contracts.js";
 import { readArtifact, writeArtifact } from "../../src/standalone/artifact-files.js";
 import { listCursorKeys } from "../../src/runtime/list-cursor.js";
@@ -354,6 +355,65 @@ test("a local build asks for its login once and publishes its sign-in without a 
     } finally {
       await rm(folder, { recursive: true, force: true });
     }
+  });
+});
+
+// A cancel at the terminal is the owner's choice to stop, not a question left unanswered: a
+// signed-out build ends at once instead of going on without the answer.
+test("a local build whose owner cancels the minter's question ends as no response and the minter is not asked to go on", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Original SDKs and Chromium for a scripted build that asks one question",
+  });
+  test.setTimeout(60_000);
+  await withShop(async (shop, endpoint) => {
+    const mintRequests: ModelRequest[] = [];
+    const minter = provider(
+      (_request, index) =>
+        index === 0
+          ? [
+              call(
+                "request_input",
+                {
+                  questions: [{ id: "format", type: "text", prompt: "Which format?" }],
+                  intent: "Only the caller knows this.",
+                },
+                "format",
+              ),
+            ]
+          : [message("Going on without it.")],
+      mintRequests,
+    );
+    const asked: InputRequest[] = [];
+    const built = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* createPomerado({
+            browser: { endpoint },
+            minterProvider: minter,
+            guardianProvider: guardian(),
+            outcomeReviewerProvider: quietReviewer,
+            ask: (request) =>
+              Effect.sync(() => {
+                asked.push(request);
+              }).pipe(Effect.zipRight(Effect.fail(new OwnerCancelled({ code: "NoResponse" })))),
+            timeoutMs: 30_000,
+          });
+          return yield* service.mint({
+            url: `${shop.origin}/login`,
+            intent: "Read the account summary",
+            input: {},
+            effect: "read",
+          });
+        }),
+      ),
+    );
+    expect(built, JSON.stringify(built)).toMatchObject({
+      build: "incomplete",
+      noResponse: { possibleCommit: false },
+    });
+    expect(asked).toHaveLength(1);
+    expect(mintRequests).toHaveLength(1);
   });
 });
 

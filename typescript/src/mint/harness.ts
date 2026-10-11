@@ -4616,8 +4616,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             }).pipe(
               Effect.catchIf(
                 (error) => error.noResponse !== undefined,
+                // An owner's cancel is a choice to stop, never a question to decide without.
                 (error) =>
-                  handsBackNoAnswer() ? noAnswer() : unanswered(error, "asking a question"),
+                  error.ownerCancelled !== true && handsBackNoAnswer()
+                    ? noAnswer()
+                    : unanswered(error, "asking a question"),
               ),
               // error-reporting-allow: typed-recovery an invalid request is the model's to correct, told as its result
               Effect.catchIf(

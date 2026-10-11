@@ -200,6 +200,12 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
   /** The build's owner left a request unanswered; the build ends as `no_response`. */
   readonly noResponse?: { readonly possibleCommit: boolean };
   /**
+   * With `noResponse`: the owner cancelled the request, as with Ctrl-C at a terminal, rather than
+   * letting its window end. The build ends as `no_response`; the question never goes back to the
+   * minter as no answer.
+   */
+  readonly ownerCancelled?: true;
+  /**
    * What a takeover was still waiting on when its recovery wait ran out, such as
    * `sandbox_attachment_unconfirmed`: the build ends with `hostFailure: recovery_timeout`.
    */
