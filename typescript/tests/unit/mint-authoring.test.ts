@@ -211,7 +211,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   ["pagination", "Never recreate a hold, draft, upload, payment token or write in order to page."],
   ["writes", "A write build changes something real on the caller's account"],
   ["writes", "Prefer confirming the write from its commit request."],
-  ["writes", "- The first read-back that matches confirms the write; stop there."],
+  ["writes", "- When a read-back is needed, the first one that matches confirms the write; stop there."],
   ["writes", "- State from before the write never matches."],
   [
     "writes",
@@ -643,7 +643,7 @@ it("has a write confirm from its first matching read-back, never from state befo
     " ",
   );
   expect(writes).toContain(
-    "- The first read-back that matches confirms the write; stop there. It matches when it shows the written record after the write, found by something the write produced or entered (its number, its own reference or the exact values entered), and every field the caller asked for that the view shows agrees (the read before the commit already checked what you entered). When the write changed state that already existed, the same read also checks that only the requested change happened. Write each read-back step to check that match in its own code and call `verified()` when it holds, so the first one that matches is the confirming step. Read one confirmation, list or detail view: find the record there by that identity, never by its position, such as the first or newest row. Read only that record, and the view's other rows only where the before-and-after check or another skill, such as the cart skill, compares them. Read another page, in that same step before `verified()`, only for a field the view did not show and the tool's output promises.",
+    "- When a read-back is needed, the first one that matches confirms the write; stop there. It matches when it shows the written record after the write, found by something the write produced or entered (its number, its own reference or the exact values entered), and every field the caller asked for that the view shows agrees (the read before the commit already checked what you entered). When the write changed state that already existed, the same read also checks that only the requested change happened. Write each read-back step to check that match in its own code and call `verified()` when it holds, so the first one that matches is the confirming step. Read one confirmation, list or detail view: find the record there by that identity, never by its position, such as the first or newest row. Read only that record, and the view's other rows only where the before-and-after check or another skill, such as the cart skill, compares them. Read another page, in that same step before `verified()`, only for a field the view did not show and the tool's output promises.",
   );
   // Entered values find a record but never prove it new.
   expect(writes).toContain(
@@ -656,10 +656,10 @@ it("has a write confirm from its first matching read-back, never from state befo
   expect(writes).toContain(
     "- Never repeat a step blindly. If an `act` step fails after the page sent a state-changing request or opened a socket, after it entered a commit mark, or without returning a result at all (its page was lost), the write may already be committed;",
   );
-  // The reference the skill points to confirms from its one matching view the same way.
+  // The reference the skill points to confirms from its own commit response.
   expect(
     (await readFile("typescript/authoring/examples/write-readback.ts", "utf8")).replace(/\s+/g, " "),
-  ).toContain("// The first read-back that matches confirms the write");
+  ).toContain("// The 201 with its Location confirmed the write. Record it now, with no further call.");
 });
 
 /*
@@ -671,21 +671,21 @@ it("has a write confirm from its own commit request, and read back only when tha
   const texts = await renderedTexts("typescript/authoring");
   const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    '- Prefer confirming the write from its commit request. Keep the click on the final commit control, such as Save, Send, Submit, Book or Pay, in its own step. In the same call as that click, wait for the site\'s response to the request it sends, matched by the method and path the session saw carry the commit on the site, and by its body where the body shows the caller\'s values, as `references/write-readback.ts` does. Wait too for every way the page can answer with `waitForOutcome`, listing the site\'s error or validation message first. The write went through when that response is 2xx or 3xx, a body the call can read shows no error, and the page shows no error or validation message after it. A 200 whose body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says the work is queued, went through too; return the site\'s own status word for it in the output. Then read what the output promises from that response or from the page the commit left, match it to the caller\'s values, and call `verified()` with no argument just before returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page, such as a list, a history or an account screen, only to prove the write. Make no execute call after `verified()`: a later call reopens the effect. After the confirming step, further `act` steps are refused.',
+    '- Prefer confirming the write from its commit request. Keep the click on the final commit control, such as Save, Send, Submit, Book or Pay, in its own step. In the same call as that click, wait for the site\'s response to the request it sends, matched by the method and path the session saw carry the commit on the site, and by its body where the body shows the caller\'s values, as `references/write-readback.ts` does. Wait too for every way the page can answer with `waitForOutcome`, listing the site\'s error or validation message first. The write went through when that response is 2xx or 3xx, a body the call can read shows no error, and the page shows no error or validation message after it. A 200 whose body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says the work is queued, went through too; return the site\'s own status word for it in the output. Then read what the output promises from that response or from the page the commit left, match it to the caller\'s values, and call `verified()` with no argument just before returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page, such as a list, a history or an account screen, only to prove the write. When a commit step returned without calling `verified()` and its `stateChangingRequests` list the commit request with a 2xx or 3xx status, prefer confirming it in the next step from the page as it stands. Make no execute call after `verified()`: a later call reopens the effect. After the confirming step, further `act` steps are refused.',
   );
   // Every case the request cannot settle keeps a read-back.
   expect(text("writes")).toContain(
-    "- Read the site's own proof instead only when the commit request can't confirm the write: no such request went out; it failed, got no answer or returned an error status; its body shows an error, or can't be read on an endpoint that reports errors with a 200, such as GraphQL or a batch call; the page shows an error; the commit went over a websocket or a GET link; or a later stage the site can still refuse, such as sending what an earlier click saved, sent no request of its own. Then read the confirmation it shows (an order, booking or reference number) or the saved state (the orders page, the booking list, the updated profile), match it to the caller's values, return the number or record in the output, and call `verified()` as above. A generic toast alone is not a confirmation, nor is a 200 from any other request.",
+    "- Read the site's own proof instead only when the commit request can't confirm the write: no such request went out; it failed, got no answer or returned an error status; its body shows an error, or can't be read on an endpoint that reports errors with a 200, such as GraphQL or a batch call; the page shows an error; the commit went over a websocket or a GET link; or a later stage the site can still refuse, such as sending what an earlier click saved, sent no request of its own. Then prefer the confirmation the page shows after the click: an order, booking or reference number, or a success message or toast that appears after the click with no error on the page. Open the saved state, such as the orders page, the booking list or the updated profile, only when the page shows no confirmation. Match it to the caller's values, return the number or record in the output, and call `verified()` as above. A 200 from any other request is not a confirmation.",
   );
   expect(text("writes")).toContain(
     "Before any further write, run an `act` step that only reads the page or the account. When `stateChangingRequests` shows the failed step's commit request went through, that step may read only the page as it stands: check it for an error or validation message, read what the output needs, and call `verified()` there.",
   );
   expect(text("writes")).not.toContain("a 200 response is not a confirmation");
   expect(text("forms")).toContain(
-    "Prefer confirming from the commit request the final click sends, checked as the writes skill says, and otherwise by meaningful resource/readback, never from a generic toast alone or another request's 200.",
+    "Prefer confirming from the commit request the final click sends, checked as the writes skill says, and otherwise from the confirmation the page shows after the click, such as a reference number, a success message or a toast, never from another request's 200.",
   );
   expect(text("forms")).toContain(
-    "Never call it for a toast alone, a status code without the page's error check, or a missing confirmation",
+    "Never call it for a status code without the page's error check, or a missing confirmation",
   );
   // The request list carries each request's response status for that check.
   expect(text("core")).toContain(
@@ -731,8 +731,8 @@ it("renders the pinned standalone authoring", async () => {
     ["4b9f115a5e58daf028404a8803376055a60f8269e8f9a06735662f0f11520dad", "auth"],
     ["9a6bab49fd138beb664ba684b947f36ed8d36829ccba9bab430a946c3043bd0a", "testing"],
     ["ab913e2169b9be4ac767df8a88b29cf2e3e5f28779f29bfe9d7e175f07e56f8d", "pagination"],
-    ["43cf97950c0308efe8ee1646beb5b1140509426f0f81508c270564c3d95cf3f0", "forms"],
-    ["0d190cd56153dea9ce4462c6ea828a5e7a830c0eeea418fadafb60f8abdbf98a", "writes"],
+    ["262c84579471edb9922fc1d5fbdd03f91872051ec4c0dac417a1aa06b259310a", "forms"],
+    ["dfe956dc9bfadda3f8e829575a54e0b39f1ad445d8a8d220552e9d68c3c950de", "writes"],
     ["0bc4d6c765154139547ec2e4500d14bbd1d086995fdd6b385b8f53f4e7ae7255", "cart"],
     ["3c457792ca30c01b14b2a054aa2e275495b3d1e9db7132859a631f826e81044a", "caller-input"],
     ["c0334ed4d84ac4c807e108dcc3d0560ca7049fbb12013e03062d222dacce3655", "publication"],

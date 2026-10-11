@@ -132,7 +132,10 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   output. Then read what the output promises from that response or from the page the commit
   left, match it to the caller's values, and call `verified()` with no argument just before
   returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page,
-  such as a list, a history or an account screen, only to prove the write. Make no execute
+  such as a list, a history or an account screen, only to prove the write. When a commit
+  step returned without calling `verified()` and its `stateChangingRequests` list the commit
+  request with a 2xx or 3xx status, prefer confirming it in the next step from the page as
+  it stands. Make no execute
   call after `verified()`: a later call reopens the effect. After the confirming step,
   further `act` steps are refused.
 - Read the site's own proof instead only when the commit request can't confirm the write:
@@ -140,17 +143,19 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   shows an error, or can't be read on an endpoint that reports errors with a 200, such as
   GraphQL or a batch call; the page shows an error; the commit went over a websocket or a GET
   link; or a later stage the site can still refuse, such as sending what an earlier click
-  saved, sent no request of its own. Then read the confirmation it shows (an order, booking
-  or reference number) or the saved state (the orders page, the booking list, the updated
-  profile), match it to the caller's values, return the number or record in the output, and
-  call `verified()` as above. A generic toast alone is not a confirmation, nor is a 200 from
-  any other request.
+  saved, sent no request of its own. Then prefer the confirmation the page shows after the
+  click: an order, booking or reference number, or a success message or toast that appears
+  after the click with no error on the page. Open the saved state, such as the orders page,
+  the booking list or the updated profile, only when the page shows no confirmation. Match
+  it to the caller's values, return the number or record in the output, and call
+  `verified()` as above. A 200 from any other request is not a confirmation.
 - Only if the site offers none of these, a commit response the call can check, a
   confirmation or the saved state, the write is `unverifiable`: do not call
   `verified`. It publishes flagged, and its runs report the write as possibly
   completed. A session in which any step recorded a confirmation is never
   `unverifiable`; publish against the confirming step.
-- The first read-back that matches confirms the write; stop there. It matches when it shows
+- When a read-back is needed, the first one that matches confirms the write; stop there. It
+  matches when it shows
   the written record after the write, found by something the write produced or entered (its
   number, its own reference or the exact values entered), and every field the caller asked
   for that the view shows agrees (the read before the commit already checked what you
@@ -204,7 +209,10 @@ only what the session's confirming step read and returns it; the script matches 
 values to the input and calls `verified()`, as the references do. Nothing runs live
 before publishing, so a read the session never made, added to that call, can fail
 after the write has landed, and a run that hits it reports a successful write as
-possibly completed. Declare the script's contract, `defineOperation({ name,
+possibly completed. When the session confirmed the write on another page but its commit
+step's `stateChangingRequests` listed the commit request with a 2xx or 3xx status,
+prefer confirming the script from that request in the commit call, as above, over
+opening that page. Declare the script's contract, `defineOperation({ name,
 input, output, write: { confirmation: "readback", commits: ["place-order"] } }, run)`
 (or `"unverifiable"` when the site shows neither a confirmation nor the saved state),
 marking the same commit steps as the session. A script declared `unverifiable` cannot call
@@ -300,7 +308,7 @@ See `references/write-session.ts` for two steps and the composed script, and
 
 ## Standalone write completion
 
-Perform the authorized task once through live `act` steps, preserving the shared effect journal and caller choices. Wait for actual confirmation and read back committed state. Declare `verified`, `unverifiable`, and their confirmation behavior accurately using the existing SDK; a missing result alone never proves the write absent.
+Perform the authorized task once through live `act` steps, preserving the shared effect journal and caller choices. Wait for actual confirmation, from the commit request's response or the page, and read back committed state only when neither confirms it. Declare `verified`, `unverifiable`, and their confirmation behavior accurately using the existing SDK; a missing result alone never proves the write absent.
 
 Keep steps small and read the actual state after each submission. A button named Continue, Next or Save may save a draft, persist that page, or finish the task immediately; its label does not establish that another review or final submit follows. Mark only the step whose click saves or submits. Opening or filling an unsaved form is not a commit step. Mark every such step, including autosaves, saved form steps and payment submissions whose next screen is unknown: call `enteringCommit("place-order")` right before the execute call that can send the change and declare the names in order as `write.commits`. Use the same marked helper in the session and the composed script. If a call returns an unexpected page or fails while waiting for an assumed review, read back before another submission: the task may already be complete.
 

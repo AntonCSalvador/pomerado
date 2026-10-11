@@ -206,16 +206,17 @@ otherwise report the read-to-submit race. Ask about choices as `AGENTS.md` ("Try
 then ask") says, and never keep or clear an add-on, pre-selected paid option or saved
 payment unasked; every optional field the flow offers is still an optional input (core
 skill, the input schema). Prefer confirming from the commit request the final click sends,
-checked as the writes skill says, and otherwise by meaningful resource/readback, never from a
-generic toast alone or another request's 200. Match a confirmation message only against text
+checked as the writes skill says, and otherwise from the confirmation the page shows after
+the click, such as a reference number, a success message or a toast, never from another
+request's 200. Match a confirmation message only against text
 the site showed for this submission, never wording you expect; when no such message was
 observed, read back the saved state (the record, its quantity or status) instead.
 
 Once that check or read-back matches the request, call the context's `verified()` with no
 argument just before returning, so the run reports the write as landed, whether it read the
 site's confirmation for this submission or the saved state. Without it the write stays a
-possible effect. Never call it for a toast alone, a status code without the page's error
-check, or a missing confirmation, and make no execute call after it: a
+possible effect. Never call it for a status code without the page's error check, or a
+missing confirmation, and make no execute call after it: a
 later call makes the effect possible again. Missing confirmation preserves uncertainty; it
 does not authorize another submit.
 <!-- pomerado:section forms.fixture-checks:start
