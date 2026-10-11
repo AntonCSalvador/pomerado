@@ -24,7 +24,7 @@ import { mintState, type MintState } from "./mint-state.js";
 import { mintExecution } from "./mint-execution.js";
 import { mintPublication } from "./mint-publication.js";
 import { localLiveTests } from "./mint-live-tests.js";
-import { mintError } from "./errors.js";
+import { askError, mintError } from "./errors.js";
 import { memoryPublicationDecisions } from "./publication-decisions.js";
 import { listed, signInOriginsToAsk } from "./sign-in-origin-question.js";
 import type { FileHandles } from "../mint/file-handles.js";
@@ -92,7 +92,7 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
         ),
         Effect.map((answers) => handles.issue(answers)),
         Effect.tap((issued) => Effect.sync(() => context.askedByAgent(candidate, issued))),
-        Effect.mapError(mintError),
+        Effect.mapError(askError),
       ),
     recordBuildEffect: (effect) => Effect.sync(() => context.setBuildEffect(effect)),
     reviewTaskUpdate: (candidate) =>

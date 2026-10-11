@@ -1,6 +1,7 @@
 import { MintFailure } from "../mint/contracts.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { LocalOperationFailure } from "../execution/local-operation.js";
+import { InputRequestFailure } from "../runtime/input-request.js";
 export const error = (cause: unknown) =>
   cause instanceof Error ? cause : new Error("Pomerado operation failed", { cause });
 export const mintError = (cause: unknown) =>
@@ -13,6 +14,23 @@ export const mintError = (cause: unknown) =>
           error: cause,
         }),
       });
+
+/**
+ * The minter's question failed: one the caller left unanswered fails as `noResponse`, so the
+ * harness decides whether it goes back to the minter or ends the build; anything else as
+ * `mintError`.
+ */
+export const askError = (cause: unknown) =>
+  cause instanceof InputRequestFailure && cause.code === "NoResponse"
+    ? new MintFailure({
+        code: "Unavailable",
+        noResponse: { possibleCommit: false },
+        failureDetail: failureDetail("mint_host_dependency_failed", {
+          operation: "standalone.ask",
+          error: cause,
+        }),
+      })
+    : mintError(cause);
 
 /** Contract extraction reports the original schema refusal to finish_build. */
 export const publicationError = (cause: unknown) => {
