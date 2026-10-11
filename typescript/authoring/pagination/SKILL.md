@@ -73,8 +73,8 @@ row and the offset after it there:
   links or Next to that number. Never edit a page number or offset into a URL yourself.
 - `api`: the site's own token, page or offset that fetched that response (`token`, none for the
   first), and the offset within it. `open` opens the results page, then calls the endpoint inside
-  the page with that token. Keep the visible mechanism as the fallback when the endpoint refuses
-  or changes.
+  the page with that token, or, for a position with only a `page`, fetches the responses up to
+  that page. Keep the visible mechanism as the fallback when the endpoint refuses or changes.
 - `append` and `scroll`: the fewest steps that load that row (`steps`) and its offset in the
   list. `open` starts the list, then repeats the one action `steps` times, waiting for each step's
   rows with `waitForRows`, the click or scroll as its `action`.
@@ -103,25 +103,28 @@ by key as they show. Never treat a repeated click as safe if it could submit or 
 ## Changed lists
 
 Lists change between calls. `readList` reads from the segment that holds the last row the
-previous call returned and continues after that row, wherever it now is: rows inserted above it
-push the window down, and `readList` reads more of the segment or the next ones, looking for that
-row when new rows pushed it past its segment, so the call still returns `limit` rows. It drops
-rows already returned. `list_changed` is true when anything changed at or above that row: it
-moved from where the cursor saw it, because rows were inserted above it (rows the caller never
-gets) or rows it already got were removed, within its segment or across into another; it is gone;
-or a returned row came back. Rows that change below it are simply returned. When that row and
-every row the cursor remembers are gone, it starts its segment over, repeating rows rather than
-skipping them. When the site applied a context the caller did not set, such as a location it
-picked, return it as the segment's `context`, so a different one sets `list_changed`. Never
-promise a snapshot the site does not keep.
+previous call returned and continues after that row, wherever it now is, and drops rows already
+returned. Rows inserted above it push the window down: `readList` reads more of the segment or
+the next ones. Rows removed above it can pull it back into an earlier segment: `readList` reads
+the previous segment by its page number, then up to two segments on, then earlier segments one
+at a time, within the call's reads. When none shows that row or any row the cursor remembers, the
+call returns no rows with `has_more` true, and the next call steps back further; past the first
+segment it continues from the list's first row, repeating rows rather than skipping them. So
+`open` must reach a position that has only a `page`, as the mechanisms below say. `list_changed`
+is true when anything changed at or above that row: it moved from where the cursor saw it,
+because rows were inserted above it (rows the caller never gets) or rows it already got were
+removed; it is gone; or a returned row came back. Rows that change below it are simply returned.
+When the site applied a context the caller did not set, such as a location it picked, return it
+as the segment's `context`, so a different one sets `list_changed`. Never promise a snapshot the
+site does not keep.
 
 ## Stop
 
 `readList` returns as soon as it holds `limit` rows. Per call it reads at most 5 site pages or
 API responses, or 10 steps, within `remainingMs()`; when a bound stops it, it returns what it
 read with a position that continues; a call the run's time stopped before it read past its
-position hands back that same position, which a call with more time continues. `next_cursor` is
-null, with `has_more` true and
+position hands back that same position, which a call with more time continues, and a second such
+call in a row ends the list with `no_progress`. `next_cursor` is null, with `has_more` true and
 `next_cursor_unavailable` saying why, past the deepest position a tool can rebuild without the
 site's link or token (10 site pages or 20 steps, `depth_cap`), when the site's link or token is
 too long for a cursor (`position_too_long`), or when a later call returned no rows and its next

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { admitListCursor, listCursorKeys, sealListOutput } from "../../src/runtime/list-cursor.js";
 import {
+  listSeenMax,
   readList,
   startList,
   withListHost,
@@ -33,11 +34,19 @@ interface SiteSegment extends ListSegment<Row> {
   readonly at: number;
 }
 
+/** The most rows a simulated site serves per request, as a site request with a count would. */
+const requestMax = 1_000;
+const checkCount = (count: number) => {
+  if (!Number.isInteger(count) || count < 1 || count > requestMax)
+    throw new Error(`a reader was asked for ${count} rows`);
+};
+
 /** A list site: `rows` in its order, `pageSize` rows per site page, API response or step. */
 const listSite = (rows: string[], pageSize: number) => {
   const pageOf = (page: number) => rows.slice((page - 1) * pageSize, page * pageSize);
   const hrefOf = (page: number) => `${origin}/s?q=lamps&page=${page}`;
   const separate = (page: number, count: number, token?: string): SiteSegment => {
+    checkCount(count);
     const all = pageOf(page);
     return {
       at: page,
@@ -51,6 +60,7 @@ const listSite = (rows: string[], pageSize: number) => {
   };
   // The whole list after `steps` "Load more" steps or scrolls.
   const grown = (steps: number, count: number): SiteSegment => {
+    checkCount(count);
     const all = rows.slice(0, (steps + 1) * pageSize);
     return {
       at: steps,
@@ -72,18 +82,28 @@ const listSite = (rows: string[], pageSize: number) => {
       more: async (segment, count) => separate(segment.at, count),
       next: async (segment, count) => separate(segment.at + 1, count),
     },
+    // A position without a link is reached by its page number, as a reader follows Next to it.
     next_link: {
       keyOf: (row) => row.id,
       open: async (position, count) =>
-        separate(Number(new URL(position?.href ?? hrefOf(1)).searchParams.get("page")), count),
+        separate(
+          position?.href === undefined
+            ? (position?.page ?? 1)
+            : Number(new URL(position.href).searchParams.get("page")),
+          count,
+        ),
       more: async (segment, count) => separate(segment.at, count),
       next: async (segment, count) => separate(segment.at + 1, count),
     },
-    // The API's token is the index its response starts at; the first request sends none.
+    // The API's token is the index its response starts at; the first request sends none. A
+    // position without a token is reached by its page number.
     api: {
       keyOf: (row) => row.id,
       open: async (position, count) => {
-        const page = position?.token === undefined ? 1 : Number(position.token) / pageSize + 1;
+        const page =
+          position?.token === undefined
+            ? (position?.page ?? 1)
+            : Number(position.token) / pageSize + 1;
         return separate(page, count, page === 1 ? undefined : String((page - 1) * pageSize));
       },
       more: async (segment, count) => separate(segment.at, count, segment.token),
@@ -344,12 +364,19 @@ describe.each(mechanisms)("a %s list that changes between calls", (mechanism) =>
           const burst = Math.floor(random() * (2 * pageSize + 1));
           for (let row = 0; row < burst; row++) site.rows.unshift(`n${++inserted}`);
         }
-        // A row the caller already got, removed. The last one returned goes only while the one
-        // before it stays: with no returned row left to find, a call starts its segment over.
-        if (random() < 0.3 && returned.length > 0) {
-          const gone = returned[Math.floor(random() * returned.length)] ?? "";
-          if (gone === returned.at(-1) && !site.rows.includes(returned.at(-2) ?? "")) continue;
-          if (site.rows.includes(gone)) site.rows.splice(site.rows.indexOf(gone), 1);
+        // Several rows the caller already got, removed, such as rows it acted on. Each goes only
+        // while another of the rows the cursor remembers stays: with none of them left to find,
+        // a call cannot tell where it left off and repeats rows.
+        if (random() < 0.3) {
+          const removals = 1 + Math.floor(random() * 8);
+          for (let removal = 0; removal < removals; removal++) {
+            const gone = returned[Math.floor(random() * returned.length)] ?? "";
+            const remembered = returned
+              .slice(-listSeenMax)
+              .filter((id) => id !== gone && site.rows.includes(id));
+            if (remembered.length === 0 || !site.rows.includes(gone)) continue;
+            site.rows.splice(site.rows.indexOf(gone), 1);
+          }
         }
       }
       expect({ pageSize, limit, returned }).toEqual({ pageSize, limit, returned: original });
@@ -398,7 +425,66 @@ describe("a call the run's time stops", () => {
     const resumed = await call(site, "append", 20, short.cursor);
     expect(resumed.ids).toEqual(ids(21, 40));
   });
+
+  it("ends the list with no_progress when the run's time stops it there twice in a row", async () => {
+    const site = listSite(ids(1, 80), 20);
+    const first = await call(site, "append", 20);
+    const short = await call(site, "append", 20, first.cursor, () => 1_000);
+    expect(short.output.next_cursor).toEqual(expect.any(String));
+    // A call with time between two stops continues, and the next stop hands back a cursor again.
+    const resumed = await call(site, "append", 20, short.cursor);
+    expect(resumed.ids).toEqual(ids(21, 40));
+    const stopped = await call(site, "append", 20, resumed.cursor, () => 1_000);
+    expect(stopped.output.next_cursor).toEqual(expect.any(String));
+    const again = await call(site, "append", 20, stopped.cursor, () => 1_000);
+    expect(again.ids).toEqual([]);
+    expect(again.output).toMatchObject({
+      next_cursor: null,
+      has_more: true,
+      next_cursor_unavailable: "no_progress",
+    });
+  });
 });
+
+describe.each<ListMechanism>(["pages", "next_link", "api"])(
+  "a %s list whose rows above the last returned one are removed",
+  (mechanism) => {
+    it("finds the last returned row the removals pulled back into the previous segment", async () => {
+      const site = listSite(ids(1, 30), 10);
+      const first = await call(site, mechanism, 11);
+      expect(first.ids).toEqual(ids(1, 11));
+      site.rows.splice(site.rows.indexOf("r2"), 1);
+      site.rows.splice(site.rows.indexOf("r3"), 1);
+      const next = await call(site, mechanism, 11, first.cursor);
+      expect(next.ids).toEqual(ids(12, 22));
+      expect(next.output.list_changed).toBe(true);
+    });
+
+    it("reads to the end when every row before the last returned one is gone", async () => {
+      const site = listSite(ids(1, 20), 10);
+      const first = await call(site, mechanism, 11);
+      site.rows.splice(0, 10);
+      const next = await call(site, mechanism, 11, first.cursor);
+      expect(next.ids).toEqual(ids(12, 20));
+      expect(next.output).toMatchObject({ list_changed: true, has_more: false });
+    });
+
+    it("steps back across calls when the removals pulled it back further than one call reads", async () => {
+      const site = listSite(ids(1, 60), 3);
+      const first = await call(site, mechanism, 15);
+      expect(first.ids).toEqual(ids(1, 15));
+      site.rows.splice(site.rows.indexOf("r2"), 12);
+      const returned: string[] = [];
+      let cursor = first.cursor;
+      while (cursor !== undefined) {
+        const page = await call(site, mechanism, 15, cursor);
+        returned.push(...page.ids);
+        cursor = page.cursor;
+      }
+      expect(returned).toEqual(ids(16, 60));
+    });
+  },
+);
 
 describe("a site link with only list parameters", () => {
   it("stays in the cursor, so the next call opens it", async () => {
