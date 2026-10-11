@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Clock, Effect, Fiber, Option, TestClock, TestContext } from "effect";
 import { describe, expect, it } from "vitest";
 import type { AutofillSignedIn } from "../../src/destinations/autofill-step.js";
 import { makeMarkerChecks } from "../../src/standalone/signed-in-marker.js";
@@ -10,7 +10,9 @@ const origin = "https://www.shop.test";
  * `formAnswer` says the page it starts on answered a form directly. Its signed-out pages settle
  * before the host reads them, unless `settled` is false. It records each address the host
  * loaded, by the live check's `openPath` or a host call's goto, which fails once `failGoto` is
- * set.
+ * set. A page the live check loads draws the marker `drawsAfterMs` after its load, and each live
+ * check takes `checkMs`, both on the Effect clock. A path in `mismatch` fails the check on its
+ * path.
  */
 const modeledTab = (options: {
   readonly at: string;
@@ -18,11 +20,17 @@ const modeledTab = (options: {
   readonly formAnswer?: boolean;
   readonly failGoto?: boolean;
   readonly settled?: boolean;
+  readonly drawsAfterMs?: number;
+  readonly checkMs?: number;
+  readonly mismatch?: readonly string[];
 }) => {
   let current = new URL(options.at, origin).href;
   const loads: string[] = [];
   let snapshots = 0;
   let observed = 0;
+  let checks = 0;
+  // The page the tab starts on drew everything long ago.
+  let loadedAt = Number.NEGATIVE_INFINITY;
   const open = (url: string) => {
     current = url;
     const loaded = new URL(url);
@@ -54,10 +62,18 @@ const modeledTab = (options: {
       }),
   };
   const check = (indicator: AutofillSignedIn) =>
-    Effect.sync(() => {
-      if (indicator.openPath !== undefined) open(new URL(indicator.openPath, origin).href);
+    Effect.gen(function* () {
+      checks += 1;
+      if (indicator.openPath !== undefined) {
+        open(new URL(indicator.openPath, origin).href);
+        loadedAt = yield* Clock.currentTimeMillis;
+      }
+      if (options.checkMs !== undefined) yield* Effect.sleep(options.checkMs);
       const path = new URL(current).pathname;
-      return options.shows.includes(path)
+      if (options.mismatch?.includes(path) === true)
+        return { signedIn: false as const, failed: "path_mismatch" as const, url: current };
+      const drawn = (yield* Clock.currentTimeMillis) - loadedAt >= (options.drawsAfterMs ?? 0);
+      return options.shows.includes(path) && drawn
         ? { signedIn: true as const, url: current }
         : { signedIn: false as const, failed: "indicator_not_visible" as const, url: current };
     });
@@ -73,6 +89,10 @@ const modeledTab = (options: {
     },
     get snapshots() {
       return snapshots;
+    },
+    /** The live checks run so far. */
+    get checks() {
+      return checks;
     },
     get where() {
       const url = new URL(current);
@@ -102,6 +122,20 @@ const markerChecks = (
 
 const accountMarker = { selector: "#account", openPath: "/account" };
 
+/**
+ * Runs `effect` on a test clock moved on a minute, so a marker's settle passes without a real
+ * wait, with the clock's time when it ended.
+ */
+const onTestClock = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fiber = yield* Effect.fork(Effect.zip(effect, Clock.currentTimeMillis));
+      yield* TestClock.adjust("1 minute");
+      const [value, endedAt] = yield* Fiber.join(fiber);
+      return { value, endedAt };
+    }).pipe(Effect.provide(TestContext.TestContext)),
+  );
+
 describe("makeMarkerChecks", () => {
   it("loads the newest other page explored once the login was sent, then returns the tab", async () => {
     const tab = modeledTab({ at: "/account", shows: ["/account"] });
@@ -112,7 +146,7 @@ describe("makeMarkerChecks", () => {
     state.loginSent = true;
     markers.explored(`${origin}/search?q=lamp`);
     markers.explored(`${origin}/account`);
-    const checked = await Effect.runPromise(markers.check(accountMarker));
+    const { value: checked } = await onTestClock(markers.check(accountMarker));
     expect(checked).toEqual({
       signedOutSnapshot: "unchecked",
       signedInNow: true,
@@ -154,7 +188,7 @@ describe("makeMarkerChecks", () => {
     markers.explored(`${origin}/search`);
     markers.explored(`${origin}/account`);
     markers.explored(`${origin}/orders`);
-    await Effect.runPromise(markers.check(accountMarker));
+    await onTestClock(markers.check(accountMarker));
     expect(tab.loads).toEqual(["/account", "/search", "/orders"]);
   });
 
@@ -211,7 +245,7 @@ describe("makeMarkerChecks", () => {
   it("loads openPath, or else the site's root, as the fresh page", async () => {
     const tab = modeledTab({ at: "/account", shows: ["/account"] });
     const markers = markerChecks(tab);
-    const checked = await Effect.runPromise(
+    const { value: checked } = await onTestClock(
       markers.check({ selector: "#account", urlPath: "/account" }),
     );
     // The root is not the marker's path, as a run's reset finds it.
@@ -239,5 +273,52 @@ describe("makeMarkerChecks", () => {
     const checked = await Effect.runPromise(Effect.either(markerChecks(tab).check(accountMarker)));
     expect(checked).toMatchObject({ _tag: "Left", left: { code: "Unavailable" } });
     expect(tab.observed).toBe(1);
+  });
+
+  it("checks a loaded page every half second until it draws the marker, without loading it again", async () => {
+    const tab = modeledTab({ at: "/account", shows: ["/account"], drawsAfterMs: 4_000 });
+    const { value: checked, endedAt } = await onTestClock(markerChecks(tab).check(accountMarker));
+    expect(checked).toEqual({ signedOutSnapshot: "unchecked", signedInNow: true, freshLoad: true });
+    // The page as it was, the load at 0 and each half second until 4 seconds; then no more.
+    expect(tab.checks).toBe(10);
+    expect(endedAt).toBe(4_000);
+    // Only the first check loaded the page, so the agent's page is where the tab already is.
+    expect(tab.loads).toEqual(["/account"]);
+  });
+
+  it("reads a marker the page never draws as absent 10 seconds after the first check", async () => {
+    const tab = modeledTab({ at: "/orders", shows: ["/orders"] });
+    const markers = markerChecks(tab);
+    const { checked, before, endedAt } = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.fork(markers.check(accountMarker));
+        yield* TestClock.adjust("9999 millis");
+        const before = yield* Fiber.poll(fiber);
+        yield* TestClock.adjust("1 millis");
+        const checked = yield* Fiber.join(fiber);
+        return { checked, before, endedAt: yield* Clock.currentTimeMillis };
+      }).pipe(Effect.provide(TestContext.TestContext)),
+    );
+    expect(Option.isNone(before)).toBe(true);
+    expect(checked).toEqual({ signedOutSnapshot: "unchecked", signedInNow: true, freshLoad: false });
+    expect(endedAt).toBe(10_000);
+    expect(tab.loads).toEqual(["/account", "/orders"]);
+  });
+
+  it("ends the wait 10 seconds after the first check, however long each check takes", async () => {
+    const tab = modeledTab({ at: "/orders", shows: ["/orders"], checkMs: 2_000 });
+    const { value: checked, endedAt } = await onTestClock(markerChecks(tab).check(accountMarker));
+    expect(checked).toMatchObject({ freshLoad: false });
+    // The page as it was ends at 2 seconds and the load's first check at 4: the last check
+    // starts at 12 seconds and ends at the deadline.
+    expect(endedAt).toBe(14_000);
+    expect(tab.checks).toBe(6);
+  });
+
+  it("stops at once on a failure other than a marker not shown", async () => {
+    const tab = modeledTab({ at: "/orders", shows: ["/orders"], mismatch: ["/account"] });
+    const { value: checked, endedAt } = await onTestClock(markerChecks(tab).check(accountMarker));
+    expect(checked).toMatchObject({ freshLoad: false });
+    expect([tab.checks, endedAt]).toEqual([2, 0]);
   });
 });

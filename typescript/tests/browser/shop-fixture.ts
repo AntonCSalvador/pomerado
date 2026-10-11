@@ -74,6 +74,11 @@ interface ShopState extends StoreState {
   home: "ok" | "broken" | "hang" | "late" | "splash" | "ticking";
   homeRenderMs: number;
   /**
+   * How long after it runs the account page's script draws the account's element for a signed-in
+   * session, as a client-rendered page does; 0 sends the element with the page.
+   */
+  accountRenderMs: number;
+  /**
    * Whether the one-screen sign-in asks for `shopCode` on a code screen, `/two-factor`, before it
    * signs the browser in. The screen's form posts the code back to it.
    */
@@ -290,9 +295,12 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
   const account: Route = (request, response) =>
     html(
       response,
-      cookieOf(request, "shop_session") === signedIn
-        ? `<title>Account</title><p id="account">${shopAccount.username}</p>`
-        : "<title>Account</title><p id='signed-out'>Please sign in</p>",
+      cookieOf(request, "shop_session") !== signedIn
+        ? "<title>Account</title><p id='signed-out'>Please sign in</p>"
+        : state.accountRenderMs === 0
+          ? `<title>Account</title><p id="account">${shopAccount.username}</p>`
+          : `<title>Account</title><main id="app"></main>
+<script>setTimeout(()=>{const account=document.createElement('p');account.id='account';account.textContent=${JSON.stringify(shopAccount.username)};document.querySelector('#app').append(account)},${state.accountRenderMs})</script>`,
     );
   // The account's orders, behind the same session as its account page.
   const orders: Route = (request, response) =>
@@ -569,6 +577,7 @@ export const startShop = async (directory: string): Promise<Shop> => {
     loginSubmit: "enabled",
     home: "ok",
     homeRenderMs: 300,
+    accountRenderMs: 0,
     loginCode: false,
     signedInLogin: "form",
     signOutOn: undefined,
