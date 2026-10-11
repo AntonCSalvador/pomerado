@@ -313,6 +313,54 @@ it("asks for a new code once the site rejected the last, twice at most, never fi
   ).toEqual(new Unanswered("code_corrections_exhausted"));
 });
 
+const codeBoxes = {
+  fields: [1, 2, 3, 4, 5, 6].map((box) => ({ selector: `#otp-${box}`, slot: "code" as const })),
+};
+
+it("asks a screen's code once and types one character in each of its boxes, without the spaces and hyphens it is written with", async () => {
+  const asked: Question[] = [];
+  const { values: autofill, registered } = values(answering(["246 810"], asked));
+  expect(
+    await Effect.runPromise(
+      autofill.valuesFor(codeBoxes, {
+        credentials: login("synthetic-user"),
+        code: { rejected: new Set(), requests: { current: 0 } },
+      }),
+    ),
+  ).toMatchObject({ values: ["2", "4", "6", "8", "1", "0"], step: codeBoxes });
+  expect(asked).toHaveLength(1);
+  // Masked as given and as typed.
+  expect(registered).toEqual(["246 810", "246810"]);
+});
+
+it("types a code that does not fit a screen's boxes whole in each", async () => {
+  const { values: autofill } = values(answering(["1234567"]));
+  expect(
+    await Effect.runPromise(
+      autofill.valuesFor(codeBoxes, {
+        credentials: login("synthetic-user"),
+        code: { rejected: new Set(), requests: { current: 0 } },
+      }),
+    ),
+  ).toMatchObject({ values: Array.from({ length: 6 }, () => "1234567") });
+});
+
+it("never types into a screen's boxes a code the site refused, written another way", async () => {
+  const asked: Question[] = [];
+  const { values: autofill } = values(answering(["246-810", "135791"], asked));
+  const codeRequests = { current: 0 };
+  expect(
+    await Effect.runPromise(
+      autofill.valuesFor(codeBoxes, {
+        credentials: login("synthetic-user"),
+        code: { again: "rejected", rejected: new Set(["246810"]), requests: codeRequests },
+      }),
+    ),
+  ).toMatchObject({ values: ["1", "3", "5", "7", "9", "1"] });
+  expect(asked).toHaveLength(2);
+  expect(codeRequests.current).toBe(2);
+});
+
 it("asks for a private answer with the question the screen shows, each time", async () => {
   const asked: Question[] = [];
   const { values: autofill, registered } = values(answering(["first", "second"], asked));

@@ -162,6 +162,28 @@ export const isExtraSecret = (slot: AutofillSlot): slot is ExtraSecretSlot =>
   slot === "recovery_code" ||
   slot === "private_answer";
 
+const oneCharacter = (value: string | undefined) =>
+  value !== undefined && Array.from(value).length === 1;
+
+/**
+ * The value a step's field went out with as the host keeps it: a code typed one character per
+ * box, the step's code fields that each hold one character, is one code, their values joined in
+ * field order, as the submission guard joins it. So what the host watches go out, records and
+ * rules out after a refusal is the code the site gets, never one of its characters. A longer code
+ * field keeps its own value.
+ */
+export const keptValue = (
+  step: { readonly fields: readonly { readonly slot: AutofillSlot }[] },
+  values: readonly string[],
+  index: number,
+) => {
+  const value = values[index];
+  if (step.fields[index]?.slot !== "code" || !oneCharacter(value)) return value;
+  return step.fields
+    .flatMap((field, at) => (field.slot === "code" && oneCharacter(values[at]) ? [values[at]] : []))
+    .join("");
+};
+
 /**
  * A request the page sent while a sign-in was open, as the host heard it: `navigation` for the
  * primary page's own document request, `popup` for one a popup sent, `http` for anything else
@@ -401,8 +423,8 @@ export const trustOrigin = (record: SignInRecord, origin: string): readonly Secr
 
 /**
  * Arms the watch for a fill about to run, with the form endpoints the host judged for its step,
- * and holds the step's values as pending: the request its submit sends may be heard before the
- * fill returns.
+ * and holds the step's values as pending, a code typed into one-character boxes as one code
+ * (`keptValue`): the request its submit sends may be heard before the fill returns.
  */
 export const armStep = (
   record: SignInRecord,
@@ -430,7 +452,8 @@ export const armStep = (
     siteOrigin: inspection.siteOrigin,
   };
   step.fields.forEach((field, index) => {
-    if (!isExtraSecret(field.slot)) record.pending.set(field.slot, values[index] ?? "");
+    if (!isExtraSecret(field.slot))
+      record.pending.set(field.slot, keptValue(step, values, index) ?? "");
   });
   // A date of birth records the control the host found for it, never its value.
   const control = (index: number) => {

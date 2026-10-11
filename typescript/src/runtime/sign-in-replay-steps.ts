@@ -15,6 +15,7 @@ import {
   isExtraSecret,
   isIdentifier,
   isSecret,
+  keptValue,
   provesLogin,
   recordStep,
   Unanswered,
@@ -455,15 +456,18 @@ export const makeReplayScreenWait = <E, Rejection extends string = never>(
     });
 };
 
-/** Each code a step filled, which a fresh code request never takes again. */
+/** Each code a step filled, boxes joined, which a fresh code request never takes again. */
 const noteCodeValues = (rejectedCodes: Set<string>, step: AutofillStep, filled: readonly string[]) => {
-  for (const [index, field] of step.fields.entries())
-    if (field.slot === "code" && filled[index] !== undefined) rejectedCodes.add(filled[index]);
+  for (const [index, field] of step.fields.entries()) {
+    const value = keptValue(step, filled, index);
+    if (field.slot === "code" && value !== undefined) rejectedCodes.add(value);
+  }
 };
 
 /**
- * Records the value each field went out with, for later rejection evidence, and counts a code
- * filled after a rejection. A private answer is never kept: it is asked on every sign-in.
+ * Records the value each field went out with, a code's boxes joined, for later rejection evidence,
+ * and counts a code filled after a rejection. A private answer is never kept: it is asked on every
+ * sign-in.
  */
 const recordFilledValues = <E>(
   session: ReplaySession<E>,
@@ -473,7 +477,7 @@ const recordFilledValues = <E>(
 ) => {
   const { retry } = session;
   for (const [index, field] of step.fields.entries()) {
-    const value = filled[index];
+    const value = keptValue(step, filled, index);
     if (value !== undefined && field.slot !== "private_answer")
       retry.lastFilled[logicalRejectedField(field.slot, retry.primary.kind)] = value;
   }
@@ -565,6 +569,7 @@ export const runReplayStep = <E>(
       if (recordStep(record, step, report))
         for (const field of step.fields)
           if (isExtraSecret(field.slot)) sent.maySent.add(field.slot);
+      if (report.outcome === "filled" && report.submit === "page") progress.pageSent.add(step);
       if (step.fields.length > 0 && maySend(report)) {
         recordFilledValues(session, step, filled, codeAgain);
         progress.anythingSent = true;

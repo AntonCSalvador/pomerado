@@ -1094,6 +1094,38 @@ it("tells the minter a code screen's page may have sent its code itself, and cou
   ).toMatchObject({ verified: true, result: { signedIn: true } });
 });
 
+it("asks a code screen of one-character boxes for its code once, types a character in each, and verifies once a request carried the code whole", async () => {
+  const boxes: SignInStep = {
+    fields: [1, 2, 3, 4, 5, 6].map((box) => ({ selector: `#otp-${box}`, slot: "code" as const })),
+  };
+  const host = pageSentHarness((step, values) =>
+    isCode(step)
+      ? [
+          {
+            url: `${origin}/api/code`,
+            method: "POST",
+            body: JSON.stringify({ code: values.join("") }),
+            channel: "http",
+            resourceType: "fetch",
+          },
+        ]
+      : [formRequest(values)],
+  );
+  expect(
+    await host.run((recorder) =>
+      Effect.gen(function* () {
+        yield* recorder.step(identifierOnly, undefined, Effect.void);
+        yield* recorder.step(boxes, undefined, Effect.void);
+        return yield* recorder.step(signedIn, undefined, Effect.void);
+      }),
+    ),
+  ).toMatchObject({ verified: true, result: { signedIn: true } });
+  expect(
+    host.asked.flatMap((request) => request.questions).filter((question) => question.id === "code"),
+  ).toHaveLength(1);
+  expect(host.filled.at(-1)?.values).toEqual(["4", "8", "2", "9", "1", "3"]);
+});
+
 it("records a private answer's question selector in version 1, never its question or answer", async () => {
   const host = harness({
     held: account,
