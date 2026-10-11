@@ -361,6 +361,66 @@ it("tells the agent when the host could not read the schemas its verdicts and ne
   expect(ran).toHaveProperty("schemaProblem");
 });
 
+// Fails when the source digest follows the host runtime's relative import out of the workspace:
+// the workspace refuses that path, so live_tests answered source_unreadable and ran nothing.
+it.each(["../../runtime/index.js", "../../browser/index.js"])(
+  "runs the batch for a tool that imports the host runtime as %s",
+  async (sdk) => {
+    const { host, batches } = liveTestHost({});
+    const f = await fixture(
+      (_request, index) =>
+        [call("live_tests", { ...runAll, entrypoint: "src/tool.mjs" }, "run")][index] ?? prose(),
+      { liveTests: host, deadline: Deadline.after(30 * 60_000) },
+      read,
+    );
+    const root = (f.workspace as unknown as { root: string }).root;
+    const single = { cases: cases.cases.filter((testCase) => testCase.next_page !== true) };
+    await writeWorkspace(root, {
+      "src/tool.mjs": `import { defineOperation } from "${sdk}";\nexport default defineOperation;\n`,
+      "test/cases.json": JSON.stringify(single),
+    });
+    await f.run();
+    expect(resultOf(f.requests[1], "run")).toMatchObject({ status: "ran" });
+    expect(batches).toHaveLength(1);
+    expect(batches[0]?.sourceDigest).toEqual(expect.any(String));
+  },
+);
+
+// Fails when the digest swallows a read the workspace refused: the host never hears of it.
+it("reports a source digest the host could not read, and runs nothing", async () => {
+  const { host, batches } = liveTestHost({});
+  const reported: { readonly error: unknown; readonly operation: string }[] = [];
+  const f = await fixture(
+    (_request, index) => [call("live_tests", runAll, "run")][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reporting: {
+        failure: (error, details) =>
+          Effect.sync(() => {
+            reported.push({ error, operation: details.operation });
+          }),
+        bestEffort: (effect) => Effect.ignore(effect),
+      },
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  // The workspace refuses a path with a space, so the import cannot be read.
+  await writeWorkspace(root, {
+    "src/tool.ts": `import helper from "./helper copy.mjs";\nexport default helper;\n`,
+    "test/cases.json": JSON.stringify(cases),
+  });
+  await f.run();
+  expect(resultOf(f.requests[1], "run")).toMatchObject({ status: "source_unreadable" });
+  expect(batches).toHaveLength(0);
+  expect(reported).toEqual(
+    expect.arrayContaining([
+      { error: expect.any(MintFailure) as unknown, operation: "stepDigest" },
+    ]),
+  );
+});
+
 it("checks each case's output as it checks an example's, and the record keeps the findings", async () => {
   const markup = {
     status: "completed" as const,

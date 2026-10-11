@@ -343,8 +343,10 @@ export const entrypointImportClosure = (
 
 /**
  * The entrypoint's static import closure read one file at a time, for a host that cannot list its
- * workspace: each file `read` returns, following relative imports. A module that could load a
- * file its imports do not name contributes only what its imports name.
+ * workspace: each file `read` returns, following relative imports into authored source only, as
+ * the published bundle does. The SDK a tool imports by relative path is the host's and fixed
+ * within a job, often outside the workspace, so it is never read. A module that could load a file
+ * its imports do not name contributes only what its imports name.
  */
 export const readImportClosure = async (
   read: (path: string) => Promise<string | undefined>,
@@ -358,8 +360,10 @@ export const readImportClosure = async (
     if (source === undefined) continue;
     included.set(path, source);
     if (path.endsWith(".json")) continue;
-    for (const request of relativeModuleRequests(source, path) ?? [])
-      pending.push(posix.normalize(posix.join(posix.dirname(path), request)));
+    for (const request of relativeModuleRequests(source, path) ?? []) {
+      const resolved = posix.normalize(posix.join(posix.dirname(path), request));
+      if (publishableSourcePath.test(resolved)) pending.push(resolved);
+    }
   }
   return included;
 };
