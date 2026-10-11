@@ -1,44 +1,34 @@
-# Contributing
+# Contributing to Pomerado
 
-Contributions are welcome, from people and from their coding agents. Open an issue for a bug, a question or an idea. Report security problems privately with **Report a vulnerability** on the [Security tab](https://github.com/Pomerado/pomerado/security), never in a public issue.
+We welcome bug reports, documentation improvements and code contributions. Start by opening a [GitHub issue](https://github.com/Pomerado/pomerado/issues/new). Discuss larger changes before you start building them.
 
-## How to contribute
+Pomerado is agent friendly. Point your coding agent at [AGENTS.md](AGENTS.md), which has the setup, the layout and the rules it should follow. You answer for its changes as if you wrote them.
 
-1. Open an issue before a large change, so we can agree on the approach before you write code. A small fix can go straight to a pull request.
-2. Fork the repository and branch from `main`.
-3. Make your change. A change in behavior starts with a failing test.
-4. Run the checks under [Build and test](#build-and-test).
-5. Open a pull request that says what changed and why.
+Please follow our [code of conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately with **Report a vulnerability** on the [Security tab](https://github.com/Pomerado/pomerado/security), never in a public issue.
 
-A maintainer approves the CI run on your pull request, then reviews it. Alan ([@alanmrsa](https://github.com/alanmrsa)) or Akshay ([@AkshayM21](https://github.com/AkshayM21)) reviews and approves every pull request before it merges, our own included. Push fixes as new commits, and merge `main` into your branch rather than rebasing. Each merge publishes a canary to npm, so you can try your change right away. [Releasing](docs/RELEASING.md) covers how `latest` moves.
+## Set up the repository
 
-## Using a coding agent
+To use Pomerado with your agent, start with [Get started](README.md#get-started). To develop this repository, install these.
 
-Pomerado is agent friendly. Point your agent at [AGENTS.md](AGENTS.md), which has the setup, the layout and the rules it should follow. Read the diff and run the checks yourself before you open the pull request. You answer for the change as if you wrote it.
+- macOS or Linux.
+- Node 24.21 or a later Node 24 release.
+- pnpm 10.34.5, which corepack installs for you.
+- git 2.36 or later, and jq.
 
-## Build and test
-
-Use macOS or Linux, Node 24.21 or a later Node 24 release, pnpm 10.34.5, git 2.36 or later, and jq.
+Fork the repository, then clone your fork and install its dependencies.
 
 ```sh
-git clone https://github.com/<your-username>/pomerado.git
+git clone https://github.com/YOUR_USERNAME/pomerado.git
 cd pomerado
 corepack enable
 corepack pnpm install --frozen-lockfile
 corepack pnpm exec playwright install chromium
-corepack pnpm typecheck
 corepack pnpm build
-corepack pnpm test
-corepack pnpm test:browser
-npm pack --dry-run
-bash tools/ci-scan.sh content
 ```
 
-- Tests use synthetic sites and scripted model responses. They need no model API key or Pomerado account.
-- Browser tests run the built `dist/`, so build before you run them.
-- On Linux, add `--with-deps` after `install` if Chromium's system libraries are missing.
+On Linux, add `--with-deps` after `install` if Chromium's system libraries are missing.
 
-To try your build in an MCP client, point the client at the built entry with Node. Use absolute paths. `node -p 'process.execPath'` prints the Node path.
+To try your build in an MCP client, point the client at the built entry with Node. Use absolute paths. `node -p 'process.execPath'` prints the Node path, and the server needs `OPENAI_API_KEY` in its environment to mint.
 
 ```json
 {
@@ -51,15 +41,35 @@ To try your build in an MCP client, point the client at the built entry with Nod
 }
 ```
 
-The server needs `OPENAI_API_KEY` in its environment to mint. [Client settings](docs/getting-started.md#client-settings) shows how each client passes it.
+## Find your way around
 
-## What CI checks
+The [repository guide](README.md#repository-guide) maps the top-level folders. [How it works](docs/how-it-works.md#source-layout) lists each module under `typescript/src/`.
 
-- CI runs typecheck, build, unit tests, the packed package check, browser tests, a gitleaks secret scan and a public content scan.
-- Keep credentials, personal data and customer data out of code, tests, commit messages and pull request text.
-- Link an issue by its full URL in files and commit messages. The content scan rejects `#123` style references there, though your pull request description can use them.
-- Add to this package only code the local host runs, or a hook interface another host implements.
+## Make a change
 
-## License
+Keep changes focused and follow the conventions in [AGENTS.md](AGENTS.md). For a change in behavior, add a failing test first, make the change, then refactor. Unit tests go in `typescript/tests/unit/` and browser tests in `typescript/tests/browser/`. Tests use synthetic sites and scripted model responses, and no test may call a real model.
 
-Pomerado is licensed under the [MIT License](LICENSE). Contributions are accepted under the same license, inbound = outbound, with no Contributor License Agreement. Third-party code keeps its own license, with its license and notice under `third-party/`.
+This package holds only code the local host runs, plus hook interfaces that other hosts implement. Update the docs when you change a public API, a tool or the CLI. Record a user-facing change under **Unreleased** in [CHANGELOG.md](CHANGELOG.md), with migration steps for a breaking change.
+
+## Run checks
+
+From the repository root, run these.
+
+```sh
+corepack pnpm typecheck
+corepack pnpm build
+corepack pnpm test
+corepack pnpm test:browser
+npm pack --dry-run
+bash tools/ci-scan.sh content
+```
+
+Browser tests run the built `dist/`, so build before you run them. The content scan rejects a bare `#123` in files and commit messages, so link an issue there by its full URL. The [CI workflow](.github/workflows/check.yml) is the source of truth for the full set of checks, including a gitleaks secret scan.
+
+## Open a pull request
+
+Describe the problem, the resulting behavior and how you verified it. Link related issues, and note any checks you could not run. Keep credentials, personal data and customer data out of code, tests, commit messages and pull request text.
+
+A maintainer approves the CI run on your pull request, then reviews it. Alan ([@alanmrsa](https://github.com/alanmrsa)) or Akshay ([@AkshayM21](https://github.com/AkshayM21)) reviews and approves every pull request before it merges, our own included. Push fixes as new commits, and merge `main` into your branch rather than rebasing. Each merge publishes a canary to npm, and [Releasing](docs/RELEASING.md) covers how `latest` moves.
+
+Contributions are made under the repository's [MIT License](LICENSE), inbound = outbound. There is no Contributor License Agreement. Third-party code keeps its own license, with its license and notice under `third-party/`.

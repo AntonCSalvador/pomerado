@@ -199,6 +199,7 @@ This repository is the complete Pomerado core, released under the MIT license. E
 - Issues and pull requests are welcome.
 - Pomerado is agent friendly. [AGENTS.md](AGENTS.md) gives your coding agent the setup and the rules.
 - Alan or Akshay reviews every pull request before it merges.
+- Everyone follows our [code of conduct](CODE_OF_CONDUCT.md).
 - Security problems go privately through **Report a vulnerability** on the [Security tab](https://github.com/Pomerado/pomerado/security).
 - [CONTRIBUTING.md](CONTRIBUTING.md) has the steps to build, test and open a pull request.
 
