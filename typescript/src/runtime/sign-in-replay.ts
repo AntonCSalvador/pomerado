@@ -101,6 +101,8 @@ const makeReplaySession = <E>(input: SignInReplayInput<E>) => {
     ran: [] as AutofillStep[],
     /** The password or code a retry filled a second time, which is never filled again. */
     refilled: new Set<SecretSlot>(),
+    /** The steps whose page may have sent what they filled itself, before the host clicked. */
+    pageSent: new Set<AutofillStep>(),
   };
   const outcome = (reason: string): SignInReplayOutcome => ({
     outcome: progress.anythingSent ? "unclear" : "unsent",
@@ -400,7 +402,8 @@ const awaitIndicator = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
 /**
  * A code screen that came back: the owner gives a new code, never one the site rejected. The
  * screen decides the rest: every other password or code field it shows empty is filled again,
- * and a field that still holds a value is left as it is. A password goes out at most twice.
+ * and a field that still holds a value is left as it is. A password goes out at most twice. A
+ * code its page may have sent itself (`page`) came back refused only once a request carried it.
  */
 const retryCode = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
   Effect.gen(function* () {
@@ -414,6 +417,14 @@ const retryCode = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
     if (rejected !== undefined && rejected !== "code") return "username_rejected";
     const shown = yield* replay.shownAgain("code");
     if (shown === undefined) return "none" as const;
+    // A code screen whose page may have sent the code itself shows a refusal only once a request
+    // carried that code: a page that only seemed to move on sent nothing, and a new code asked
+    // then would say the site refused one it never got.
+    if (session.progress.pageSent.has(shown)) {
+      yield* session.sent.settled;
+      const { record } = session;
+      if (record.proofCarried !== true || record.pending.has("code")) return "none" as const;
+    }
     session.recordRejected([...observed, "code"]);
     const fields = yield* emptyRetryFields(input.browser, shown, rejected === "code");
     if (typeof fields === "string") return fields;
