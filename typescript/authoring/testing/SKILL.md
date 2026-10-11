@@ -10,7 +10,10 @@ proves its tool with one run, the read's example (run again after each fix, as t
 says) or the write's act session (writes skill). It designs no tests beyond that run: no
 `test/cases.json`, no live test on an input it chose and no offline test suite. Its HTTP version
 is checked once, against that run (http-mcp skill). Report what that run did not exercise as
-untested in `coverage`. Stop reading here unless the build is a read that has not signed in.
+untested in `coverage`. The scope follows what the tool is now: a read that signs in or becomes
+a write mid-build, a repair included, stops designing and running tests from then on, and a
+repair that rebuilds a signed-in tool or a write as a read signed out tests it fully. Stop reading
+here unless the build is a read that has not signed in.
 
 Use execute with purpose=test, target, relative entrypoint/test file, fixtureRefs,
 caseFilter, maxWorkers and timeoutSeconds. Fixtures are host-authorized immutable
@@ -97,9 +100,9 @@ read in source, never by cleaning the string afterwards; a correct value needs n
 any case that catches a real risk. A tool that returns a list runs page two live with the cursor
 page one returned, and reaches a last page (pagination skill).
 
-Results count only for the source and the case as they ran: an edit makes them stale. Finish in
-this order: make your last edit, run the cases again, run the example last, then call
-`finish_build`. Publication review reads the host's record of your cases (`publication/tests.json`),
+Results count only for the version, the source and the case as they ran: an edit makes them
+stale. Finish in this order: make your last edit, run the cases again on each version, run the
+example last, then call `finish_build`. Publication review reads the host's record of your cases (`publication/tests.json`),
 not your account of them, and judges them against what the tool claims: a failing case, or a
 claim no passing case tests while time remained, holds publication back. Deleting or changing a
 case after it failed does not hide the failure: the record keeps its last result as retired, and
@@ -110,13 +113,16 @@ When the host offers no `live_tests`, a read signed out runs its cases one input
 instead: execute purpose `test`, target `liveBrowser`, with `testInput`, the tool's input as JSON
 text; the host may limit how many.
 
-Test the HTTP version, `src/tool-http.mjs`, the same way as `src/tool.mjs`: on several of your
-cases' inputs, not only the example's, after each fix, until it matches the Playwright version
-(http-mcp skill). `live_tests` batches record `src/tool.mjs`, so run each HTTP input with execute
-purpose `test`, target `liveBrowser`, entrypoint `src/tool-http.mjs` and its `testInput`. A test
-of `src/tool-http.mjs` counts for the HTTP version only for the source it ran. Check `testInput`
-against the schema yourself first: a failed test of `src/tool-http.mjs` marks the HTTP version's
-latest live test failed until a later one passes; fix it and test again.
+Test the HTTP version, `src/tool-http.mjs`, the same way as `src/tool.mjs`: run the same cases
+as a batch on it with `live_tests` entrypoint `src/tool-http.mjs`, in parallel, and fix it until
+every case does what it does on the Playwright version (http-mcp skill). Each version keeps its
+own result for each case: a batch on one never replaces or stales the other's, and `plan` shows
+the results of the entrypoint you name. The publication record shows each case's result on both
+versions, and the review judges each version from its own results. A test of `src/tool-http.mjs`
+counts for the HTTP version only for the source it ran. Where the host offers no `live_tests`,
+run its inputs one at a time with execute, entrypoint `src/tool-http.mjs` and `testInput`, and
+check `testInput` against the schema yourself first: a failed test marks the HTTP version's
+latest live test failed until a later one passes.
 
 The example uses the caller's input, or your `exampleInput` when that input is empty, and offline
 tests always use the caller's input. If a test shows the schema must widen, widen it in source;

@@ -143,7 +143,12 @@ export const makeMintContinuationFixture = <
   return async function fixture(
     response: (request: ModelRequest, index: number) => Promise<ModelResponse> | ModelResponse,
     overrides: Partial<MintDependencies> = {},
-    request: { readonly effect?: "read" | "write" | "ask"; readonly siteOrigin?: string } = {},
+    request: {
+      readonly effect?: "read" | "write" | "ask";
+      readonly siteOrigin?: string;
+      readonly mode?: "mint" | "maintenance";
+      readonly observations?: unknown;
+    } = {},
     limits?: Parameters<typeof makeOpenAIMinter>[2],
   ) {
     const directory = await mkdtemp(join(tmpdir(), "pomerado-model-continuation-"));

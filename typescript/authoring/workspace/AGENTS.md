@@ -65,7 +65,8 @@ the source files, never captures.
   input, required where the request needs it, and publication decodes that input.
 - `live_tests` runs the live tests of a read signed out when the host offers it: the cases you
   design in `test/cases.json` from what you saw on the site, and every result, run in parallel
-  batches on fresh browsers. Design them as soon as you know the page and its inputs, and read
+  batches on fresh browsers, on `src/tool.mjs` and on `src/tool-http.mjs`, each version keeping
+  its own results. Design them as soon as you know the page and its inputs, and read
   .agents/testing/SKILL.md first. A signed-in read and a write run no live tests.
 - `retain_capture`, `finish_build` and `request_input` are described below and in their
   tool descriptions.
@@ -451,12 +452,13 @@ always fenced.
 Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md). It designs
 its own cases at the start, from what it saw on the site: different real values unlike the
 example's, smart combinations and edge cases. It refines them once the example passes, and runs
-as many as it needs, in parallel batches, and tests its HTTP version on several inputs the same
-way. Finish in this order: your last edit, the cases again, then the example last, before
+as many as it needs, in parallel batches, and runs the same cases as a batch on its HTTP version.
+Finish in this order: your last edit, the cases again on each version, then the example last, before
 `finish_build`. A signed-in read and a write do the original task: the read's example, or the
 write's act session, is the one run that proves the tool. They design no tests and run no live
 tests or offline test suites beyond it, and check their HTTP version once, against that run.
-Report skipped, unsupported or missing bodies honestly.
+The scope follows what the tool is now: a read that signs in or becomes a write keeps to the one
+run from then on, and a repair that rebuilds one as a read signed out tests it fully. Report skipped, unsupported or missing bodies honestly.
 
 <!-- pomerado:section agents.implementations -->
 

@@ -565,8 +565,10 @@ export const ManagedSignInExecutionRequest = ExecutionRequest.omit("signInStep")
 
 /**
  * What a host provides for a read's live tests. The minting agent designs cases in
- * `test/cases.json` from what it saw on the site, and runs them in batches. A batch runs only on a
- * read that has not signed in: a signed-in read and a write prove the tool with one run.
+ * `test/cases.json` from what it saw on the site, and runs them in batches on the Playwright
+ * version or the HTTP version (`entrypoint`); the harness keeps each version's results apart. A
+ * batch runs only on a read that has not signed in: a signed-in read and a write prove the tool
+ * with one run.
  */
 export interface LiveTestHost {
   /**

@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Usage } from "@openai/agents";
-import type { ModelRequest, ModelResponse } from "@openai/agents";
-import { Effect } from "effect";
+import type { ModelProvider, ModelRequest, ModelResponse } from "@openai/agents";
+import { Effect, Schema } from "effect";
 import { afterEach, expect, it } from "vitest";
 import {
   MintFailure,
@@ -10,9 +10,11 @@ import {
   type LiveTestBatchResult,
   type LiveTestHost,
   type MintDependencies,
+  MintHarnessSnapshot,
 } from "../../src/mint/contracts.js";
 import type { LiveTestOutcome } from "../../src/mint/live-tests.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
+import type { MintAgentSnapshot, MintRecoveryFactory } from "../../src/mint/recovery-contracts.js";
 import { Deadline } from "../../src/runtime/deadline.js";
 import { makeMintContinuationFixture, readAllow } from "../support/mint-fixtures.js";
 import { portableJobSession } from "../support/portable-mint.js";
@@ -280,7 +282,7 @@ it("runs the cases a read designed as one batch and hands publication the host's
   expect(published.seen).toHaveLength(1);
   // The record lists each case with its purpose, input and verdict, and what was not tested.
   const record = published.seen[0]?.liveTests as {
-    cases: { id: string; status: string; input: unknown }[];
+    cases: { id: string; input: unknown; results: Record<string, unknown> }[];
     notTested: unknown;
   };
   expect(record.cases).toEqual(
@@ -288,13 +290,15 @@ it("runs the cases a read designed as one batch and hands publication the host's
       expect.objectContaining({
         id: "sort-price",
         purpose: "Sorting by price reorders the results.",
-        status: "fail",
         input: { query: "lamp", sort: "price_low" },
+        results: { playwright: expect.objectContaining({ status: "fail" }) },
       }),
     ]),
   );
   expect(record.notTested).toEqual(cases.notTested);
-  expect(published.seen[0]?.coverage).toContain("4 cases (3 pass, 1 fail, 0 inconclusive)");
+  expect(published.seen[0]?.coverage).toContain(
+    "4 cases. Playwright version (src/tool.ts): 3 pass, 1 fail, 0 inconclusive.",
+  );
 });
 
 it("marks results stale in the publication record when the source changed after they ran", async () => {
@@ -326,8 +330,8 @@ it("marks results stale in the publication record when the source changed after 
   root = (f.workspace as unknown as { root: string }).root;
   await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
   await f.run();
-  const record = published.seen[0]?.liveTests as { cases: { id: string; status: string }[] };
-  expect(record.cases.map((testCase) => testCase.status)).toEqual([
+  const record = published.seen[0]?.liveTests as { cases: { results: { playwright: { status: string } } }[] };
+  expect(record.cases.map((testCase) => testCase.results.playwright.status)).toEqual([
     "stale",
     "stale",
     "stale",
@@ -410,8 +414,12 @@ it("checks each case's output as it checks an example's, and the record keeps th
 
   // A finding on a case never refuses publication; the record keeps it compactly for the review.
   expect(published.seen).toHaveLength(1);
-  const record = published.seen[0]?.liveTests as { cases: Record<string, unknown>[] };
-  expect(record.cases.find((testCase) => testCase["id"] === "repeat-1")?.["outputChecks"]).toEqual([
+  const record = published.seen[0]?.liveTests as {
+    cases: { id: string; results: { playwright: Record<string, unknown> } }[];
+  };
+  expect(
+    record.cases.find((testCase) => testCase.id === "repeat-1")?.results.playwright["outputChecks"],
+  ).toEqual([
     { path: "results[].name", check: "markup", count: 1, blocking: true },
   ]);
 });
@@ -671,8 +679,8 @@ it("runs nothing when Guardian denies the batch, and says why", async () => {
     status: "review_denied",
     rationale: "Case repeat-1 guesses an order number.",
   });
-  const record = published.seen[0]?.liveTests as { cases: { status: string }[] };
-  expect(record.cases.every((testCase) => testCase.status === "not_run")).toBe(true);
+  const record = published.seen[0]?.liveTests as { cases: { results: { playwright: { status: string } } }[] };
+  expect(record.cases.every((testCase) => testCase.results.playwright.status === "not_run")).toBe(true);
 });
 
 it("runs no live tests for a signed-in read, which its example alone proves", async () => {
@@ -719,4 +727,288 @@ it("runs no live tests for a signed-in read, which its example alone proves", as
   expect(batches).toHaveLength(0);
   expect(resultOf(f.requests[2], "run")).toMatchObject({ status: "unavailable" });
   expect(published.seen[0]?.liveTests).toBeUndefined();
+});
+
+const httpSource = "export default { name: 'search_catalog_http' };\n";
+const runHttp = { action: "run", entrypoint: "src/tool-http.mjs", cases: null, maxWorkers: 3 };
+const planOf = (entrypoint: string) => ({ action: "plan", entrypoint, cases: null, maxWorkers: null });
+const statuses = (result: Record<string, unknown>) =>
+  Object.fromEntries(
+    (result["cases"] as { id: string; status: string }[]).map((testCase) => [testCase.id, testCase.status]),
+  );
+
+// A read signed out runs the same cases as a batch on both versions. Each version keeps its own
+// results: a batch on the HTTP version neither replaces nor stales the Playwright version's.
+it("runs the cases as a batch on each version, and each version keeps its own results", async () => {
+  const { host, batches } = liveTestHost((batch) =>
+    batch === 0
+      ? {
+          "sort-price": { status: "failed", errorClass: "TimeoutError", message: "Timed out" },
+          nothing: { status: "completed", output: { results: [], has_next_page: false, next_cursor: null } },
+        }
+      : {
+          nothing: {
+            status: "failed",
+            errorClass: "OperationFailure",
+            message: "Unexpected status 500",
+            frame: "src/tool-http.mjs:9",
+          },
+        },
+  );
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", example, "example"),
+        call("live_tests", runAll, "run_playwright"),
+        call("live_tests", runHttp, "run_http"),
+        call("live_tests", planOf("src/tool.ts"), "plan_playwright"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/tool-http.mjs": httpSource,
+    "test/cases.json": JSON.stringify(cases),
+  });
+  await f.run();
+
+  expect(batches.map((batch) => batch.entrypoint)).toEqual(["src/tool.ts", "src/tool-http.mjs"]);
+  const both = { "repeat-1": "pass", "page-2": "pass" };
+  expect(statuses(resultOf(f.requests[3], "run_http"))).toEqual({
+    ...both,
+    "sort-price": "pass",
+    nothing: "fail",
+  });
+  // After the HTTP batch, the Playwright version's results stand as they ran.
+  expect(statuses(resultOf(f.requests[4], "plan_playwright"))).toEqual({
+    ...both,
+    "sort-price": "fail",
+    nothing: "pass",
+  });
+
+  // The record shows each case's result on each version, against that version's own source.
+  const record = published.seen[0]?.liveTests as {
+    versions: { version: string; entrypoint: string }[];
+    cases: { id: string; results: Record<string, { status: string }> }[];
+  };
+  expect(record.versions.map(({ version, entrypoint }) => [version, entrypoint])).toEqual([
+    ["playwright", "src/tool.ts"],
+    ["http", "src/tool-http.mjs"],
+  ]);
+  const byCase = Object.fromEntries(
+    record.cases.map((testCase) => [
+      testCase.id,
+      [testCase.results["playwright"]?.status, testCase.results["http"]?.status],
+    ]),
+  );
+  expect(byCase).toEqual({
+    "repeat-1": ["pass", "pass"],
+    "sort-price": ["fail", "pass"],
+    nothing: ["pass", "fail"],
+    "page-2": ["pass", "pass"],
+  });
+  expect(published.seen[0]?.coverage).toContain(
+    "HTTP version (src/tool-http.mjs): 3 pass, 1 fail, 0 inconclusive.",
+  );
+});
+
+/** A scripted minter that checkpoints before each model call, as a host's recovery store does. */
+const checkpointingMinter = (respondTo: (index: number) => ModelResponse) => {
+  const requests: ModelRequest[] = [];
+  const recoveryFactory: MintRecoveryFactory = (store) =>
+    Effect.succeed({
+      model: (state, counters, invoke) =>
+        store
+          .save({ version: 1, sdkVersion: "0.18.0", sdkState: state(), ...counters, tools: [] })
+          .pipe(Effect.zipRight(invoke)),
+      tool: (_call, invoke) => invoke,
+    });
+  const provider: ModelProvider = {
+    getModel: () => ({
+      getResponse: async (request) => {
+        requests.push(request);
+        return respondTo(requests.length - 1);
+      },
+      getStreamedResponse: () => {
+        throw new Error("Unused stream");
+      },
+    }),
+  };
+  return { requests, model: makeOpenAIMinter(provider, "medium", {}, { recoveryFactory }) };
+};
+
+// A checkpoint from an older release keeps results without an entrypoint: a worker that takes
+// it over restores them as the Playwright version's, and the HTTP version has run nothing yet.
+it("restores an older checkpoint's results as the Playwright version's", async () => {
+  const { host } = liveTestHost({
+    nothing: { status: "completed", output: { results: [], has_next_page: false, next_cursor: null } },
+  });
+  const checkpoints: { agent: MintAgentSnapshot; harness: MintHarnessSnapshot }[] = [];
+  const files = {
+    "src/tool.ts": toolSource,
+    "src/tool-http.mjs": httpSource,
+    "test/cases.json": JSON.stringify(cases),
+  };
+  const before = checkpointingMinter(
+    (index) =>
+      [call("execute", example, "example"), call("live_tests", runAll, "run")][index] ?? prose(),
+  );
+  const first = await fixture(() => prose(), {
+    model: before.model,
+    liveTests: host,
+    deadline: Deadline.after(30 * 60_000),
+    reviewAndExecute: completedExample,
+    agentRecovery: {
+      save: (agent, harness) =>
+        Effect.sync(() => {
+          checkpoints.push({ agent, harness });
+        }),
+    },
+  }, read);
+  await writeWorkspace((first.workspace as unknown as { root: string }).root, files);
+  await first.run().catch(() => undefined);
+  const saved = checkpoints.find((checkpoint) => (checkpoint.harness.liveTests ?? []).length > 0);
+  if (saved === undefined) throw new Error("No checkpoint with live test results");
+  // What an older release wrote: the same results, with no entrypoint.
+  const older = Schema.decodeUnknownSync(MintHarnessSnapshot)(
+    JSON.parse(
+      JSON.stringify({
+        ...saved.harness,
+        liveTests: saved.harness.liveTests?.map(({ entrypoint: _entrypoint, ...record }) => record),
+      }),
+    ),
+  );
+  expect(older.liveTests?.some((record) => record.entrypoint !== undefined)).toBe(false);
+
+  const published = publications();
+  const after = checkpointingMinter(
+    (index) =>
+      [
+        call("live_tests", planOf("src/tool.ts"), "plan_playwright"),
+        call("live_tests", planOf("src/tool-http.mjs"), "plan_http"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+  );
+  const second = await fixture(() => prose(), {
+    model: after.model,
+    liveTests: host,
+    deadline: Deadline.after(30 * 60_000),
+    reviewAndExecute: completedExample,
+    publish: published.publish,
+    agentRecovery: { initial: { agent: saved.agent, harness: older }, save: () => Effect.void },
+  }, read);
+  await writeWorkspace((second.workspace as unknown as { root: string }).root, files);
+  await second.run();
+  const pass = { "repeat-1": "pass", "sort-price": "pass", nothing: "pass", "page-2": "pass" };
+  expect(statuses(resultOf(after.requests[1], "plan_playwright"))).toEqual(pass);
+  expect(statuses(resultOf(after.requests[2], "plan_http"))).toEqual(
+    Object.fromEntries(Object.keys(pass).map((id) => [id, "not_run"])),
+  );
+  const record = published.seen[0]?.liveTests as {
+    cases: { results: Record<string, { status: string }> }[];
+  };
+  expect(record.cases.map((testCase) => testCase.results["playwright"]?.status)).toEqual(
+    Object.values(pass),
+  );
+  expect(record.cases.every((testCase) => testCase.results["http"]?.status === "not_run")).toBe(true);
+});
+
+const signInStep = { ...example, purpose: "authenticate", entrypoint: "src/sign-in.ts" };
+const signingIn: MintDependencies["reviewAndExecute"] = (input, beforeDispatch) =>
+  input.purpose === "authenticate"
+    ? (beforeDispatch?.(readAllow) ?? Effect.void).pipe(
+        Effect.as({
+          executionId: "sign_in_one",
+          status: "completed" as const,
+          effect: "verified" as const,
+          authentication: { state: "authenticated" as const, effect: "verified" as const },
+          observations: {},
+        }),
+      )
+    : completedExample(input, beforeDispatch);
+
+// Testing scope follows what the tool is now. A repair of a read that starts signed out runs its
+// cases; once it signs in, it is a signed-in read: live tests are refused from then on, and its
+// publication carries no test record, so the review judges its one run.
+it("drops a repair that signs in mid-build to the one-run rule", async () => {
+  const { host, batches } = liveTestHost({
+    nothing: { status: "completed", output: { results: [], has_next_page: false, next_cursor: null } },
+  });
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("live_tests", runAll, "before_sign_in"),
+        call("execute", signInStep, "sign_in"),
+        call("live_tests", runAll, "after_sign_in"),
+        call("execute", example, "example"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: signingIn,
+      publish: published.publish,
+    },
+    { ...read, mode: "maintenance", observations: { failure: "The results list did not load." } },
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/sign-in.ts": toolSource,
+    "test/cases.json": JSON.stringify(cases),
+  });
+  await f.run();
+  expect(resultOf(f.requests[1], "before_sign_in")).toMatchObject({ status: "ran" });
+  expect(resultOf(f.requests[3], "after_sign_in")).toMatchObject({ status: "unavailable" });
+  expect(batches).toHaveLength(1);
+  expect(published.seen).toHaveLength(1);
+  expect(published.seen[0]?.liveTests).toBeUndefined();
+  expect(published.seen[0]?.coverage).not.toContain("Host live tests");
+});
+
+// A repair that rebuilds a write as a read signed out is a read signed out now: it runs its cases
+// in parallel batches, and its publication carries the host's record of them.
+it("gives a repair that rebuilds a write as a read signed out its live tests", async () => {
+  const { host, batches } = liveTestHost({
+    nothing: { status: "completed", output: { results: [], has_next_page: false, next_cursor: null } },
+  });
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", example, "example"),
+        call("live_tests", runAll, "run"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    {
+      ...read,
+      mode: "maintenance",
+      observations: { originalTool: { effect: "write", signedIn: true } },
+    },
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+  await f.run();
+  expect(resultOf(f.requests[2], "run")).toMatchObject({ status: "ran" });
+  expect(batches[0]?.workers).toBe(3);
+  const record = published.seen[0]?.liveTests as {
+    cases: { results: Record<string, { status: string }> }[];
+  };
+  expect(record.cases.every((testCase) => testCase.results["playwright"]?.status === "pass")).toBe(true);
 });

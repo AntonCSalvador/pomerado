@@ -8,8 +8,9 @@ description: Build a read's faster HTTP version: find where the page gets its da
 `src/tool-http.mjs` answers the same contract as `src/tool.mjs` without driving the page, so runs
 are faster. Most sites that render server-side, or call a JSON API from the page, port, bot-protected
 ones included: requests ride the browser's own cookies, TLS fingerprint and proxy. The HTTP version
-is tested as its Playwright version is: a read signed out on several inputs, a signed-in read
-once against its example, and a write once, by replaying its act session offline (Test it, below).
+is tested as its Playwright version is, by what the tool is now: a read signed out on several
+inputs, a signed-in read once against its example, and a write once, by replaying its act session
+offline (Test it, below).
 
 ## Request rules (check every request)
 
@@ -215,9 +216,11 @@ refuses literal tokens.
 ## Test it
 
 - **Read:** `execute` purpose `test`, target `liveBrowser`, entrypoint `src/tool-http.mjs`, from
-  the same starting state as the example. Test it as the Playwright version is tested. A read
-  signed out tests it on several inputs, the example's and its cases' (`testInput`), as the
-  testing skill says. A signed-in read checks it once, against the example: the caller's input
+  the same starting state as the example, compared with the example: the host counts this as the
+  HTTP version's live test. Then test it as the Playwright version is tested. A read signed out
+  runs its cases as a batch on it too, with `live_tests` entrypoint `src/tool-http.mjs`, in
+  parallel; each version keeps its own results, and the review judges the HTTP version from its
+  own (testing skill). A signed-in read checks it once, against the example: the caller's input
   (omit `testInput`), compared with the example's output. Either way, after a failure fix it and
   test again until it passes. A live test starts like the example: the site origin page, with the
   session saved right after sign-in for a signed-in read, or with exploration cookies and storage

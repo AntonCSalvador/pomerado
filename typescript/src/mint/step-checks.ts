@@ -26,8 +26,9 @@ const JsonText = Schema.parseJson();
  * Preflight's refusal of a step's `testInput`, if any. Only a read signed out runs a live test on
  * an input the agent chose, as many as it needs, of the Playwright or the HTTP version alike. A
  * signed-in read and a write prove the tool with one run, the read's example or the write's act
- * session, so they run none. A host that does not say the read is signed out is treated as signed
- * in.
+ * session, so they run none. The host passes the build's state as it is now: a read that signed in
+ * or became a write mid-build, a repair included, runs none from then on. A host that does not say
+ * the read is signed out is treated as signed in.
  */
 export const preflightTestInput = (
   submitted: ExecutionRequest,
