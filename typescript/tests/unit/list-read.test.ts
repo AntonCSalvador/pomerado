@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { admitListCursor, listCursorKeys, sealListOutput } from "../../src/runtime/list-cursor.js";
 import {
+  listCallBounds,
   listSeenMax,
   readList,
   startList,
@@ -139,22 +140,41 @@ const listSite = (rows: string[], pageSize: number) => {
       }),
     },
   };
-  // Which segment each call's `open` reached: the site page, API response or steps it loaded.
+  // Which segment each call's `open` reached: the site page, API response or steps it loaded,
+  // and how many reads the readers did since `reads.count` was last reset.
   const opened: number[] = [];
+  const reads = { count: 0 };
   const logged = Object.fromEntries(
     Object.entries(readers).map(([mechanism, reader]) => [
       mechanism,
       {
         ...reader,
         open: async (position: ListPosition | undefined, count: number) => {
+          reads.count++;
           const segment = await reader.open(position, count);
           opened.push(segment.at);
           return segment;
         },
+        ...(reader.more === undefined
+          ? {}
+          : {
+              more: async (segment: SiteSegment, count: number) => {
+                reads.count++;
+                return reader.more?.(segment, count) as Promise<SiteSegment>;
+              },
+            }),
+        ...(reader.next === undefined
+          ? {}
+          : {
+              next: async (segment: SiteSegment, count: number) => {
+                reads.count++;
+                return reader.next?.(segment, count) as Promise<SiteSegment>;
+              },
+            }),
       },
     ]),
   ) as Record<ListMechanism, ListReader<Row, SiteSegment>>;
-  return { rows, readers: logged, opened };
+  return { rows, readers: logged, opened, reads };
 };
 
 /** One call: its list from the input and the cursor the host admitted, then its rows and fields. */
@@ -342,7 +362,7 @@ const seeded = (seed: number) => () => {
 describe.each(mechanisms)("a %s list that changes between calls", (mechanism) => {
   const whole = mechanism === "append" || mechanism === "scroll" || mechanism === "offset";
 
-  it("returns every row once, in order, through bursts of new rows on top and removals of returned rows", async () => {
+  it("skips no row, and returns none only when its reads run out, through bursts of new rows on top and removals of returned rows", async () => {
     const random = seeded(mechanisms.indexOf(mechanism) + 1);
     for (let trial = 0; trial < 60; trial++) {
       const pageSize = 1 + Math.floor(random() * 30);
@@ -354,19 +374,27 @@ describe.each(mechanisms)("a %s list that changes between calls", (mechanism) =>
       const returned: string[] = [];
       let cursor: string | undefined;
       let inserted = 0;
-      for (let calls = 0; calls < 200; calls++) {
+      for (let calls = 0; calls < 1_000; calls++) {
+        site.reads.count = 0;
         const page = await call(site, mechanism, limit, cursor);
         returned.push(...page.ids);
         cursor = page.cursor;
         if (cursor === undefined) break;
+        // Only the call's reads stop a call with no rows here: the run's time never runs out.
+        const allReads = 1 + (whole ? listCallBounds.steps : listCallBounds.sitePages - 1);
+        if (page.ids.length === 0)
+          expect({ pageSize, limit, reads: site.reads.count }).toEqual({
+            pageSize,
+            limit,
+            reads: allReads,
+          });
         // A newest-first burst of up to two segments' new rows above everything returned.
         if (random() < 0.5 && inserted < pageSize * 8) {
           const burst = Math.floor(random() * (2 * pageSize + 1));
           for (let row = 0; row < burst; row++) site.rows.unshift(`n${++inserted}`);
         }
-        // Several rows the caller already got, removed, such as rows it acted on. Each goes only
-        // while another of the rows the cursor remembers stays: with none of them left to find,
-        // a call cannot tell where it left off and repeats rows.
+        // Several rows the caller already got, removed, such as rows it acted on, while another
+        // of the rows the cursor remembers stays.
         if (random() < 0.3) {
           const removals = 1 + Math.floor(random() * 8);
           for (let removal = 0; removal < removals; removal++) {
@@ -379,7 +407,10 @@ describe.each(mechanisms)("a %s list that changes between calls", (mechanism) =>
           }
         }
       }
-      expect({ pageSize, limit, returned }).toEqual({ pageSize, limit, returned: original });
+      // Every row comes back, in order. A call that starts over repeats rows, and may return new
+      // rows from above.
+      const firsts = [...new Set(returned.filter((id) => id.startsWith("r")))];
+      expect({ pageSize, limit, firsts }).toEqual({ pageSize, limit, firsts: original });
     }
   });
 
@@ -469,19 +500,33 @@ describe.each<ListMechanism>(["pages", "next_link", "api"])(
       expect(next.output).toMatchObject({ list_changed: true, has_more: false });
     });
 
-    it("steps back across calls when the removals pulled it back further than one call reads", async () => {
-      const site = listSite(ids(1, 60), 3);
+    it("starts over from the list's first segment after removals of more than a segment's rows", async () => {
+      const site = listSite(ids(1, 60), 5);
       const first = await call(site, mechanism, 15);
       expect(first.ids).toEqual(ids(1, 15));
+      // The last returned row moves from the third segment to the first.
       site.rows.splice(site.rows.indexOf("r2"), 12);
-      const returned: string[] = [];
-      let cursor = first.cursor;
+      const next = await call(site, mechanism, 15, first.cursor);
+      expect(next.ids).toEqual(["r16", "r17"]);
+      expect(next.output.list_changed).toBe(true);
+      const later: string[] = [];
+      let cursor = next.cursor;
       while (cursor !== undefined) {
         const page = await call(site, mechanism, 15, cursor);
-        returned.push(...page.ids);
+        later.push(...page.ids);
         cursor = page.cursor;
       }
-      expect(returned).toEqual(ids(16, 60));
+      expect(later).toEqual(ids(18, 60));
+    });
+
+    it("starts over from the list's first row in one call after a burst further on than it looks", async () => {
+      const site = listSite(ids(1, 100), 10);
+      const first = await call(site, mechanism, 20);
+      const burst = Array.from({ length: 50 }, (_, index) => `n${index + 1}`);
+      site.rows.unshift(...burst);
+      const next = await call(site, mechanism, 20, first.cursor);
+      expect(next.ids).toEqual(burst.slice(0, 20));
+      expect(next.output.list_changed).toBe(true);
     });
   },
 );

@@ -106,17 +106,15 @@ Lists change between calls. `readList` reads from the segment that holds the las
 previous call returned and continues after that row, wherever it now is, and drops rows already
 returned. Rows inserted above it push the window down: `readList` reads more of the segment or
 the next ones. Rows removed above it can pull it back into an earlier segment: `readList` reads
-the previous segment by its page number, then up to two segments on, then earlier segments one
-at a time, within the call's reads. When none shows that row or any row the cursor remembers, the
-call returns no rows with `has_more` true, and the next call steps back further; past the first
-segment it continues from the list's first row, repeating rows rather than skipping them. So
-`open` must reach a position that has only a `page`, as the mechanisms below say. `list_changed`
-is true when anything changed at or above that row: it moved from where the cursor saw it,
-because rows were inserted above it (rows the caller never gets) or rows it already got were
-removed; it is gone; or a returned row came back. Rows that change below it are simply returned.
-When the site applied a context the caller did not set, such as a location it picked, return it
-as the segment's `context`, so a different one sets `list_changed`. Never promise a snapshot the
-site does not keep.
+the previous segment by its page number, then up to two segments on. When neither shows that row
+or any row the cursor remembers, it starts over from the list's first segment in the same call,
+repeating rows rather than skipping any. So `open` must reach a position that has only a `page`,
+as the mechanisms below say. `list_changed` is true when anything changed at or above that row:
+it moved from where the cursor saw it, because rows were inserted above it (rows the caller
+never gets) or rows it already got were removed; it is gone; or a returned row came back. Rows
+that change below it are simply returned. When the site applied a context the caller did not
+set, such as a location it picked, return it as the segment's `context`, so a different one sets
+`list_changed`. Never promise a snapshot the site does not keep.
 
 ## Stop
 

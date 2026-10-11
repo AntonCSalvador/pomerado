@@ -113,11 +113,9 @@ const draftBytes = (draft: unknown) => Buffer.byteLength(JSON.stringify(draft), 
 /**
  * The part of a cursor a script writes and reads: its mechanism, position, the rows returned so
  * far, the anchor (the last returned row's key digest), the digests of the last rows returned,
- * the digest of the context the site applied, how many calls in a row the run's time stopped at
- * this position (`t`), and whether the anchor lies before the position's segment, which a call
- * that stepped back without finding it hands on (`b`). The host adds the tool, the inputs'
- * digest, the caller it was issued to and the expiry, and signs it. Its JSON is at most
- * `listDraftMaxBytes`.
+ * the digest of the context the site applied, and how many calls in a row the run's time stopped
+ * at this position (`t`). The host adds the tool, the inputs' digest, the caller it was issued to
+ * and the expiry, and signs it. Its JSON is at most `listDraftMaxBytes`.
  */
 export const listDraftFields = {
   m: ListMechanism,
@@ -127,7 +125,6 @@ export const listDraftFields = {
   s: Schema.Array(Digest).pipe(Schema.maxItems(listSeenMax)),
   cx: Schema.optional(Digest),
   t: Schema.optional(Schema.Int.pipe(Schema.between(1, listTimeStopsMax))),
-  b: Schema.optional(Schema.Literal(1)),
 };
 export const ListDraft = Schema.Struct(listDraftFields).pipe(
   Schema.filter((draft) => draftBytes(draft) <= listDraftMaxBytes),
@@ -245,8 +242,6 @@ export interface ListStart {
   readonly context?: string;
   /** How many calls in a row before this one the run's time stopped at this position. */
   readonly timeStops: number;
-  /** Whether the anchor lies before the position's segment: the call steps back to find it. */
-  readonly lookingBack: boolean;
   /** Whether the run's host signs the next cursor; without it, `finishList` returns none. */
   readonly signed: boolean;
 }
@@ -282,7 +277,6 @@ export const startList = (
       returned: 0,
       seen: new Set(),
       timeStops: 0,
-      lookingBack: false,
       signed,
     };
   const draft = host?.position;
@@ -305,7 +299,6 @@ export const startList = (
     seen: new Set(draft.s),
     ...(draft.cx === undefined ? {} : { context: draft.cx }),
     timeStops: draft.t ?? 0,
-    lookingBack: draft.b === 1,
     signed,
   };
 };
@@ -478,8 +471,11 @@ export const finishList = <Row>(
     readonly context?: string;
     /** The run's time stopped this call before it read past its position; not a stall. */
     readonly bounded?: boolean;
-    /** The last returned row lies before `next`'s segment; the next call steps back to find it. */
-    readonly lookingBack?: boolean;
+    /**
+     * With no rows, the key of the row `next` resumes after when it is not the last row the
+     * previous page returned, such as a row returned earlier that this call read past.
+     */
+    readonly resumeAfter?: string;
   },
 ): ListOutput => {
   if (page.rows.length > list.limit)
@@ -514,7 +510,8 @@ export const finishList = <Row>(
   if (!fits(next)) return ended("position_too_long");
   if (!list.signed) return ended("unsigned_host");
   const digests = page.rows.map((row) => listDigest(page.keyOf(row)));
-  const anchor = digests.at(-1) ?? list.anchor;
+  const anchor =
+    digests.at(-1) ?? (page.resumeAfter === undefined ? list.anchor : listDigest(page.resumeAfter));
   // The last rows returned across calls, this call's last.
   const seen = [...[...list.seen].filter((digest) => !digests.includes(digest)), ...digests];
   const context = page.context === undefined ? list.context : listDigest(page.context);
@@ -526,7 +523,6 @@ export const finishList = <Row>(
     s: seen.slice(-listSeenMax),
     ...(context === undefined ? {} : { cx: context }),
     ...(timeStops === 0 ? {} : { t: timeStops }),
-    ...(page.lookingBack === true ? { b: 1 } : {}),
   });
   if (Either.isLeft(draft)) {
     // Within each field's length, a position can still be too large as a whole.
@@ -627,17 +623,17 @@ const growing = (mechanism: ListMechanism) =>
  *
  * When the segment a later page opens (`pages`, `next_link`, `api`) shows neither that row nor any
  * row the cursor remembers, rows removed above may have pulled them back, or rows inserted above
- * pushed them on. It reads the previous segment by its page number, then up to two segments on,
- * then earlier segments one at a time, all within the call's reads, and sets `list_changed` when
- * it found them in an earlier segment. When none shows them, it returns no rows with `has_more`
- * true and a position at the earliest segment it read, so the next call looks back from there;
- * at the first segment, it continues from the list's first row. So when the list changes only by
- * removals of rows the caller got, and one row the cursor remembers stays, no row is repeated or
- * skipped. Rows inserted above are rows the caller never gets, and a burst that pushes every
- * remembered row further on than it looks repeats rows. A list that stops growing while the site
- * still offers more stops this call with `has_more` true. A call the run's time stopped before it
- * read past its position hands back that same position, and a second such call in a row ends the
- * list with `no_progress`.
+ * pushed them on. It reads the previous segment by its page number, which finds them after
+ * removals of up to about a segment's rows, then up to two segments on. When neither direction
+ * shows them, it starts over from the list's first segment in the same call: after that row or
+ * the last remembered row when that segment shows one, else from the list's first row, repeating
+ * rows rather than skipping any. It sets `list_changed` when it found them in the previous segment
+ * or started over. A list that stops growing while the site still offers more stops this call
+ * with `has_more` true. A call returns no rows while the list has more only when the run's time or
+ * the call's reads stopped it: reads that ran out before it could start over hand back the list's
+ * first segment, where the next call starts over. A call the run's time stopped before it read past
+ * its position hands back that same position, and a second such call in a row ends the list with
+ * `no_progress`.
  */
 export const readList = async <Row, Segment extends ListSegment<Row>>(
   list: ListStart,
@@ -646,7 +642,7 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
   const whole = growing(list.mechanism);
   const start = list.position;
   const anchor = list.anchor;
-  // The page number of the first segment read, which a step back lowers.
+  // The page number of the first segment read, which a step back or a start over lowers.
   let base = start?.page ?? 1;
   let segments: Segment[] = [await reader.open(start, (start?.offset ?? 0) + list.limit)];
   const rowsRead = () =>
@@ -680,13 +676,14 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
     !(start.token !== undefined && start.offset === 0);
   const inSight = (rows: readonly Row[]) =>
     digestsOf(rows).some((digest) => digest === anchor || list.seen.has(digest));
-  // A step back found the anchor or a returned row in an earlier segment.
+  // The step back found the anchor or a returned row in the previous segment.
   let steppedBack = false;
-  // Stepping back reached the first segment and found neither: the call starts the list over.
+  // Neither direction found them: the call started over from the list's first segment.
   let restarted = false;
-  // The earliest segment a step back read that shows neither, and its page number.
-  let earliest: { readonly page: number; readonly segment: Segment } | undefined;
-  // Neither the anchor nor any returned row is in sight, and an earlier segment may hold them.
+  // The previous segment, read whole, when it shows neither.
+  let previous: { readonly page: number; readonly segment: Segment } | undefined;
+  // Neither the anchor nor any returned row is in sight, and the list's first segment is not the
+  // one read: the call may still step back or start over.
   const lost = () =>
     tracking && !whole && !restarted && (start?.page ?? 1) > 1 && !inSight(rowsRead());
   let blind = 0;
@@ -694,15 +691,14 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
   // before is either, or those rows run to the last row read. Rows inserted above the anchor push
   // it on, maybe past the segment the position names; once a returned row is followed by rows
   // never returned, the anchor is gone instead. With no returned row in sight at all, it looks at
-  // most `blindSegments` segments on, unless an earlier call already did and handed on the look
-  // back.
+  // most `blindSegments` segments on.
   const seeking = () => {
     if (!tracking) return false;
     const keys = digestsOf(rowsRead());
     if (anchor !== undefined && keys.includes(anchor)) return false;
     const lastSeen = keys.findLastIndex((key) => list.seen.has(key));
     if (lastSeen >= 0) return lastSeen === keys.length - 1;
-    return !steppedBack && !restarted && !list.lookingBack && blind < blindSegments;
+    return !steppedBack && !restarted && blind < blindSegments;
   };
   const readOn = async () => {
     let picked = pick();
@@ -744,11 +740,7 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
   const readBack = async (page: number) => {
     reads++;
     return reader.open(
-      {
-        page,
-        offset: 0,
-        ...(start?.scope === undefined ? {} : { scope: start.scope }),
-      },
+      { page, offset: 0, ...(start?.scope === undefined ? {} : { scope: start.scope }) },
       segmentRowsMax,
     );
   };
@@ -766,28 +758,16 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
       steppedBack = true;
       base--;
       segments = back.more ? [back] : [back, ...segments];
-    } else earliest = { page: base - 1, segment: back };
+    } else previous = { page: base - 1, segment: back };
   }
   await readOn();
-  // Rows removed above pulled them back further: earlier segments, one at a time.
-  while (lost() && earliest !== undefined && reads < budget && timeLeft()) {
-    if (earliest.page <= 1) break;
-    const page = earliest.page - 1;
-    const back = await readBack(page);
-    if (inSight(back.rows)) {
-      steppedBack = true;
-      base = page;
-      segments = [back];
-      earliest = undefined;
-      await readOn();
-    } else earliest = { page, segment: back };
-  }
-  if (lost() && earliest !== undefined && earliest.page <= 1) {
-    // No returned row is left back to the first segment: start the list over from its first row.
+  if (lost() && (previous?.page === 1 || (reads < budget && timeLeft()))) {
+    // Neither direction shows them: start over from the list's first segment, continuing after
+    // the anchor or a returned row when it shows one, else from its first row.
+    const first = previous?.page === 1 ? previous.segment : await readBack(1);
     restarted = true;
     base = 1;
-    segments = [earliest.segment];
-    earliest = undefined;
+    segments = [first];
     await readOn();
   }
   const applied = context();
@@ -816,29 +796,24 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
         return common;
     }
   };
-  // Stepping back found neither within the call's reads: no rows, and a position at the
-  // earliest segment read, which the next call opens and looks back from.
-  if (lost() && earliest !== undefined)
+  // The call's reads ran out before it could start over: no rows, and the list's first segment,
+  // where the next call starts over.
+  if (lost() && !outOfTime)
     return {
       rows: [],
       output: finishList(list, {
         rows: [],
         keyOf: reader.keyOf,
-        next: positionOf(
-          earliest.segment,
-          earliest.page,
-          Math.max(1, earliest.segment.rows.length),
-        ),
+        next: { page: 1, offset: 0, ...(start?.scope === undefined ? {} : { scope: start.scope }) },
         hasMore: true,
         totalResults,
         listChanged: true,
         ...(applied === undefined ? {} : { context: applied }),
-        lookingBack: true,
       }),
     };
   // The run's time ran out before this call read past its position, before it found the anchor
-  // rows inserted above pushed further on, or before it could look back: the next call continues
-  // from the same position.
+  // rows inserted above pushed further on, or before it could step back or start over: the next
+  // call continues from the same position.
   if (
     start !== undefined &&
     (lost() ||
@@ -852,10 +827,9 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
         next: start,
         hasMore: true,
         totalResults,
-        listChanged: pick().listChanged || list.lookingBack,
+        listChanged: pick().listChanged,
         ...(applied === undefined ? {} : { context: applied }),
         bounded: true,
-        lookingBack: list.lookingBack,
       }),
     };
   const picked = pick();
@@ -865,17 +839,16 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
     const row = read[index];
     return row === undefined ? [] : [row];
   });
-  // The segment that holds the last returned row, else the row the call resumed after: the
-  // fewest steps that load it, or the last site page or response that shows it.
+  // The segment that holds the last returned row, else the last row it read past: the fewest
+  // steps that load it, or the last site page or response that shows it.
   const lastIndex = picked.indices[results.length - 1];
   let at = segments.length - 1;
   let offset = segments.at(-1)?.rows.length ?? 0;
+  let resumeAfter: string | undefined;
   if (!whole) {
-    const resume =
-      lastIndex ??
-      (anchor !== undefined && keys.includes(anchor)
-        ? keys.lastIndexOf(anchor)
-        : keys.findLastIndex((key) => list.seen.has(key)));
+    // With no row returned, after the last row read that the anchor or a returned row is, so
+    // rows already returned that this call read past are not read again.
+    const resume = lastIndex ?? keys.findLastIndex((key) => key === anchor || list.seen.has(key));
     if (resume >= 0) {
       let before = 0;
       at = segments.findIndex((segment) => {
@@ -884,6 +857,8 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
         return false;
       });
       offset = resume - before + 1;
+      const row = read[resume];
+      if (lastIndex === undefined && row !== undefined) resumeAfter = reader.keyOf(row);
     }
   } else {
     const last = lastIndex === undefined ? anchor : keys[lastIndex];
@@ -903,9 +878,10 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
       rows: results,
       keyOf: reader.keyOf,
       next: hasMore ? positionOf(segments[at], base + at, offset) : null,
+      ...(resumeAfter === undefined ? {} : { resumeAfter }),
       hasMore,
       totalResults,
-      listChanged: picked.listChanged || steppedBack || restarted || list.lookingBack,
+      listChanged: picked.listChanged || steppedBack || restarted,
       ...(applied === undefined ? {} : { context: applied }),
     }),
   };

@@ -414,6 +414,27 @@ describe("finishList", () => {
     expect(again(stalled, rows("c")).next_cursor).toMatch(/^pcd1\./u);
   });
 
+  it("anchors a later page that returned no rows on the row it resumed after", () => {
+    const later = continuing(cursorOf(pageOne()));
+    // The call read past rows returned before, up to c, and returned none.
+    const fields = finishList(later, {
+      rows: [],
+      keyOf,
+      next: { page: 1, offset: 3, href: "https://www.example.test/s?q=lamps" },
+      hasMore: true,
+      totalResults: null,
+      listChanged: false,
+      resumeAfter: "c",
+    });
+    const resumed = continuing(
+      cursorOf(sealListOutput({ results: [], ...fields }, input, scope())),
+    );
+    expect(selectRows(resumed, rows("a", "b", "c", "d"), keyOf)).toEqual({
+      rows: rows("d"),
+      listChanged: false,
+    });
+  });
+
   it("refuses more rows than limit", () => {
     expect(() =>
       finishList(startList(hosted({ limit: 1 }), { mechanism: "append" }), {
