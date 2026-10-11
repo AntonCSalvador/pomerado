@@ -210,3 +210,15 @@ test("a run never says the site refused a code that six code boxes only seemed t
   expect(prompts).toEqual(["login", codePrompt]);
   expect(sent).toEqual([]);
 });
+
+test("a run types nothing into six code boxes for a code that does not fit them", async ({ page }) => {
+  const { sent } = await serve(page);
+  const { result, prompts } = await run(page, ["12345"]);
+  expect(result).toMatchObject({
+    _tag: "Left",
+    left: { code: "NeedsInput", reason: "sign_in_value" },
+  });
+  expect(prompts).toEqual(["login", codePrompt]);
+  expect(sent).toEqual([]);
+  for (const box of [1, 2, 3, 4, 5, 6]) await expect(page.locator(`#otp-${box}`)).toHaveValue("");
+});

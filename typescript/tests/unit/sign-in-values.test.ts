@@ -333,17 +333,22 @@ it("asks a screen's code once and types one character in each of its boxes, with
   expect(registered).toEqual(["246 810", "246810"]);
 });
 
-it("types a code that does not fit a screen's boxes whole in each", async () => {
-  const { values: autofill } = values(answering(["1234567"]));
-  expect(
-    await Effect.runPromise(
-      autofill.valuesFor(codeBoxes, {
-        credentials: login("synthetic-user"),
-        code: { rejected: new Set(), requests: { current: 0 } },
-      }),
-    ),
-  ).toMatchObject({ values: Array.from({ length: 6 }, () => "1234567") });
-});
+it.each(["12345", "1234567", "246 810 1"])(
+  "fills none of a screen's boxes with a code that leaves other than one character in each: %s",
+  async (answer) => {
+    const asked: Question[] = [];
+    const { values: autofill } = values(answering([answer], asked));
+    expect(
+      await Effect.runPromise(
+        autofill.valuesFor(codeBoxes, {
+          credentials: login("synthetic-user"),
+          code: { rejected: new Set(), requests: { current: 0 } },
+        }),
+      ),
+    ).toEqual(new Unanswered("code_shape"));
+    expect(asked).toHaveLength(1);
+  },
+);
 
 it("never types into a screen's boxes a code the site refused, written another way", async () => {
   const asked: Question[] = [];

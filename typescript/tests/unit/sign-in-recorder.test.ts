@@ -1098,28 +1098,35 @@ it("asks a code screen of one-character boxes for its code once, types a charact
   const boxes: SignInStep = {
     fields: [1, 2, 3, 4, 5, 6].map((box) => ({ selector: `#otp-${box}`, slot: "code" as const })),
   };
-  const host = pageSentHarness((step, values) =>
-    isCode(step)
-      ? [
-          {
-            url: `${origin}/api/code`,
-            method: "POST",
-            body: JSON.stringify({ code: values.join("") }),
-            channel: "http",
-            resourceType: "fetch",
-          },
-        ]
-      : [formRequest(values)],
-  );
-  expect(
-    await host.run((recorder) =>
+  /** The code screen's own request, with `body` made of what the boxes were filled with. */
+  const sending = (body: (values: readonly string[]) => string) =>
+    pageSentHarness((step, values) =>
+      isCode(step)
+        ? [
+            {
+              url: `${origin}/api/code`,
+              method: "POST",
+              body: body(values),
+              channel: "http",
+              resourceType: "fetch",
+            },
+          ]
+        : [formRequest(values)],
+    );
+  const signIn = (made: ReturnType<typeof sending>) =>
+    made.run((recorder) =>
       Effect.gen(function* () {
         yield* recorder.step(identifierOnly, undefined, Effect.void);
         yield* recorder.step(boxes, undefined, Effect.void);
         return yield* recorder.step(signedIn, undefined, Effect.void);
       }),
-    ),
-  ).toMatchObject({ verified: true, result: { signedIn: true } });
+    );
+  // A request with the last box's digit alone carries no code.
+  expect(await signIn(sending((values) => JSON.stringify({ step: values.at(-1) })))).toMatchObject({
+    result: { signedIn: false, failed: "credentials_not_submitted" },
+  });
+  const host = sending((values) => JSON.stringify({ code: values.join("") }));
+  expect(await signIn(host)).toMatchObject({ verified: true, result: { signedIn: true } });
   expect(
     host.asked.flatMap((request) => request.questions).filter((question) => question.id === "code"),
   ).toHaveLength(1);

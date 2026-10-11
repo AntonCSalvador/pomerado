@@ -168,9 +168,8 @@ const oneCharacter = (value: string | undefined) =>
 /**
  * The value a step's field went out with as the host keeps it: a code typed one character per
  * box, the step's code fields that each hold one character, is one code, their values joined in
- * field order, as the submission guard joins it. So what the host watches go out, records and
- * rules out after a refusal is the code the site gets, never one of its characters. A longer code
- * field keeps its own value.
+ * field order. So what the host watches go out, records and rules out after a refusal is the code
+ * the site gets, never one of its characters. A longer code field keeps its own value.
  */
 export const keptValue = (
   step: { readonly fields: readonly { readonly slot: AutofillSlot }[] },
