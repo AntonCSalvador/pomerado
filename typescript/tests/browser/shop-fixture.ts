@@ -89,6 +89,10 @@ interface ShopState extends StoreState {
    * page. Cleared once used. Only for a page that sets no cookie of its own, such as `/orders`.
    */
   signOutOn: string | undefined;
+  /** The account's statements, in the order `/statements` lists them, 30 to a page. */
+  statements: string[];
+  /** Each load of `/statements`: the page asked for and whether the browser was signed in. */
+  statementLoads: { readonly page: number; readonly signedIn: boolean }[];
 }
 
 export interface Shop {
@@ -98,6 +102,8 @@ export interface Shop {
   readonly state: ShopState;
   readonly sessionValue: string;
   readonly csrfValue: string;
+  /** The session cookie's value once signed in. */
+  readonly signedInValue: string;
   readonly close: () => Promise<void>;
 }
 
@@ -296,6 +302,23 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
         ? `<title>Orders</title><p id="account">${shopAccount.username}</p><p id="orders">2 orders</p>`
         : "<title>Orders</title><p id='signed-out'>Please sign in</p>",
     );
+  // The account's statements, 30 to a page with a Next link, behind the same session.
+  const statements: Route = (request, response) => {
+    const url = new URL(request.url ?? "/", "https://www.shop.test");
+    const page = Math.max(1, Number(url.searchParams.get("page") ?? "1"));
+    const signedInNow = cookieOf(request, "shop_session") === signedIn;
+    state.statementLoads.push({ page, signedIn: signedInNow });
+    if (!signedInNow)
+      return html(response, "<title>Statements</title><p id='signed-out'>Please sign in</p>");
+    const rows = state.statements.slice((page - 1) * 30, page * 30);
+    const next = page * 30 < state.statements.length ? `/statements?page=${page + 1}` : null;
+    return html(
+      response,
+      `<title>Statements</title><p id="account">${shopAccount.username}</p>
+<ol id="statements">${rows.map((id) => `<li data-id="${id}">Statement ${id}</li>`).join("")}</ol>
+${next === null ? "" : `<a rel="next" href="${next}">Next</a>`}`,
+    );
+  };
   // The sign-in's query goes on to the password screen: `hidden=N` puts N hidden text fields
   // ahead of its own field, `pad=N` puts N spaces ahead of the identifier its label echoes in
   // place of "Password for", `tag` marks its help links, so a test finds its own screen,
@@ -491,6 +514,7 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
     ["/api/login", postOnly(login)],
     ["/account", account],
     ["/orders", orders],
+    ["/statements", statements],
     ["/two-factor", twoFactor],
     ["/hang", hang],
     ["/identity-login", identityLogin],
@@ -548,6 +572,8 @@ export const startShop = async (directory: string): Promise<Shop> => {
     loginCode: false,
     signedInLogin: "form",
     signOutOn: undefined,
+    statements: Array.from({ length: 45 }, (_, index) => `S${index + 1}`),
+    statementLoads: [],
     ...initialStoreState(),
   };
   const sessionValue = `sess-${randomBytes(12).toString("hex")}`;
@@ -594,6 +620,7 @@ export const startShop = async (directory: string): Promise<Shop> => {
     state,
     sessionValue,
     csrfValue,
+    signedInValue: signedIn,
     close: () => {
       for (const response of hanging) response.destroy();
       return new Promise<void>((resolve) => server.close(() => resolve()));
