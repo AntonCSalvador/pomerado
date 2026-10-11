@@ -82,6 +82,8 @@ export interface ListCursorScope {
 }
 
 const wirePrefix = "pc1";
+/** How far apart two hosts' clocks may be when one checks a cursor's age from another's. */
+const clockSkewMs = 5_000;
 const keyedDigestLength = 16;
 
 /** The signed part of a cursor: the draft, the tool, the inputs, the caller and its lifetime. */
@@ -160,7 +162,7 @@ const refusalText: { readonly [Reason in CursorRefusal]: string } = {
   other_tool: "The cursor belongs to another tool.",
   other_account: "The cursor was returned to another account or login.",
   inputs_changed: "The cursor was returned for other inputs; only limit may change between pages.",
-  expired: "The cursor expired; a cursor works for an hour after the call that returned it.",
+  expired: "The cursor expired; a cursor works for ten minutes after the call that returned it.",
   off_site: "The cursor points off the tool's site.",
   mechanism_changed: "This tool now pages the site another way, so the cursor no longer applies.",
   site_expired: "The site no longer accepts the position this cursor holds.",
@@ -243,7 +245,11 @@ export const admitListCursor = (input: unknown, scope: ListCursorScope): ListCur
   if (signed.op !== bound?.op) return refused("other_tool");
   if (signed.sub !== bound.sub) return refused("other_account");
   if (signed.ih !== bound.ih) return refused("inputs_changed");
-  if (scope.now >= signed.exp * 1000) return refused("expired");
+  // A cursor ends at its own expiry, and never later than this host's lifetime after it was
+  // issued, with a few seconds for clocks that differ: a host with a longer lifetime may have
+  // signed it.
+  const ends = Math.min(signed.exp * 1000, signed.iat * 1000 + listCursorTtlMs + clockSkewMs);
+  if (scope.now >= ends) return refused("expired");
   if (signed.pos.href !== undefined && !onSite(signed.pos.href, scope.siteOrigin))
     return refused("off_site");
   const { v: _v, op: _op, ih: _ih, sub: _sub, iat: _iat, exp: _exp, ...draft } = signed;
@@ -257,12 +263,13 @@ export type DroppedListCursor = Extract<
 >;
 
 /**
- * Signs the `next_cursor` a run's output holds and fills `next_cursor_expires_at`, an hour from
- * `now`. `input` is the caller's input for the run, as sent. Only a runtime draft is signed; a
- * next cursor in any other form is the tool's own and the output passes unchanged. A draft that
- * does not decode, or whose site link is off the tool's site, is dropped: `next_cursor` becomes
- * null, `has_more` stays true, and both `next_cursor_unavailable` and `dropped` say why. Every
- * valid draft fits in a cursor, so none is dropped for its size.
+ * Signs the `next_cursor` a run's output holds and fills `next_cursor_expires_at`,
+ * `listCursorTtlMs` (ten minutes) from `now`. `input` is the caller's input for the run, as sent.
+ * Only a runtime draft is signed; a next cursor in any other form is the tool's own and the
+ * output passes unchanged. A draft that does not decode, or whose site link is off the tool's
+ * site, is dropped: `next_cursor` becomes null, `has_more` stays true, and both
+ * `next_cursor_unavailable` and `dropped` say why. Every valid draft fits in a cursor, so none is
+ * dropped for its size.
  */
 export const sealListOutput = (
   output: unknown,

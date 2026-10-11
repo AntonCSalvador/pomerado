@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { Effect } from "effect";
 import { readFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
@@ -115,6 +116,42 @@ describe("a sealed cursor", () => {
       reason,
       message: expect.stringContaining("Call again without cursor"),
     });
+  });
+
+  it("works for ten minutes after the call that returned it, and not a millisecond longer", () => {
+    const cursor = cursorOf(pageOne());
+    const tenMinutes = 10 * 60 * 1_000;
+    expect(pageOne().output).toMatchObject({
+      next_cursor_expires_at: new Date(issuedAt + tenMinutes).toISOString(),
+    });
+    expect(
+      admitListCursor({ ...input, cursor }, scope({ now: issuedAt + tenMinutes - 1 })),
+    ).toMatchObject({ ok: true });
+    expect(
+      admitListCursor({ ...input, cursor }, scope({ now: issuedAt + tenMinutes + 1 })),
+    ).toMatchObject({ ok: false, reason: "expired" });
+  });
+
+  it("refuses a cursor an older host signed for longer, once ten minutes have passed", () => {
+    // Re-sign a cursor as a host with a longer lifetime would have: same key, an hour's expiry.
+    const sealed = cursorOf(pageOne());
+    const [prefix, keyId, body] = sealed.split(".");
+    const payload = JSON.parse(Buffer.from(body ?? "", "base64url").toString("utf8")) as {
+      iat: number;
+      exp: number;
+    };
+    const longer = Buffer.from(JSON.stringify({ ...payload, exp: payload.iat + 3_600 })).toString(
+      "base64url",
+    );
+    const signed = `${prefix}.${keyId}.${longer}`;
+    const cursor = `${signed}.${createHmac("sha256", new Uint8Array(32).fill(1)).update(signed).digest("base64url")}`;
+    const tenMinutes = 10 * 60 * 1_000;
+    expect(
+      admitListCursor({ ...input, cursor }, scope({ now: issuedAt + tenMinutes - 1 })),
+    ).toMatchObject({ ok: true });
+    expect(
+      admitListCursor({ ...input, cursor }, scope({ now: issuedAt + 30 * 60 * 1_000 })),
+    ).toMatchObject({ ok: false, reason: "expired" });
   });
 
   it("refuses a cursor sent with other inputs", () => {
@@ -268,7 +305,23 @@ describe("the rows a later page returns", () => {
       rows: rows("c", "d"),
       listChanged: false,
     });
-    expect(continued(rows("new", "a", "b", "c"))).toEqual({ rows: rows("c"), listChanged: false });
+    // The caller never gets the inserted row, so the list says it changed.
+    expect(continued(rows("new", "a", "b", "c"))).toEqual({ rows: rows("c"), listChanged: true });
+  });
+
+  it("say the list changed for a row removed above the last returned one, within its page or across", () => {
+    // Page one returned a and b, which end at offset 2 of their site page.
+    const cursor = cursorOf(pageOne({ page: 1, offset: 2, href: "https://www.example.test/s?q=lamps" }));
+    // A row above them removed: b moves up within the page.
+    expect(selectRows(continuing(cursor), rows("b", "c", "d"), keyOf)).toEqual({
+      rows: rows("c", "d"),
+      listChanged: true,
+    });
+    // Enough removed that b moves back to the page before: the page starts after it.
+    expect(selectRows(continuing(cursor), rows("c", "d"), keyOf)).toEqual({
+      rows: rows("c", "d"),
+      listChanged: true,
+    });
   });
 
   it("continue after the last returned row still there, and say so, when the anchor is gone", () => {
@@ -293,6 +346,16 @@ describe("the rows a later page returns", () => {
     expect(selectRows(continuing(cursor, "api"), rows("c", "d"), keyOf)).toEqual({
       rows: rows("c", "d"),
       listChanged: false,
+    });
+  });
+
+  it("say the list changed when a token position into the anchor's own segment lacks it", () => {
+    // The token fetched the segment that holds the last returned row, and the position resumes
+    // inside it: that row gone from those rows is a change, as on a site page.
+    const cursor = cursorOf(pageOne({ offset: 2, token: "from-a" }, "api"));
+    expect(selectRows(continuing(cursor, "api"), rows("c", "d"), keyOf)).toEqual({
+      rows: rows("c", "d"),
+      listChanged: true,
     });
   });
 
@@ -349,6 +412,27 @@ describe("finishList", () => {
     // A step further, or rows returned, is progress and continues.
     expect(again({ steps: 2, offset: 2 }, []).next_cursor).toMatch(/^pcd1\./u);
     expect(again(stalled, rows("c")).next_cursor).toMatch(/^pcd1\./u);
+  });
+
+  it("anchors a later page that returned no rows on the row it resumed after", () => {
+    const later = continuing(cursorOf(pageOne()));
+    // The call read past rows returned before, up to c, and returned none.
+    const fields = finishList(later, {
+      rows: [],
+      keyOf,
+      next: { page: 1, offset: 3, href: "https://www.example.test/s?q=lamps" },
+      hasMore: true,
+      totalResults: null,
+      listChanged: false,
+      resumeAfter: "c",
+    });
+    const resumed = continuing(
+      cursorOf(sealListOutput({ results: [], ...fields }, input, scope())),
+    );
+    expect(selectRows(resumed, rows("a", "b", "c", "d"), keyOf)).toEqual({
+      rows: rows("d"),
+      listChanged: false,
+    });
   });
 
   it("refuses more rows than limit", () => {

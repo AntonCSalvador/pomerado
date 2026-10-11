@@ -71,36 +71,9 @@ change, wait for the rows you return with `waitForChange`, as the core skill say
 When results, prices or availability depend on a location or store that the site lets a visitor
 set, make it an input and apply it as the core skill's input schema says. If the site says it has
 no such location or store, the tool throws `InvalidInput` with `field` and `available`, the ones
-it offers. When the page does not apply the caller's location, the tool throws
-`LocationNotApplied` with the requested and applied location (core skill); it never returns
-results for the page's own location in their place.
-
-## Categories and collections
-
-A search box is one way into the site's product grid; its navigation is another. When a query
-term names a collection or category, such as sale, new arrivals, clearance or a department, or
-when the search's results are thin or miss items the site clearly carries, check the navigation
-before you settle the inputs:
-
-1. Open the site's menus, drawers and category links, and list each category's label, its
-   parent and its link.
-2. Search the term too. A search that treats a category word as text, with few or unrelated
-   results, shows the category is the way in.
-3. Open one category page and compare it with the search results: the same cards, filters, sort
-   and paging mean one template.
-
-When they share the template, make one browse tool rather than a search tool and a fixed
-category tool:
-
-- Offer an optional `category` input beside an optional `query`, with at least one required.
-  Take the category choices from the navigation while you build, as the labels the site shows,
-  such as "Shoes > Sale": an enum when the tree is fixed, otherwise a string matched against the
-  navigation's links on each run, refused with `available` when no link matches.
-- Open the category through its navigation link, or the link's own `href`, then apply the
-  query, filters, sort and pagination as on search results, and return the same card shape,
-  with the category's heading or breadcrumb as applied.
-- Never hard-code one category, such as a sale-only tool: a category is a value the caller
-  could vary (core skill).
+it offers. When the page does not apply the caller's location, or resets a filter or sort the
+caller chose, the tool throws `InputNotApplied` with the requested and applied value (core
+skill); it never returns results for the page's own location or default in their place.
 
 ## Results
 
@@ -153,6 +126,7 @@ order, sponsored ones in place.
 ## Describe and test it
 
 The description briefly states the design decisions, limits and interpretations a caller needs,
-such as the site's default location, how many results one call returns and how the site pages. Set every input
-you expose in at least one live run before publishing, as the testing skill says, and give each
-an `examples` value the site offers for a typical query.
+such as the site's default location, how many results one call returns and how the site pages. A
+search signed out sets every input you expose in at least one live run before publishing, as the
+testing skill says; a signed-in one proves the tool with its example. Give each input an
+`examples` value the site offers for a typical query.

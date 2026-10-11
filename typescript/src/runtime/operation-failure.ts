@@ -107,15 +107,15 @@ class InputRejected extends Error {
   }
 }
 
-/** The longest a location's site message may be. */
-export const maximumLocationMessageLength = 1000;
+/** The longest site message an unapplied input's detail may carry. */
+export const maximumSiteMessageLength = 1000;
 
 /**
- * A location the caller supplied that the page did not apply: the input that names it, the
- * caller's value, what the page committed instead when it showed one, the tool's step that
- * failed, and the page's own words when it showed an error.
+ * An input the caller supplied that the page did not apply: the input's name, the caller's
+ * value, what the page committed instead when it showed one, the tool's step that failed, and
+ * the page's own words when it showed an error.
  */
-export interface LocationNotAppliedDetail {
+export interface InputNotAppliedDetail {
   readonly field: string;
   readonly requested: string;
   readonly applied?: string;
@@ -133,7 +133,7 @@ const boundedText = (value: unknown, limit: number) => {
  * The detail as a host may carry it, each part bounded; undefined when it lacks the field, the
  * requested value or the step.
  */
-export const boundedLocationDetail = (detail: unknown): LocationNotAppliedDetail | undefined => {
+export const boundedInputDetail = (detail: unknown): InputNotAppliedDetail | undefined => {
   if (typeof detail !== "object" || detail === null) return undefined;
   const at = (key: string, limit = maximumRefusalChoiceLength) =>
     boundedText(Reflect.get(detail, key), limit);
@@ -142,7 +142,7 @@ export const boundedLocationDetail = (detail: unknown): LocationNotAppliedDetail
     at("requested"),
     at("applied"),
     at("step"),
-    at("siteMessage", maximumLocationMessageLength),
+    at("siteMessage", maximumSiteMessageLength),
   ];
   if (field === undefined || requested === undefined || step === undefined) return undefined;
   return {
@@ -155,22 +155,24 @@ export const boundedLocationDetail = (detail: unknown): LocationNotAppliedDetail
 };
 
 /**
- * The page did not apply a location the caller supplied, such as a ZIP, address or store, after
- * the tool's bounded retries. The run fails rather than return results for another place.
- * Scripts throw it as `errors.LocationNotApplied`, after reading the page's committed location
- * back: `new errors.LocationNotApplied(message, { field: "zip", requested: input.zip, applied,
- * step: "set_location", siteMessage })`. `applied` is what the page kept, when it shows one;
- * `siteMessage` is the page's own error, when it showed one. A location the site says it does
- * not serve is the caller's to correct: that is `InvalidInput` with the places it offers.
+ * The page did not apply a valid value the caller supplied, such as a location, store, filter,
+ * sort or date it ignored or reset, after the tool's bounded retries. The run fails rather than
+ * return results computed without the caller's value. Scripts throw it as
+ * `errors.InputNotApplied`, after reading the page's committed value back:
+ * `new errors.InputNotApplied(message, { field: "sort", requested: input.sort, applied, step:
+ * "apply_sort", siteMessage })`. `applied` is what the page kept, when it shows one;
+ * `siteMessage` is the page's own error, when it showed one. A value the site does not offer is
+ * the caller's to correct: that is `InvalidInput` with the values it offers.
+ * `errors.LocationNotApplied` is a deprecated alias of this class, kept for published tools.
  */
-class LocationRejected extends Error {
-  override readonly name = "LocationNotApplied";
-  readonly _tag = "LocationNotApplied";
-  readonly location?: LocationNotAppliedDetail;
-  constructor(message: string, detail?: LocationNotAppliedDetail) {
+class InputUnapplied extends Error {
+  override readonly name = "InputNotApplied";
+  readonly _tag = "InputNotApplied";
+  readonly unapplied?: InputNotAppliedDetail;
+  constructor(message: string, detail?: InputNotAppliedDetail) {
     super(message.slice(0, 4096));
-    const bounded = boundedLocationDetail(detail);
-    if (bounded !== undefined) this.location = bounded;
+    const bounded = boundedInputDetail(detail);
+    if (bounded !== undefined) this.unapplied = bounded;
   }
 }
 
@@ -231,7 +233,7 @@ const unexpectedScriptFailure = (error: unknown, dispatch: Dispatch) =>
 export type ScriptFailure =
   | OperationFailure
   | InputRejected
-  | LocationRejected
+  | InputUnapplied
   | CredentialsRejected
   | BrowserActionTimeout
   | ChallengeFailure
@@ -243,7 +245,7 @@ export type ScriptFailure =
 const passThrough = (error: unknown): error is ScriptFailure =>
   error instanceof OperationFailure ||
   error instanceof InputRejected ||
-  error instanceof LocationRejected ||
+  error instanceof InputUnapplied ||
   error instanceof CredentialsRejected ||
   error instanceof ChallengeFailure ||
   error instanceof DialogFailure ||
@@ -272,6 +274,8 @@ export const operationErrors = {
   OperationFailure,
   ChallengeFailure,
   InvalidInput: InputRejected,
-  LocationNotApplied: LocationRejected,
+  InputNotApplied: InputUnapplied,
+  /** Deprecated: the same class as `InputNotApplied`, kept so published tools that throw it still run. */
+  LocationNotApplied: InputUnapplied,
   CredentialsRejected,
 } as const;

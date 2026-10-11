@@ -100,15 +100,18 @@ first:
   the code reads from each record's own element on every run is no overclaim when the example's
   record lacked that fact. A field the code never reads is a defect, not a limit to disclose,
   and a fact the page shows is never listed as unsupported instead of being returned.
-- **Coverage.** `coverage` says what exercised each behavior, in three parts: live (the example
-  and live tests, with the input each ran, such as page 1 of one query), offline (fixture<!-- pomerado:section publication.saved-http --> and parser tests, synthetic cases such as page boundaries included) and untested (such as
+- **Coverage.** `coverage` says what exercised each behavior: live (the example or the act
+  session, and a read signed out's live tests, with the input each ran, such as page 1 of one
+  query), offline only where a read signed out ran such checks (fixture<!-- pomerado:section publication.saved-http --> and parser tests, synthetic cases such as page boundaries included) and untested (such as
   a later page, a query with no results or another layout, live). Name each exposed input under
   the run that set it, or under untested (testing skill). An offline or synthetic check never
   stands in for a live one. For a read signed out, the host adds its own line from its record of
   your live test cases and gives the review that record (`publication/tests.json`): each case's
   purpose, input, expectation and result on the source you publish, and what you listed under
   `notTested` with why. Guardian judges the tool's claims no passing case tests, and failing and
-  stale cases, and checks every `notTested` reason against the captures and the request.
+  stale cases, and checks every `notTested` reason against the captures and the request. A
+  signed-in read or a write reports its one run, the example or the act session, and lists what
+  that run did not exercise as untested without testing it; the review judges that run alone.
 - **Errors.** A thrown message states the cause the code observed, such as a status or a missing
   element, never a guessed one.
 - **Write options.** Each option on the path is an input even when the caller left the choice to

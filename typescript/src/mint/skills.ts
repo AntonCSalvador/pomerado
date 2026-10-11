@@ -31,7 +31,8 @@ const catalog = [
   },
   {
     name: "testing",
-    description: "Meaningful offline/live checks and honest missing evidence",
+    description:
+      "Only for a read signed out: design live test cases and run them in parallel. A signed-in read or a write skips it and proves its tool with one run",
     references: [],
   },
   {
@@ -65,7 +66,7 @@ const catalog = [
   {
     name: "caller-input",
     description:
-      "Ask the run's caller mid-run for what only they know: a choice only the page offers, or a code the site sends",
+      "Read before settling any tool's inputs and errors: what the input schema holds, the rules checked before touching the site, InvalidInput versus InputNotApplied, and asking the run's caller mid-run for what only they know",
     references: ["caller-choice.ts", "caller-code.ts"],
   },
   {

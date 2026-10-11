@@ -9,8 +9,10 @@ import { Effect, Either, Schema } from "effect";
 import { createPomerado } from "../../src/standalone/pomerado.js";
 import { makeInputAsker } from "../../src/inputs/callback.js";
 import { InputRequestFailure, type InputRequest } from "../../src/runtime/input-request.js";
+import { OwnerCancelled } from "../../src/inputs/terminal.js";
 import type { MintArtifact } from "../../src/standalone/contracts.js";
 import { readArtifact, writeArtifact } from "../../src/standalone/artifact-files.js";
+import { listCursorKeys } from "../../src/runtime/list-cursor.js";
 import {
   actionFor,
   authorityOf,
@@ -353,6 +355,65 @@ test("a local build asks for its login once and publishes its sign-in without a 
     } finally {
       await rm(folder, { recursive: true, force: true });
     }
+  });
+});
+
+// A cancel at the terminal is the owner's choice to stop, not a question left unanswered: a
+// signed-out build ends at once instead of going on without the answer.
+test("a local build whose owner cancels the minter's question ends as no response and the minter is not asked to go on", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Original SDKs and Chromium for a scripted build that asks one question",
+  });
+  test.setTimeout(60_000);
+  await withShop(async (shop, endpoint) => {
+    const mintRequests: ModelRequest[] = [];
+    const minter = provider(
+      (_request, index) =>
+        index === 0
+          ? [
+              call(
+                "request_input",
+                {
+                  questions: [{ id: "format", type: "text", prompt: "Which format?" }],
+                  intent: "Only the caller knows this.",
+                },
+                "format",
+              ),
+            ]
+          : [message("Going on without it.")],
+      mintRequests,
+    );
+    const asked: InputRequest[] = [];
+    const built = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* createPomerado({
+            browser: { endpoint },
+            minterProvider: minter,
+            guardianProvider: guardian(),
+            outcomeReviewerProvider: quietReviewer,
+            ask: (request) =>
+              Effect.sync(() => {
+                asked.push(request);
+              }).pipe(Effect.zipRight(Effect.fail(new OwnerCancelled({ code: "NoResponse" })))),
+            timeoutMs: 30_000,
+          });
+          return yield* service.mint({
+            url: `${shop.origin}/login`,
+            intent: "Read the account summary",
+            input: {},
+            effect: "read",
+          });
+        }),
+      ),
+    );
+    expect(built, JSON.stringify(built)).toMatchObject({
+      build: "incomplete",
+      noResponse: { possibleCommit: false },
+    });
+    expect(asked).toHaveLength(1);
+    expect(mintRequests).toHaveLength(1);
   });
 });
 
@@ -1470,6 +1531,115 @@ test("a run that stays signed in through the script signs in once and types noth
     expect(result).toEqual(Either.right({ first: true, signedInAgain: false, second: true }));
     expect(reasons(asked)).toEqual(["missing_credentials"]);
     expect(shop.state.loginPosts).toBe(1);
+  });
+});
+
+/**
+ * Lists the account's statements a page at a time through `readList`: a site page is opened by
+ * the site's own link, and a load that shows the page signed out asks the host to sign in again
+ * and opens it once more.
+ */
+const listStatements = `import { Schema } from "effect";
+import { defineOperation, listInputFields, listOutputFields, readList, startList } from "../runtime/index.js";
+export default defineOperation({name:"list_statements",input:Schema.Struct({...listInputFields}),output:Schema.Struct({statements:Schema.Array(Schema.String),...listOutputFields})},
+async ({kernel,sessionId,siteOrigin,input,ensureSignedIn}) => {
+  const list = startList(input, { mechanism: "pages" });
+  const read = async (href, count) => {
+    const response = await kernel.browsers.playwright.execute(sessionId,{timeout_sec:15,code:\`
+      await page.goto(\${JSON.stringify(href)}, { waitUntil: "domcontentloaded" });
+      if ((await page.locator("#signed-out").count()) > 0) return null;
+      const ids = await page.locator("#statements > li").evaluateAll((rows) => rows.map((row) => row.dataset.id));
+      const next = page.locator("a[rel=next]");
+      const nextHref = (await next.count()) === 1 ? await next.getAttribute("href") : null;
+      return { href: page.url(), ids: ids.slice(0, \${count}), more: ids.length > \${count}, next: nextHref === null ? null : new URL(nextHref, page.url()).href };\`});
+    if(!response.success) throw new Error(String(response.error));
+    return response.result;
+  };
+  const open = async (href, count) => {
+    let found = await read(href, count);
+    if (found === null && (await ensureSignedIn()).signedInAgain) found = await read(href, count);
+    if (found === null) throw new Error("The statements page is signed out");
+    return { rows: found.ids.map((id) => ({ id })), more: found.more, hasNext: found.next !== null, href: found.href, next: found.next };
+  };
+  const page = await readList(list, {
+    keyOf: (row) => row.id,
+    open: (position, count) => open(position?.href ?? new URL("/statements", siteOrigin).href, count),
+    more: (segment, count) => open(segment.href, count),
+    next: (segment, count) => open(segment.next, count),
+  });
+  return { statements: page.rows.map((row) => row.id), ...page.output };
+});`;
+
+test("a signed-in list's page two signs in through the host before it reaches its position, and its cursor holds no login or session", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Chromium and two list runs, each in a new session that signs in",
+  });
+  test.setTimeout(120_000);
+  await withShop(async (shop, endpoint) => {
+    const keys = listCursorKeys({ current: { id: "k1", secret: new Uint8Array(32).fill(5) } });
+    const artifact = {
+      entrypoint: "src/tool.mjs",
+      files: [{ path: "src/tool.mjs", content: listStatements }],
+      inputSchema: { type: "object" },
+      outputSchema: { type: "object" },
+      signIn: { recipe: loginRecipe(shop.origin), entryUrl: `${shop.origin}/login` },
+    } as MintArtifact;
+    const asked: InputRequest[] = [];
+    // Each page in a new session, as separate served calls run: nothing of page one's sign-in stays.
+    const listPage = (input: Record<string, unknown>) =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const service = yield* createPomerado({
+              browser: { endpoint },
+              ask: loginAnswers(asked, []),
+              timeoutMs: 30_000,
+              listCursors: { keys },
+            });
+            return yield* service.run(artifact, {
+              url: `${shop.origin}/statements`,
+              intent: "List the account's statements",
+              effect: "read",
+              input,
+            });
+          }),
+        ),
+      ) as Promise<{
+        readonly statements: readonly string[];
+        readonly next_cursor: string | null;
+        readonly has_more: boolean;
+      }>;
+    const statements = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, index) => `S${from + index}`);
+
+    const first = await listPage({ limit: 20 });
+    expect(first.statements).toEqual(statements(1, 20));
+    expect(shop.state.loginPosts).toBe(1);
+    const cursor = first.next_cursor ?? "";
+    // The cursor holds the site's link and the position, never the login or the session.
+    const body = Buffer.from(cursor.split(".")[2] ?? "", "base64url").toString("utf8");
+    expect(body).toContain("/statements");
+    for (const secret of [
+      shopAccount.username,
+      shopAccount.password,
+      shop.sessionValue,
+      shop.signedInValue,
+    ])
+      expect(`${cursor}\n${body}`).not.toContain(secret);
+
+    const loadsBefore = shop.state.statementLoads.length;
+    const second = await listPage({ limit: 20, cursor });
+    // The rest of site page one, then site page two's first rows: twenty, no gap, no repeat.
+    expect(second.statements).toEqual(statements(21, 40));
+    expect(second.has_more).toBe(true);
+    // Page two signed in through the host before the script ran, and opened the list signed in.
+    expect(shop.state.loginPosts).toBe(2);
+    expect(reasons(asked)).toEqual(["missing_credentials", "missing_credentials"]);
+    expect(shop.state.statementLoads.slice(loadsBefore)).toEqual([
+      { page: 1, signedIn: true },
+      { page: 2, signedIn: true },
+    ]);
   });
 });
 

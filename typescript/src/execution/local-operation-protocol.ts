@@ -5,9 +5,9 @@ import { maximumInputIssuePath, maximumInputIssues } from "../runtime/errors.js"
 import { ScriptQuestionDeclarations } from "../runtime/script-input.js";
 import { FileField, fileReferenceMaxLength } from "../runtime/files.js";
 import {
-  maximumLocationMessageLength,
   maximumRefusalChoiceLength,
   maximumRefusalChoices,
+  maximumSiteMessageLength,
 } from "../runtime/operation-failure.js";
 import { HttpCapability, HttpResponseGap, SiteHttpRequest } from "../runtime/site-http.js";
 import { ListDraft } from "../runtime/list-page.js";
@@ -45,14 +45,14 @@ export const InputRefusal = Schema.Struct({
   ),
 });
 
-/** A script's `LocationNotApplied`: the location it could not apply and what the page kept. */
-export const LocationNotApplied = Schema.Struct({
+/** A script's `InputNotApplied`: the input it could not apply and what the page kept. */
+export const InputNotApplied = Schema.Struct({
   field: RefusalText,
   requested: RefusalText,
   applied: Schema.optionalWith(RefusalText, { exact: true }),
   step: RefusalText,
   siteMessage: Schema.optionalWith(
-    Schema.String.pipe(Schema.minLength(1), Schema.maxLength(maximumLocationMessageLength)),
+    Schema.String.pipe(Schema.minLength(1), Schema.maxLength(maximumSiteMessageLength)),
     { exact: true },
   ),
 });
@@ -176,7 +176,7 @@ export const LocalOperationMessage = Schema.Union(
       { exact: true },
     ),
     refusal: Schema.optionalWith(InputRefusal, { exact: true }),
-    location: Schema.optionalWith(LocationNotApplied, { exact: true }),
+    unapplied: Schema.optionalWith(InputNotApplied, { exact: true }),
     ...JournalFields,
   }),
 );

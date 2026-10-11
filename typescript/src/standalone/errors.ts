@@ -2,6 +2,7 @@ import { MintFailure } from "../mint/contracts.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { LocalOperationFailure } from "../execution/local-operation.js";
 import { InputRequestFailure } from "../runtime/input-request.js";
+import { OwnerCancelled } from "../inputs/terminal.js";
 export const error = (cause: unknown) =>
   cause instanceof Error ? cause : new Error("Pomerado operation failed", { cause });
 export const mintError = (cause: unknown) =>
@@ -17,14 +18,15 @@ export const mintError = (cause: unknown) =>
 
 /**
  * The minter's question failed: one the caller left unanswered fails as `noResponse`, so the
- * harness decides whether it goes back to the minter or ends the build; anything else as
- * `mintError`.
+ * harness decides whether it goes back to the minter or ends the build, and one the owner
+ * cancelled also as `ownerCancelled`, which always ends it; anything else as `mintError`.
  */
 export const askError = (cause: unknown) =>
   cause instanceof InputRequestFailure && cause.code === "NoResponse"
     ? new MintFailure({
         code: "Unavailable",
         noResponse: { possibleCommit: false },
+        ...(cause instanceof OwnerCancelled ? { ownerCancelled: true as const } : {}),
         failureDetail: failureDetail("mint_host_dependency_failed", {
           operation: "standalone.ask",
           error: cause,

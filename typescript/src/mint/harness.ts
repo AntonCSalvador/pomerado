@@ -102,12 +102,15 @@ import {
   liveTestsEvidence,
   liveTestsEvidencePath,
   liveTestsEvidenceProblem,
+  liveTestVersion,
   LiveTestOutputChecks,
   maximumBatchCases,
   outputExcerpt,
   primaryListOf,
   type LiveTestCasesFile,
   type LiveTestRecord,
+  type LiveTestVersion,
+  type LiveTestVersionResults,
 } from "./live-tests.js";
 import type {
   LiveMinterHistory,
@@ -334,6 +337,8 @@ const runnerResultNotice = (runner: RunnerResultDefect) =>
 
 /** How many of the latest publication refusals a question or blocked-explanation review reads. */
 const reviewedPublicationRefusals = 8;
+/** The HTTP version's file, whose live tests the publication record shows beside the Playwright version's. */
+const httpVersionPath = "src/tool-http.mjs";
 /** Refusals of a write the session did not demonstrate as its build declares it. */
 const writeCompletionReasons: ReadonlySet<string> = new Set([
   "write_not_submitted",
@@ -3097,17 +3102,31 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           );
           return yield* updatedAnswer(submitted.changes, result.notice);
         });
-      /** Each live test case's latest result, by case id; a takeover restores them. */
-      const liveTestRecords = new Map<string, LiveTestRecord>(
-        (recovered?.liveTests ?? [])
-          .filter((record) => record.retired !== true)
-          .map((record) => [record.id, record]),
-      );
+      /**
+       * Each live test case's latest result on each version, by case id; a takeover restores
+       * them. A batch on the HTTP version never replaces or stales the Playwright version's
+       * results, nor the reverse. A record from an older release names no entrypoint: it is the
+       * Playwright version's.
+       */
+      const liveTestRecords: Record<LiveTestVersion, Map<string, LiveTestRecord>> = {
+        playwright: new Map(),
+        http: new Map(),
+      };
+      // The HTTP version's results have a field of their own: a record in liveTests that names
+      // no entrypoint, as an older release writes it, is the Playwright version's.
+      const recoveredLiveTests = [
+        ...(recovered?.liveTests ?? []),
+        ...(recovered?.liveTestsHttp ?? []),
+      ];
+      for (const record of recoveredLiveTests)
+        if (record.retired !== true)
+          liveTestRecords[liveTestVersion(record.entrypoint)].set(record.id, record);
+      const recordsFor = (entrypoint: string) => liveTestRecords[liveTestVersion(entrypoint)];
       /**
        * Failing results the minter replaced by changing their case, so the publication review
-       * still sees them. Bounded: the oldest go first.
+       * still sees them. Bounded for each version: the oldest go first.
        */
-      const liveTestReplaced: LiveTestRecord[] = (recovered?.liveTests ?? []).filter(
+      const liveTestReplaced: LiveTestRecord[] = recoveredLiveTests.filter(
         (record) => record.retired === true,
       );
       /**
@@ -3116,13 +3135,24 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * counts, so the size of a batch cannot set it.
        */
       let liveTestsOutOfTime = recovered?.liveTestsOutOfTime === true;
-      /** Each case's latest screened output, by case id: this attempt's runs only. */
+      /** Each case's latest screened output, by version and case id: this attempt's runs only. */
       const liveTestOutputs = new Map<string, unknown>();
+      const outputKey = (entrypoint: string, id: string) => `${liveTestVersion(entrypoint)}\n${id}`;
       /** Whether a passing example's receipt already carried the test plan. */
-      let testPlanSent = (recovered?.liveTests ?? []).length > 0;
-      /** A read that signed in tests one input at a time, at most four (execute testInput). */
+      let testPlanSent = recoveredLiveTests.length > 0;
+      /**
+       * Whether this read signed in. Only a read signed out designs and runs live tests; a
+       * signed-in read proves its tool with its example alone. Read at each use, with the build's
+       * current effect, so a read that signs in or becomes a write mid-build, a repair included,
+       * stops testing from then on. Only a sign-in on the current site counts, as on the host.
+       */
       const signedIn = () =>
-        executions.some((entry) => entry.authentication?.state === "authenticated");
+        executions.some(
+          (entry) =>
+            entry.authentication?.state === "authenticated" &&
+            // A sign-in on the site an update moved the build away from is that site's.
+            (revisions.get(entry.executionId) ?? 0) >= latestRevisionChanging("site"),
+        );
       const liveTestsOffered = () =>
         dependencies.liveTests !== undefined && buildEffect === "read" && !signedIn();
       /** The agent's cases file as it stands, or why it cannot be used. */
@@ -3173,9 +3203,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const file = Either.isRight(read) ? read.right : emptyCases;
           const digest = yield* stepDigest(entrypoint);
           const cases = file.cases.map((testCase) => ({
-            ...caseView(testCase, liveTestRecords.get(testCase.id), digest),
-            ...(options.show?.includes(testCase.id) && liveTestOutputs.has(testCase.id)
-              ? { output: liveTestOutputs.get(testCase.id) }
+            ...caseView(testCase, recordsFor(entrypoint).get(testCase.id), digest),
+            ...(options.show?.includes(testCase.id) &&
+            liveTestOutputs.has(outputKey(entrypoint, testCase.id))
+              ? { output: liveTestOutputs.get(outputKey(entrypoint, testCase.id)) }
               : {}),
           }));
           const shown =
@@ -3312,8 +3343,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 : yield* dependencies.projection
                     .json(judged.output)
                     .pipe(Effect.orElseSucceed(() => "[output withheld: screening failed]"));
-            if (screened === undefined) liveTestOutputs.delete(run.id);
-            else liveTestOutputs.set(run.id, screened);
+            const outputAt = outputKey(request.entrypoint, run.id);
+            if (screened === undefined) liveTestOutputs.delete(outputAt);
+            else liveTestOutputs.set(outputAt, screened);
             const message =
               judged.message === undefined
                 ? undefined
@@ -3342,7 +3374,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     ),
                   );
             const digestOfCase = caseDigest(testCase);
-            const previous = liveTestRecords.get(run.id);
+            const records = recordsFor(request.entrypoint);
+            const version = liveTestVersion(request.entrypoint);
+            const previous = records.get(run.id);
             // A failure the run replaces stays in the record: the case changed after it, or it
             // did not fail again on the same source and case, which shows it is flaky.
             const flaky =
@@ -3355,16 +3389,22 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               (previous.caseDigest !== digestOfCase || flaky) &&
               !liveTestReplaced.some(
                 (entry) =>
+                  liveTestVersion(entry.entrypoint) === version &&
                   entry.id === previous.id &&
                   entry.caseDigest === previous.caseDigest &&
                   entry.sourceDigest === previous.sourceDigest,
               )
             ) {
               liveTestReplaced.push({ ...previous, retired: true, ...(flaky ? { flaky: true } : {}) });
-              liveTestReplaced.splice(0, Math.max(0, liveTestReplaced.length - maximumBatchCases));
+              const ofVersion = liveTestReplaced.filter(
+                (entry) => liveTestVersion(entry.entrypoint) === version,
+              );
+              for (const dropped of ofVersion.slice(0, Math.max(0, ofVersion.length - maximumBatchCases)))
+                liveTestReplaced.splice(liveTestReplaced.indexOf(dropped), 1);
             }
-            liveTestRecords.set(run.id, {
+            records.set(run.id, {
               id: run.id,
+              entrypoint: request.entrypoint,
               caseDigest: digestOfCase,
               sourceDigest,
               verdict: judged.verdict,
@@ -3417,18 +3457,60 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             })),
           });
         });
-      /** The publication review's record of a read's live tests, and its coverage line. */
-      const liveTestsForPublication = (entrypoint: string) =>
+      /**
+       * The publication review's record of a read's live tests, and its coverage line. It lists
+       * only the versions that ship: the published entrypoint's, and the HTTP version beside a
+       * published Playwright version unless finish_build ruled it out (`httpRuledOut`). A version
+       * that does not ship is neither recorded nor judged.
+       */
+      const liveTestsForPublication = (entrypoint: string, httpRuledOut: boolean) =>
         Effect.gen(function* () {
           if (dependencies.liveTests === undefined || buildEffect !== "read" || signedIn())
             return undefined;
           const read = yield* readCasesFile;
+          const published = liveTestVersion(entrypoint);
+          const replacedOf = (version: LiveTestVersion) =>
+            liveTestReplaced.filter((record) => liveTestVersion(record.entrypoint) === version);
+          const versions: LiveTestVersionResults[] = [
+            {
+              version: published,
+              entrypoint,
+              sourceDigest: yield* stepDigest(entrypoint),
+              records: liveTestRecords[published],
+              replaced: replacedOf(published),
+            },
+          ];
+          if (published === "playwright" && !httpRuledOut) {
+            // The file the HTTP version's latest results ran, else its conventional file when
+            // the workspace has one.
+            const ran = [...replacedOf("http"), ...liveTestRecords.http.values()]
+              .map((record) => record.entrypoint)
+              .filter((path) => path !== undefined)
+              .at(-1);
+            const httpEntrypoint =
+              ran ??
+              ((yield* Effect.promise(async () => {
+                try {
+                  return (await session.pathExists?.(httpVersionPath)) === true;
+                } catch {
+                  return false;
+                }
+              }))
+                ? httpVersionPath
+                : undefined);
+            if (httpEntrypoint !== undefined)
+              versions.push({
+                version: "http",
+                entrypoint: httpEntrypoint,
+                sourceDigest: yield* stepDigest(httpEntrypoint),
+                records: liveTestRecords.http,
+                replaced: replacedOf("http"),
+              });
+          }
           return liveTestsEvidence({
             file: Either.isRight(read) ? read.right : emptyCases,
             ...(Either.isLeft(read) ? { fileProblem: read.left } : {}),
-            records: liveTestRecords,
-            replaced: liveTestReplaced,
-            sourceDigest: yield* stepDigest(entrypoint),
+            versions,
             outOfTime: liveTestsOutOfTime,
           });
         }).pipe(
@@ -3916,7 +3998,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     );
               // The host's own record of a read's live tests on this source goes to the review
               // as evidence, and its line to coverage. It never refuses publication by itself.
-              const liveTests = yield* liveTestsForPublication(proposed.entrypoint);
+              const liveTests = yield* liveTestsForPublication(
+                proposed.entrypoint,
+                proposed.httpVersion?.outcome === "ruled_out",
+              );
               const coverage =
                 liveTests === undefined
                   ? minterCoverage
@@ -4230,7 +4315,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     {},
                     (error.reason === "http_implementation_stale"
                       ? "Not published yet: src/tool-http.mjs changed since its last passing live test, and a test counts only for the source it ran. Run execute purpose test, target liveBrowser, entrypoint src/tool-http.mjs on the current file, or restore the version that passed, then call finish_build again with the same executionId."
-                      : "Not published yet: this read has no HTTP version that passed a live test. Read .agents/http-mcp/SKILL.md from the top, find where the example's data comes from (step 1), write src/tool-http.mjs and test it live with execute purpose test, target liveBrowser, entrypoint src/tool-http.mjs. Fix and test again until its output matches the example's; there is no limit on these tests, and a request refused before sending never counts. Then call finish_build again with the same executionId.") +
+                      : "Not published yet: this read has no HTTP version that passed a live test. Read .agents/http-mcp/SKILL.md from the top, find where the example's data comes from (step 1), write src/tool-http.mjs and test it live with execute purpose test, target liveBrowser, entrypoint src/tool-http.mjs. Fix and test again until its output matches the example's; a request refused before sending never counts. A read signed out then runs its cases as a batch on it with live_tests, as on src/tool.mjs (testing skill); a signed-in read checks it once, against the example. Then call finish_build again with the same executionId.") +
                       " If it can't port, call finish_build again with httpVersion naming the signal from the skill's \"When it can't port\", the requestId it rests on and a short note; don't write or run a stub. The host asks only once.",
                   );
                 if (error.reason === "login_url_one_time")
@@ -4531,8 +4616,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             }).pipe(
               Effect.catchIf(
                 (error) => error.noResponse !== undefined,
+                // An owner's cancel is a choice to stop, never a question to decide without.
                 (error) =>
-                  handsBackNoAnswer() ? noAnswer() : unanswered(error, "asking a question"),
+                  error.ownerCancelled !== true && handsBackNoAnswer()
+                    ? noAnswer()
+                    : unanswered(error, "asking a question"),
               ),
               // error-reporting-allow: typed-recovery an invalid request is the model's to correct, told as its result
               Effect.catchIf(
@@ -4882,8 +4970,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         status: "unavailable",
                         instruction:
                           buildEffect === "write"
-                            ? "A write build never runs live tests; test it offline (pureFiles, savedDOM or savedHTTP)."
-                            : "This read signed in, so it runs up to four live tests one at a time: execute purpose test, target liveBrowser, with testInput.",
+                            ? "A write build runs no live tests: its act session is the one run that proves it. Compose the script from the session and publish."
+                            : "This read signed in, so it runs no live tests: its example alone proves the tool. Check src/tool-http.mjs once against the example's input, if you wrote one (execute purpose test, target liveBrowser, no testInput), run the example last, after your last edit, and publish.",
                       });
                     if (request.action === "plan")
                       return JSON.stringify(
@@ -5101,13 +5189,23 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const retainRuntimeRecord = dependencies.diagnostics?.retainRuntimeRecord;
       const observeModelTrace = dependencies.diagnostics?.observeModelTrace;
       /** The harness checkpoint, with `task` as its effective task. */
+      /** One version's results for the checkpoint, under `field`, or nothing when it has none. */
+      const liveTestsCheckpoint = (
+        version: LiveTestVersion,
+        field: "liveTests" | "liveTestsHttp",
+      ): Partial<MintHarnessSnapshot> => {
+        const records = [
+          ...liveTestReplaced.filter((record) => liveTestVersion(record.entrypoint) === version),
+          ...liveTestRecords[version].values(),
+        ];
+        return records.length === 0 ? {} : { [field]: records };
+      };
       const captureHarness = (task: TaskState = taskState): MintHarnessSnapshot => ({
         executions: [...executions],
         // Replaced failures come first, so an older worker that keys records by id keeps the
-        // latest.
-        ...(liveTestRecords.size === 0 && liveTestReplaced.length === 0
-          ? {}
-          : { liveTests: [...liveTestReplaced, ...liveTestRecords.values()] }),
+        // latest. The HTTP version's results go in their own field, which an older worker drops.
+        ...liveTestsCheckpoint("playwright", "liveTests"),
+        ...liveTestsCheckpoint("http", "liveTestsHttp"),
         ...(liveTestsOutOfTime ? { liveTestsOutOfTime: true } : {}),
         ...(reviewer.tracked().length === 0 ? {} : { outcomeWrites: reviewer.tracked() }),
         purposes: [...purposes].map(([executionId, purpose]) => {

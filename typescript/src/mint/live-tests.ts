@@ -12,6 +12,10 @@ import { outputCheckMeaning, outputChecks, type OutputCheck } from "../runtime/o
  * on a fresh page, in parallel browsers where the host has them, and the agent sees every result.
  * Nothing here blocks publication: the publication review reads the record and judges the cases
  * against what the tool claims.
+ *
+ * The same cases run on both versions of a read: the Playwright version (`src/tool.mjs`) and the
+ * HTTP version (`src/tool-http.mjs`). Each version keeps its own result for each case, so a batch
+ * on one never replaces or stales the other's.
  */
 
 /** Where the agent writes its cases. */
@@ -20,6 +24,15 @@ export const liveTestCasesPath = "test/cases.json";
 export const liveTestsEvidencePath = "publication/tests.json";
 /** The most cases one batch runs: a payload bound, not a limit on testing. */
 export const maximumBatchCases = 50;
+
+/** Which version of a read a case ran on. */
+export type LiveTestVersion = "playwright" | "http";
+/**
+ * The version an entrypoint is: `http` for a `*-http.mjs` file, else `playwright`. A record from
+ * an older release names no entrypoint, and is the Playwright version's.
+ */
+export const liveTestVersion = (entrypoint: string | undefined): LiveTestVersion =>
+  entrypoint?.endsWith("-http.mjs") === true ? "http" : "playwright";
 
 type Json = Readonly<Record<string, unknown>>;
 type Input = Readonly<Record<string, unknown>>;
@@ -400,7 +413,11 @@ const inconclusiveDetail: Readonly<Record<LiveTestInconclusiveReason, string>> =
  * `error` passes on. Any other throw, an `OperationFailure` that wraps an unexpected exception
  * included, is a bug.
  */
-const declaredRefusals: ReadonlySet<string> = new Set(["LocationNotApplied"]);
+const declaredRefusals: ReadonlySet<string> = new Set([
+  "InputNotApplied",
+  // An older runtime's name for the same refusal.
+  "LocationNotApplied",
+]);
 
 /**
  * A case's verdict from its runs and what it expected. `list` is where a list read's results sit
@@ -534,6 +551,11 @@ export const LiveTestOutputChecks: Schema.Schema<readonly LiveTestOutputCheck[]>
 /** One case's latest result, as the harness keeps it across a takeover. */
 export interface LiveTestRecord {
   readonly id: string;
+  /**
+   * The entrypoint the case ran, whose version (`liveTestVersion`) keeps this result apart from
+   * the other version's. Absent in a record from an older release: the Playwright version's.
+   */
+  readonly entrypoint?: string;
   readonly caseDigest: string;
   /** The digest of the source it ran. */
   readonly sourceDigest: string;
@@ -563,6 +585,7 @@ export interface LiveTestRecord {
 
 export const LiveTestRecord: Schema.Schema<LiveTestRecord> = Schema.Struct({
   id: Schema.String,
+  entrypoint: Schema.optionalWith(Schema.String, { exact: true }),
   caseDigest: Schema.String,
   sourceDigest: Schema.String,
   verdict: Schema.Literal("pass", "fail", "inconclusive"),
@@ -754,60 +777,108 @@ const countsOf = (statuses: readonly CaseStatus[]) => {
   };
 };
 
+/** One version's results, for the publication record. */
+export interface LiveTestVersionResults {
+  readonly version: LiveTestVersion;
+  /** The entrypoint whose current source the statuses are judged against, if the build has one. */
+  readonly entrypoint?: string;
+  /** That entrypoint's current source digest; undefined leaves every result stale or not run. */
+  readonly sourceDigest: string | undefined;
+  /** This version's latest result for each case, by case id. */
+  readonly records: ReadonlyMap<string, LiveTestRecord>;
+  /** This version's failing results the minter replaced by changing their case. */
+  readonly replaced?: readonly LiveTestRecord[];
+}
+
+const versionName = (version: LiveTestVersion) =>
+  version === "http" ? "HTTP version" : "Playwright version";
+
 /**
  * The host's record of a read's live tests on the source it publishes, for the publication
- * review (`publication/tests.json`), and the line it adds to coverage.
+ * review (`publication/tests.json`), and the line it adds to coverage. Each case shows its result
+ * on each version in `versions`, judged against that version's own current source.
  */
 export const liveTestsEvidence = (options: {
   readonly file: LiveTestCasesFile;
   readonly fileProblem?: string;
-  readonly records: ReadonlyMap<string, LiveTestRecord>;
-  /** Failing results the minter replaced by changing their case. */
-  readonly replaced?: readonly LiveTestRecord[];
-  readonly sourceDigest: string | undefined;
+  /** The Playwright version's results, and the HTTP version's when the build has one. */
+  readonly versions: readonly LiveTestVersionResults[];
   /** The attempt ran out of time for live tests. */
   readonly outOfTime?: boolean;
 }) => {
-  const { file, records, sourceDigest } = options;
+  const { file, versions } = options;
   const outOfTime = options.outOfTime === true;
-  const cases = file.cases.map((testCase) => {
-    const { outputChecks: findings, ...view } = caseView(
-      testCase,
-      records.get(testCase.id),
-      sourceDigest,
-    );
-    return {
-      ...view,
-      input: testCase.input,
-      // Compact for the review: it reads the values in the excerpt and the captures.
-      ...(findings === undefined
-        ? {}
-        : {
-            outputChecks: findings.map(({ path, check, count, blocking }) => ({
-              path,
-              check,
-              count,
-              blocking,
-            })),
-          }),
-    };
-  });
+  const cases = file.cases.map((testCase) => ({
+    id: testCase.id,
+    purpose: testCase.purpose,
+    expect: testCase.expect,
+    ...(testCase.next_page === true ? { next_page: true } : {}),
+    input: testCase.input,
+    results: Object.fromEntries(
+      versions.map((entry) => {
+        const {
+          id: _id,
+          purpose: _purpose,
+          expect: _expect,
+          next_page: _nextPage,
+          outputChecks: findings,
+          ...view
+        } = caseView(testCase, entry.records.get(testCase.id), entry.sourceDigest);
+        return [
+          entry.version,
+          {
+            ...view,
+            // Compact for the review: it reads the values in the excerpt and the captures.
+            ...(findings === undefined
+              ? {}
+              : {
+                  outputChecks: findings.map(({ path, check, count, blocking }) => ({
+                    path,
+                    check,
+                    count,
+                    blocking,
+                  })),
+                }),
+          },
+        ];
+      }),
+    ),
+  }));
   const notTested = file.notTested ?? [];
-  const retired = retiredViews(file, records, options.replaced ?? [], sourceDigest);
+  const retired = versions.flatMap((entry) =>
+    retiredViews(file, entry.records, entry.replaced ?? [], entry.sourceDigest).map((view) => ({
+      version: entry.version,
+      ...view,
+    })),
+  );
   const nothing =
     options.fileProblem === undefined &&
     cases.length === 0 &&
     notTested.length === 0 &&
     retired.length === 0;
-  const counts = countsOf(cases.map((testCase) => testCase.status));
+  const versionViews = versions.map((entry) => ({
+    version: entry.version,
+    ...(entry.entrypoint === undefined ? {} : { entrypoint: entry.entrypoint }),
+    ...(entry.sourceDigest === undefined ? {} : { sourceDigest: entry.sourceDigest }),
+    counts: countsOf(
+      file.cases.map((testCase) =>
+        caseStatus(testCase, entry.records.get(testCase.id), entry.sourceDigest),
+      ),
+    ),
+  }));
   const retiredFailures = retired.filter((entry) => entry.lastVerdict === "fail").length;
   const summary = nothing
     ? "Host live tests on the published source: none designed or run; beyond the example, nothing was tested live."
-    : `Host live tests on the published source: ${cases.length} case${cases.length === 1 ? "" : "s"} (${Object.entries(
-        counts,
-      )
-        .map(([status, count]) => `${count} ${status}`)
-        .join(", ")}).${
+    : `Host live tests on the published source: ${cases.length} case${cases.length === 1 ? "" : "s"}.${versionViews
+        .map(
+          (entry) =>
+            ` ${versionName(entry.version)}${entry.entrypoint === undefined ? "" : ` (${entry.entrypoint})`}: ${Object.entries(
+              entry.counts,
+            )
+              .map(([status, count]) => `${count} ${status}`)
+              .join(", ")}.`,
+        )
+        .join("")}${
         retired.length === 0
           ? ""
           : ` ${retired.length} retired case${retired.length === 1 ? "" : "s"} (${retiredFailures} last failed).`
@@ -817,14 +888,13 @@ export const liveTestsEvidence = (options: {
       kind: "host_live_tests",
       note: nothing
         ? "Written by the host, never by the minter. The minter designed and ran no live test case, so beyond the example nothing was tested live."
-        : "Written by the host from its own runs, never by the minter. Each case ran on a fresh page after one Guardian review of its batch; purpose is the minter's account of what the case establishes. status is against the source being published: stale means the source or the case changed after the case ran. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists cases the minter deleted, failures it replaced by changing the case, and failures that did not repeat when the unchanged case ran again on the same source (flaky), with their last result; excusedBy names a case that passes the same input with the same expectation on the published source after the source changed.",
-      ...(sourceDigest === undefined ? {} : { sourceDigest }),
+        : "Written by the host from its own runs, never by the minter. The same cases run on each version of the tool: playwright, the Kernel script, and http, the HTTP version, for each version that ships: a version that does not ship, such as an HTTP version the minter ruled out, is not listed. versions names each version's entrypoint, the source digest its results are judged against, and its counts. Each case's results hold its result on each version, from that version's own batches: one version's run never counts for the other. Each case ran on a fresh page after one Guardian review of its batch; purpose is the minter's account of what the case establishes. status is against that version's source being published: stale means the source or the case changed after the case ran, and not_run means no batch ran it on that version. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists, by version, cases the minter deleted, failures it replaced by changing the case, and failures that did not repeat when the unchanged case ran again on the same source (flaky), with their last result; excusedBy names a case that passes the same input with the same expectation on that version's published source after the source changed.",
       ...(outOfTime ? { outOfTime: true } : {}),
       ...(options.fileProblem === undefined ? {} : { casesFileProblem: options.fileProblem }),
+      versions: versionViews,
       cases,
       notTested,
       retired,
-      counts,
     },
     coverage: `${summary}${outOfTime ? ` ${outOfTimeNote}` : ""}${
       options.fileProblem === undefined ? "" : ` ${options.fileProblem}`
@@ -838,6 +908,7 @@ export const liveTestsEvidenceProblem = (problem: string) => ({
     kind: "host_live_tests",
     note: "Written by the host, never by the minter.",
     problem,
+    versions: [],
     cases: [],
     notTested: [],
     retired: [],

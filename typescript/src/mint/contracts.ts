@@ -200,6 +200,12 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
   /** The build's owner left a request unanswered; the build ends as `no_response`. */
   readonly noResponse?: { readonly possibleCommit: boolean };
   /**
+   * With `noResponse`: the owner cancelled the request, as with Ctrl-C at a terminal, rather than
+   * letting its window end. The build ends as `no_response`; the question never goes back to the
+   * minter as no answer.
+   */
+  readonly ownerCancelled?: true;
+  /**
    * What a takeover was still waiting on when its recovery wait ran out, such as
    * `sandbox_attachment_unconfirmed`: the build ends with `hostFailure: recovery_timeout`.
    */
@@ -545,7 +551,7 @@ export const ExecutionRequest = Schema.Struct({
   testInput: Schema.optional(
     Schema.String.pipe(Schema.minLength(2), Schema.maxLength(16_384)).annotations({
       description:
-        "Only with purpose test and target liveBrowser on a read build: the tool's input you chose, as JSON text, to show the tool works for values other than the caller's, such as another route or passenger count. Public values only. The host may limit how many run per attempt: a signed-in read runs at most 4. Where the host offers live_tests, a read signed out has no limit and runs its planned cases in batches with it. Omit it to run the caller's input.",
+        "Only with purpose test and target liveBrowser on a read build: the tool's input you chose, as JSON text, to show the tool works for values other than the caller's, such as another route or passenger count. Public values only. Only a read signed out runs one; a signed-in read proves the tool with its example and runs none. Where the host offers live_tests, a read signed out runs its planned cases in batches with it instead. Omit it to run the caller's input.",
     }),
   ),
   /** Only on authenticate, and only where the host offers autofill sign-in. */
@@ -565,9 +571,10 @@ export const ManagedSignInExecutionRequest = ExecutionRequest.omit("signInStep")
 
 /**
  * What a host provides for a read's live tests. The minting agent designs cases in
- * `test/cases.json` from what it saw on the site, and runs them in batches. Live test cases never
- * count toward a signed-in read's four agent-chosen tests: a batch runs only on a read that has
- * not signed in.
+ * `test/cases.json` from what it saw on the site, and runs them in batches on the Playwright
+ * version or the HTTP version (`entrypoint`); the harness keeps each version's results apart. A
+ * batch runs only on a read that has not signed in: a signed-in read and a write prove the tool
+ * with one run.
  */
 export interface LiveTestHost {
   /**
@@ -1377,10 +1384,15 @@ export interface ExampleJournal {
 export interface MintHarnessSnapshot {
   readonly executions: readonly ExecutionEvidence[];
   /**
-   * Each live test case's latest result, so a takeover keeps them. Optional, so a rollout's old
-   * and new workers each restore the other's checkpoint.
+   * Each live test case's latest result on the Playwright version, so a takeover keeps them.
+   * Optional, so a rollout's old and new workers each restore the other's checkpoint.
    */
   readonly liveTests?: readonly LiveTestRecord[];
+  /**
+   * The same for the HTTP version. A field of its own, so a worker from an older release, which
+   * keeps no HTTP results, drops them rather than restoring them as the Playwright version's.
+   */
+  readonly liveTestsHttp?: readonly LiveTestRecord[];
   /**
    * Whether the attempt ran out of time for live tests: a batch refused for time, or a case
    * stopped by a batch deadline the attempt's end set.
@@ -1563,6 +1575,7 @@ const HarnessTerminal = Schema.Struct({
 export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.Struct({
   executions: Schema.Array(ExecutionEvidence),
   liveTests: Schema.optionalWith(Schema.Array(LiveTestRecord), { exact: true }),
+  liveTestsHttp: Schema.optionalWith(Schema.Array(LiveTestRecord), { exact: true }),
   liveTestsOutOfTime: Schema.optionalWith(Schema.Boolean, { exact: true }),
   outcomeWrites: Schema.optionalWith(Schema.Array(OutcomeWrite), { exact: true }),
   purposes: Schema.Array(
@@ -1915,7 +1928,7 @@ export interface MintDependencies {
   ) => Effect.Effect<SignedInMarkerCheck, MintFailure>;
   /**
    * Runs a read's planned live tests in batches (`LiveTestHost`). Absent, the minter is offered
-   * no live_tests tool and tests one input at a time with execute.
+   * no live_tests tool, and a read signed out tests one input at a time with execute.
    */
   readonly liveTests?: LiveTestHost;
   /** The host's own descriptions of its optional tools, in place of the generic ones. */

@@ -7,8 +7,10 @@ description: Build a read's faster HTTP version: find where the page gets its da
 
 `src/tool-http.mjs` answers the same contract as `src/tool.mjs` without driving the page, so runs
 are faster. Most sites that render server-side, or call a JSON API from the page, port, bot-protected
-ones included: requests ride the browser's own cookies, TLS fingerprint and proxy. A write's HTTP
-version is built from its act session's requests and tested offline only (Test it, below).
+ones included: requests ride the browser's own cookies, TLS fingerprint and proxy. The HTTP version
+is tested as its Playwright version is, by what the tool is now: a read signed out on several
+inputs, a signed-in read once against its example, and a write once, by replaying its act session
+offline (Test it, below).
 
 ## Request rules (check every request)
 
@@ -214,8 +216,13 @@ refuses literal tokens.
 ## Test it
 
 - **Read:** `execute` purpose `test`, target `liveBrowser`, entrypoint `src/tool-http.mjs`, from
-  the same starting state as the example. Test after each fix, as often as it takes; there is no
-  budget for HTTP tests. A live test starts like the example: the site origin page, with the
+  the same starting state as the example, compared with the example: the host counts this as the
+  HTTP version's live test. Then test it as the Playwright version is tested. A read signed out
+  runs its cases as a batch on it too, with `live_tests` entrypoint `src/tool-http.mjs`, in
+  parallel; each version keeps its own results, and the review judges the HTTP version from its
+  own (testing skill). A signed-in read checks it once, against the example: the caller's input
+  (omit `testInput`), compared with the example's output. Either way, after a failure fix it and
+  test again until it passes. A live test starts like the example: the site origin page, with the
   session saved right after sign-in for a signed-in read, or with exploration cookies and storage
   cleared for an anonymous one, so it cannot pass on state exploration left. The host records the
   result as the HTTP version's live evidence: transport, duration and output schemas.
@@ -257,10 +264,11 @@ refuses literal tokens.
 - **Write:** the real write is the act session, which runs the Playwright version; the
   host refuses an act step or residual whose entrypoint is `*-http.mjs`. Write the HTTP
   version from the session's state-changing requests and captures, and never run a
-  second write to compare. Test it offline with target `savedHTTP`, selecting the
-  session's capture (`capture.json`) or its response bodies as `fixtureRefs`. `SiteHttp` then replays the
-  recorded exchanges, as the testing skill describes. A passing replay is the only
-  evidence a write's HTTP version can have.
+  second write to compare. Check it once, against the session: replay it offline with target
+  `savedHTTP`, selecting the session's capture (`capture.json`) or its response bodies as
+  `fixtureRefs`, and `SiteHttp` replays the recorded exchanges. Fix and replay again until it
+  passes; design no other tests. A passing replay is the only evidence a write's HTTP version
+  can have.
 - Replay also helps a read: iterate on parsing without touching the site.
 - A test counts only for the `src/tool-http.mjs` it ran, and its schemas must match the
   published ones: a read's example, or a write's composed script, whose declared write

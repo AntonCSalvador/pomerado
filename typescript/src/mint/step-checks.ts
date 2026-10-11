@@ -17,34 +17,33 @@ interface Refusal {
 }
 const refused = (reason: string): Refusal => ({ supported: false, reason });
 
-/**
- * Live tests a signed-in read may run per attempt on an input the agent chose. An HTTP version's
- * tests (`*-http.mjs`) have no cap and never count toward it: they are iterated until they match.
- */
-const maximumAgentTestInputs = 4;
-const isHttpVersion = (entrypoint: string | undefined) => entrypoint?.endsWith("-http.mjs") === true;
 /** Why an agent-chosen test input that is not JSON text never runs. */
 export const testInputNotJson =
   "testInput must be the tool's input as JSON text. Nothing was executed.";
 const JsonText = Schema.parseJson();
 
 /**
- * Preflight's refusal of a step's `testInput`, if any. Only a read's live test may run an input
- * the agent chose. A read signed out runs as many as it needs. A signed-in read runs at most four
- * per attempt, counted from the history's `agent_chosen` marks; a test Guardian denied never ran
- * and left none. A host that does not say whether the read signed in keeps the limit. An HTTP
- * version's tests are neither capped nor counted, when the history names each step's entrypoint.
+ * Preflight's refusal of a step's `testInput`, if any. Only a read signed out runs a live test on
+ * an input the agent chose, as many as it needs, of the Playwright or the HTTP version alike. A
+ * signed-in read and a write prove the tool with one run, the read's example or the write's act
+ * session, so they run none. The host passes the build's state as it is now: a read that signed in
+ * or became a write mid-build, a repair included, runs none from then on. A host that does not say
+ * the read is signed out is treated as signed in.
  */
 export const preflightTestInput = (
   submitted: ExecutionRequest,
   scope: {
     readonly buildEffect: MintRequest["effect"] | undefined;
-    readonly executionHistory: readonly {
+    /** Whether the read signed in. Only `false`, a read signed out, runs inputs the agent chose. */
+    readonly signedIn?: boolean;
+    /**
+     * @deprecated Ignored: no count of agent-chosen tests limits a read signed out, and a
+     * signed-in read runs none. Kept so existing callers compile; it will be removed.
+     */
+    readonly executionHistory?: readonly {
       readonly input?: "agent_chosen" | "agent_chosen_batch";
       readonly entrypoint?: string;
     }[];
-    /** Whether the read signed in; a read signed out has no limit on agent-chosen tests. */
-    readonly signedIn?: boolean;
   },
 ): Refusal | undefined => {
   if (submitted.testInput === undefined) return undefined;
@@ -58,16 +57,10 @@ export const preflightTestInput = (
     );
   if (Option.isNone(Schema.decodeUnknownOption(JsonText)(submitted.testInput)))
     return refused(testInputNotJson);
-  if (isHttpVersion(submitted.entrypoint)) return undefined;
   if (scope.signedIn === false) return undefined;
-  const chosen = scope.executionHistory.filter(
-    (entry) => entry.input === "agent_chosen" && !isHttpVersion(entry.entrypoint),
-  ).length;
-  return chosen >= maximumAgentTestInputs
-    ? refused(
-        `This attempt already ran ${maximumAgentTestInputs} live tests with an input you chose, the most ${scope.signedIn === true ? "a signed-in read" : "this host"} allows. Run a live test with the caller's input (omit testInput) or publish. Nothing was executed.`,
-      )
-    : undefined;
+  return refused(
+    `Only a read signed out runs a live test on an input you chose. ${scope.signedIn === true ? "This read signed in, so it" : "This host does not say this read is signed out, so it"} proves the tool with its example alone: run the example again after a fix, and check src/tool-http.mjs once against the example's input (omit testInput). Nothing was executed.`,
+  );
 };
 
 type InputObject = Readonly<Record<string, unknown>>;
@@ -226,9 +219,9 @@ export const writeSessionBoundary = (
       : "Purpose act is a live step (target liveBrowser) of a write build's one write session. A read explores, then runs its example.";
   if (scope.buildEffect !== "write" || submitted.target !== "liveBrowser") return undefined;
   if (submitted.purpose === "example" || submitted.purpose === "test")
-    return "A write build performs its action once, through purpose act steps, never as a live example or a live test. Read .agents/writes/SKILL.md; test offline with pureFiles, savedDOM or savedHTTP.";
+    return "A write build performs its action once, through purpose act steps, never as a live example or a live test: its act session is the one run that proves it. Read .agents/writes/SKILL.md.";
   if (submitted.purpose === "explore" && scope.writeSessionStarted)
-    return "This write build's session has started, so live exploration is over. Continue with the next act step on the page as it is, or test offline.";
+    return "This write build's session has started, so live exploration is over. Continue with the next act step on the page as it is.";
   return undefined;
 };
 

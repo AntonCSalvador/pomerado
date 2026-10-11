@@ -1,26 +1,26 @@
 ---
 name: testing
-description: Choose meaningful parser, saved HTTP, static DOM and authorized live checks.
+description: Design and run live test cases for a read signed out. A signed-in read or a write skips this skill and proves its tool with one run.
 ---
 
-# Test the contract you authored
+# Test a read signed out
+
+This skill is for a read signed out only. A signed-in read or a write does the original task: it
+proves its tool with one run, the read's example (run again after each fix, as the core skill
+says) or the write's act session (writes skill). It designs no tests beyond that run: no
+`test/cases.json`, no live test on an input it chose and no offline test suite. Its HTTP version
+is checked once, against that run (http-mcp skill). Report what that run did not exercise as
+untested in `coverage`. The scope follows what the tool is now: a read that signs in or becomes
+a write mid-build, a repair included, stops designing and running tests from then on, and a
+repair that rebuilds a signed-in tool or a write as a read signed out tests it fully. Stop reading
+here unless the build is a read that has not signed in.
 
 Use execute with purpose=test, target, relative entrypoint/test file, fixtureRefs,
 caseFilter, maxWorkers and timeoutSeconds. Fixtures are host-authorized immutable
 inputs. Offline cases may use isolated workers; a live test is one read-only flow. It starts
-like the example: the site origin page, with the session saved right after sign-in for a
-signed-in read. A read proves its operation with purpose=example and iterates from that
-clean start; running the example or a live test again is normal for a read. A write
-happens once, in its act session (the writes skill), so a write build tests only
-offline: pureFiles, savedDOM and savedHTTP.
-
-An entry page with a saved signed-in session is not a signed-out browser. These example and live
-tests verify business navigation and results after authentication; they do not prove that the
-recorded sign-in works from the published `loginUrl`. For autofill, follow the auth skill's entry
-recording guidance: required navigation from that URL must precede the credential screens in the
-recorded steps, not just in an exploration script or the business script (which runs after sign-in).
-Report sign-in replay as unverified unless a separate registered run actually starts signed out
-at that URL and completes the recorded steps. Do not clear a live session or repeat a write merely to test this.
+like the example: the site origin page, with exploration cookies and site storage cleared. A
+read proves its operation with purpose=example and iterates from that clean start; running the
+example or a live test again is normal.
 
 ## Test a read signed out as much as it needs
 
@@ -69,7 +69,7 @@ About 10 to 20 cases is typical. Write them in `test/cases.json`:
 ```
 
 `purpose` says in a sentence what the case establishes. `expect` is `result`, `empty`,
-`invalid_input` or `error`: a loud refusal the tool throws on purpose, `LocationNotApplied`; any
+`invalid_input` or `error`: a loud refusal the tool throws on purpose, `InputNotApplied`; any
 other throw is a bug and fails the case. Expect `empty`, `invalid_input` or `error` only for an
 input the site really has no results for, does not offer or cannot apply. Use real values the site offers, which you saw while
 exploring: listed options, places, dates, counts, records and retailers the site lists. Never use
@@ -100,36 +100,42 @@ read in source, never by cleaning the string afterwards; a correct value needs n
 any case that catches a real risk. A tool that returns a list runs page two live with the cursor
 page one returned, and reaches a last page (pagination skill).
 
-Results count only for the source and the case as they ran: an edit makes them stale. Finish in
-this order: make your last edit, run the cases again, run the example last, then call
-`finish_build`. Publication review reads the host's record of your cases (`publication/tests.json`),
+Results count only for the version, the source and the case as they ran: an edit makes them
+stale. Finish in this order: make your last edit, run the cases again on each version, run the
+example last, then call `finish_build`. Publication review reads the host's record of your cases (`publication/tests.json`),
 not your account of them, and judges them against what the tool claims: a failing case, or a
 claim no passing case tests while time remained, holds publication back. Deleting or changing a
 case after it failed does not hide the failure: the record keeps its last result as retired, and
 so does a failure that passes when run again on the same code, as flaky. When
 `live_tests` answers `no_time`, run the example last and publish; the record says time ran out.
 
-A signed-in read tests one input at a time instead: up to four live tests per attempt with an
-input you choose (`testInput`, the tool's input as JSON text, with purpose `test` and target
-`liveBrowser`), spent on the riskiest controls and a record whose page differs. When the host offers no
-`live_tests`, a read signed out tests the same way, one input at a time; the host may limit how many.
-Live tests of `src/tool-http.mjs` never count toward either limit.
+When the host offers no `live_tests`, a read signed out runs its cases one input at a time
+instead: execute purpose `test`, target `liveBrowser`, with `testInput`, the tool's input as JSON
+text; the host may limit how many.
+
+Test the HTTP version, `src/tool-http.mjs`, the same way as `src/tool.mjs`: run the same cases
+as a batch on it with `live_tests` entrypoint `src/tool-http.mjs`, in parallel, and fix it until
+every case does what it does on the Playwright version (http-mcp skill). Each version keeps its
+own result for each case: a batch on one never replaces or stales the other's, and `plan` shows
+the results of the entrypoint you name. The publication record shows each case's result on both
+versions, and the review judges each version from its own results. A test of `src/tool-http.mjs`
+counts for the HTTP version only for the source it ran. Where the host offers no `live_tests`,
+run its inputs one at a time with execute, entrypoint `src/tool-http.mjs` and `testInput`, and
+check `testInput` against the schema yourself first: a failed test marks the HTTP version's
+latest live test failed until a later one passes.
 
 The example uses the caller's input, or your `exampleInput` when that input is empty, and offline
 tests always use the caller's input. If a test shows the schema must widen, widen it in source;
 publication reads the schemas from current source, and only a changed flow needs a fresh example
-(publication skill). A live test of `src/tool-http.mjs` counts for the HTTP version only for the
-source it ran (HTTP skill). Check `testInput` against the schema yourself first: a failed test of
-`src/tool-http.mjs` marks the HTTP version's latest live test failed until a later one passes; fix
-it and test again (http-mcp skill), as often as it takes, since HTTP tests have no cap.<!-- pomerado:section testing.offline-fixtures -->
+(publication skill).<!-- pomerado:section testing.offline-fixtures -->
 
 - pureFiles: parsers/calculation with ordinary files and meaningful assertions.<!-- pomerado:section testing.saved-targets -->
 - liveBrowser: authorized fresh observation for real-site behavior. Optional read
   smoke checks do not grant purchases, cart additions, uploads, holds or autosave.
 
-Choose cases that catch actual risk: applied filters, account scope, IDs, units,
-authoritative empty versus absent/loading data, private-input variation, partial
-coverage, schema failures, variants and changed terms. Avoid assertions that merely
+Choose cases that catch actual risk: applied filters, IDs, units, authoritative empty
+versus absent/loading data, partial coverage, schema failures, variants and changed
+terms. Avoid assertions that merely
 copy implementation expressions.
 Report actual passed/failed/skipped/unsupported counts and missing evidence; an
 all-skipped suite proves nothing. Never fabricate absent response bodies or assets.

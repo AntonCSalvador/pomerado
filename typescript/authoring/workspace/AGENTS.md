@@ -55,18 +55,19 @@ the source files, never captures.
   (`rg -n 'text' captures/`). Omit `workdir` or use `/workspace` or `.`; other workdirs, PTYs
   and `runAs` are rejected. Node, `rg` and the standard Unix tools are available.
   `reference/offline-commands.md` has the details.
-- `execute` runs your code with the host-bound input, or on a read's live test with your own
-  `testInput`, on a supplied facility: `liveBrowser`,
+- `execute` runs your code with the host-bound input, or on a live test of a read signed out
+  with your own `testInput`, on a supplied facility: `liveBrowser`,
   `savedDOM`, `savedHTTP` or `pureFiles`. Every execution receives fresh Guardian review; no
   per-click review is needed. When the host-bound input is empty (`{}`), write the tool's
   input from the request and the owner's answers and pass it as `exampleInput` (JSON text) on
   a read's example, or on each write act step that needs it (the first act step that passes it
   fixes it, and later steps repeat it or omit it and run it); each of its keys must be a schema
   input, required where the request needs it, and publication decodes that input.
-- `live_tests` runs a read's live tests when the host offers it: the cases you design in
-  `test/cases.json` from what you saw on the site, and every result, run in parallel batches on
-  fresh browsers. Design them as soon as you know the page and its inputs, and read
-  .agents/testing/SKILL.md first.
+- `live_tests` runs the live tests of a read signed out when the host offers it: the cases you
+  design in `test/cases.json` from what you saw on the site, and every result, run in parallel
+  batches on fresh browsers, on `src/tool.mjs` and on `src/tool-http.mjs`, each version keeping
+  its own results. Design them as soon as you know the page and its inputs, and read
+  .agents/testing/SKILL.md first. A signed-in read and a write run no live tests.
 - `retain_capture`, `finish_build` and `request_input` are described below and in their
   tool descriptions.
 - `report_blocked` ends the build as blocked when its task is impossible as asked (below).
@@ -190,8 +191,9 @@ HTTP version (`src/tool-http.mjs`), which may build its requests from the caller
 
 **Read back every input before returning.** Read the page's own display of each input the
 site shows, such as the date picker, selected time, party size, passengers, cabin, applied
-filters, sort and selected options, and refuse a mismatch: the tool's code fails the run
-(`OperationFailure`) and never returns results for an input that did not apply. Three cases
+filters, sort and selected options, and refuse a mismatch: the tool throws `InputNotApplied`
+(.agents/core/SKILL.md) and never returns results for an input that did not apply; a control
+the tool could not find or read is `OperationFailure`. Three cases
 return results with what applied instead: a number on a scale the site steps returns its applied
 bound, a filter group the page disables for the results is reported as not offered, and a value
 the page's choices do not hold returns the rows of a broader choice that covers it
@@ -199,10 +201,8 @@ the page's choices do not hold returns the rows of a broader choice that covers 
 URL the tool built, a URL parameter, a box checked before the site applied it or the option's
 name elsewhere on the page does not show an input applied; read the site's committed state, such
 as the applied chip, the selected control or the results' own state, and compare its text with
-the input, or the option a proper noun matched, normalized for case and whitespace. A location
-the caller supplied that did not apply throws `LocationNotApplied` instead
-(.agents/core/SKILL.md). A detail read also checks the page's stable identity
-(.agents/core/SKILL.md). Building or repairing a search or listing tool: read
+the input, or the option a proper noun matched, normalized for case and whitespace. A detail
+read also checks the page's stable identity (.agents/core/SKILL.md). Building or repairing a search or listing tool: read
 .agents/search/SKILL.md before you settle its inputs.
 
 **Load large content progressively.** Know a file's size before reading it:<!-- pomerado:section agents.file-lengths --> every `read_source` result gives
@@ -458,13 +458,16 @@ write's task is done once, in its act session, and uncertain private-field submi
 fenced, regardless of the read flag. An authentication submission with an unknown outcome is
 always fenced.
 
-Testing a read is your job, never the caller's (.agents/testing/SKILL.md). A read signed out
-designs its own cases at the start, from what it saw on the site: different real values unlike
-the example's, smart combinations and edge cases. It refines them once the example passes, and
-runs as many as it needs, in parallel batches. A signed-in read
-runs up to four live tests with an input you choose (`testInput`), spent on the riskiest controls.
-Finish in this order: your last edit, the cases again, then the example last, before
-`finish_build`. Report skipped, unsupported or missing bodies honestly.
+Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md). It designs
+its own cases at the start, from what it saw on the site: different real values unlike the
+example's, smart combinations and edge cases. It refines them once the example passes, and runs
+as many as it needs, in parallel batches, and runs the same cases as a batch on its HTTP version.
+Finish in this order: your last edit, the cases again on each version, then the example last, before
+`finish_build`. A signed-in read and a write do the original task: the read's example, or the
+write's act session, is the one run that proves the tool. They design no tests and run no live
+tests or offline test suites beyond it, and check their HTTP version once, against that run.
+The scope follows what the tool is now: a read that signs in or becomes a write keeps to the one
+run from then on, and a repair that rebuilds one as a read signed out tests it fully. Report skipped, unsupported or missing bodies honestly.
 
 <!-- pomerado:section agents.implementations -->
 

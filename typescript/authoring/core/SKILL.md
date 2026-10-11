@@ -10,7 +10,14 @@ inputs, desired result and permitted effects. A read build explores, then iterat
 script from a clean start by running its example until it works (re-running a read's
 example is normal); resolve its missing choices with reads when possible. A write build
 does the caller's requested task once, live (in as many write steps as it takes), then
-composes its script from what happened (the `writes` skill). Credentials and sign-in codes
+composes its script from what happened (the `writes` skill). Only a read signed out designs
+and runs tests beyond its example, live test cases included (the `testing` skill). A signed-in
+read proves its tool with its example and a write with its act session; neither reads the
+`testing` skill or designs further tests, and each checks its HTTP version once, against that
+run. The scope follows what the tool is now, not what the build started as: a read that signs in
+or becomes a write, in a new build or a repair, keeps to the one run from then on, and a repair
+that rebuilds a signed-in tool or a write as a read signed out tests it fully. Credentials and
+sign-in codes
 belong to the host; never request a password, cookie or TOTP seed in model-visible text.
 
 Asking the caller follows `AGENTS.md` ("Try hard, then ask").
@@ -91,17 +98,23 @@ pomerado:section core.execute-calls:end -->
 - Check every rule the input alone breaks before any site action, such as a check-out on or
   before its check-in, a count below one or a date before yesterday in UTC, and throw
   `InvalidInput` at once, starting "Caller input error:" and naming the field and the rule.
-- When the page does not apply a location the caller supplied, such as a ZIP code, address or
-  store, after the tool's bounded retries, throw
-  `new errors.LocationNotApplied(message, { field, requested, applied, step, siteMessage })`:
-  `field` the input's name, `requested` the caller's value, `applied` the location the page kept
+  Hold in the input schema every rule it can express. The caller-input skill, "Validate it,
+  and fail with the right error", lists the rules and when to throw each error.
+- When the page does not apply a valid value the caller supplied, such as a location, store,
+  filter, sort or date it ignored, reset or replaced with its own, after the tool's bounded
+  retries, throw
+  `new errors.InputNotApplied(message, { field, requested, applied, step, siteMessage })`:
+  `field` the input's name, `requested` the caller's value, `applied` the value the page kept
   as read back (left out when it shows none), `step` the tool's step that failed, such as
-  `set_location`, and `siteMessage` the page's own error when it showed one. The run then fails
-  and returns nothing for another place. Never report the location as not applied in the output
-  instead, such as a `zip_applied: false` flag or a "lookup-only" description, and never let an
-  answer to a question make a supplied location optional. When the site says it does not serve
-  the location, that is the caller's to fix: throw `InvalidInput` with `field` and `available`,
-  the places it offers.
+  `set_location` or `apply_sort`, and `siteMessage` the page's own error when it showed one.
+  The run then fails and returns nothing computed without the caller's value. Never report the
+  value as not applied in the output instead, such as a `zip_applied: false` flag or a
+  "lookup-only" description, and never let an answer to a question make a supplied value
+  optional. On a write, check it before the first commit step: a write that may already have
+  changed the site still ends as a possible change, never retried. A value the site does not
+  offer, such as a location it says it does not serve, is the caller's to fix: throw
+  `InvalidInput` with `field` and `available`. `errors.LocationNotApplied` is an older name for
+  the same error; write `InputNotApplied`.
 - After a write, call `verified()` with no argument just before returning, once a call has
   read the result back, either the site's confirmation for this submission or the saved state.
   Return the confirmation number or record in the output. Without it the write stays a
@@ -131,8 +144,8 @@ that asks.
   the next, such as a seating label or a room name, shouldn't decide whether the tool books or
   refuses unless the caller chose it.
 - Read results for every option the schema lists. When an option leads to a page that
-  differs from the others, handle that layout too and run it live (testing skill); never
-  return results for another option in its place.
+  differs from the others, handle that layout too, and on a read signed out run it live as a
+  test case (testing skill); never return results for another option in its place.
 - A repair that finds a declared input broken, never applied or always reported unsupported
   fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract
   means every input and output it declares works, not leaving a broken one as it was.
@@ -209,7 +222,7 @@ that asks.
   cart tool alike, and when it does, make it an optional input, such as `zip_code`, or `store`
   when the site offers stores. Set it on every run through the site's
   own location control, take the site's matching suggestion, read the applied location back
-  from the page and return it. When it does not apply, throw `LocationNotApplied` (above).
+  from the page and return it. When it does not apply, throw `InputNotApplied` (above).
   Left unset, return the location the page shows and say in the
   description that the site picks it, which can differ from run to run. While building, ask
   the owner for one (`AGENTS.md`, "Try hard, then ask"); they may skip it. Skipping that
@@ -413,7 +426,11 @@ that depends on them:
    choice. Compare text read back with the caller's value normalized, or for a proper noun with
    the option it matched: ignore case, repeated whitespace and typographic punctuation such as
    curly quotes, never exact case-sensitive equality, since a page may echo a query or name in
-   its own case.
+   its own case. When the page kept another value after the tool's bounded retries, throw
+   `InputNotApplied` (above); never read on with the page's value. A number snapped to the
+   nearest step inside the caller's bound and returned as applied, a filter group the page
+   disables reported as not offered, and a broader choice that covers the value (search skill)
+   are not unapplied inputs.
 4. Read. Only then read the values the choices affect. Return the applied choices beside
    them. Return a group's offered options as a list when the page shows them without extra
    clicks, as a record page shows its variants, or when the caller asks (search skill).
@@ -661,9 +678,9 @@ Never recreate a write or login to recover an observation. See
 `references/native-page.ts` for a site-guarded read.
 
 The tools and the files you may edit are in `AGENTS.md`. The host binds the caller's actual input/account; no tool
-argument selects another account or private reference. A live read test's `testInput` is
-the one input you choose, with public values only (.agents/testing/SKILL.md). Every new
-command/probe/execution gets Guardian review<!-- pomerado:section core.tools-and-files -->.
+argument selects another account or private reference. A live test's `testInput`, on a
+read signed out only, is an input you choose, with public values only
+(.agents/testing/SKILL.md). Every new command/probe/execution gets Guardian review<!-- pomerado:section core.tools-and-files -->.
 Nested Playwright actions do not each trigger review. A probe operation still receives the host-bound business
 input. Its declared schema must accept that input even when the bounded observation
 does not use every field; do not replace it with an empty or probe-only schema.

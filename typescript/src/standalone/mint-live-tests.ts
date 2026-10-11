@@ -156,7 +156,7 @@ export const localLiveTests = (state: MintState): LiveTestHost => {
           }
           cases.push({ ...(yield* runLiveTestCase(testCase, runInput)), lane: 0 });
         }
-        // One history entry for the batch, which never counts toward a signed-in read's tests.
+        // One history entry for the batch.
         yield* context.recorded(
           { purpose: "test", target: "liveBrowser", input: "agent_chosen_batch" },
           Effect.succeed({

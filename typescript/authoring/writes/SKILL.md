@@ -190,8 +190,9 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   A step that never calls `verified` does not end a session.
 
 Once the session has started, a live `explore` or `test` is refused, and a write
-build never runs a live `example`. Offline checks stay available: `pureFiles` for
-helpers, `savedDOM` against the session's captures.
+build never runs a live `example`. The session is the one run that proves the write: design
+no tests and build no offline test suite for it. Its HTTP version gets one offline replay of
+the session (http-mcp skill), and the testing skill is not for a write.
 
 ## Compose and publish
 
@@ -303,7 +304,7 @@ Perform the authorized task once through live `act` steps, preserving the shared
 
 Keep steps small and read the actual state after each submission. A button named Continue, Next or Save may save a draft, persist that page, or finish the task immediately; its label does not establish that another review or final submit follows. Mark only the step whose click saves or submits. Opening or filling an unsaved form is not a commit step. Mark every such step, including autosaves, saved form steps and payment submissions whose next screen is unknown: call `enteringCommit("place-order")` right before the execute call that can send the change and declare the names in order as `write.commits`. Use the same marked helper in the session and the composed script. If a call returns an unexpected page or fails while waiting for an assumed review, read back before another submission: the task may already be complete.
 
-Compose `src/tool.mjs` from the original reviewed steps and confirming observation. You may check source/schema and pure helpers offline, but never run the composed write live again. Call `finish_build` with its confirming `executionId`, declared entrypoint and honest coverage. It returns integration files/schemas. When a write's outcome remains uncertain, report that uncertainty and preserve the no-replay rule.
+Compose `src/tool.mjs` from the original reviewed steps and confirming observation. Design no tests for it, and never run the composed write live again. Call `finish_build` with its confirming `executionId`, declared entrypoint and honest coverage. It returns integration files/schemas. When a write's outcome remains uncertain, report that uncertainty and preserve the no-replay rule.
 
 If the composed contract names the wrong commit marks, correct it to match the marks the session actually entered. If the completed session entered no marks, it cannot finish: changing its source or entering a mark in a later read cannot show that the earlier commit was marked. End the build and explain that the task completed but its commit steps were not marked; never repeat the write to add them.
 

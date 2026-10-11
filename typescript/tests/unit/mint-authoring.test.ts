@@ -293,7 +293,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   // next value, so the minter reads it off the page.
   [
     "core",
-    "never just the example's value. The example's values are one case, never limits. - Prefer keying only on what the caller asked for. A detail that changes from one listing to the next, such as a seating label or a room name, shouldn't decide whether the tool books or refuses unless the caller chose it. - Read results for every option the schema lists. When an option leads to a page that differs from the others, handle that layout too and run it live (testing skill); never return results for another option in its place. - A repair that finds a declared input broken, never applied or always reported unsupported fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract means every input and output it declares works, not leaving a broken one as it was. - Never derive a format from one sample: not an input format, an element key, a selector, a URL path or a label. A key the page showed for the example's value says nothing about the next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read the format off the page for the value you need, such as the day cell whose visible label or accessible name is the caller's date, or a key the page itself lists, never a key rebuilt from the one you saw. - Inputs are values a caller knows",
+    "never just the example's value. The example's values are one case, never limits. - Prefer keying only on what the caller asked for. A detail that changes from one listing to the next, such as a seating label or a room name, shouldn't decide whether the tool books or refuses unless the caller chose it. - Read results for every option the schema lists. When an option leads to a page that differs from the others, handle that layout too, and on a read signed out run it live as a test case (testing skill); never return results for another option in its place. - A repair that finds a declared input broken, never applied or always reported unsupported fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract means every input and output it declares works, not leaving a broken one as it was. - Never derive a format from one sample: not an input format, an element key, a selector, a URL path or a label. A key the page showed for the example's value says nothing about the next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read the format off the page for the value you need, such as the day cell whose visible label or accessible name is the caller's date, or a key the page itself lists, never a key rebuilt from the one you saw. - Inputs are values a caller knows",
   ],
   // The minter reads the never-loosened needed values, the facts a caller could use, typed output
   // and kept rows before it writes the schema and the parser, so a fact the code could not read
@@ -356,9 +356,9 @@ const formerSections: readonly (readonly [string, string])[] = [
   ["pagination", "The host signs every cursor and checks it before the next run starts"],
   ["writes", "- The first `act` step claims the build's write."],
   ["publication", "- **Login URL.** A signed-in tool publishes the `loginUrl` you signed in from, and every run opens it."],
-  ["workspace/AGENTS.md", "Testing a read is your job, never the caller's (.agents/testing/SKILL.md)."],
+  ["workspace/AGENTS.md", "Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md)."],
   ["workspace/AGENTS.md", "- `src/`: your operation. It exists from the start and is empty until you write to it"],
-  ["testing", "Choose cases that catch actual risk: applied filters, account scope, IDs, units"],
+  ["testing", "Choose cases that catch actual risk: applied filters, IDs, units, authoritative empty"],
   ["testing", "Where the host offers `live_tests`, a read signed out has no limit on live tests, and the host runs them for you in parallel."],
 ];
 
@@ -726,17 +726,17 @@ it("renders the pinned standalone authoring", async () => {
     ...skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name]),
     ...[...guide.files].map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["400d66ffa7cc56ed04992b5f5d0448c6ff1eca66559f85dffacc68a807096468", "core"],
-    ["48a6032f7b7c5ea73a9e5e24dde7b5ed56e4b78152cbf1aa7c72a7fc5ad57293", "search"],
-    ["44d7e901c447b4d03ff10c94954d8c5381cf811de647d0474478e7babd453515", "auth"],
-    ["9dec1255475d3048d681d566e723d2c63cb71b10eafc4bef4d3522916027aeb2", "testing"],
-    ["ef7377693db446a9b7ffde2888c508e9f670b5e850710b7b87274d33ba2e1552", "pagination"],
-    ["383c75f4ebe9c8c8933b3e6cf1d9fc15033e990a68a88e0f8fab76008d9c41fc", "forms"],
-    ["c3ed43b2b64e83b242d23f928ac495ce5ef092d51e6c41c6d7e94d3109087ab9", "writes"],
+    ["520b967aed9f89134886f84d9fe2ce9563d342ef4e17e5127333999667376e4c", "core"],
+    ["1efca9b1b5ce56096befc0c13df347228c111e6ab6e1dca7ddcfd30cbfd19f98", "search"],
+    ["4b9f115a5e58daf028404a8803376055a60f8269e8f9a06735662f0f11520dad", "auth"],
+    ["9a6bab49fd138beb664ba684b947f36ed8d36829ccba9bab430a946c3043bd0a", "testing"],
+    ["ab913e2169b9be4ac767df8a88b29cf2e3e5f28779f29bfe9d7e175f07e56f8d", "pagination"],
+    ["43cf97950c0308efe8ee1646beb5b1140509426f0f81508c270564c3d95cf3f0", "forms"],
+    ["0d190cd56153dea9ce4462c6ea828a5e7a830c0eeea418fadafb60f8abdbf98a", "writes"],
     ["0bc4d6c765154139547ec2e4500d14bbd1d086995fdd6b385b8f53f4e7ae7255", "cart"],
-    ["8871b4fde517d50e97b1f9eacfff413c9a9b4224151f353d00a2a6f0ae547d91", "caller-input"],
-    ["e6220d6f99f8dbd8c8961dd043e046edb58fd9398ec578f104600a296bd7fed6", "publication"],
-    ["923e01bf92744901b0d05dd5da9004ef245107354eb0b144e91a38ebac2e35b6", "workspace/AGENTS.md"],
+    ["2cf40e3117e08f6b929b9d092e0f381851e11b1158c8f900c5730b16d1310a1a", "caller-input"],
+    ["c0334ed4d84ac4c807e108dcc3d0560ca7049fbb12013e03062d222dacce3655", "publication"],
+    ["78f0163caa806bea87680e5960af0f0251a12b48c436f788a8f2d204c9bc21b8", "workspace/AGENTS.md"],
     ["e023d1b6f7bc3673118d4310d9813cfa878c554b68a353413e73592054d2704d", "workspace/README.md"],
   ]);
 });
