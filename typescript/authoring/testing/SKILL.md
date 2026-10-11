@@ -133,9 +133,9 @@ publication reads the schemas from current source, and only a changed flow needs
 - liveBrowser: authorized fresh observation for real-site behavior. Optional read
   smoke checks do not grant purchases, cart additions, uploads, holds or autosave.
 
-Choose cases that catch actual risk: applied filters, account scope, IDs, units,
-authoritative empty versus absent/loading data, private-input variation, partial
-coverage, schema failures, variants and changed terms. Avoid assertions that merely
+Choose cases that catch actual risk: applied filters, IDs, units, authoritative empty
+versus absent/loading data, partial coverage, schema failures, variants and changed
+terms. Avoid assertions that merely
 copy implementation expressions.
 Report actual passed/failed/skipped/unsupported counts and missing evidence; an
 all-skipped suite proves nothing. Never fabricate absent response bodies or assets.

@@ -358,7 +358,7 @@ const formerSections: readonly (readonly [string, string])[] = [
   ["publication", "- **Login URL.** A signed-in tool publishes the `loginUrl` you signed in from, and every run opens it."],
   ["workspace/AGENTS.md", "Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md)."],
   ["workspace/AGENTS.md", "- `src/`: your operation. It exists from the start and is empty until you write to it"],
-  ["testing", "Choose cases that catch actual risk: applied filters, account scope, IDs, units"],
+  ["testing", "Choose cases that catch actual risk: applied filters, IDs, units, authoritative empty"],
   ["testing", "Where the host offers `live_tests`, a read signed out has no limit on live tests, and the host runs them for you in parallel."],
 ];
 
@@ -729,13 +729,13 @@ it("renders the pinned standalone authoring", async () => {
     ["6dbf3d6c4f9c2350d352e9aabfe7a64590142e6a68a2f89455162fc30b4ee15e", "core"],
     ["7388018fd882348872f730aed731c65015fe09ef320a89bd733aa5549cecb748", "search"],
     ["4b9f115a5e58daf028404a8803376055a60f8269e8f9a06735662f0f11520dad", "auth"],
-    ["4d2bf7906b1e32d4f4ef4b0ba6a16aaa1d2bbb904259d6b753fb8240a2bfc40f", "testing"],
+    ["b280dc1e6d5f5c83b0169dea75cc04cf3892501bc3f46f9e68557995176b9497", "testing"],
     ["57579c997ce5e7e795be3fb1e348a47252b906b3d96fa542a2ce32008d4d7bf0", "pagination"],
-    ["383c75f4ebe9c8c8933b3e6cf1d9fc15033e990a68a88e0f8fab76008d9c41fc", "forms"],
+    ["43cf97950c0308efe8ee1646beb5b1140509426f0f81508c270564c3d95cf3f0", "forms"],
     ["0d190cd56153dea9ce4462c6ea828a5e7a830c0eeea418fadafb60f8abdbf98a", "writes"],
     ["0bc4d6c765154139547ec2e4500d14bbd1d086995fdd6b385b8f53f4e7ae7255", "cart"],
     ["bcf2c2d8cebae229466169182c4815a2bce91e82fbdd6fd0543b36153ec387f4", "caller-input"],
-    ["8feb2e15202b2e54b2a63e6a60eb1fa6bfbbfb4f023b9087ec826b59d5c11bf2", "publication"],
+    ["c0334ed4d84ac4c807e108dcc3d0560ca7049fbb12013e03062d222dacce3655", "publication"],
     ["a086c5cdcfe8bdee9c21c34c67ace9f5ae601823ac9731c9c94bfeefadb42a4e", "workspace/AGENTS.md"],
     ["e023d1b6f7bc3673118d4310d9813cfa878c554b68a353413e73592054d2704d", "workspace/README.md"],
   ]);

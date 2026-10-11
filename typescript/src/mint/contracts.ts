@@ -1368,10 +1368,15 @@ export interface ExampleJournal {
 export interface MintHarnessSnapshot {
   readonly executions: readonly ExecutionEvidence[];
   /**
-   * Each live test case's latest result, so a takeover keeps them. Optional, so a rollout's old
-   * and new workers each restore the other's checkpoint.
+   * Each live test case's latest result on the Playwright version, so a takeover keeps them.
+   * Optional, so a rollout's old and new workers each restore the other's checkpoint.
    */
   readonly liveTests?: readonly LiveTestRecord[];
+  /**
+   * The same for the HTTP version. A field of its own, so a worker from an older release, which
+   * keeps no HTTP results, drops them rather than restoring them as the Playwright version's.
+   */
+  readonly liveTestsHttp?: readonly LiveTestRecord[];
   /**
    * Whether the attempt ran out of time for live tests: a batch refused for time, or a case
    * stopped by a batch deadline the attempt's end set.
@@ -1543,6 +1548,7 @@ const HarnessTerminal = Schema.Struct({
 export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.Struct({
   executions: Schema.Array(ExecutionEvidence),
   liveTests: Schema.optionalWith(Schema.Array(LiveTestRecord), { exact: true }),
+  liveTestsHttp: Schema.optionalWith(Schema.Array(LiveTestRecord), { exact: true }),
   liveTestsOutOfTime: Schema.optionalWith(Schema.Boolean, { exact: true }),
   outcomeWrites: Schema.optionalWith(Schema.Array(OutcomeWrite), { exact: true }),
   purposes: Schema.Array(
