@@ -2434,21 +2434,30 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const acceptedAnswers: unknown[] = [];
       /**
        * The digest of what `entrypoint`'s import closure holds in the workspace now, without
-       * paths; undefined when it cannot be read.
+       * paths; undefined when it cannot be read, and a failed read is reported to the host.
        */
       const stepDigest = (entrypoint: string) =>
-        Effect.promise(async () => {
-          try {
+        Effect.tryPromise({
+          try: async () => {
             const files = await readImportClosure(async (path) => {
               if ((await session.pathExists?.(path)) === false) return undefined;
               const text: unknown = await session.readFile?.({ path });
               return typeof text === "string" ? text : undefined;
             }, entrypoint);
             return files.size === 0 ? undefined : contentDigest(files);
-          } catch {
-            return undefined;
-          }
-        });
+          },
+          catch: (error) => error,
+        }).pipe(
+          Effect.catchAll((error) =>
+            reportFailure(error, {
+              component: "mint",
+              operation: "stepDigest",
+              phase: "source_digest",
+              subCause: "mint_host_dependency_failed",
+              correlation: dependencies.reportCorrelation ?? "process",
+            }).pipe(Effect.as(undefined)),
+          ),
+        );
       /** A write Guardian labelled, as the outcome reviewer tracks it. */
       const trackedWrite = (
         executionId: string,
