@@ -19,8 +19,10 @@ import type { AutofillSlot, Targets } from "./autofill-step.js";
  *   was typed into before that inspection, only the site's and configured sign-in origins
  *   themselves, since page code may have put a typed value in any path or query). A password or recovery code is found inside any text
  *   (`match: "within"`); a code only where no digit adjoins it, nor a letter when the code has one
- *   (`"token"`), since a short one turns up inside a timestamp by chance. Both ignore case, since a
- *   URL's host is lowercased as it is parsed.
+ *   (`"token"`), since a short one turns up inside a timestamp by chance. A step's code fields are
+ *   one code, their values joined in field order, so a code split into one-character boxes is found
+ *   whole and never one character at a time. Both ignore case, since a URL's host is lowercased as
+ *   it is parsed.
  * - A refused submit event is canceled. `form.submit()` fires no submit event, but its entry
  *   list's `formdata` event comes once the browser fixed the method and action; it cannot be
  *   canceled, so the guard stops the event, empties the entry list and takes the form out of the
@@ -51,11 +53,12 @@ export const submissionGuardCode = `(field, { key, call, actions, match, submit,
         return text;
       }
     };
-    // Each secret as typed, or as the page left it in its field.
+    // Each secret as typed, or as the page left it in its fields, a code's fields joined in order.
     const secrets = () =>
-      guard.secrets.flatMap(({ element, typed, token }) =>
-        [typed, element.value]
-          .filter((value) => typeof value === "string" && value !== "")
+      guard.secrets.flatMap(({ parts, token }) =>
+        [parts.map(({ typed }) => typed), parts.map(({ element }) => element.value)]
+          .map((values) => values.map((value) => (typeof value === "string" ? value : "")).join(""))
+          .filter((value) => value !== "")
           .map((value) => ({ value: value.toLowerCase(), token })),
       );
     const carriedIn = (text, { value, token }) => {
@@ -162,7 +165,12 @@ export const submissionGuardCode = `(field, { key, call, actions, match, submit,
   const judgedGet = submitInForm ? submitGet && submitted !== null && formOf(field) === submitted : fieldGet;
   if (judgedGet) return false;
   guard.fields.push(field);
-  if (match !== null) guard.secrets.push({ element: field, typed: field.value, token: match === "token" });
+  if (match === null) return true;
+  // A step's code fields are one code, which the host arms in field order.
+  const part = { element: field, typed: field.value };
+  const code = match === "token" ? guard.secrets.find(({ token }) => token) : undefined;
+  if (code === undefined) guard.secrets.push({ parts: [part], token: match === "token" });
+  else code.parts.push(part);
   return true;
 }`;
 
@@ -177,8 +185,9 @@ const guardKey = `__pomerado_submission_${randomUUID()}`;
 /**
  * The secrets the submission guard also finds by value, beyond the fields themselves: a password
  * or recovery code inside any text, a code only where no digit adjoins it, since a short one turns
- * up inside a timestamp by chance. A date part or a ZIP is never matched by value, since a
- * dropdown's or a hidden field's own value may hold one.
+ * up inside a timestamp by chance. The guard joins a step's `"token"` fields, its code's, into one
+ * code. A date part or a ZIP is never matched by value, since a dropdown's or a hidden field's own
+ * value may hold one.
  */
 const secretMatch: Partial<Record<AutofillSlot, "within" | "token">> = {
   password: "within",

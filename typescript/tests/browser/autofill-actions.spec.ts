@@ -840,6 +840,137 @@ for (const [where, onclick, changed, actionOrigin] of [
     expect(JSON.stringify([report, { ...report.failureDetail }])).not.toContain(code);
   });
 
+// A code some screens split into one-character boxes, one digit typed into each. Its tests type
+// into up to seven fields, so they get more time.
+const boxCode = "482913";
+const boxesStep: AutofillStep = {
+  fields: Array.from(boxCode, (_, index) => ({ selector: `#box${index}`, slot: "code" as const })),
+  submit: "#continue",
+};
+const boxes = Array.from(
+  boxCode,
+  (_, index) =>
+    `<input id="box${index}" name="box${index}" inputmode="numeric" maxlength="1" aria-label="Digit ${index + 1}">`,
+).join("");
+/** A flow ID in the action's path, and a step in its query, where digits of the code stand alone. */
+const flowAction = "/verify/a4e7f2c9-1b3d-4f5a-9c2e-d8b1e3f9a4c2?step=2";
+
+/**
+ * A code screen whose form posts to `flowAction` and whose Verify button runs `onclick`, inspected
+ * once the host typed into the page earlier in the sign-in, so only the site's own origin exempts a
+ * value and the action's path and query never do, then filled with `values`.
+ */
+const fillAfterTyping = async (
+  page: Page,
+  controls: string,
+  step: AutofillStep,
+  values: readonly string[],
+  onclick: string,
+  passwordField = false,
+) => {
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(request.url()));
+  const received = await serve(
+    page,
+    `${controls}<button id="continue" onclick="${onclick}">Verify</button>
+<script>document.forms[0].action = ${JSON.stringify(flowAction)};</script>`,
+    passwordField,
+  );
+  const host = await hostPage(page);
+  const inspection = await Effect.runPromise(
+    inspectAutofillStep({
+      step,
+      page: host,
+      siteOrigin: site,
+      authenticationOrigins: [],
+      judgedBeforeTyping: [],
+    }),
+  );
+  if ("outcome" in inspection) throw new Error(`Inspection refused: ${inspection.reason}`);
+  const report = await Effect.runPromise(
+    fillAutofillStep({
+      step,
+      values,
+      inspection,
+      page: host,
+      keyboard: (await hostKeyboard(page)).keyboard,
+      settleMs: 500,
+    }),
+  );
+  return { report, received, requested, host };
+};
+
+// A step's code fields are one code, their values joined in field order, found as a code in one
+// field is: a box's lone digit is no code, and the whole code is found wherever it stands alone.
+for (const [layout, controls, step, values, joined] of [
+  [
+    "six one-character boxes",
+    boxes,
+    boxesStep,
+    [...boxCode],
+    "Array.from(this.form.querySelectorAll('[name^=box]'), (box) => box.value).join('')",
+  ],
+  [
+    "one field",
+    '<label>Code<input id="code" name="code" inputmode="numeric"></label>',
+    codeStep,
+    [boxCode],
+    "this.form.code.value",
+  ],
+] as const) {
+  test(`a code in ${layout} signs in after typing when some of its digits stand alone in the action`, async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    const { report, received, host } = await fillAfterTyping(page, controls, step, values, "");
+    expect(report).toMatchObject({ outcome: "filled", submit: "clicked" });
+    expect(received.map((form) => [...form.values()].join(""))).toEqual([boxCode]);
+    expectNotCarried(host.calls, boxCode);
+  });
+
+  test(`a code in ${layout} the click handler puts whole in the action's query is refused as it fires`, async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    const { report, received, requested } = await fillAfterTyping(
+      page,
+      controls,
+      step,
+      values,
+      `this.form.action = '/verify?otp=' + ${joined}`,
+    );
+    expect(requested.filter((url) => url.includes(boxCode))).toEqual([]);
+    expect(received).toEqual([]);
+    expect(report).toMatchObject({
+      submit: "refused",
+      clicked: true,
+      failureDetail: {
+        context: { changed: "submission.action", submissionActionOrigin: site },
+      },
+    });
+    expect(JSON.stringify([report, { ...report.failureDetail }])).not.toContain(boxCode);
+  });
+}
+
+test("a password beside one-character code boxes is still found on its own", async ({ page }) => {
+  test.setTimeout(90_000);
+  const { report, received, requested } = await fillAfterTyping(
+    page,
+    boxes,
+    { fields: [...passwordStep.fields, ...boxesStep.fields], submit: "#continue" },
+    [password, ...boxCode],
+    "this.form.action = '/verify?p=' + encodeURIComponent(this.form.password.value)",
+    true,
+  );
+  expect(carrying(requested)).toEqual([]);
+  expect(received).toEqual([]);
+  expect(report).toMatchObject({
+    submit: "refused",
+    clicked: true,
+    failureDetail: { context: { changed: "submission.action", submissionActionOrigin: site } },
+  });
+});
+
 // A private answer is found inside any text, like a password: the guard finds it even where
 // letters adjoin it in a path.
 test("a private answer the click handler puts inside the action's path is refused as it fires", async ({
