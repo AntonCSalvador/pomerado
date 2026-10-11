@@ -322,24 +322,28 @@ describe("run outcomes", () => {
   });
 });
 
-describe("a location the page did not apply", () => {
-  const location = { field: "zip", requested: "00001", step: "store_save" };
+describe("an input the page did not apply", () => {
+  const unapplied_input = { field: "zip", requested: "00001", step: "store_save" };
   const failed = (evidence: Partial<RunEvidence>): RunEvidence => ({
     status: "completed",
     effect: "not_started",
     output: "failed",
     tool_effect: "read",
-    failure_reason: "location_not_applied",
-    location,
+    failure_reason: "input_not_applied",
+    unapplied_input,
     ...evidence,
   });
 
   it.each([
     { name: "a read", evidence: {} },
     { name: "a write that sent nothing", evidence: { tool_effect: "write", effect: "rejected" } },
+    {
+      name: "a record an earlier release kept as location_not_applied",
+      evidence: { failure_reason: "location_not_applied" },
+    },
   ] as const)("may run again with the same request for $name", ({ evidence }) => {
     expect(classifyRun(failed(evidence))).toMatchObject({
-      code: "location_not_applied",
+      code: "input_not_applied",
       retry: "same_key",
       possibleCommit: false,
     });
@@ -359,7 +363,7 @@ describe("a location the page did not apply", () => {
     },
   ] as const)("never offers $name a same-request retry", ({ evidence, ...expected }) => {
     const outcome = classifyRun(failed(evidence));
-    expect(outcome?.code).not.toBe("location_not_applied");
+    expect(outcome?.code).not.toBe("input_not_applied");
     expect(outcome?.retry).not.toBe("same_key");
     if ("code" in expected) expect(outcome?.code).toBe(expected.code);
   });

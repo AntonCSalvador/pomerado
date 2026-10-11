@@ -4,6 +4,8 @@ const runnerErrorCodes = [
   "CredentialsRejected",
   "SourceLoadFailed",
   "InvalidInput",
+  "InputNotApplied",
+  // An older runtime's name for the same refusal.
   "LocationNotApplied",
   "InvalidOutput",
   "BrowserFailure",

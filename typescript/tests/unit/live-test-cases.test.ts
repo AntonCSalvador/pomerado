@@ -103,6 +103,8 @@ describe("judgeCase", () => {
       outcome: { status: "failed" as const, errorClass, frame: "src/tool.mjs:40" },
       durationMs: 1,
     });
+    expect(judgeCase({ expect: "error" }, failed("InputNotApplied"), undefined).verdict).toBe("pass");
+    // An older runtime's name for the same refusal.
     expect(judgeCase({ expect: "error" }, failed("LocationNotApplied"), undefined).verdict).toBe("pass");
     expect(judgeCase({ expect: "error" }, failed("TimeoutError"), undefined).verdict).toBe("fail");
     // Only a declared refusal is the loud failure a case expects; a code bug never passes.

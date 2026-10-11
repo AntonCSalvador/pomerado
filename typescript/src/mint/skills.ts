@@ -65,7 +65,7 @@ const catalog = [
   {
     name: "caller-input",
     description:
-      "Ask the run's caller mid-run for what only they know: a choice only the page offers, or a code the site sends",
+      "Read before settling any tool's inputs and errors: what the input schema holds, the rules checked before touching the site, InvalidInput versus InputNotApplied, and asking the run's caller mid-run for what only they know",
     references: ["caller-choice.ts", "caller-code.ts"],
   },
   {

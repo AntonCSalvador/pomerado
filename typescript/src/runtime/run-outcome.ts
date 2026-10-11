@@ -126,7 +126,7 @@ export interface RunEvidence {
   readonly failure_reason?: string | undefined;
   /** The run's own judgement that a step may have changed the website. */
   readonly possible_commit?: boolean | undefined;
-  /** The tool's or the site's own words, for a refused input or a location the page did not apply. */
+  /** The tool's or the site's own words, for a refused input or an input the page did not apply. */
   readonly refusal_reason?: string | undefined;
   /** The input a refusal named, when the tool named it. */
   readonly refusal_field?: string | undefined;
@@ -136,12 +136,12 @@ export interface RunEvidence {
   readonly refusal_kind?: string | undefined;
   /** The login field the website rejected. */
   readonly rejected_field?: string | undefined;
-  /** The location the caller supplied that the page did not apply, and what it kept instead. */
-  readonly location?: RunLocationEvidence | undefined;
+  /** The input the caller supplied that the page did not apply, and what it kept instead. */
+  readonly unapplied_input?: RunUnappliedInputEvidence | undefined;
 }
 
-/** A location the page did not apply, as a run's record keeps it. */
-export interface RunLocationEvidence {
+/** An input the page did not apply, as a run's record keeps it. */
+export interface RunUnappliedInputEvidence {
   readonly field: string;
   readonly requested: string;
   readonly applied?: string | undefined;
@@ -162,7 +162,7 @@ export const runOutcomeCodes = [
   "no_response",
   "credentials_rejected",
   "input_rejected",
-  "location_not_applied",
+  "input_not_applied",
   "login_identity_conflict",
   "website_sign_in_unavailable",
   "worker_lost",
@@ -177,7 +177,7 @@ export const runOutcomeRetry: { readonly [Code in RunOutcomeCode]: RunRetryClass
   no_response: "new_key",
   credentials_rejected: "fix_input",
   input_rejected: "fix_input",
-  location_not_applied: "same_key",
+  input_not_applied: "same_key",
   login_identity_conflict: "fix_input",
   website_sign_in_unavailable: "same_key",
   worker_lost: "same_key",
@@ -229,8 +229,8 @@ const lostWorker = (view: RunEvidence): RunFailure =>
     ? failure("worker_lost")
     : failure("outcome_unknown");
 
-/** A location that did not apply ends a run that may run again: a read, or a site left untouched. */
-const locationRetryable = (view: RunEvidence) =>
+/** An input that did not apply ends a run that may run again: a read, or a site left untouched. */
+const unappliedRetryable = (view: RunEvidence) =>
   view.possible_commit !== true &&
   !unsettledEffect(view) &&
   (view.tool_effect === "read" || view.effect === "not_started" || view.effect === "rejected");
@@ -252,25 +252,29 @@ export const runError = (view: RunEvidence): RunFailure => {
           : { available: view.refusal_available }),
         ...(view.refusal_kind === undefined ? {} : { kind: view.refusal_kind }),
       });
-    case "location_not_applied":
+    case "input_not_applied":
+    // A record an earlier release kept under the location-only reason.
+    case "location_not_applied": {
       // Only a read or an untouched site may run again as is; a write that applied or may have,
       // or a run that judged a step may have committed, keeps its own outcome.
-      if (!locationRetryable(view)) break;
-      return failure("location_not_applied", {
+      if (!unappliedRetryable(view)) break;
+      const unapplied = view.unapplied_input;
+      return failure("input_not_applied", {
         possible_commit: false,
         ...(view.refusal_reason === undefined ? {} : { reason: view.refusal_reason }),
-        ...(view.location === undefined
+        ...(unapplied === undefined
           ? {}
           : {
-              field: view.location.field,
-              requested: view.location.requested,
-              ...(view.location.applied === undefined ? {} : { applied: view.location.applied }),
-              step: view.location.step,
-              ...(view.location.site_message === undefined
+              field: unapplied.field,
+              requested: unapplied.requested,
+              ...(unapplied.applied === undefined ? {} : { applied: unapplied.applied }),
+              step: unapplied.step,
+              ...(unapplied.site_message === undefined
                 ? {}
-                : { site_message: view.location.site_message }),
+                : { site_message: unapplied.site_message }),
             }),
       });
+    }
     case "login_identity_conflict":
       return failure("login_identity_conflict", {});
     case "login_check_unavailable":

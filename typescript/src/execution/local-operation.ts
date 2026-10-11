@@ -11,7 +11,7 @@ import type { CommitMark } from "../runtime/context.js";
 import type { InputIssue } from "../runtime/errors.js";
 import type {
   InputRefusalDetail,
-  LocationNotAppliedDetail,
+  InputNotAppliedDetail,
 } from "../runtime/operation-failure.js";
 import type { ScriptQuestionDeclarations } from "../runtime/script-input.js";
 import { asksAsDeclared } from "./declared-questions.js";
@@ -97,8 +97,8 @@ export class LocalOperationFailure extends Error {
   readonly sessionLoss?: "session_not_kept";
   /** The input a script's `InvalidInput` named and the choices the page offers for it. */
   readonly refusal?: InputRefusalDetail;
-  /** The location a script's `LocationNotApplied` named and what the page kept instead. */
-  readonly location?: LocationNotAppliedDetail;
+  /** The input a script's `InputNotApplied` named and what the page kept instead. */
+  readonly unapplied?: InputNotAppliedDetail;
   /** The authored source line that threw, such as `src/tool.mjs:12`, when the child named one. */
   readonly frame?: string;
   constructor(
@@ -112,7 +112,7 @@ export class LocalOperationFailure extends Error {
       readonly reported?: boolean;
       readonly sessionLoss?: "session_not_kept";
       readonly refusal?: InputRefusalDetail;
-      readonly location?: LocationNotAppliedDetail;
+      readonly unapplied?: InputNotAppliedDetail;
       readonly frame?: string;
     } = {},
   ) {
@@ -120,7 +120,7 @@ export class LocalOperationFailure extends Error {
     this.reported = options.reported ?? true;
     if (options.sessionLoss !== undefined) this.sessionLoss = options.sessionLoss;
     if (options.refusal !== undefined) this.refusal = options.refusal;
-    if (options.location !== undefined) this.location = options.location;
+    if (options.unapplied !== undefined) this.unapplied = options.unapplied;
     if (options.frame !== undefined) this.frame = options.frame;
   }
 }
@@ -306,7 +306,7 @@ const handleTerminalMessage = (
           {
             ...(message.sessionLoss === undefined ? {} : { sessionLoss: message.sessionLoss }),
             ...(message.refusal === undefined ? {} : { refusal: message.refusal }),
-            ...(message.location === undefined ? {} : { location: message.location }),
+            ...(message.unapplied === undefined ? {} : { unapplied: message.unapplied }),
             ...(message.frame === undefined ? {} : { frame: message.frame }),
           },
         ),

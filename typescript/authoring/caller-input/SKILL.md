@@ -1,9 +1,56 @@
 ---
 name: caller-input
-description: Ask the run's caller mid-run for what only they know, such as a choice only the page offers or a code the site sends, then continue in place.
+description: Validate the caller's input, refuse a bad value or fail on one the page did not apply with the right error, and ask the run's caller mid-run for what only they know, such as a choice only the page offers or a code the site sends.
 ---
 
-# Ask the caller during a run
+# Caller input
+
+## Validate it, and fail with the right error
+
+A published tool is an API: every caller reads its input schema and acts on its errors. Refuse a
+bad value before the tool touches the site, and fail loudly whenever the run cannot return what
+the caller asked for. Never return results computed without a value the caller supplied.
+
+1. Express in the input schema everything it can hold, so the host refuses a bad value before
+   the script runs: each field's type, an enum of the site's full set of options, a minimum and
+   maximum for numbers, counts and lengths, a format such as a date-only `CalendarDate` or a
+   pattern for a code, and which fields are required.
+2. Check every rule the schema cannot hold before any site action, and throw
+   `new errors.InvalidInput(message, { field })` at once, starting "Caller input error:" and
+   naming the field and the rule. Such rules include:
+   - an end date on or after its start date, and a check-out after its check-in;
+   - a date the task rules out, such as a departure before yesterday in UTC;
+   - a count within the site's own limits, such as a party size or quantity the site caps,
+     found while building and stated in the message;
+   - inputs that exclude each other, such as a store and a ZIP code where the site takes one;
+   - at least one of a set the tool needs one of, such as a record's number or its name.
+3. Throw the error that matches what happened:
+   - `InvalidInput`: the caller's value is wrong or the site does not offer it. It breaks a rule
+     above, is not among the options the page lists, or names something the site says it does
+     not serve, such as a location. Pass `field`, and `available`, every option the page offers
+     as selectable, exactly as shown, whenever the page lists them. The caller corrects the
+     input and runs again.
+   - `InputNotApplied`: the value is valid and the site offers it, but the page did not apply
+     it after the tool's bounded retries. It ignored, reset or replaced the value, such as a
+     location, store, filter, sort or date, and the read-back shows its own default or another
+     value (core skill, "Configure, then read"). Throw
+     `new errors.InputNotApplied(message, { field, requested, applied, step, siteMessage })`
+     as the core skill says. A read, or a run that left the site untouched, may run again with
+     the same request.
+   - An option the page lists but greys out, such as a booked date or a sold-out size, on a
+     read: not an error. Return it unavailable, with the page's reason and alternatives, and the
+     run succeeds. A write throws `InvalidInput` with `available` instead.
+   - A write whose steps may have changed the site and then failed or could not confirm the
+     change: let it end as a possible change, which is never retried. Never throw
+     `InvalidInput` or `InputNotApplied` to make it look untouched (writes skill).
+   - A control the tool could not find, open or read, or a page that changed: `OperationFailure`,
+     never `InvalidInput` or `InputNotApplied`.
+
+   Never pick another value for the caller, such as a near match, the page's default or the
+   first option, and never report a refused or unapplied value in the output instead of
+   throwing, such as a `sort_applied: false` flag or a "best-effort" description.
+
+## Ask the caller during a run
 
 Try first. Ask only for what the page or the caller uniquely knows at that point:
 

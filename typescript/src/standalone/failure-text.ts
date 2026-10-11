@@ -68,18 +68,22 @@ const sentences: {
       ),
     };
   },
-  location_not_applied: (outcome) => {
-    const [requested, applied, siteMessage] = [
+  input_not_applied: (outcome) => {
+    const [field, requested, applied, siteMessage] = [
+      detail(outcome, "field"),
       detail(outcome, "requested"),
       detail(outcome, "applied"),
       detail(outcome, "site_message"),
     ];
-    const location = requested === undefined ? "the requested location" : `location ${requested}`;
+    const value =
+      requested === undefined
+        ? "a value in the input"
+        : `${field === undefined ? "the value" : field} ${requested}`;
     return {
-      message: `The website did not apply ${location}${applied === undefined ? "" : `; the page stayed on ${applied}`}, so the run returned no results for another place.${siteMessage === undefined ? "" : ` The website said: ${siteMessage}`}`,
+      message: `The website did not apply ${value}${applied === undefined ? "" : `; the page kept ${applied}`}, so the run returned no results computed without it.${siteMessage === undefined ? "" : ` The website said: ${siteMessage}`}`,
       remediation: then(
         outcome,
-        "Run it again only when the website's message points to a passing problem; otherwise change the location in the input.",
+        "Run it again only when the website's message points to a passing problem; otherwise change that value in the input.",
       ),
     };
   },
