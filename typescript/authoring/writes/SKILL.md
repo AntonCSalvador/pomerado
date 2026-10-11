@@ -304,7 +304,7 @@ A script that throws `errors.InvalidInput` (core skill) fails as the caller's in
 mark is entered, the run reports that it changed nothing.
 
 See `references/write-session.ts` for two steps and the composed script, and
-`references/write-readback.ts` for a read-back confirmation tied to its submission.
+`references/write-readback.ts` for a write confirmed from its own commit request.
 <!-- pomerado:section writes.completion:start
 
 ## Standalone write completion
