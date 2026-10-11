@@ -92,16 +92,18 @@ export const CalendarDate = Schema.String.pipe(
 export const formControlsCode = String.raw`
 const formControlFailure = (reason) => Object.assign(new Error(reason), { name: "FormControlFailure" });
 /** Folds case, accents, spacing and punctuation, so "Joe’s Café" and "joes cafe" name the same option. */
-const formControlText = (text) =>
-  String(text ?? "")
+const formControlText = (text) => {
+  const folded = String(text ?? "")
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
     .normalize("NFC")
-    .replace(/['‘’ʼ]/g, "")
-    .replace(/[.,\-‐‑‒–—](?!\p{N})/gu, " ")
+    .replace(/(?<!\p{N})['‘’ʼ](?!\p{N})/gu, "")
+    .replace(/(?<!\p{N})[.,\-‐‑‒–—](?!\p{N})/gu, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+  return folded === "" ? String(text ?? "").trim() : folded;
+};
 const formControlFrame = async (control) => {
   const handle = await control.elementHandle();
   const frame = handle === null ? null : await handle.ownerFrame();

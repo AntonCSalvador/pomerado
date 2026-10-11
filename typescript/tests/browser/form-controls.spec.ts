@@ -431,6 +431,61 @@ test("chooseOption still folds a period or hyphen before a letter beside numbers
   expect(await submitted(page)).toEqual({ place: "2" });
 });
 
+// Punctuation next to a digit on either side belongs to the value, and a value of punctuation
+// alone names no option, not even one with an empty label.
+for (const [wanted, labels] of [
+  ["5-", ["5", "10"]],
+  ["5'10", ["510", "6'0"]],
+  ["-", ["", "Other"]],
+] as const)
+  test(`chooseOption finds no option for ${JSON.stringify(wanted)} among ${JSON.stringify(labels)}`, async ({
+    page,
+  }) => {
+    const options = labels.map((label, index) => `<option value="${"abc"[index]}">${label}</option>`);
+    await page.setContent(`<form><label>Height<select name="height">
+<option value="">Choose</option>${options.join("")}</select></label></form>`);
+    expect(
+      await call(page, `return await chooseOption(page.getByLabel("Height"), ${JSON.stringify(wanted)});`),
+    ).toEqual({ error: "option_missing" });
+    expect(await submitted(page)).toEqual({ height: "" });
+  });
+
+test("chooseOption still folds punctuation between letters beside a value with digits", async ({
+  page,
+}) => {
+  await page.setContent(`<form><label>Name<select name="name">
+<option value="">Choose</option><option value="1">St. Louis</option><option value="2">Saint-Denis</option>
+<option value="3">OBrien</option><option value="4">5'10</option><option value="5">1-5 years</option>
+</select></label></form>`);
+  const name = 'page.getByLabel("Name")';
+  expect(await call(page, `return await chooseOption(${name}, "St Louis");`)).toMatchObject({
+    result: { label: "St. Louis", value: "1" },
+  });
+  expect(await call(page, `return await chooseOption(${name}, "Saint Denis");`)).toMatchObject({
+    result: { label: "Saint-Denis", value: "2" },
+  });
+  expect(await call(page, `return await chooseOption(${name}, "O'Brien");`)).toMatchObject({
+    result: { label: "OBrien", value: "3" },
+  });
+  expect(await submitted(page)).toEqual({ name: "3" });
+});
+
+test("chooseOption keeps a value of punctuation alone as it is, never blank", async ({ page }) => {
+  await page.setContent(`<form><label>Code<select name="code">
+<option value="">Choose</option><option value="a"></option><option value="b">-</option>
+</select></label></form>`);
+  const code = 'page.getByLabel("Code")';
+  // "-" names the option labelled "-", never the one with an empty label.
+  expect(await call(page, `return await chooseOption(${code}, "-");`)).toEqual({
+    result: { shape: "select", label: "-", value: "b" },
+  });
+  // Blank stays blank and names nothing.
+  expect(await call(page, `return await chooseOption(${code}, "  ");`)).toEqual({
+    error: "option_missing",
+  });
+  expect(await submitted(page)).toEqual({ code: "b" });
+});
+
 test("a failure names its reason, never the value", async ({ page }) => {
   await page.setContent(`<form><label>Date of birth<input name="dob"></label>
 <label>Month<select name="month"><option>7</option></select></label></form>`);
