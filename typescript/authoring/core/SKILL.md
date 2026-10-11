@@ -96,9 +96,9 @@ pomerado:section core.execute-calls:end -->
   `new errors.LocationNotApplied(message, { field, requested, applied, step, siteMessage })`:
   `field` the input's name, `requested` the caller's value, `applied` the location the page kept
   as read back (left out when it shows none), `step` the tool's step that failed, such as
-  `store_save`, and `siteMessage` the page's own error when it showed one. The run then fails
+  `set_location`, and `siteMessage` the page's own error when it showed one. The run then fails
   and returns nothing for another place. Never report the location as not applied in the output
-  instead, such as `store_applied: false` or a "lookup-only" description, and never let an
+  instead, such as a `zip_applied: false` flag or a "lookup-only" description, and never let an
   answer to a question make a supplied location optional. When the site says it does not serve
   the location, that is the caller's to fix: throw `InvalidInput` with `field` and `available`,
   the places it offers.
@@ -157,6 +157,10 @@ that asks.
   it showed. With one, use it. With several, ask the caller which one with a declared choice
   question whose options are those matches as the site labels them
   (.agents/caller-input/SKILL.md).
+- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
+  match that accepts the usual forms of the same name, such as a city alone or with its
+  state and country, or a company with or without Ltd. or Inc. Never require an exact match.
+  When more than one option matches, list them for the caller instead of picking one.
 - On a write, every choice the session met is an input: each option on the path,
   add-ons and pre-selected defaults included. Make it required when the site requires
   a choice (a fare class) and optional when it does not (a seat). An unset optional input
@@ -177,8 +181,9 @@ that asks.
   purpose calls for, not only the ones the request names: record every control the flow
   offers that narrows, orders or configures what the tool returns as an optional input wired
   to its control, such as cabin class (economy or first) on a flight search, even when the
-  request never mentions it. Open collapsed groups, drawers and "more" links before you
-  decide what the page offers: a collapsed group is not an absent one. Leave out controls
+  request never mentions it, except a choice that was declined (below). Open collapsed
+  groups, drawers and "more" links before you decide what the page offers: a collapsed group
+  is not an absent one. Leave out controls
   unrelated to the purpose, such as a language switch or a newsletter opt-in on a search.
   Record such a field as an optional input whether or not you ask about it, since callers of
   the tool can set it. Ask about one only as `AGENTS.md` ("Try hard, then ask") allows; left
@@ -207,8 +212,10 @@ that asks.
   from the page and return it. When it does not apply, throw `LocationNotApplied` (above).
   Left unset, return the location the page shows and say in the
   description that the site picks it, which can differ from run to run. While building, ask
-  the owner for one (`AGENTS.md`, "Try hard, then ask"); they may skip it. Setting a location,
-  store or delivery or pickup mode in the run's own browser is part of the read, never a write,
+  the owner for one (`AGENTS.md`, "Try hard, then ask"); they may skip it. Skipping that
+  question only leaves the example without a location, and the input stays; saying the tool
+  should use no location declines it (below). Setting a location, store or delivery or pickup
+  mode in the run's own browser is part of the read, never a write,
   even through a Save button: the run's browser is fresh and discarded, so nothing is saved,
   and a tool that never signs in has no account to change. Saving a guest address signed out
   is part of the read too when it only sets the location; a step that also enters a name,
@@ -217,7 +224,7 @@ that asks.
 - A choice the request, the caller or the owner declined, or a step they said not to take (no
   location, no store, skip a filter, don't sign in), is not part of the tool for any caller:
   never offer it as an input, never set it in the example or a test, and never put it in
-  `exampleInput`. Note it as `declined` in `test/cases.json` (testing skill) and in coverage.
+  `exampleInput`. Note it in coverage.
 - When the caller input is empty (`{}`), write the tool's input from the request and the
   owner's answers, with dates normalized (10/4 is the next October 4, as `2026-10-04`), and
   pass it as `exampleInput`: on a read's example, or on each write act step that needs it. The
@@ -380,7 +387,10 @@ that depends on them:
    `new errors.InvalidInput(message, { field, available })` before any commit mark, with
    `field` the input's name and `available` every option the page currently offers as
    selectable, exactly as shown. Leave disabled, sold-out and other unselectable options out of
-   `available`, and say in the message that they were left out. Never pick a near match, the page's default or the first option.
+   `available`, and say in the message that they were left out. Never pick a near match, the
+   page's default or the first option; the same proper noun in another usual form is not a near
+   match (input schema above). A broader choice that covers the value, such as "Show all", is
+   allowed on a search (search skill).
    - An option the page lists but greys out, disables or marks unavailable, such as a booked
      date, a sold-out size or a full time slot: a read returns it as data, the requested value
      with `available: false`, the page's own reason when it shows one, and the alternatives the
@@ -400,9 +410,10 @@ that depends on them:
 3. Confirm. Read each choice back from the page's selected state, then wait for the values
    that depend on it with `waitForChange`: changed, or confirmed unchanged once the page's
    loading sign came and went; a value read before the page updates belongs to the previous
-   choice. Compare text read back with the caller's value normalized: ignore case, repeated
-   whitespace and typographic punctuation such as curly quotes, never exact case-sensitive
-   equality, since a page may echo a query or name in its own case.
+   choice. Compare text read back with the caller's value normalized, or for a proper noun with
+   the option it matched: ignore case, repeated whitespace and typographic punctuation such as
+   curly quotes, never exact case-sensitive equality, since a page may echo a query or name in
+   its own case.
 4. Read. Only then read the values the choices affect. Return the applied choices beside
    them. Return a group's offered options as a list when the page shows them without extra
    clicks, as a record page shows its variants, or when the caller asks (search skill).
@@ -605,6 +616,9 @@ then check that exactly one element matches; `waitForOutcome` checks it for the 
 returns. When several candidates remain, inspect them and choose by evidence such as
 section, accessible name and destination before clicking or waiting. A readiness wait targets one specific
 evidenced element or page state.
+
+Never search the open web, such as Google, to find the page a task needs. Make its URL an
+input and ask the caller for it.
 
 For a detail read whose input is the record's page URL, check that it is https on the tool's
 site and open it unchanged. Otherwise reach the record through the site's own search, list or
