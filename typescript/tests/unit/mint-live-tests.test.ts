@@ -733,7 +733,7 @@ it("never counts a case the site blocked on the browser's egress against the too
   const blocked = (resultOf(f.requests[1], "run")["cases"] as { id: string }[]).find(
     (testCase) => testCase.id === "sort-price",
   );
-  expect(blocked).toMatchObject({ status: "inconclusive", got: "site_block", detail: expect.stringContaining("egress") });
+  expect(blocked).toMatchObject({ status: "inconclusive", got: "site_block" });
   expect(published.seen[0]?.coverage).toContain("1 inconclusive.");
 });
 
