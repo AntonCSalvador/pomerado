@@ -18,6 +18,7 @@ import {
   FoundIn,
   locatedRefusal,
   namedAfterTyping,
+  namedOrigin,
   refused,
   Searched,
   targetEvidence,
@@ -27,6 +28,7 @@ import {
 } from "./autofill-refusal.js";
 import { sameSite, siteDomain } from "../runtime/same-site.js";
 import { trustedUrl } from "../runtime/sign-in-origins.js";
+import { type CardSlot, isCardSlot, onPaymentFrameOrigin } from "./payment-frames.js";
 import type { PageControls } from "./page-controls.js";
 import type {
   AutofillPopup,
@@ -54,6 +56,11 @@ export type ExtraSecretSlot = "date_of_birth" | "zip" | "recovery_code" | "priva
 export type SecretSlot = "password" | "code" | ExtraSecretSlot;
 /** The kind of value a sign-in field takes; the host fills it from the login of that kind. */
 export type AutofillSlot = IdentifierKind | SecretSlot;
+/**
+ * The kind of value a field the fill engine types takes: a sign-in field's, or a card-fill step's
+ * part of a payment card, which the host fills from the caller's card answer.
+ */
+export type FillSlot = AutofillSlot | CardSlot;
 
 /**
  * A field of a sign-in screen. An identifier field lists every kind it accepts (`accepts`, from the
@@ -61,9 +68,9 @@ export type AutofillSlot = IdentifierKind | SecretSlot;
  * one the login holds, by `identifierPreference`, or one the owner gave. A secret field names its
  * slot alone.
  */
-export interface AutofillField {
+export interface AutofillField<Slot extends FillSlot = AutofillSlot> {
   readonly selector: string;
-  readonly slot: AutofillSlot;
+  readonly slot: Slot;
   /** Observed question in the answer field's frame; supported only for private_answer. */
   readonly questionSelector?: string | undefined;
   readonly accepts?: readonly IdentifierKind[] | undefined;
@@ -104,10 +111,10 @@ export interface AutofillStepRequest {
  * One sign-in screen: the fields the host fills and the control it clicks. A screen that advances
  * by itself names no submit; a method choice or a "Next" names only one.
  */
-export interface AutofillStep {
+export interface AutofillStep<Slot extends FillSlot = AutofillSlot> {
   readonly popup?: AutofillPopup | undefined;
   readonly rejectedMarkers?: readonly RejectedMarker[] | undefined;
-  readonly fields: readonly AutofillField[];
+  readonly fields: readonly AutofillField<Slot>[];
   readonly submit?: string | undefined;
   /** A two-factor method choice: every method offered, and `submit` the one picked. */
   readonly methods?:
@@ -125,6 +132,10 @@ export interface AutofillSignedIn {
 /** Where a control sits and its form and link destinations: what the host judges before typing. */
 const Target = Schema.Struct({
   ownerUrl: Schema.NullOr(Schema.String),
+  /** The origin of each frame between the control's own frame and the top document, nearest first. */
+  ancestors: Schema.optional(Schema.Array(Schema.String)),
+  /** Its form's `method` attribute, or a control's `formmethod` attribute, says GET. */
+  explicitGet: Schema.optional(Schema.Boolean),
   documentOrigin: Schema.String,
   actions: Schema.Array(Schema.String),
   methods: Schema.Array(Schema.String),
@@ -249,6 +260,8 @@ export interface AutofillInspection {
   /** What the host judged the targets against, which each fill call judges them against again. */
   readonly siteOrigin: string;
   readonly authenticationOrigins: readonly string[];
+  /** The payment frame origins a card field may also sit in, for a card-fill step only. */
+  readonly paymentFrameOrigins?: readonly string[] | undefined;
   readonly screen: {
     /**
      * The origin of the frame the host found the step's controls in, its submit's or, when it
@@ -257,7 +270,7 @@ export interface AutofillInspection {
      */
     readonly origin: string;
     readonly fields: readonly (typeof Described.Type & {
-      readonly slot: AutofillSlot;
+      readonly slot: FillSlot;
       readonly accepts?: readonly IdentifierKind[] | undefined;
       readonly format?: DateOfBirthFormat | undefined;
     })[];
@@ -282,7 +295,7 @@ export type AutofillStepReport =
   | {
       readonly outcome: "filled";
       readonly fields: readonly {
-        readonly slot: AutofillSlot;
+        readonly slot: FillSlot;
         readonly status: AutofillFieldStatus;
       }[];
       /**
@@ -359,29 +372,63 @@ export interface AutofillPage {
 /**
  * The first control that sits or submits off the site and its configured sign-in origins, or a
  * field still to be typed (from index `from`) that takes no typing: where its own frame, document,
- * form actions and link destination are, naming only `named` origins once anything was typed.
+ * form actions and link destination are, naming only `named` origins once anything was typed. A
+ * field for a part of a payment card may also sit in a frame on one of `paymentFrameOrigins`,
+ * exactly; no other field ever counts one as trusted.
  */
 export const untrustedTarget = (
   targets: typeof Targets.Type,
-  step: AutofillStep,
-  trust: { readonly siteOrigin: string; readonly authenticationOrigins: readonly string[] },
+  step: AutofillStep<FillSlot>,
+  trust: {
+    readonly siteOrigin: string;
+    readonly authenticationOrigins: readonly string[];
+    readonly paymentFrameOrigins?: readonly string[] | undefined;
+  },
   from: number,
   named?: ReadonlySet<string>,
 ) => {
-  const trusted = (url: string) => trustedUrl(trust.siteOrigin, trust.authenticationOrigins, url);
-  const untrustedPart = (target: Target, action: string) => {
-    if (!trusted(target.ownerUrl ?? "")) return "frame";
-    if (!trusted(target.documentOrigin)) return "document_origin";
-    return target.actions.every(trusted) ? undefined : action;
+  const trusted = (url: string, card: boolean) =>
+    trustedUrl(trust.siteOrigin, trust.authenticationOrigins, url) ||
+    (card && onPaymentFrameOrigin(url, trust.paymentFrameOrigins ?? []));
+  const untrustedPart = (target: Target, action: string, card = false) => {
+    if (!trusted(target.ownerUrl ?? "", card)) return "frame";
+    if (!trusted(target.documentOrigin, card)) return "document_origin";
+    return target.actions.every((url) => trusted(url, card)) ? undefined : action;
   };
-  const refusedAt = (index: number | "submit", target: Target, part: string) =>
+  /**
+   * A card field's own checks: every frame above its own is on the site or on its own frame's
+   * origin, so no frame off them wraps a payment frame; and off a payment frame, its form never
+   * says GET (`explicitGet`), which would put the card in an address.
+   */
+  const cardPart = (target: Target) => {
+    const own = urlOrigin(target.ownerUrl ?? "");
+    const wrapping = (target.ancestors ?? []).find(
+      (origin) => origin !== own && !trusted(origin, false),
+    );
+    if (wrapping !== undefined) return { part: "ancestor_frame", ancestorOrigin: namedOrigin(wrapping, named) };
+    const inPaymentFrame = onPaymentFrameOrigin(target.ownerUrl ?? "", trust.paymentFrameOrigins ?? []);
+    return !inPaymentFrame && target.explicitGet === true ? { part: "form_method" } : undefined;
+  };
+  const refusedAt = (
+    index: number | "submit",
+    target: Target,
+    part: string,
+    evidence: Readonly<Record<string, string>> = {},
+  ) =>
     withCheck(refused("credential_target_refused", index), "destination", {
       part,
       ...targetEvidence(target, named),
+      ...evidence,
     });
   for (const [index, target] of targets.fields.entries()) {
-    const part = untrustedPart(target, "form_action");
+    const card = isCardSlot(step.fields[index]?.slot);
+    const part = untrustedPart(target, "form_action", card);
     if (part !== undefined) return refusedAt(index, target, part);
+    const carded = card ? cardPart(target) : undefined;
+    if (carded !== undefined) {
+      const { part: cardCheck, ...evidence } = carded;
+      return refusedAt(index, target, cardCheck, evidence);
+    }
     // A date also goes into an enabled select or dropdown, which takes a choice, not typing.
     const choosable =
       step.fields[index]?.slot === "date_of_birth" &&
@@ -405,12 +452,15 @@ export const untrustedTarget = (
  * submits by GET is allowed when it is clearly the login form, which Guardian judges; its values
  * land in a URL that stays byte-exact. Once the host typed into the page
  * (`judgedBeforeTyping` given), a refusal names only the origins `namedAfterTyping` allows.
+ * A step with a part of a payment card (a card-fill step) is refused unless the primary tab's top
+ * document is on the site, and its card fields may sit in a frame on `paymentFrameOrigins`.
  */
 export const inspectAutofillStep = (input: {
-  readonly step: AutofillStep;
+  readonly step: AutofillStep<FillSlot>;
   readonly page: AutofillPage;
   readonly siteOrigin: string;
   readonly authenticationOrigins: readonly string[];
+  readonly paymentFrameOrigins?: readonly string[] | undefined;
   readonly judgedBeforeTyping?: readonly string[] | undefined;
 }): Effect.Effect<AutofillRefusal | AutofillInspection> =>
   Effect.gen(function* () {
@@ -442,6 +492,15 @@ export const inspectAutofillStep = (input: {
     const found = inspected.right;
     const named = namedAfterTyping(input);
     if ("error" in found) return locatedRefusal(found, named);
+    const top = URL.parse(found.url);
+    if (
+      step.fields.some((field) => isCardSlot(field.slot)) &&
+      (top === null || !sameSite(siteOrigin, top))
+    )
+      return withCheck(refused("credential_target_refused"), "top_document", {
+        part: "top_document",
+        ...foundEvidence(found.url, undefined, named),
+      });
     const targets = {
       fields: found.fields.map(({ target }) => target),
       submit: found.submit === null ? null : found.submit.target,
@@ -463,6 +522,9 @@ export const inspectAutofillStep = (input: {
       targets,
       siteOrigin,
       authenticationOrigins,
+      ...(input.paymentFrameOrigins === undefined
+        ? {}
+        : { paymentFrameOrigins: input.paymentFrameOrigins }),
       screen: {
         origin: frame ? urlOrigin(frame) : "",
         fields: found.fields.map(({ described }, index) => {

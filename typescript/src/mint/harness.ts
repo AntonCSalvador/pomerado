@@ -68,9 +68,11 @@ import {
 } from "../guardian/task-update.js";
 import { siteDomain } from "../runtime/same-site.js";
 import { validateSignedInMarker } from "../destinations/signed-in-marker.js";
+import { isCardSlot } from "../destinations/payment-frames.js";
 import { finiteCaptureGap, finiteRunnerFailure } from "./runner-failure.js";
 import { isSecretHandle } from "./secret-handles.js";
 import { fileReadbackRule } from "./file-readback.js";
+import { cardReadbackRule } from "./card-readback.js";
 import type {
   AcceptedTaskUpdate,
   AllowedExecution,
@@ -1343,7 +1345,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             answers: visibleAnswers,
           });
           yield* reviewer.taskUpdated("The caller answered a question.");
-          const handles = Object.values(answers).some((answer) => answer.type === "secret");
+          const cardQuestion = (id: string) =>
+            submitted.questions.some(
+              (question) =>
+                question.id === id && question.type === "secret" && isCardSlot(question.secretKind),
+            );
+          const secretIds = Object.entries(answers)
+            .filter(([, answer]) => answer.type === "secret")
+            .map(([id]) => id);
+          const card = secretIds.some(cardQuestion);
+          // A card answer never goes into source, so the source handle rule is only for the rest.
+          const handles = secretIds.some((id) => !cardQuestion(id));
           if (askAgain !== undefined)
             return JSON.stringify({
               status: "answered",
@@ -1353,7 +1365,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           return JSON.stringify({
             status: "answered",
             answers: visibleAnswers,
-            instruction: `The caller answered. Continue in this attempt with these answers; verify the current page before acting on them, and before any further write.${handles ? " A secret answer is a handle such as {{secret.s1}}, never the value, which you never see. Write the handle exactly as given, as the whole string literal passed as the value to fill, type or pressSequentially, or as a field of a request to this site, in the Playwright code of a kernel.browsers.playwright.execute call in explore, test or act source; the host fills in the value when it runs that source live, and masks it in what comes back. It refuses a handle anywhere else, such as in a variable, a concatenation, a transform, a return value or a navigation. Offline targets get the handle text unchanged. An example and published source never hold a handle: a value the finished tool needs at run time is a declared secret question it asks with ask." : ""}`,
+            instruction: `The caller answered. Continue in this attempt with these answers; verify the current page before acting on them, and before any further write.${handles ? " A secret answer is a handle such as {{secret.s1}}, never the value, which you never see. Write the handle exactly as given, as the whole string literal passed as the value to fill, type or pressSequentially, or as a field of a request to this site, in the Playwright code of a kernel.browsers.playwright.execute call in explore, test or act source; the host fills in the value when it runs that source live, and masks it in what comes back. It refuses a handle anywhere else, such as in a variable, a concatenation, a transform, a return value or a navigation. Offline targets get the handle text unchanged. An example and published source never hold a handle: a value the finished tool needs at run time is a declared secret question it asks with ask." : ""}${card ? " A card answer (card_number, card_expiry, card_cvc, billing_postal_code) is never written in source: run an execution with purpose card_fill, target liveBrowser, entrypoint operation/card-fill-step.json and cardFillStep naming each card field's own selector, on the page or inside the payment provider's frame, with the card handle for it; the host types the values and clicks nothing." : ""}`,
           });
         });
       /** `handedBack`: the execution's unanswered script question went back to the minter. */
@@ -4398,6 +4410,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     error.reason,
                     {},
                     `Not published: the source moves or reads a file outside the host's file service. Rule: ${fileReadbackRule}. Remove that code, then call finish_build again.`,
+                  );
+                if (error.reason === "card_readback")
+                  return notPublished(
+                    error.code,
+                    error.reason,
+                    {},
+                    `Not published: the source fills a card and could read it back. Rule: ${cardReadbackRule}. Remove that code, then call finish_build again.`,
                   );
                 if (
                   error.reason === "session_token_literal" ||

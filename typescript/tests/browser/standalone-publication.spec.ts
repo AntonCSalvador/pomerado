@@ -246,6 +246,51 @@ test("finish_build refuses a saved file of any extension that holds a secret han
   }
 });
 
+// Code beside a fillCard that could read a typed card back never publishes, though nothing ran it.
+test("finish_build refuses source that fills a card and could read it back", async () => {
+  test.setTimeout(60_000);
+  const site = await headingSite();
+  const guardian = recordingGuardian();
+  try {
+    const { built, last } = await mint({
+      effect: "read",
+      url: site.url,
+      guardian,
+      turns: [
+        () => patch({ "src/tool.mjs": headingTool }),
+        () => [call("execute", execution("example", "src/tool.mjs"), "example")],
+        // After the example: an export nothing runs fills a card and reads the page's markup.
+        () => [
+          {
+            type: "apply_patch_call",
+            callId: "patch_pay",
+            status: "completed",
+            operation: {
+              type: "update_file",
+              path: "src/tool.mjs",
+              diff: `@@\n-});\n+});\n+export const pay = async ({ fillCard }, page) => {\n+  await fillCard({ fields: [{ selector: "#number", handle: "{{card.c1}}" }] });\n+  return page.content();\n+};\n`,
+            },
+          },
+        ],
+        (request) => finish(request, "finish", "example"),
+      ],
+    });
+    expect(built.build, JSON.stringify(built)).not.toBe("published");
+    const refused = toolResult(last, "finish");
+    expect(refused).toMatchObject({
+      status: "not_published",
+      code: "PublicationUnavailable",
+      reason: "card_readback",
+    });
+    expect(JSON.stringify(refused)).toContain(
+      "Not published: the source fills a card and could read it back. Rule: a card stays with the host",
+    );
+    expect(publications(guardian.reviews)).toHaveLength(0);
+  } finally {
+    await site.close();
+  }
+});
+
 // A tool saved with no questions recorded is one saved before builds recorded them, which a run
 // reads from its source. A new tool that declares none records an empty set instead.
 test("a published read that declares no questions records an empty question set", async () => {

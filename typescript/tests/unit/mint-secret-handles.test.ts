@@ -531,3 +531,78 @@ describe("secretHandleRefusal", () => {
     ).toBeUndefined();
   });
 });
+
+describe("card handles", () => {
+  const card = () => {
+    const handles = makeSecretHandles();
+    handles.issue(
+      {
+        number: { type: "secret", value: "4242424242424242" },
+        code: { type: "secret", value: "551234" },
+      },
+      { number: "card_number", code: "one_time_code" },
+    );
+    return handles;
+  };
+  const cardSource = kernelStep(
+    'await page.frameLocator("iframe").getByLabel("Card number").fill("{{secret.s1}}");',
+  );
+
+  it("records each card answer's kind and nothing for other secrets", () => {
+    const handles = card();
+    expect(handles.kindOf("{{secret.s1}}")).toBe("card_number");
+    expect(handles.kindOf("{{secret.s2}}")).toBeUndefined();
+    expect(handles.cardValues(["{{secret.s1}}"])).toEqual(["4242424242424242"]);
+    expect(handles.cardValues(["{{secret.s1}}", "{{secret.s2}}"])).toBeUndefined();
+    expect(handles.cardValues(["{{secret.s7}}"])).toBeUndefined();
+  });
+
+  it("refuses a card handle anywhere in source, even in a site-input sink", () => {
+    const files = new Map([["explore/card.mjs", cardSource]]);
+    expect(
+      secretHandleRefusal(
+        card(),
+        files,
+        { purpose: "explore", target: "liveBrowser", entrypoint: "explore/card.mjs" },
+        site,
+      ),
+    ).toBe(
+      "explore/card.mjs line 4: {{secret.s1}} is a card answer, which never goes into source. Type it with a card-fill step: operation/card-fill-step.json, run with purpose card_fill. Nothing was executed.",
+    );
+  });
+
+  it("never fills a card handle into source", () => {
+    const files = new Map([["explore/card.mjs", cardSource]]);
+    expect(card().fill(files, site).get("explore/card.mjs")).toBe(cardSource);
+  });
+
+  it("keeps an OTP handle working as before", async () => {
+    const files = new Map([
+      ["explore/code.mjs", kernelStep('await page.getByLabel("Code").fill("{{secret.s2}}");')],
+    ]);
+    const handles = card();
+    expect(
+      secretHandleRefusal(
+        handles,
+        files,
+        { purpose: "explore", target: "liveBrowser", entrypoint: "explore/code.mjs" },
+        site,
+      ),
+    ).toBeUndefined();
+    expect(await sentToSite(handles.fill(files, site).get("explore/code.mjs") ?? "")).toEqual([
+      ["getByLabel", "Code"],
+      ["fill", "551234"],
+    ]);
+  });
+
+  it("keeps card kinds across a snapshot and restores an older snapshot without them", () => {
+    const restored = makeSecretHandles(
+      Schema.decodeUnknownSync(SecretHandlesSnapshot)(JSON.parse(JSON.stringify(card().snapshot()))),
+    );
+    expect(restored.kindOf("{{secret.s1}}")).toBe("card_number");
+    const older = makeSecretHandles(
+      Schema.decodeUnknownSync(SecretHandlesSnapshot)([["{{secret.s1}}", "private-code"]]),
+    );
+    expect(older.kindOf("{{secret.s1}}")).toBeUndefined();
+  });
+});

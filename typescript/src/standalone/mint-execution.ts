@@ -36,8 +36,12 @@ import {
   draftQuestionDeclarations,
 } from "../mint/draft-questions.js";
 import { secretHandleRefusal } from "../mint/secret-handles.js";
+import { runCardFill } from "../destinations/card-fill.js";
+import { paymentFrameOrigins } from "../destinations/payment-frames.js";
+import { screenMintText } from "../mint/workspace.js";
 import { fileHandleRefusal } from "../mint/file-handles.js";
 import { fileReadbackRefusal } from "../mint/file-readback.js";
+import { cardReadbackRefusal } from "../mint/card-readback.js";
 import { makeLocalFileHook } from "../execution/local-files.js";
 import { makeRunFiles } from "../runtime/file-transfer.js";
 import { stepInput } from "../mint/step-checks.js";
@@ -65,6 +69,7 @@ import {
 } from "./script-answer-reuse.js";
 import { error, mintError } from "./errors.js";
 import { mintSessionSignInFailure, type SessionSignInFailed } from "./session-sign-in.js";
+import { sessionCardFill } from "./card-fill.js";
 type Execution = Parameters<MintDependencies["reviewAndExecute"]>[0];
 type BeforeDispatch = Parameters<MintDependencies["reviewAndExecute"]>[1];
 /**
@@ -537,6 +542,7 @@ const authoredExecution = (
       secretHandleRefusal(handles, files, execution, context.siteOrigin) ??
       fileHandleRefusal(files, execution) ??
       fileReadbackRefusal(files, execution, state.fileHandles.files.length > 0) ??
+      cardReadbackRefusal(files, execution, handles.issuedCard()) ??
       draftQuestionDeclarationFailure(execution.entrypoint, entrypointSource);
     if (refusal !== undefined) return unsupported(refusal);
     const selected = yield* stepInput(execution, {
@@ -563,7 +569,7 @@ const authoredExecution = (
     // finished that sign-in: it counts as the proof, as a code the host fills does. Only a typing
     // call that delivered the code's value in a frame on the site or a configured sign-in origin
     // and completed counts, never the source text.
-    const known = new Map(handles.snapshot());
+    const known = new Map(handles.snapshot().map(([handle, value]) => [handle, value]));
     const codes =
       execution.purpose === "explore" && live
         ? context.signInCodes().flatMap((handle) => known.get(handle) ?? [])
@@ -662,6 +668,7 @@ const authoredExecution = (
                       signIn: state.sessionSignIn.hook((failure) => {
                         signInFailure ??= failure;
                       }),
+                      cardFill: sessionCardFill(state.session, context.siteOrigin),
                     }
                   : {}),
                 ...(runFiles === undefined ? {} : { files: runFiles }),
@@ -713,13 +720,73 @@ const authoredExecution = (
       }).pipe(Effect.scoped),
     );
   });
+/**
+ * A host card-fill step: the caller's card answers typed into the checkout's card fields on the
+ * build's browser, once Guardian allowed the step and its screen, which hold handles only. It
+ * clicks nothing; what it typed may reach the payment provider, so a step that typed is possible.
+ */
+const executeCardFill = (
+  state: MintState,
+  step: ExecutionRequest["cardFillStep"],
+  beforeDispatch: BeforeDispatch,
+) =>
+  Effect.gen(function* () {
+    const { context, handles } = state;
+    const { browser, projection, signInTyping } = state.session;
+    const id = randomUUID();
+    if (step === undefined)
+      return unsupported(
+        "A card_fill execution names the card fields and their card handles in cardFillStep. Nothing was executed.",
+      );
+    const outcome = yield* runCardFill({
+      step,
+      handles,
+      page: browser,
+      keyboard: browser.keyboard,
+      siteOrigin: context.siteOrigin,
+      // Once the host typed into the page, a refusal names only the site's and the listed origins.
+      judgedBeforeTyping: signInTyping.typed ? [...paymentFrameOrigins] : undefined,
+      review: (source) =>
+        screenMintText({ projection }, source).pipe(
+          Effect.flatMap((text) =>
+            context.review(
+              {
+                entrypoint: "operation/card-fill-step.json",
+                sources: new Map([["operation/card-fill-step.json", text]]),
+                input: {},
+                currentExecution: { purpose: "card_fill", target: "liveBrowser" },
+              },
+              "not_sent",
+            ),
+          ),
+          Effect.flatMap(allowedOf),
+          Effect.flatMap((allowed) => beforeDispatch?.(allowed) ?? Effect.void),
+        ),
+      beforeTyping: () => Effect.void,
+    });
+    if (outcome.status !== "refused" && outcome.typed) signInTyping.typed = true;
+    yield* context.observe;
+    const typed = outcome.status !== "refused" && outcome.typed;
+    return {
+      executionId: id,
+      status: outcome.status === "filled" ? ("completed" as const) : ("failed" as const),
+      effect: typed || outcome.status === "uncertain" ? ("possible" as const) : ("not_sent" as const),
+      observations: yield* projection.json(JSON.parse(outcome.observations)),
+    };
+  });
+
 export const mintExecution =
   (state: MintState): MintDependencies["reviewAndExecute"] =>
   (execution, beforeDispatch, journal) => {
     const perform: Effect.Effect<ExecutionEvidence, Error> =
       execution.purpose === "command"
         ? executeCommand(state, execution, beforeDispatch)
-        : execution.purpose === "authenticate" && execution.signInStep !== undefined
+        : execution.purpose === "card_fill"
+          ? state.context.recorded(
+              { purpose: "card_fill", target: "liveBrowser" },
+              executeCardFill(state, execution.cardFillStep, beforeDispatch),
+            )
+          : execution.purpose === "authenticate" && execution.signInStep !== undefined
           ? state.context.recorded(
               { purpose: "authenticate", target: "liveBrowser" },
               executeAuthentication(

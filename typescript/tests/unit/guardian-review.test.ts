@@ -11,6 +11,7 @@ import {
 } from "../../src/guardian/execution-policy.js";
 import type { GuardianExecutionEnvironment } from "../../src/guardian/execution-policy.js";
 import { makeOpenAIReviewer } from "../../src/guardian/openai.js";
+import { paymentFrameOrigins } from "../../src/destinations/payment-frames.js";
 import { ReviewFailure, makeGuardian } from "../../src/guardian/review.js";
 import type { PendingExecution, Reviewer, ReviewTurn } from "../../src/guardian/review.js";
 import { UpstreamPolicySlotInvalid } from "../../src/guardian/upstream-policy.js";
@@ -774,5 +775,23 @@ describe("OpenAI reviewer policy and trusted authority", () => {
       { scheme: "https", registrableDomain: "site.invalid" },
     ]);
     expect(input).not.toHaveProperty("trusted_execution_context.currentPage");
+  });
+
+  it("gives every execution review the exact payment frame origins", async () => {
+    const requests = readThenDecide({
+      outcome: "allow",
+      rationale: "Guarded on the site.",
+      action: "read",
+    });
+    await Effect.runPromise(
+      makeGuardian(reviewer("Synthetic upstream {{ tenant_policy_config }}")).review(
+        pending,
+        readEntrypoint,
+      ),
+    );
+    expect(modelInput(requests)).toHaveProperty(
+      "trusted_authority.paymentFrameOrigins",
+      paymentFrameOrigins,
+    );
   });
 });

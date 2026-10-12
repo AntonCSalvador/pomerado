@@ -25,6 +25,7 @@ import {
   type AutofillPage,
   type AutofillRefusal,
   type AutofillStep,
+  type FillSlot,
   type AutofillStepReport,
   LocatedError,
   Targets,
@@ -78,11 +79,13 @@ type CallAnswer = Exclude<FillAnswer, typeof LocatedError.Type> | Stop;
 
 const properties = [
   "ownerUrl",
+  "ancestors",
   "documentOrigin",
   "editable",
   "control",
   "actions",
   "methods",
+  "explicitGet",
   "submitMethod",
 ] as const;
 /** Each control of two judgments: the field's index or `submit`, as judged before and now. */
@@ -117,6 +120,7 @@ const resubmitted = (
   const moved = controls(before, after).find(
     ({ was, now }) =>
       JSON.stringify(was?.methods) !== JSON.stringify(now?.methods) ||
+      (was?.explicitGet ?? false) !== (now?.explicitGet ?? false) ||
       was?.submitMethod !== now?.submitMethod ||
       JSON.stringify(was?.actions) !== JSON.stringify(now?.actions),
   );
@@ -146,7 +150,7 @@ interface FillProgress {
 }
 
 const filledReport = (
-  step: AutofillStep,
+  step: AutofillStep<FillSlot>,
   progress: FillProgress,
   submit: "clicked" | "failed" | "not_attempted" | "refused" | "stayed_disabled" | "none" | "page",
   url: string,
@@ -223,7 +227,7 @@ const failedCall = (
  * typed field left empty fails, and only the submit's recheck refuses the submit.
  */
 const stopped = (
-  step: AutofillStep,
+  step: AutofillStep<FillSlot>,
   progress: FillProgress,
   answer: Stop | { readonly checked: false; readonly url: string },
   during: "field" | "submit",
@@ -257,7 +261,7 @@ const evidenceOrigins = (input: FillInput, progress: FillProgress) =>
     : undefined;
 
 interface FillInput {
-  readonly step: AutofillStep;
+  readonly step: AutofillStep<FillSlot>;
   readonly values: readonly string[];
   readonly inspection: AutofillInspection;
   readonly page: AutofillPage;
@@ -307,7 +311,7 @@ const rejudge = (
  * sends what its last box completed. A step with a submit is the host's to click, so there the
  * same answer stays a refusal.
  */
-const screenGone = (step: AutofillStep, answer: typeof LocatedError.Type) =>
+const screenGone = (step: AutofillStep<FillSlot>, answer: typeof LocatedError.Type) =>
   step.fields.length > 0 &&
   step.submit === undefined &&
   ((answer.error === "not_found" && typeof answer.target === "number") ||
