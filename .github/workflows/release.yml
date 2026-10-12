@@ -213,7 +213,6 @@ jobs:
           published_version="$(jq -r .version <<<"$metadata")"
           published_integrity="$(jq -r .dist.integrity <<<"$metadata")"
           attestations="$(jq -r '.dist.attestations.url // empty' <<<"$metadata")"
-          latest="$(jq -r '."dist-tags".latest' <<<"$metadata")"
           if [ "$published_version" != "$VERSION" ]; then
             echo "::error::npm has no pomerado@$VERSION."
             exit 1
@@ -259,35 +258,45 @@ jobs:
             exit 1
           fi
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
-          echo "latest=$latest" >> "$GITHUB_OUTPUT"
       # npm dist-tag authenticates through trusted publishing (OIDC) from npm 11.21.0. Node 24.21.0
       # ships npm 11.19.0, whose dist-tag never asks for an OIDC token and so has no credentials.
       # This step alone runs npm 11.21.0. Keep that version pinned exactly, since this job can push
       # tags and mint OIDC tokens. Drop the pin once the pinned Node ships npm 11.21.0 or later.
+      # `npm view` reads the package document, which the registry's CDN caches for up to five
+      # minutes, so it can name the old `latest` long after a move. The dist-tags endpoint is not
+      # cached, so this step reads `latest` there, before and after the move. A re-run for the
+      # version `latest` already names changes nothing.
       - name: Move latest
-        env:
-          LATEST: ${{ steps.published.outputs.latest }}
         run: |
-          if [ "$LATEST" = "$VERSION" ]; then
+          read_latest() {
+            curl -fsS --retry 3 https://registry.npmjs.org/-/package/pomerado/dist-tags | jq -er .latest
+          }
+          previous="$(read_latest)"
+          if [ "$previous" = "$VERSION" ]; then
             echo "latest already names $VERSION." >> "$GITHUB_STEP_SUMMARY"
-          else
-            npx --yes npm@11.21.0 dist-tag add "pomerado@$VERSION" latest
-            echo "latest moved from $LATEST to $VERSION." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
-          # The registry can serve the old tag for a short while after a move.
-          for attempt in 1 2 3 4 5; do
-            current="$(npm view pomerado dist-tags.latest)"
+          npx --yes npm@11.21.0 dist-tag add "pomerado@$VERSION" latest
+          # The registry accepted the move. Read it back, backing off for up to a minute in case a
+          # replica behind the endpoint lags.
+          current="$(read_latest)"
+          for delay in 2 4 8 16 30; do
             if [ "$current" = "$VERSION" ]; then
-              exit 0
+              break
             fi
-            echo "latest still reads $current after attempt $attempt."
-            sleep $((attempt * 5))
+            echo "latest still reads $current. Reading it again in ${delay}s."
+            sleep "$delay"
+            current="$(read_latest)"
           done
-          echo "::error::latest names $current, not $VERSION."
-          exit 1
-      # The release tags ruleset lets a tag be created once and never moved or deleted, so a
-      # promotion after a rollback finds its tag and release already there. A tag that is already
-      # there must point to the commit the provenance names.
+          if [ "$current" != "$VERSION" ]; then
+            echo "::error::latest names $current, not $VERSION."
+            exit 1
+          fi
+          echo "latest moved from $previous to $VERSION." >> "$GITHUB_STEP_SUMMARY"
+      # Two tag rulesets cover v* tags. One lets only GitHub Actions, as this job's token, create
+      # them. The other lets no one move or delete them, so a promotion after a rollback finds its
+      # tag and release already there. A tag that is already there must point to the commit the
+      # provenance names. docs/RELEASING.md describes both rulesets.
       - name: Tag the commit and create the GitHub Release
         env:
           COMMIT: ${{ steps.published.outputs.commit }}
@@ -307,7 +316,10 @@ jobs:
               exit 1
             fi
           else
-            gh api "repos/$REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$COMMIT" --silent
+            if ! gh api "repos/$REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$COMMIT" --silent; then
+              echo "::error::Couldn't create tag $tag. If a tag ruleset refused it, check that GitHub Actions may bypass the ruleset that restricts creating v* tags, as docs/RELEASING.md describes."
+              exit 1
+            fi
           fi
           if ! gh release view "$tag" --repo "$REPOSITORY" >/dev/null 2>&1; then
             gh release create "$tag" --repo "$REPOSITORY" --verify-tag --title "pomerado $VERSION" --generate-notes
