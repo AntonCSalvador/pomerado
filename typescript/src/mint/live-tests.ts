@@ -286,7 +286,12 @@ export type LiveTestInconclusiveReason =
   /** The script asked a question, which nobody answers during a test. */
   | "asked"
   /** Page 1 returned no cursor, so there was no next page to run. */
-  | "no_next_page";
+  | "no_next_page"
+  /**
+   * The site blocked the browser's egress, such as an edge refusal of the page's own data call
+   * or a bot vendor's block page, and the case met it again or had no other proxy to run on.
+   */
+  | "site_block";
 
 /** What one run of a case's input showed. Outputs stay with the host until judged. */
 export type LiveTestOutcome =
@@ -406,6 +411,7 @@ const inconclusiveDetail: Readonly<Record<LiveTestInconclusiveReason, string>> =
   deadline: "The batch ran out of time before this case ran. Run it again.",
   asked: "The script asked a question, which nobody answers during a test. A read that needs an answer from its caller declares the question; run cases that do not need one.",
   no_next_page: "Page 1 returned no cursor, so the host could not run a next page. Use a query with more than one page of results, or fix how the tool returns its cursor.",
+  site_block: "The site blocked this browser's network egress, by refusing the page's own data call or with a bot vendor's block page, so the case tested nothing about the tool. The host ran it once more on a browser on another proxy where it had one. It is an egress problem, not a script failure: do not change the script for it. Run the case again later.",
 };
 
 /**
