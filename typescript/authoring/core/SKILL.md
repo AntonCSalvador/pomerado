@@ -7,7 +7,7 @@ description: Kernel script operation SDK, mint intake, execution targets and own
 
 Identify the requested operation, website/login realm, required account, business
 inputs, desired result and permitted effects. A read build explores, then iterates its
-script from a clean start by running its example until it works (re-running a read's
+script from a reset start by running its example until it works (re-running a read's
 example is normal); resolve its missing choices with reads when possible. A write build
 does the caller's requested task once, live (in as many write steps as it takes), then
 composes its script from what happened (the `writes` skill). Only a read signed out designs
@@ -639,7 +639,7 @@ full page load your source asks about with `ensureSignedIn`, the host signs in a
 do not call `authenticate` for it. When the host cannot keep the site signed in, the step fails with
 `session_not_kept`: report that cause instead of signing in again. That source must perform
 the flow from its input,
-never rely on a page an exploration left open. So a read iterates from a clean start,
+never rely on a page an exploration left open. So a read iterates from a reset start,
 and re-running its example or live test is normal. A live test stays read-only. A write
 session's later `act` steps continue on the page the previous step left.
 If the deadline expires, report the named readiness failure and use current

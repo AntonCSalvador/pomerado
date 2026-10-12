@@ -59,8 +59,9 @@ export const startStateFor = (
  * each step and `dispatched(step)` once the step's page is ready. A failed page start stops the
  * step and changes nothing, so the next step's plan asks again. A host that replaces the browser,
  * such as for a new proxy, calls `browserReplaced()`: the new browser starts with an empty
- * profile, so no sign-in has started on it. `signInStartedBefore` says whether a sign-in started
- * on the current browser before this build, as on a browser that builds share.
+ * profile, so the tracker forgets what it saw on the old one. `signInStartedBefore` says whether
+ * a sign-in started on the current browser before this build, as on a browser that builds share;
+ * the tracker asks it at each plan, so after a replacement it must answer for the new browser.
  */
 export const makeStartTracker = (
   options: { readonly signInStartedBefore?: () => boolean } = {},
@@ -126,8 +127,10 @@ export const makeStartTracker = (
       if (isFirstWriteStep(step.purpose, writeSessionStarted)) writeSessionStarted = true;
     },
     /**
-     * The host replaced the browser, which starts with an empty profile: it forgets every sign-in
-     * started, sent or verified on the old one. The write session stays as it was.
+     * The host replaced the browser, which starts with an empty profile: the tracker forgets every
+     * sign-in started, sent or verified on the old one. `signInStarted` is then whatever
+     * `signInStartedBefore` says of the new browser, false without it. The write session stays as
+     * it was.
      */
     browserReplaced: () => {
       signInStarted = false;

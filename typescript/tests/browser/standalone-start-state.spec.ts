@@ -750,6 +750,67 @@ test("a signed-in build that moves to another site replays nothing of the old si
   expect(built.artifact).not.toHaveProperty("signIn");
 });
 
+test("a later build in the same session starts its example signed out after an earlier build signed in", async () => {
+  test.setTimeout(150_000);
+  const site = await startSite();
+  // Each build answers from its own steps; both share the session's browser.
+  const phases = [
+    readSteps(true),
+    [
+      () => patch({ "src/tool.mjs": operation("probe", probe("later")) }),
+      () => [execution("example", "src/tool.mjs")] as Output,
+      finish,
+    ],
+  ];
+  const phase = { current: 0, step: 0 };
+  const [first, later] = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* createPomerado({
+          browser: { endpoint: site.endpoint },
+          minterProvider: provider(
+            (model) => phases[phase.current]?.[phase.step++]?.(model) ?? [message("Done.")],
+          ),
+          guardianProvider: guardian(),
+          outcomeReviewerProvider: quietReviewer,
+          ask: makeInputAsker((request) =>
+            Effect.succeed(
+              Object.fromEntries(
+                request.questions.map((question) => [
+                  question.id,
+                  question.type === "credential" ? { ...account, saveLogin: false } : account.password,
+                ]),
+              ),
+            ),
+          ),
+          timeoutMs: 60_000,
+        });
+        const signedIn = yield* service.mint({
+          url: `${site.origin}/login`,
+          effect: "read",
+          intent: "Report where the page starts",
+          input: {},
+        });
+        phase.current = 1;
+        phase.step = 0;
+        const anonymous = yield* service.mint({
+          url: `${site.origin}/entry`,
+          effect: "read",
+          intent: "Report where the page starts",
+          input: {},
+        });
+        return [signedIn, anonymous] as const;
+      }),
+    ),
+  ).finally(site.close);
+  expect(first.build).toBe("published");
+  expect(site.probe("example")).toMatchObject({ cookies: ["explored", "member"], token: "member" });
+  // The later build never signed in, but the browser still holds the earlier build's session:
+  // its example's reset clears it, so the example reads the site signed out.
+  expect(later.build).toBe("published");
+  expect(site.probe("later")).toMatchObject({ path: "/", cookies: [], token: null, tabs: 1 });
+});
+
 test("a write session's first step starts at the root with the browser's site data, and the next continues", async () => {
   test.setTimeout(90_000);
   const site = await startSite();
