@@ -23,7 +23,7 @@ for (const frame of primary.frames()) {
   for (let index = 0; index < count && buttons.length < 20; index++) {
     const candidate = candidates.nth(index);
     if (!(await candidate.isVisible())) continue;
-    const words = clip(await candidate.evaluate((element) => element.getAttribute("aria-label") ?? (element instanceof HTMLInputElement ? (element.type === "image" ? element.alt : element.value) : element.textContent)));
+    const words = clip(await candidate.evaluate((element) => element.getAttribute("aria-label") ?? (element instanceof HTMLInputElement ? (element.type === "image" ? element.alt : element.value) : element.textContent), undefined, { timeout: ${elementReadMs} }));
     buttons.push(words ?? "(unlabelled button)");
   }
 }
@@ -95,6 +95,8 @@ export type AutofillFillCall =
  * as empty, except in the submit call of a step with fields and no submit (`readsOnly`), which only
  * reads the page: there a read that fails, as when the page takes the field away while the call
  * reads it, fails the call, a look the host takes again, and is never a typed field left empty.
+ * With no settle wait the host takes no look again, so the failed call stands, and the host reports
+ * it as uncertain: what was typed may have been sent.
  */
 const fillCallCode = (
   call: AutofillFillCall,
@@ -203,7 +205,7 @@ const fieldLocated = located.fields[${call.index}];
 const question = fields[${call.index}].question;
 try {
   // Emptied only when it holds something: Playwright clears with a Delete key a page sees.
-  if (await field.evaluate((element) => typeof element.value === "string" && element.value.length > 0))
+  if (await field.evaluate((element) => typeof element.value === "string" && element.value.length > 0, undefined, { timeout: ${elementReadMs} }))
     await field.fill("", { timeout: 5000 });
   await field.focus({ timeout: 5000 });
   // Keep this original-node binding in Patchright's isolated world, inaccessible to page code.
@@ -217,7 +219,7 @@ try {
     if (questionRequired) Object.defineProperty(element.ownerDocument.defaultView, key, { value: binding, configurable: true });
     element.setAttribute(key, "");
     return null;
-  }, [${JSON.stringify(call.bindingKey)}, question !== undefined], undefined, true);
+  }, [${JSON.stringify(call.bindingKey)}, question !== undefined], { timeout: ${elementReadMs} }, true);
   if (activeTag === null && question !== undefined) {
     await question.locator.evaluate((element, { key, text }) => {
       const scope = element.ownerDocument.defaultView;
@@ -226,7 +228,7 @@ try {
       if (!binding) throw new Error("Question binding unavailable");
       const readQuestionText = ${questionTextCode};
       binding.checkQuestion = () => readQuestionText(element) === text;
-    }, { key: ${JSON.stringify(call.bindingKey)}, text: question.text }, undefined, true);
+    }, { key: ${JSON.stringify(call.bindingKey)}, text: question.text }, { timeout: ${elementReadMs} }, true);
   }
   return activeTag === null
     ? { focused: true, located: fieldLocated, url: primary.url() }
