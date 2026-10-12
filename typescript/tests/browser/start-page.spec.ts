@@ -127,25 +127,50 @@ test("keeps a restored session and lets the step go deeper when the root fails t
   });
 });
 
-test("keeps the session while returning to the site root", async ({ page }) => {
+test("keeps every kind of site data while returning to the site root, and closes other tabs", async ({
+  page,
+}) => {
   await withSite(page, async (site, { reset, stopped }) => {
     await page.goto(`${site.origin}/claims`);
-    await page.evaluate(() => {
+    await page.evaluate(async () => {
       document.cookie = "login=member; max-age=3600";
       localStorage.setItem("login", "member");
       sessionStorage.setItem("login", "member");
+      await new Promise<void>((resolve, reject) => {
+        const opened = indexedDB.open("site", 1);
+        opened.onupgradeneeded = () => opened.result.createObjectStore("state");
+        opened.onerror = () => reject(opened.error);
+        opened.onsuccess = () => {
+          const write = opened.result.transaction("state", "readwrite");
+          write.objectStore("state").put("member", "login");
+          write.oncomplete = () => {
+            opened.result.close();
+            resolve();
+          };
+        };
+      });
     });
+    await page.context().newPage();
     await reset({ siteData: "keep" });
-    expect(page.url()).toBe(`${site.origin}/`);
+    expect(page.context().pages().map((open) => open.url())).toEqual([`${site.origin}/`]);
     expect(stopped()).toBe(false);
     expect(site.hits("/")).toBe(1);
     expect((await page.context().cookies()).map((cookie) => cookie.name)).toEqual(["login"]);
     expect(
-      await page.evaluate(() => ({
+      await page.evaluate(async () => ({
         local: localStorage.getItem("login"),
         session: sessionStorage.getItem("login"),
+        indexed: await new Promise((resolve) => {
+          const opened = indexedDB.open("site", 1);
+          opened.onsuccess = () => {
+            const read = opened.result.transaction("state").objectStore("state").get("login");
+            read.onsuccess = () => resolve(read.result);
+            read.onerror = () => resolve(null);
+          };
+          opened.onerror = () => resolve(null);
+        }),
       })),
-    ).toEqual({ local: "member", session: "member" });
+    ).toEqual({ local: "member", session: "member", indexed: "member" });
   });
 });
 

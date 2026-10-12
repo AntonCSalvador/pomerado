@@ -467,7 +467,7 @@ const readSteps = (signIn: boolean) => [
   finish,
 ];
 
-test("a signed-out build's example starts clean at the site root, and a run starts at the root", async () => {
+test("a signed-out build's example starts at the site root with the site data exploration left, and a run starts at the root", async () => {
   test.setTimeout(90_000);
   const site = await startSite();
   const built = await build(
@@ -481,17 +481,20 @@ test("a signed-out build's example starts clean at the site root, and a run star
   // so the example and the run each load the root once.
   expect(site.visits).toEqual(["/entry", "/deep", "/", "/"]);
   const [example, run] = site.probes;
+  // The reset closed the second tab and reloaded the root, and kept exploration's cookie, site
+  // storage and tab storage.
   expect(example).toMatchObject({
     path: "/",
-    cookies: [],
-    explored: null,
-    tab: null,
+    cookies: ["explored"],
+    explored: "yes",
+    tab: "yes",
     tabs: 1,
   });
-  expect(run).toMatchObject({ path: "/", cookies: [], tabs: 1 });
+  // A run in the same scope shares the browser and clears nothing; it loads the root.
+  expect(run).toMatchObject({ path: "/", cookies: ["explored"], explored: "yes", tabs: 1 });
 });
 
-test("a signed-in build's example starts at the root with the session saved after sign-in", async () => {
+test("a signed-in build's example starts at the root on the browser's signed-in session", async () => {
   test.setTimeout(90_000);
   const site = await startSite();
   const built = await build(
@@ -514,17 +517,22 @@ test("a signed-in build's example starts at the root with the session saved afte
     "/",
   ]);
   const [example, run] = site.probes;
-  // The sign-in's cookie and storage come back; exploration's do not.
+  // The browser keeps the sign-in's cookie and storage, and exploration's too.
   expect(example).toMatchObject({
     path: "/",
-    cookies: ["member"],
-    explored: null,
+    cookies: ["explored", "member"],
+    explored: "yes",
     token: "member",
-    tab: null,
+    tab: "yes",
     tabs: 1,
   });
   // A run keeps the browser's session and loads the root, whatever the request's path.
-  expect(run).toMatchObject({ path: "/", cookies: ["member"], token: "member", tabs: 1 });
+  expect(run).toMatchObject({
+    path: "/",
+    cookies: ["explored", "member"],
+    token: "member",
+    tabs: 1,
+  });
 });
 
 test("a signed-in build whose reset's load signs it out signs in again before its example, which starts at the root", async () => {
@@ -547,8 +555,8 @@ test("a signed-in build whose reset's load signs it out signs in again before it
   ]);
   expect(built.build).toBe("published");
   // The host found the root signed out after the reset. Its check that types nothing loaded the
-  // sign-in page, which showed its form, so it signed in again with the login the build holds,
-  // saved that session and reset once more. The root then showed the marker.
+  // sign-in page, which showed its form, so it signed in again with the login the build holds
+  // and reset once more. The root then showed the marker.
   expect(site.visits).toEqual([
     "/login",
     "/account",
@@ -561,10 +569,10 @@ test("a signed-in build whose reset's load signs it out signs in again before it
   ]);
   expect(site.probe("example")).toMatchObject({
     path: "/",
-    cookies: ["member"],
-    explored: null,
+    cookies: ["explored", "member"],
+    explored: "yes",
     token: "member",
-    tab: null,
+    tab: "yes",
     tabs: 1,
   });
 });
@@ -742,7 +750,7 @@ test("a signed-in build that moves to another site replays nothing of the old si
   expect(built.artifact).not.toHaveProperty("signIn");
 });
 
-test("a write session's first step starts clean at the root, and the next continues", async () => {
+test("a write session's first step starts at the root with the browser's site data, and the next continues", async () => {
   test.setTimeout(90_000);
   const site = await startSite();
   await build(site, { url: `${site.origin}/entry`, effect: "write" }, [
@@ -762,23 +770,23 @@ test("a write session's first step starts clean at the root, and the next contin
   expect(site.visits[0]).toBe("/entry");
   expect(site.probe("first")).toMatchObject({
     path: "/",
-    cookies: [],
-    explored: null,
-    tab: null,
+    cookies: ["explored"],
+    explored: "yes",
+    tab: "yes",
     tabs: 1,
   });
   // A later step continues the page the previous step left.
-  expect(site.probe("next")).toMatchObject({ path: "/form", cookies: [], tabs: 1 });
+  expect(site.probe("next")).toMatchObject({ path: "/form", cookies: ["explored"], tabs: 1 });
 });
 
-test("each live test starts clean at the root, as the example does", async () => {
+test("each live test starts at the root with the browser's site data, as the example does", async () => {
   test.setTimeout(90_000);
   const site = await startSite();
   const built = await build(site, { url: `${site.origin}/entry`, effect: "read" }, [
     () =>
       patch({
         "explore/look.mjs": explore,
-        // The test leaves state of its own, which the example must not see either.
+        // The test leaves a second tab and goes deeper, which the example's reset undoes.
         "test/check.mjs": operation("check", probe("test")),
         "src/tool.mjs": operation("probe", probe("example")),
       }),
@@ -789,12 +797,17 @@ test("each live test starts clean at the root, as the example does", async () =>
     finish,
   ]);
   expect(built.build).toBe("published");
-  expect(site.probe("test")).toMatchObject({ path: "/", cookies: [], explored: null, tabs: 1 });
+  expect(site.probe("test")).toMatchObject({
+    path: "/",
+    cookies: ["explored"],
+    explored: "yes",
+    tabs: 1,
+  });
   expect(site.probe("example")).toMatchObject({
     path: "/",
-    cookies: [],
-    explored: null,
-    tab: null,
+    cookies: ["explored"],
+    explored: "yes",
+    tab: "yes",
     tabs: 1,
   });
 });
@@ -852,8 +865,8 @@ test("a sign-in whose page submits its own form still counts, and the example ke
   expect(site.visits.slice(0, 2)).toEqual(["/login-self", "/account"]);
   expect(site.probe("example")).toMatchObject({
     path: "/",
-    cookies: ["member"],
-    explored: null,
+    cookies: ["explored", "member"],
+    explored: "yes",
     token: "member",
     tabs: 1,
   });
@@ -883,7 +896,7 @@ test("a write build whose first live step is its act starts at the root", async 
   expect(site.probe("first")).toMatchObject({ path: "/", cookies: [], tabs: 1 });
 });
 
-test("a check again after a confirmed sign-in is refused and drops the saved session", async () => {
+test("a check again after a confirmed sign-in is refused and the example keeps the browser's session", async () => {
   test.setTimeout(90_000);
   const site = await startSite();
   const checked: Record<string, unknown>[] = [];
@@ -1001,11 +1014,11 @@ test("a code the agent types into a passwordless sign-in's code screen counts as
     passwordlessSteps({ "explore/code.mjs": typeCode }, ["explore/code.mjs"]),
   );
   expect(built.build, JSON.stringify({ built, visits: site.visits })).toBe("published");
-  // The check counted the sign-in, so the example gets back the session saved after it.
+  // The check counted the sign-in, so the example keeps the browser's session.
   expect(site.probe("example")).toMatchObject({
     path: "/",
-    cookies: ["member"],
-    explored: null,
+    cookies: ["explored", "member"],
+    explored: "yes",
     token: "member",
     tabs: 1,
   });
@@ -1138,8 +1151,8 @@ test("a code typed into a frame on a configured sign-in origin counts as typed o
   // The same explore as the frame above, but that origin is where this site signs in.
   expect(site.probe("example")).toMatchObject({
     path: "/",
-    cookies: ["member"],
-    explored: null,
+    cookies: ["explored", "member"],
+    explored: "yes",
     token: null,
     tabs: 1,
   });
@@ -1164,8 +1177,8 @@ test("a code typed into a code screen that sends itself at once counts as its pr
   expect(built.build, JSON.stringify({ built, visits: site.visits })).toBe("published");
   expect(site.probe("example")).toMatchObject({
     path: "/",
-    cookies: ["member"],
-    explored: null,
+    cookies: ["explored", "member"],
+    explored: "yes",
     token: null,
     tabs: 1,
   });
