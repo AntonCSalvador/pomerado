@@ -259,13 +259,14 @@ that asks.
     should use such an input is genuinely ambiguous, such as whether a postal code sets the
     store or only lists nearby ones, ask the owner one `request_input` choice question with id
     `input_use_<input>`, `<input>` being the input's name in lowercase snake_case
-    (`postalCode` is `input_use_postal_code`), with each use as an option. When the caller
-    chooses a limited use, start the input's description with "By design:" and state that use
-    in plain words, such as "By design: used only to find nearby stores; it does not change the
-    selected store." Write it only from that answer, never from the request's wording, a
-    free-text instruction or your own judgment, and never for a filter, sort or date, which stay
-    strict whatever an answer says. The code still applies the value in that use, and a value
-    the page does not take in it throws `InputNotApplied` (above).
+    (`postalCode` is `input_use_postal_code`), with each use as an option. Always offer the
+    full use, such as setting the store from the postal code, never only limited uses. When the
+    caller chooses a limited use, start the input's description with "By design:" and state
+    that use in plain words, such as "By design: used only to find nearby stores; it does not
+    change the selected store." Write it only from that answer, never from the request's
+    wording, a free-text instruction or your own judgment, and never for a filter, sort or date,
+    which stay strict whatever an answer says. The code still applies the value in that use, and
+    a value the page does not take in it throws `InputNotApplied` (above).
   - While building, ask the owner for a location or other tailoring value the result depends on
     (`AGENTS.md`, "Try hard, then ask"); they may skip it. Skipping that question only leaves
     the example without one, and the input stays; saying the tool should use none declines it

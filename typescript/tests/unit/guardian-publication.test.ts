@@ -7,6 +7,7 @@ import {
   nativeExecutionEnvironment,
 } from "../../src/guardian/execution-policy.js";
 import { makeOpenAIReviewer } from "../../src/guardian/openai.js";
+import { answersForReview } from "../../src/guardian/question.js";
 import {
   guardianPublicationPolicy,
   publicationDecisionPolicy,
@@ -483,38 +484,6 @@ describe("the publication policy", () => {
     );
   });
 
-  // A caller may choose, in answer to a design question, that a tailoring input has a limited use,
-  // such as a postal code used only to look up nearby locations. The review counts that documented
-  // use as applied, still flags one no answer backs, and never extends it to an input that
-  // restricts the answer. Guardian is a model, so each case pins the rule that decides it, inside
-  // the unapplied supplied input rule of the policy every host shares.
-  it.each([
-    [
-      "a By design: tailoring input with a matching answer is applied, not a finding",
-      "A caller's design decision is the one exception that lets an input that tailors the answer have a limited use: when trusted_authority.answeredQuestions holds the caller's answer to a design question about how that input is used, and the input's description starts \"By design:\" and states the use that answer chose, such as a postal code used only to look up nearby locations that never changes the selected one, that documented use counts as the input applied and is not this finding. The code still applies the value in that use.",
-    ],
-    [
-      "a By design: description with no answer behind it is a finding",
-      "A \"By design:\" description that misses or contradicts the answer, or that no answer backs, is this finding, unless the tool's earlier revision already carried it word for word, which records an earlier answer; changing that use needs a new answer.",
-    ],
-    [
-      "a filter, sort or date with such an answer is still a finding",
-      "No answer or description makes a filter, sort, date or other value that restricts the answer lookup-only. For any other input, the fix is to throw InputNotApplied",
-    ],
-    [
-      "a filter, sort or date is excused by no answer at all",
-      "Neither the description nor an answer in trusted_authority.answeredQuestions excuses it.",
-    ],
-  ])("%s", (_case, rule) => {
-    const start = publicationOutputPolicy.indexOf("Unapplied supplied input:");
-    const unappliedSupplied = publicationOutputPolicy.slice(
-      start,
-      publicationOutputPolicy.indexOf("Wrong failure:", start),
-    );
-    expect(unappliedSupplied.split(rule)).toHaveLength(2);
-    expect(guardianPublicationPolicy.split(rule)).toHaveLength(2);
-  });
-
   // A composed write that confirms from its own commit request's response, checked, is
   // confirming; one that takes any request, any status or an unread error body is not.
   it("accepts a write confirmed from its own commit request, and refuses a loose check", () => {
@@ -641,6 +610,69 @@ describe("the OpenAI publication reviewer", () => {
     expect(result).toMatchObject({ _tag: "Left", left: { code: "TurnLimitExceeded" } });
     expect(requests).toHaveLength(12);
   });
+
+  // Guardian lets a "By design:" input, a limited use such as a postal code that only lists
+  // nearby stores, count as applied on two facts the host alone controls: the caller's answer to
+  // the input's design question, bound to it by the question's id, and on a repair the host's
+  // record of the published revision's inputs. The review gets the answer under its id and the
+  // record exactly when the host supplies one, beside the shared rule that reads them.
+  it.each([
+    [
+      "a repair whose host supplies the published revision's inputs",
+      [
+        {
+          name: "postalCode",
+          description: "By design: used only to find nearby stores; it does not change the selected store.",
+        },
+        { name: "query" },
+      ],
+    ],
+    ["a build whose host supplies none", undefined],
+  ])(
+    "gives %s the caller's design answer by its id, and the published inputs only as supplied",
+    async (_case, publishedInputs) => {
+      const prompt = "Should the postal code set the store, or only list nearby stores?";
+      const answeredQuestions = await Effect.runPromise(
+        answersForReview(
+          {
+            questions: [
+              {
+                id: "input_use_postal_code",
+                type: "choice",
+                prompt,
+                options: [
+                  { id: "set_store", label: "Set the store from it" },
+                  { id: "nearby_only", label: "Only list nearby stores" },
+                ],
+              },
+            ],
+          },
+          { input_use_postal_code: { type: "choice", value: "nearby_only" } },
+          Effect.succeed,
+        ),
+      );
+      const publication = {
+        files: pending.publication?.files ?? [],
+        ...(publishedInputs === undefined ? {} : { publishedInputs }),
+      };
+      const requests = scripted(() => [message(allow)]);
+      await Effect.runPromise(
+        makeGuardian(
+          makeOpenAIReviewer("Synthetic policy {{ tenant_policy_config }}", false, native),
+        ).review({ ...pending, answeredQuestions, publication }, sourcesOf(files)),
+      );
+      const request = reviewRequest(requests[0]);
+      expect(request["trusted_authority"]).toMatchObject({
+        answeredQuestions: [
+          { id: "input_use_postal_code", question: prompt, answer: "Only list nearby stores" },
+        ],
+      });
+      expect(request["trusted_publication"]).toEqual(publication);
+      if (publishedInputs === undefined)
+        expect(request["trusted_publication"]).not.toHaveProperty("publishedInputs");
+      expect(policyOf(requests[0])).toContain(publicationOutputPolicy);
+    },
+  );
 
   it("gives an execution review no publication policy or index", async () => {
     const requests = scripted((index) =>

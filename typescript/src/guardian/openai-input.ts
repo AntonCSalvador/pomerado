@@ -44,7 +44,8 @@ export const guardianReviewInput = (
       }),
       allowedEffects: turn.pending.allowedEffects,
       answeredQuestions: absentWhenEmpty(
-        (turn.pending.answeredQuestions ?? []).map(({ question, answer, other, note }) => ({
+        (turn.pending.answeredQuestions ?? []).map(({ id, question, answer, other, note }) => ({
+          ...(id === undefined ? {} : { id }),
           question,
           answer,
           ...(other === undefined ? {} : { other }),

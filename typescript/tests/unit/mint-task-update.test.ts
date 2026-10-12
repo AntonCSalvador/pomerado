@@ -173,6 +173,7 @@ it("turns a read build into a write build once the caller picks the option the m
   // Guardian read the caller's pick as the option's own words, and the host applied a write.
   expect(updates.reviews[0]?.update.confirmation).toEqual([
     {
+      id: "save",
       question: saveQuestion.questions[0]?.prompt,
       answer: "Yes, save the note on the site",
     },
@@ -287,6 +288,7 @@ it("drops a prerequisite the caller said the site does not offer", async () => {
       ],
       confirmation: [
         {
+          id: "check",
           question:
             "The site shows no way to check a note's history before saving. How should the build go on?",
           answer: "Skip the history check and just save it",

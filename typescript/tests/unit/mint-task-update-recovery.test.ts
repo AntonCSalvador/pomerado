@@ -110,7 +110,7 @@ it("restores an applied update and the caller's answers after a takeover, and ne
     businessInput: { day: "2026-11-02" },
   });
   expect(reviews[0]?.update.confirmation).toEqual([
-    { question: "Which day should the notes be from?", answer: "November 2 instead" },
+    { id: "day", question: "Which day should the notes be from?", answer: "November 2 instead" },
   ]);
 });
 

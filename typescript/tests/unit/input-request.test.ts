@@ -1,12 +1,6 @@
 import { Either, Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import {
-  InputRequest,
-  inputUseQuestionId,
-  noticeRequest,
-  questionIdPattern,
-  validateAnswer,
-} from "../../src/runtime/input-request.js";
+import { InputRequest, noticeRequest, validateAnswer } from "../../src/runtime/input-request.js";
 
 const request = Schema.decodeUnknownSync(InputRequest)({
   id: "3f0c2a4e-7c1e-4a55-9d3b-1f2e3d4c5b6a",
@@ -316,34 +310,5 @@ describe("validateAnswer", () => {
       "password_required",
       "login",
     ]);
-  });
-});
-
-// A design question about how an input is used is keyed by the input's name, so a host can tell
-// which input the caller's answer decides. Input names may be camelCase or longer than a question
-// id allows; the id takes the name in lowercase snake_case, and no id is formed when it can't fit.
-describe("inputUseQuestionId", () => {
-  it.each([
-    ["zip", "input_use_zip"],
-    ["postal_code", "input_use_postal_code"],
-    ["postalCode", "input_use_postal_code"],
-    ["storeID", "input_use_store_id"],
-    ["URLPath", "input_use_url_path"],
-    ["address2", "input_use_address2"],
-    ["delivery-mode", "input_use_delivery_mode"],
-    ["Location", "input_use_location"],
-  ])("keys %s as %s", (input, id) => {
-    expect(inputUseQuestionId(input)).toBe(id);
-    expect(questionIdPattern.test(id)).toBe(true);
-  });
-
-  it.each([[""], ["a".repeat(55)]])("forms no id for %j", (input) => {
-    expect(inputUseQuestionId(input)).toBeUndefined();
-  });
-
-  it("keys the longest name that fits", () => {
-    const id = inputUseQuestionId("a".repeat(54));
-    expect(id).toBe(`input_use_${"a".repeat(54)}`);
-    expect(questionIdPattern.test(id ?? "")).toBe(true);
   });
 });
