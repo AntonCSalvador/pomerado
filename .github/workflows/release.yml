@@ -263,9 +263,9 @@ jobs:
       # This step alone runs npm 11.21.0. Keep that version pinned exactly, since this job can push
       # tags and mint OIDC tokens. Drop the pin once the pinned Node ships npm 11.21.0 or later.
       # `npm view` reads the package document, which the registry's CDN caches for up to five
-      # minutes, so it can name the old `latest` long after a move. The dist-tags endpoint is not
-      # cached, so this step reads `latest` there, before and after the move. A re-run for the
-      # version `latest` already names changes nothing.
+      # minutes, so it can name the old `latest` long after a move. The registry serves the
+      # dist-tags endpoint uncached, so this step reads `latest` there, before and after the move.
+      # A re-run for the version `latest` already names changes nothing.
       - name: Move latest
         run: |
           read_latest() {
@@ -278,23 +278,23 @@ jobs:
           fi
           npx --yes npm@11.21.0 dist-tag add "pomerado@$VERSION" latest
           # The registry accepted the move. Read it back, backing off for up to a minute in case a
-          # replica behind the endpoint lags.
-          current="$(read_latest)"
+          # replica behind the endpoint lags or a read fails.
+          current="$(read_latest)" || current="(unreadable)"
           for delay in 2 4 8 16 30; do
             if [ "$current" = "$VERSION" ]; then
               break
             fi
             echo "latest still reads $current. Reading it again in ${delay}s."
             sleep "$delay"
-            current="$(read_latest)"
+            current="$(read_latest)" || current="(unreadable)"
           done
           if [ "$current" != "$VERSION" ]; then
             echo "::error::latest names $current, not $VERSION."
             exit 1
           fi
           echo "latest moved from $previous to $VERSION." >> "$GITHUB_STEP_SUMMARY"
-      # Two tag rulesets cover v* tags. One lets only GitHub Actions, as this job's token, create
-      # them. The other lets no one move or delete them, so a promotion after a rollback finds its
+      # Two tag rulesets cover v* tags. One lets only GitHub Actions tokens, such as this job's,
+      # create them. The other lets no one move or delete them, so a promotion after a rollback finds its
       # tag and release already there. A tag that is already there must point to the commit the
       # provenance names. docs/RELEASING.md describes both rulesets.
       - name: Tag the commit and create the GitHub Release
@@ -317,7 +317,7 @@ jobs:
             fi
           else
             if ! gh api "repos/$REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$COMMIT" --silent; then
-              echo "::error::Couldn't create tag $tag. If a tag ruleset refused it, check that GitHub Actions may bypass the ruleset that restricts creating v* tags, as docs/RELEASING.md describes."
+              echo "::error::Couldn't create tag $tag. If a tag ruleset refused it, check that GitHub Actions may bypass the release tag creation ruleset, as docs/RELEASING.md describes."
               exit 1
             fi
           fi
