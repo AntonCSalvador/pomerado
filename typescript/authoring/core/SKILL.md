@@ -100,21 +100,24 @@ pomerado:section core.execute-calls:end -->
   `InvalidInput` at once, starting "Caller input error:" and naming the field and the rule.
   Hold in the input schema every rule it can express. The caller-input skill, "Validate it,
   and fail with the right error", lists the rules and when to throw each error.
-- When the page does not apply a valid value the caller supplied, such as a location, store,
-  filter, sort or date it ignored, reset or replaced with its own, after the tool's bounded
-  retries, throw
+- When the page does not apply a valid value the caller supplied, such as a filter, sort or
+  date it ignored, reset or replaced with its own (on a write, a location or store too), after
+  the tool's bounded retries, throw
   `new errors.InputNotApplied(message, { field, requested, applied, step, siteMessage })`:
   `field` the input's name, `requested` the caller's value, `applied` the value the page kept
   as read back (left out when it shows none), `step` the tool's step that failed, such as
   `set_location` or `apply_sort`, and `siteMessage` the page's own error when it showed one.
   The run then fails and returns nothing computed without the caller's value. Never report the
-  value as not applied in the output instead, such as a `zip_applied: false` flag or a
+  value as not applied in the output instead, such as a `sort_applied: false` flag or a
   "lookup-only" description, and never let an answer to a question make a supplied value
-  optional. On a write, check it before the first commit step: a write that may already have
-  changed the site still ends as a possible change, never retried. A value the site does not
-  offer, such as a location it says it does not serve, is the caller's to fix: throw
-  `InvalidInput` with `field` and `available`. `errors.LocationNotApplied` is an older name for
-  the same error; write `InputNotApplied`.
+  optional. An input that tailors the answer, such as a location or store, is an
+  exception: when the site still won't apply it, a read returns the site's own answer labeled
+  with the value it applied (the input schema, "Inputs that tailor the answer", below). On a
+  write, check it before the first commit step: a write that may already have changed the site
+  still ends as a possible change, never retried. A value the site does not offer, such as a
+  store missing from its picker, is the caller's to fix: throw `InvalidInput` with `field` and
+  `available`. `errors.LocationNotApplied` is an older name for the same error; write
+  `InputNotApplied`.
 - After a write, call `verified()` with no argument just before returning, once a call has
   read the result back, either the site's confirmation for this submission or the saved state.
   Return the confirmation number or record in the output. Without it the write stays a
@@ -217,25 +220,46 @@ that asks.
   title of any logo beside it. A preselected box whose group names another company or shows its
   logo is a partner box. After a probe's first submit, check whether a new tab opened or the
   page left the site. If one did, a box you missed sent it there.
-- Find the inputs that change the result yourself; the request will not list them all. A
-  location is the common one: a ZIP or postal code, city, address or store often changes
-  results, prices and availability, such as a store's stock or the appointments a city's
-  offices show. Always look for where the site lets a visitor set one, on a search, details or
-  cart tool alike, and when it does, make it an optional input, such as `zip_code`, or `store`
-  when the site offers stores. Set it on every run through the site's
-  own location control, take the site's matching suggestion, read the applied location back
-  from the page and return it. When it does not apply, throw `InputNotApplied` (above).
-  Left unset, return the location the page shows and say in the
-  description that the site picks it, which can differ from run to run. While building, ask
-  the owner for one (`AGENTS.md`, "Try hard, then ask"); they may skip it. Skipping that
-  question only leaves the example without a location, and the input stays; saying the tool
-  should use no location declines it (below). Setting a location, store or delivery or pickup
-  mode in the run's own browser is part of the read, never a write,
-  even through a Save button: the run's browser is fresh and discarded, so nothing is saved,
-  and a tool that never signs in has no account to change. Saving a guest address signed out
-  is part of the read too when it only sets the location; a step that also enters a name,
-  email or phone number is a write that needs the caller's confirmation. In a signed-in tool, use the site's per-visit location control and
-  never save an address, default store or preference to the account.
+- Inputs that tailor the answer. Many sites tailor what they show to facts about the visitor,
+  not just what they searched for: where they are (ZIP, address, store, delivery or pickup),
+  what they have (a vehicle, a device), or who they are (a membership or rate type, an insurance
+  plan, a business account). Find them yourself; the request will not list them all. Look on a
+  search, details or cart tool alike. When the site lets a visitor set one, make it an input even
+  if the request didn't mention it; it makes the tool more useful.
+  - Make it optional unless the task can't run without it. Left out, the site's own default
+    applies: return the value the site used, such as the store the page shows, and say in the
+    description that the site picks it, which can differ from run to run.
+  - When the caller gives one, honor it. Try each way the site offers, preferring one that needs
+    nothing more from the caller, then read the applied value back from the page and return it
+    as `applied_<input>`, such as `applied_store`, `applied_zip` or `applied_vehicle`.
+  - When the site needs more detail to apply it, such as a street address instead of a ZIP or a
+    vehicle's trim, add that detail as its own optional input. Its description says what it is
+    for and that it is sent to the site. Submit only what the caller gave; never invent or reuse
+    details. A name, email or phone is offered only when the site won't apply the input without
+    it. A step that creates an account or a lasting record on the site is a write, so a read
+    stops before it. While building, a live step, the example's or a test case's, that enters a
+    name, email or phone asks the owner first (`request_input`), since the execution review
+    escalates it otherwise. The owner's answer keeps the build a read, with no `mint_update`.
+  - Only when the site still won't apply what the caller gave, on a read: return what the site
+    did show, with the value it actually applied (`applied_<input>`, null only when the page
+    shows none) beside the one the caller asked for, and the site's message in a short note
+    field, `<input>_note`, such as `zip_note`, which also says why when the applied value is
+    null. Never present it as the answer for the caller's value. A location the site says it
+    does not serve is such a case: return the site's own answer with its message. A write throws
+    `InputNotApplied` (above) before its first commit step instead.
+  - Inputs that narrow the results (filters, sort, dates) stay strict: a value the page ignores
+    throws `InputNotApplied` (above).
+  - While building, ask the owner for a location or other tailoring value the result depends on
+    (`AGENTS.md`, "Try hard, then ask"); they may skip it. Skipping that question only leaves
+    the example without one, and the input stays; saying the tool should use none declines it
+    (below).
+  - Setting a location, store or delivery or pickup mode in the run's own browser is part of
+    the read, never a write, even through a Save button: the run's browser is fresh and
+    discarded, so nothing is saved, and a tool that never signs in has no account to change.
+    Entering a guest address the caller gave to apply it is part of the read too; a name, email
+    or phone follows the rules above. In a signed-in tool,
+    use the site's per-visit control and never save an address, default store or preference to
+    the account.
 - A choice the request, the caller or the owner declined, or a step they said not to take (no
   location, no store, skip a filter, don't sign in), is not part of the tool for any caller:
   never offer it as an input, never set it in the example or a test, and never put it in
@@ -433,7 +457,9 @@ that depends on them:
    `InputNotApplied` (above); never read on with the page's value. A number snapped to the
    nearest step inside the caller's bound and returned as applied, a filter group the page
    disables reported as not offered, and a broader choice that covers the value (search skill)
-   are not unapplied inputs.
+   are not unapplied inputs. An input that tailors the answer and that the site still won't
+   apply returns the site's own answer labeled with the applied value instead (the input
+   schema, "Inputs that tailor the answer").
 4. Read. Only then read the values the choices affect. Return the applied choices beside
    them. Return a group's offered options as a list when the page shows them without extra
    clicks, as a record page shows its variants, or when the caller asks (search skill).

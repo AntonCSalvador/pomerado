@@ -73,12 +73,17 @@ with `waitForChange`, as the core skill says.
 
 ## Location
 
-When results, prices or availability depend on a location or store that the site lets a visitor
-set, make it an input and apply it as the core skill's input schema says. If the site says it has
-no such location or store, the tool throws `InvalidInput` with `field` and `available`, the ones
-it offers. When the page does not apply the caller's location, or resets a filter or sort the
-caller chose, the tool throws `InputNotApplied` with the requested and applied value (core
-skill); it never returns results for the page's own location or default in their place.
+A location or store is an input that tailors the answer: follow the core skill's input schema,
+"Inputs that tailor the answer". To apply the caller's location, try each way the site offers:
+the store picker, the ZIP or postal-code box, the delivery or pickup choice, and the manual entry
+beside "use current location". Decline the browser's location permission when the site asks;
+declining often reveals a manual ZIP field. Read the applied location back and return it, such as
+`applied_store` or `applied_zip`. A store missing from the site's picker throws `InvalidInput`
+with `field` and `available`, the stores it offers, and so do a store and a ZIP that exclude each
+other. When the site still won't apply the caller's location, or says it does not serve it,
+return the results it did show with the applied location beside the caller's and the site's
+message, never as the caller's location's results. A filter or sort the page resets stays strict:
+the tool throws `InputNotApplied` with the requested and applied value (core skill).
 
 ## Results
 

@@ -1,15 +1,24 @@
-# Contributing
+# Contributing to Pomerado
 
-Pomerado does not accept outside pull requests yet. We will open them once the review and approval gate described under [Changes](#changes) is live. Until then we close pull requests from anyone other than the maintainers without review.
+We welcome bug reports, documentation improvements and code contributions. Start by opening a [GitHub issue](https://github.com/Pomerado/pomerado/issues/new). Discuss larger changes before you start building them.
 
-Issues are welcome. Open one for a bug, a question or an idea. Report security problems privately with **Report a vulnerability** on the [Security tab](https://github.com/Pomerado/pomerado/security), never in a public issue.
+Pomerado is agent friendly. Point your coding agent at [AGENTS.md](AGENTS.md), which has the setup, the layout and the rules it should follow. You answer for its changes as if you wrote them.
 
-## Build from source
+Please follow our [code of conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately with **Report a vulnerability** on the [Security tab](https://github.com/Pomerado/pomerado/security), never in a public issue.
 
-Use macOS or Linux, Node 24.21 or a later Node 24 release, pnpm 10.34.5, git 2.36 or later, and jq.
+## Set up the repository
+
+To use Pomerado with your agent, start with [Get started](README.md#get-started). To develop this repository, install these.
+
+- macOS or Linux.
+- Node 24.21 or a later Node 24 release.
+- pnpm 10.34.5, which corepack installs for you.
+- git 2.36 or later, and jq.
+
+Fork the repository, then clone your fork and install its dependencies.
 
 ```sh
-git clone https://github.com/Pomerado/pomerado.git
+git clone https://github.com/YOUR_USERNAME/pomerado.git
 cd pomerado
 corepack enable
 corepack pnpm install --frozen-lockfile
@@ -17,9 +26,9 @@ corepack pnpm exec playwright install chromium
 corepack pnpm build
 ```
 
-On Linux, run `corepack pnpm exec playwright install --with-deps chromium` if Chromium's system libraries are missing.
+On Linux, add `--with-deps` after `install` if Chromium's system libraries are missing.
 
-To run your build as an MCP server, point your client at the built entry with Node. Use absolute paths.
+To try your build in an MCP client, point the client at the built entry with Node. Use absolute paths. `node -p 'process.execPath'` prints the Node path, and the server needs `OPENAI_API_KEY` in its environment to mint.
 
 ```json
 {
@@ -32,40 +41,35 @@ To run your build as an MCP server, point your client at the built entry with No
 }
 ```
 
-- `node -p 'process.execPath'` prints the Node path, and `pwd` in the checkout prints the repository path.
-- The server needs `OPENAI_API_KEY` in its environment to mint. [Client settings](docs/getting-started.md#client-settings) shows how each client passes it.
-- The clone and build route works without an npm release. Integrations minted by your build run on your build.
+## Find your way around
 
-## Build and test
+The [repository guide](README.md#repository-guide) maps the top-level folders. [How it works](docs/how-it-works.md#source-layout) lists each module under `typescript/src/`.
+
+## Make a change
+
+Keep changes focused and follow the conventions in [AGENTS.md](AGENTS.md). For a change in behavior, add a failing test first, make the change, then refactor. Unit tests go in `typescript/tests/unit/` and browser tests in `typescript/tests/browser/`. Tests use synthetic sites and scripted model responses, and no test may call a real model.
+
+This package holds only code the local host runs, plus hook interfaces that other hosts implement. Update the docs when you change a public API, a tool or the CLI. Record a user-facing change under **Unreleased** in [CHANGELOG.md](CHANGELOG.md), with migration steps for a breaking change.
+
+## Run checks
+
+From the repository root, run these.
 
 ```sh
-corepack enable
-corepack pnpm install --frozen-lockfile
 corepack pnpm typecheck
 corepack pnpm build
 corepack pnpm test
-corepack pnpm exec playwright install chromium
 corepack pnpm test:browser
 npm pack --dry-run
+bash tools/ci-scan.sh content
 ```
 
-Tests use synthetic sites and scripted model responses. They need no model API key or Pomerado account.
+Browser tests run the built `dist/`, so build before you run them. The content scan rejects a bare `#123` in files and commit messages, so link an issue there by its full URL. The [CI workflow](.github/workflows/check.yml) is the source of truth for the full set of checks, including a gitleaks secret scan.
 
-## Changes
+## Open a pull request
 
-- The maintainers are Alan ([@alanmrsa](https://github.com/alanmrsa)) and Akshay ([@AkshayM21](https://github.com/AkshayM21)).
-- Every change goes through a pull request, the maintainers' own included. Nobody pushes to `main` directly.
-- A pull request merges only after an independent review and green CI.
-- Rulesets on `main` enforce this. They require a pull request, a green `CI` check and a `review/clear` check from the independent review on the current head, a branch that is up to date with `main`, and a code owner's approval. A push after the approval dismisses it. A repository admin may merge without the approval, but never without the two checks.
-- Maintainers merge by hand with a merge commit until a merge queue takes over.
-- A maintainer will also approve each CI run of an outside pull request.
-- Each merge to `main` publishes a canary to npm. [Releasing](docs/RELEASING.md) describes canaries and how `latest` moves.
-- CI checks every pull request, and each canary before it publishes. A merge that a newer merge replaces before its canary starts gets no run of its own on `main`. Its pull request already passed CI on the same tree. CI runs typecheck, build, unit tests, the packed package check, browser tests, a gitleaks secret scan and a public content scan. Run `node tools/check-public-content.ts` before you push.
-- Code, tests and pull request text stay free of customer data, credentials and internal references.
-- Add to this package only code the local host runs, or a hook interface another host implements.
+Describe the problem, the resulting behavior and how you verified it. Link related issues, and note any checks you could not run. Keep credentials, personal data and customer data out of code, tests, commit messages and pull request text.
 
-## License
+A maintainer approves the CI run on your pull request, then reviews it. Alan ([@alanmrsa](https://github.com/alanmrsa)) or Akshay ([@AkshayM21](https://github.com/AkshayM21)) reviews and approves every pull request before it merges, our own included. Push fixes as new commits, and merge `main` into your branch rather than rebasing. Each merge publishes a canary to npm, and [Releasing](docs/RELEASING.md) covers how `latest` moves.
 
-Pomerado is licensed under the MIT License. See [LICENSE](LICENSE). Contributions are accepted under the same MIT License, inbound = outbound. There is no Contributor License Agreement.
-
-Third-party code keeps its own license. The Guardian policy in `typescript/src/guardian/upstream-policy.md` is adapted from OpenAI Codex under the Apache License 2.0. Its license and notice are in [third-party/codex/](third-party/codex/).
+Contributions are made under the repository's [MIT License](LICENSE), inbound = outbound. There is no Contributor License Agreement. Third-party code keeps its own license, with its license and notice under `third-party/`.
