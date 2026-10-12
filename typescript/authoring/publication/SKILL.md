@@ -92,7 +92,11 @@ first:
   input schema). The one exception is a choice the request, the caller or the owner declined,
   which is never an input for any caller (core skill). Guardian counts such an input as part of
   the tool, never as scope drift or an unsupported claim. Each input you accept is applied and read
-  back (core skill, the input schema, and `AGENTS.md`; the search skill for a search).
+  back (core skill, the input schema, and `AGENTS.md`; the search skill for a search). An input
+  that tailors the answer, such as a location, store or vehicle, that the site won't apply
+  returns what the site showed with the applied value beside the caller's and the site's
+  message, which review accepts in place of a refusal (core skill, "Inputs that tailor the
+  answer").
 - **Personal data.** No personal data from the session in source, schemas, examples or metadata:
   names, emails, account numbers, addresses or the owner's answers (the list below).
 - **Claims.** The name and description claim only what the example or session reached: a

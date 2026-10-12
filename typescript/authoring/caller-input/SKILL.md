@@ -9,7 +9,8 @@ description: Validate the caller's input, refuse a bad value or fail on one the 
 
 A published tool is an API: every caller reads its input schema and acts on its errors. Refuse a
 bad value before the tool touches the site, and fail loudly whenever the run cannot return what
-the caller asked for. Never return results computed without a value the caller supplied.
+the caller asked for. Never return results computed without a value the caller supplied, except
+an input that tailors the answer, which a read returns labeled with the value the site applied.
 
 1. Express in the input schema everything it can hold, so the host refuses a bad value before
    the script runs: each field's type, an enum of the site's full set of options when the
@@ -26,13 +27,13 @@ the caller asked for. Never return results computed without a value the caller s
    - at least one of a set the tool needs one of, such as a record's number or its name.
 3. Throw the error that matches what happened:
    - `InvalidInput`: the caller's value is wrong or the site does not offer it. It breaks a rule
-     above, is not among the options the page lists, or names something the site says it does
-     not serve, such as a location. Pass `field`, and `available`, every option the page offers
+     above, or is not among the options the page lists, such as a store missing from its
+     picker. Pass `field`, and `available`, every option the page offers
      as selectable, exactly as shown, whenever the page lists them. The caller corrects the
      input and runs again.
    - `InputNotApplied`: the value is valid and the site offers it, but the page did not apply
      it after the tool's bounded retries. It ignored, reset or replaced the value, such as a
-     location, store, filter, sort or date, and the read-back shows its own default or another
+     filter, sort or date, and the read-back shows its own default or another
      value (core skill, "Configure, then read"). Throw
      `new errors.InputNotApplied(message, { field, requested, applied, step, siteMessage })`
      as the core skill says. A read, or a run that left the site untouched, may run again with
@@ -40,6 +41,10 @@ the caller asked for. Never return results computed without a value the caller s
      inside the caller's bound and returned as applied, a filter group the page disables
      reported as not offered, or a broader choice that covers the value (core and search
      skills).
+   - An input that tailors the answer, such as a location, store or vehicle, that the site still
+     won't apply, or a location it says it does not serve, on a read: not an error. Return what
+     the site showed with the value it applied beside the caller's and the site's message (core
+     skill, the input schema, "Inputs that tailor the answer").
    - An option the page lists but greys out, such as a booked date or a sold-out size, on a
      read: not an error. Return it unavailable, with the page's reason and alternatives, and the
      run succeeds. A write throws `InvalidInput` with `available` instead.
@@ -51,8 +56,8 @@ the caller asked for. Never return results computed without a value the caller s
 
    Never pick another value for the caller, such as a near match, the page's default or the
    first option, and never report a refused or unapplied value in the output instead of
-   throwing, such as a `sort_applied: false` flag or a "best-effort" description. The three
-   cases above that return results with what applied are the only exceptions.
+   throwing, such as a `sort_applied: false` flag or a "best-effort" description. The cases
+   above that return results with what applied are the only exceptions.
 
 ## Ask the caller during a run
 

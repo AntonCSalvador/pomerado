@@ -25,7 +25,10 @@ published script from what those steps did and publish it. Nothing runs again.
 A read build may search, filter and query, but may not fill in or advance a form that
 saves data on the site, save or submit anything; a task that needs that is a write build.
 Signed out, setting the session's store, location or delivery or pickup mode is part of a
-read, even through a Save button (core skill). Adding to a cart, a hold on inventory, a seat or a time slot, an upload and a draft stay writes,
+read, even through a Save button, and so is entering the details the caller gave to set it,
+unless the step creates an account or a lasting record on the site (core skill). While building,
+a live step, the example's or a test case's, that enters a name, email or phone asks the owner
+first, as the execution review requires; the answer keeps the build a read. Adding to a cart, a hold on inventory, a seat or a time slot, an upload and a draft stay writes,
 signed out too.
 
 ## When a read build finds it needs to write
@@ -127,7 +130,9 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   shows the caller's values, as `references/write-readback.ts` does. Wait too for every way
   the page can answer with `waitForOutcome`, listing the site's error or validation message
   first. The write went through when that response is 2xx or 3xx, a body the call can read
-  shows no error, and the page shows no error or validation message after it. A 200 whose
+  shows no error, and the page shows no error or validation message after it. A 201 whose
+  Location names the new record went through as soon as it arrives, with no wait for the
+  page. A 200 whose
   body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says
   the work is queued, went through too; return the site's own status word for it in the
   output. Then read what the output promises from that response or from the page the commit
@@ -304,7 +309,7 @@ A script that throws `errors.InvalidInput` (core skill) fails as the caller's in
 mark is entered, the run reports that it changed nothing.
 
 See `references/write-session.ts` for two steps and the composed script, and
-`references/write-readback.ts` for a read-back confirmation tied to its submission.
+`references/write-readback.ts` for a write confirmed from its own commit request.
 <!-- pomerado:section writes.completion:start
 
 ## Standalone write completion

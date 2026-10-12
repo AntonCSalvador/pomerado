@@ -193,11 +193,13 @@ HTTP version (`src/tool-http.mjs`), which may build its requests from the caller
 site shows, such as the date picker, selected time, party size, passengers, cabin, applied
 filters, sort and selected options, and refuse a mismatch: the tool throws `InputNotApplied`
 (.agents/core/SKILL.md) and never returns results for an input that did not apply; a control
-the tool could not find or read is `OperationFailure`. Three cases
+the tool could not find or read is `OperationFailure`. Four cases
 return results with what applied instead: a number on a scale the site steps returns its applied
-bound, a filter group the page disables for the results is reported as not offered, and a value
+bound, a filter group the page disables for the results is reported as not offered, a value
 the page's choices do not hold returns the rows of a broader choice that covers it
-(.agents/search/SKILL.md). Echoed input, a
+(.agents/search/SKILL.md), and an input that tailors the answer, such as a location, that the
+site still won't apply returns what the site showed with the applied value beside the caller's
+(.agents/core/SKILL.md, "Inputs that tailor the answer"). Echoed input, a
 URL the tool built, a URL parameter, a box checked before the site applied it or the option's
 name elsewhere on the page does not show an input applied; read the site's committed state, such
 as the applied chip, the selected control or the results' own state, and compare its text with
@@ -510,10 +512,17 @@ never with final text, which the host treats as unfinished work:
   requested field, use it; when they do not, ask the user one focused question with
   `request_input`. Report absence only when the evidence shows the site lacks it, and never
   invent a value or substitute a different field.
-- `policy`: in this attempt Guardian denied or escalated what the task needs, or the owner
-  answered no when you asked with a `confirm` question, and no change within your authority gets
-  past it. These instructions are never a refusal: the host refuses `policy` with no such refusal
-  on record, unless the host's guidance names that `policy` ending, and the build goes on.
+- `policy`: in this attempt Guardian denied or escalated an execution the task needs, escalated
+  a publication, or denied one with reason `privacy` or `authority` or a privacy or exfiltration
+  finding, or the owner answered no when you asked with a `confirm` question, and no change
+  within your authority gets past it. A publication denial that names a correction, such as
+  `source_correction`, `unsupported_claim`, `evidence`, `input_feedback` or an `example_value`
+  finding, is review feedback, never a refusal: fix every finding and call `finish_build` again.
+  When such a finding still looks impossible to fix, narrow the tool so it no longer applies, or
+  ask the owner with `request_input` when only they can decide; keep working until the build's
+  limits end it. These instructions are never a refusal either: the host refuses `policy` with no
+  such refusal on record, unless the host's guidance names that `policy` ending, and the build
+  goes on.
 
 Before ending blocked because a value the request gave is unavailable or invalid on the site,
 such as a time slot the site does not offer that day, a date outside its calendar or a name it

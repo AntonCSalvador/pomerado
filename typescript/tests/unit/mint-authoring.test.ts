@@ -671,7 +671,7 @@ it("has a write confirm from its own commit request, and read back only when tha
   const texts = await renderedTexts("typescript/authoring");
   const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    '- Prefer confirming the write from its commit request. Keep the click on the final commit control, such as Save, Send, Submit, Book or Pay, in its own step. In the same call as that click, wait for the site\'s response to the request it sends, matched by the method and path the session saw carry the commit on the site, and by its body where the body shows the caller\'s values, as `references/write-readback.ts` does. Wait too for every way the page can answer with `waitForOutcome`, listing the site\'s error or validation message first. The write went through when that response is 2xx or 3xx, a body the call can read shows no error, and the page shows no error or validation message after it. A 200 whose body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says the work is queued, went through too; return the site\'s own status word for it in the output. Then read what the output promises from that response or from the page the commit left, match it to the caller\'s values, and call `verified()` with no argument just before returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page, such as a list, a history or an account screen, only to prove the write. When a commit step returned without calling `verified()` and its `stateChangingRequests` list the commit request with a 2xx or 3xx status, prefer confirming it in the next step from the page as it stands. Make no execute call after `verified()`: a later call reopens the effect. After the confirming step, further `act` steps are refused.',
+    '- Prefer confirming the write from its commit request. Keep the click on the final commit control, such as Save, Send, Submit, Book or Pay, in its own step. In the same call as that click, wait for the site\'s response to the request it sends, matched by the method and path the session saw carry the commit on the site, and by its body where the body shows the caller\'s values, as `references/write-readback.ts` does. Wait too for every way the page can answer with `waitForOutcome`, listing the site\'s error or validation message first. The write went through when that response is 2xx or 3xx, a body the call can read shows no error, and the page shows no error or validation message after it. A 201 whose Location names the new record went through as soon as it arrives, with no wait for the page. A 200 whose body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says the work is queued, went through too; return the site\'s own status word for it in the output. Then read what the output promises from that response or from the page the commit left, match it to the caller\'s values, and call `verified()` with no argument just before returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page, such as a list, a history or an account screen, only to prove the write. When a commit step returned without calling `verified()` and its `stateChangingRequests` list the commit request with a 2xx or 3xx status, prefer confirming it in the next step from the page as it stands. Make no execute call after `verified()`: a later call reopens the effect. After the confirming step, further `act` steps are refused.',
   );
   // Every case the request cannot settle keeps a read-back.
   expect(text("writes")).toContain(
@@ -685,7 +685,7 @@ it("has a write confirm from its own commit request, and read back only when tha
     "Prefer confirming from the commit request the final click sends, checked as the writes skill says, and otherwise from the confirmation the page shows after the click, such as a reference number, a success message or a toast, never from another request's 200.",
   );
   expect(text("forms")).toContain(
-    "Never call it for a status code without the page's error check, or a missing confirmation",
+    "Never call it for a status code without the page's error check (a 201 whose Location names the new record needs none), or a missing confirmation",
   );
   // The request list carries each request's response status for that check.
   expect(text("core")).toContain(
@@ -726,17 +726,17 @@ it("renders the pinned standalone authoring", async () => {
     ...skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name]),
     ...[...guide.files].map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["8c11bbca0e7753867c9ba5a9e5666f65ea9f8a3ef004db1b7f66db3fa3fbd089", "core"],
-    ["b7fbd53486048741bdb023ea6f038fd8789e784c8ef2b21bfea80763dbf36910", "search"],
+    ["15c9ec4c46f21aa7d12b9f87f78ea8298ff85809f157ed8d922e19f38dfaaeac", "core"],
+    ["9cae349bff0ed3c9f0a6d5259022ebd09324363483d95d556627c79448edf92e", "search"],
     ["4b9f115a5e58daf028404a8803376055a60f8269e8f9a06735662f0f11520dad", "auth"],
-    ["fdd8a553dc7119b5a84da1c3368f9928167f1db5c94da88747f1bcf05beb02db", "testing"],
+    ["7684a05d1ae2a30577948164df630230839809f80c6066b1e9a69d53e0d112e2", "testing"],
     ["ab913e2169b9be4ac767df8a88b29cf2e3e5f28779f29bfe9d7e175f07e56f8d", "pagination"],
-    ["3bf59e90aab39d23852f87ca63975f0c8102e775e9d0e5782554996b0695699d", "forms"],
-    ["baea729073ddf80935f3547993dd980f99d2f3eea40a095e36c6789705e52dab", "writes"],
+    ["e7366f7bb289454dc3957aac9f857abe940ad0f3a6c8ced193bf920c119f2098", "forms"],
+    ["369720ea19f748bb9a18d1c11c6da4437736bb39e97af84ca897b168cbacd63e", "writes"],
     ["0bc4d6c765154139547ec2e4500d14bbd1d086995fdd6b385b8f53f4e7ae7255", "cart"],
-    ["3c457792ca30c01b14b2a054aa2e275495b3d1e9db7132859a631f826e81044a", "caller-input"],
-    ["c0334ed4d84ac4c807e108dcc3d0560ca7049fbb12013e03062d222dacce3655", "publication"],
-    ["5217339aa814efbc7faf067db07d45f5ab1e615066a810334cdb162fe0c9c723", "workspace/AGENTS.md"],
+    ["1eac5faab594f321ba3dc8b81361f05ce57998aa2c0d2bf1c502d33856cd85dd", "caller-input"],
+    ["3b7238d4a1af157b6cb2fa50b0ff3002b73e039b3afec4515a37e6ecc1dcd34e", "publication"],
+    ["ff7cdfdf304d69b93c67aba5f7001b2ba867be76c38207967a9748b064a71c15", "workspace/AGENTS.md"],
     ["e023d1b6f7bc3673118d4310d9813cfa878c554b68a353413e73592054d2704d", "workspace/README.md"],
   ]);
 });
