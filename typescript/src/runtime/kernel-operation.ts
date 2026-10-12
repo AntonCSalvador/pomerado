@@ -20,6 +20,7 @@ import { inspectSignInRejection } from "./sign-in-rejection.js";
 import { FileField, FileRefused, type FileChannel, type ScriptFiles } from "./files.js";
 import type { SignInRejectionMarker } from "./sign-in-rejection.js";
 import type { ListHost } from "./list-host.js";
+import { ScriptCardFillAnswer, ScriptCardFillRequest } from "./script-card-fill.js";
 import {
   CredentialsRejected,
   OperationFailure,
@@ -131,10 +132,26 @@ export interface KernelOperationContext<
    * declared with its type and prompt in the contract's `questions`. The browser stays open and
    * the deadline pauses while the caller decides; the next call gets the answers written into
    * its code. It throws `ScriptInputFailure` when no usable answer comes, such as `NoResponse`.
+   * A card question's answer is a card handle for `fillCard`, never the card itself.
    */
   readonly ask: ScriptAsk<Questions>;
   /** Asks one declared question and returns its answer itself, not one answer per id. */
   readonly askOne: ScriptAskOne<Questions>;
+  /**
+   * Types the caller's payment card into the card fields of the site's own checkout, the way the
+   * host types a password. Ask for every part of the card in one `ask`, with a declared secret
+   * question for each part whose secretKind is card_number, card_expiry, card_cvc or
+   * billing_postal_code; `ask` returns a card handle for each, never the card. Pass each field's
+   * own selector, even inside a payment processor's frame, with its handle: one to four fields,
+   * each handle once. The host types only when the page's top document is on this site and each
+   * field is on the site or in a frame on an allowlisted payment processor's origin. It clicks
+   * nothing: submit the payment in a later call, under the write's commit rules. It returns each
+   * field's part and status, and throws `OperationFailure`, with no value in it, when it typed
+   * nothing or not every field.
+   */
+  readonly fillCard: (step: {
+    readonly fields: readonly { readonly selector: string; readonly handle: string }[];
+  }) => Promise<{ readonly fields: readonly { readonly slot: string; readonly status: string }[] }>;
   /**
    * One runtime-written call that waits up to 30 s for Kernel's solver to clear a bot challenge,
    * polling `ready`, a code body that returns true once the page is usable. It throws
@@ -268,6 +285,11 @@ interface ScriptBrowser {
    * when it cannot, such as when its sign-ins are spent or the sign-in did not verify.
    */
   readonly signIn?: () => Promise<{ readonly signedInAgain: boolean }>;
+  /**
+   * The host's card fill, bound only by a host that types card answers: it types the run's card
+   * answers behind the handles into the named fields, or says why not, with no value in either.
+   */
+  readonly cardFill?: (request: ScriptCardFillRequest) => Promise<ScriptCardFillAnswer>;
   /** Hosted HTTP authoring diagnostics; native browser scripts use the portable errors. */
   readonly scriptError?: (error: unknown, dispatch: Dispatch) => OperationFailure;
   /** The host's file service for this run, bound only when the host moves files. */
@@ -380,6 +402,40 @@ const scriptFiles = (
   };
 };
 
+/**
+ * The context's `fillCard` over the host's card fill. A refusal typed nothing; once a value may
+ * have reached the page, a live run marks a possible dispatch, as a file placement does.
+ */
+const scriptFillCard =
+  (
+    options: ScriptBrowser & { readonly deadline: Deadline; readonly journal?: EffectJournal },
+  ): KernelOperationContext<unknown>["fillCard"] =>
+  async (step) => {
+    const cardFill = options.cardFill;
+    if (cardFill === undefined || options.offline === true)
+      throw new OperationFailure("This run has no card fill", { dispatch: "not_sent" });
+    const request = Schema.decodeUnknownEither(ScriptCardFillRequest)(step, {
+      onExcessProperty: "error",
+    });
+    if (Either.isLeft(request))
+      throw new OperationFailure(
+        "fillCard takes one to four fields, each its own selector and a card handle ask returned, each handle once",
+        { dispatch: "not_sent" },
+      );
+    const resume = options.deadline.suspend();
+    try {
+      const answer = Schema.decodeUnknownSync(ScriptCardFillAnswer)(
+        await cardFill(request.right),
+      );
+      const typed = answer.outcome === "filled" || answer.typed;
+      if (typed && options.journal !== undefined) Effect.runSync(options.journal.enteringDispatch);
+      if (answer.outcome === "filled") return { fields: answer.fields };
+      throw new OperationFailure(answer.message, { dispatch: typed ? "unknown" : "not_sent" });
+    } finally {
+      resume();
+    }
+  };
+
 /** Builds the context the runtime hands a Kernel script. */
 const makeKernelOperationContext = <Input>(
   options: ScriptBrowser & {
@@ -438,6 +494,7 @@ const makeKernelOperationContext = <Input>(
   // The runtime checks every id and option against the declarations; the types only guide.
   ask: scriptAsk(options.scriptInput),
   askOne: scriptAskOne(options.scriptInput),
+  fillCard: scriptFillCard(options),
   files: scriptFiles(options),
   waitPastChallenge: async ({ ready }) => {
     // The SDK accepts only a whole-millisecond request timeout.
@@ -565,6 +622,11 @@ export const runKernelScript = <Input, EncodedInput, Output, EncodedOutput>(
         const output = await operation.run({
           ...context,
           decideDialog: (report) => afterSignIn(() => context.decideDialog(report)),
+          // Typing a card is a browser call too.
+          fillCard: (step) => {
+            calls += 1;
+            return afterSignIn(() => context.fillCard(step));
+          },
           // Placing a file is a browser call: it waits for a sign-in under way and counts as one.
           files: {
             ...context.files,

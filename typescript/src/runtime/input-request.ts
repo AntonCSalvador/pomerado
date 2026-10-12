@@ -138,13 +138,25 @@ export const ConfirmQuestion = Schema.Struct({
     }),
   ),
 });
-/** A one-time code, a TOTP code or other private text; masked everywhere downstream. */
+/**
+ * A one-time code, a TOTP code, other private text or a part of a payment card; masked everywhere
+ * downstream. A card part's handle goes only into a host card-fill step, never into source.
+ */
 export const SecretQuestion = Schema.Struct({
   ...base,
   type: Schema.Literal("secret"),
-  secretKind: Schema.Literal("one_time_code", "totp", "private_text"),
+  secretKind: Schema.Literal(
+    "one_time_code",
+    "totp",
+    "private_text",
+    "card_number",
+    "card_expiry",
+    "card_cvc",
+    "billing_postal_code",
+  ),
   maxLength: Schema.optional(Length),
 });
+export type SecretKind = typeof SecretQuestion.Type.secretKind;
 /** A website login. Only the host raises it, and its answer goes only to the credential store. */
 // These bounds also apply to caller-supplied credentials without a saved-login service.
 const maximumCredentialUsernameLength = 1024;

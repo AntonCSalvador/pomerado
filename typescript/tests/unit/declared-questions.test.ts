@@ -202,3 +202,16 @@ describe("a local operation's questions", () => {
     }
   });
 });
+
+describe("card questions in a script", () => {
+  it("accepts a script that declares a card question, for its fillCard", () => {
+    const source = operation(
+      `{name:"book",input:Schema.Unknown,output:Schema.Unknown,questions:{card:{type:"secret",secretKind:"card_number",prompt:"Card number?"},zip:{type:"secret",secretKind:"billing_postal_code",prompt:"Billing ZIP?"},note:{type:"text",prompt:"Any note?"}}}`,
+    );
+    expect(draftQuestionDeclarationFailure("src/tool.mjs", source)).toBeUndefined();
+    expect(draftQuestionDeclarations("src/tool.mjs", source)).toMatchObject({
+      card: { type: "secret", secretKind: "card_number" },
+      zip: { type: "secret", secretKind: "billing_postal_code" },
+    });
+  });
+});

@@ -1,5 +1,6 @@
 import { Option, Schema } from "effect";
-import type { ValidAnswer, ValidAnswers } from "../runtime/input-request.js";
+import { type CardSlot, cardSlots, isCardSlot } from "../destinations/payment-frames.js";
+import type { SecretKind, ValidAnswer, ValidAnswers } from "../runtime/input-request.js";
 import { isAuthoredSourcePath, operationSourceFiles } from "./operation-source.js";
 import { handlePlacements } from "./secret-handle-sinks.js";
 import type { Quote } from "./secret-handle-sinks.js";
@@ -14,6 +15,10 @@ import type { Quote } from "./secret-handle-sinks.js";
  * A handle is filled only where `secret-handle-sinks.ts` places it; any other occurrence refuses
  * the execution. This keeps the value out of the model's transcript and blocks accidental leaks;
  * code written to recover the value can still do so, and Guardian's handle rule is the backstop.
+ *
+ * A part of a payment card is never filled into source at all: its handle records its kind, any
+ * occurrence in authored source refuses the execution, and only a host card-fill step types it
+ * (`cardValues`), as a sign-in step types a password.
  */
 
 /** Anything shaped like a handle, issued or not. */
@@ -53,8 +58,13 @@ const escapedFor = (quote: Quote, value: string) => {
   return escaped.replace(quote === "'" ? /'/gu : /[`$]/gu, (character) => `\\${character}`);
 };
 
+const SnapshotHandle = Schema.String.pipe(Schema.pattern(/^\{\{secret\.s[1-9]\d*\}\}$/u));
+/** Each issued handle and its value, with its card part when it is one; older snapshots have none. */
 export const SecretHandlesSnapshot = Schema.Array(
-  Schema.Tuple(Schema.String.pipe(Schema.pattern(/^\{\{secret\.s[1-9]\d*\}\}$/u)), Schema.String),
+  Schema.Union(
+    Schema.Tuple(SnapshotHandle, Schema.String),
+    Schema.Tuple(SnapshotHandle, Schema.String, Schema.Literal(...cardSlots)),
+  ),
 ).pipe(
   Schema.filter((values) => new Set(values.map(([handle]) => handle)).size === values.length, {
     message: () => "duplicate secret handle",
@@ -64,8 +74,27 @@ export type SecretHandlesSnapshot = typeof SecretHandlesSnapshot.Type;
 
 export interface SecretHandles {
   readonly snapshot: () => SecretHandlesSnapshot;
-  /** The answers as the model receives them: each `secret` value replaced by a new handle. */
-  readonly issue: (answers: ValidAnswers) => ValidAnswers;
+  /**
+   * The answers as the model receives them: each `secret` value replaced by a new handle. `kinds`
+   * gives each question's secret kind, by id; a card part's handle records it.
+   */
+  readonly issue: (
+    answers: ValidAnswers,
+    kinds?: Readonly<Record<string, SecretKind | undefined>>,
+  ) => ValidAnswers;
+  /** The card part an issued handle stands for, or undefined for any other secret. */
+  readonly kindOf: (handle: string) => CardSlot | undefined;
+  /** Whether the attempt has issued a handle for a part of the caller's card. */
+  readonly issuedCard: () => boolean;
+  /**
+   * The values of `handles`, in order, when every one is an issued card handle; undefined
+   * otherwise. Only a host card-fill step reads them, to type them itself.
+   */
+  readonly cardValues: (handles: readonly string[]) => readonly string[] | undefined;
+  /** The first authored file and line holding an issued card handle, which source never holds. */
+  readonly carded: (
+    files: ReadonlyMap<string, string>,
+  ) => { readonly path: string; readonly line: number; readonly handle: string } | undefined;
   /**
    * The model's answers a checkpoint kept for `answers`: each kept `secret` value must be a handle
    * issued for that same answer's value. Undefined when any is not.
@@ -80,7 +109,8 @@ export interface SecretHandles {
   ) => { readonly path: string; readonly line: number } | undefined;
   /**
    * A copy of the files with every issued handle that sits in a sink replaced by its value. A file
-   * holding a handle anywhere else is left as written, so no value is placed outside a sink.
+   * holding a handle anywhere else is left as written, so no value is placed outside a sink. A card
+   * handle is never replaced.
    */
   readonly fill: (
     files: ReadonlyMap<string, string>,
@@ -88,13 +118,32 @@ export interface SecretHandles {
   ) => Map<string, string>;
 }
 
+/** Each secret question's kind, by id, as `issue` takes them. */
+export const secretKindsOf = (
+  questions: readonly { readonly id: string; readonly type: string; readonly secretKind?: SecretKind }[],
+): Readonly<Record<string, SecretKind>> =>
+  Object.fromEntries(
+    questions.flatMap((question) =>
+      question.type === "secret" && question.secretKind !== undefined
+        ? [[question.id, question.secretKind] as const]
+        : [],
+    ),
+  );
+
 /** One attempt's handles. Values live only in this closure, for the attempt's lifetime. */
 export const makeSecretHandles = (initial: SecretHandlesSnapshot = []): SecretHandles => {
-  const values = new Map<string, string>(initial);
+  const values = new Map<string, string>(initial.map(([handle, value]) => [handle, value]));
+  const kinds = new Map<string, CardSlot>(
+    initial.flatMap((entry) => (entry.length === 3 ? [[entry[0], entry[2]] as const] : [])),
+  );
   let next = Math.max(0, ...initial.map(([handle]) => Number(handle.slice(10, -2)))) + 1;
   return {
-    snapshot: () => [...values],
-    issue: (answers) => {
+    snapshot: () =>
+      [...values].map(([handle, value]) => {
+        const kind = kinds.get(handle);
+        return kind === undefined ? ([handle, value] as const) : ([handle, value, kind] as const);
+      }),
+    issue: (answers, answerKinds = {}) => {
       const issued: Record<string, ValidAnswer> = {};
       for (const [id, answer] of Object.entries(answers)) {
         if (answer.type !== "secret") {
@@ -104,9 +153,29 @@ export const makeSecretHandles = (initial: SecretHandlesSnapshot = []): SecretHa
         // Numbered per attempt, so two requests, or two questions sharing an id, never collide.
         const handle = `{{secret.s${next++}}}`;
         values.set(handle, answer.value);
+        const kind = answerKinds[id];
+        if (isCardSlot(kind)) kinds.set(handle, kind);
         issued[id] = { type: "secret", value: handle };
       }
       return issued;
+    },
+    kindOf: (handle) => kinds.get(handle),
+    issuedCard: () => kinds.size > 0,
+    cardValues: (handles) => {
+      const found = handles.map((handle) =>
+        kinds.has(handle) ? values.get(handle) : undefined,
+      );
+      return found.every((value) => value !== undefined) ? found : undefined;
+    },
+    carded: (files) => {
+      if (kinds.size === 0) return undefined;
+      for (const [path, source] of files) {
+        if (!isAuthoredSourcePath(path)) continue;
+        for (const [index, line] of source.split("\n").entries())
+          for (const [handle] of line.matchAll(handleShape))
+            if (kinds.has(handle)) return { path, line: index + 1, handle };
+      }
+      return undefined;
     },
     kept: (answers, kept) => {
       const decoded = Schema.decodeUnknownOption(
@@ -148,7 +217,7 @@ export const makeSecretHandles = (initial: SecretHandlesSnapshot = []): SecretHa
           let filled = source;
           for (const placement of analysis.placements.toSorted((a, b) => b.start - a.start)) {
             const value = values.get(placement.handle);
-            if (value === undefined) continue;
+            if (value === undefined || kinds.has(placement.handle)) continue;
             const [inner, outer] = placement.quotes;
             filled =
               filled.slice(0, placement.start) +
@@ -166,11 +235,12 @@ export const makeSecretHandles = (initial: SecretHandlesSnapshot = []): SecretHa
  * issued could only fill in wrong. An example runs the source that publishes, and published
  * source never holds a handle, so an example is not spent on source that could never publish. A
  * filled value must go nowhere but the site, so a handle outside a site-input sink is refused
- * with its file and line. Offline steps never receive a value and run the handle text as
+ * with its file and line. A card handle never goes into source, so one anywhere is refused with
+ * its file and line too. Offline steps never receive a value and run the handle text as
  * written, and a sign-in step fills its fields itself.
  */
 export const secretHandleRefusal = (
-  handles: Pick<SecretHandles, "unissued" | "misplaced">,
+  handles: Pick<SecretHandles, "unissued" | "misplaced" | "carded">,
   files: ReadonlyMap<string, string>,
   step: { readonly purpose: string; readonly target: string; readonly entrypoint: string },
   siteOrigin: string | undefined,
@@ -179,6 +249,9 @@ export const secretHandleRefusal = (
   const unissued = handles.unissued(files);
   if (unissued.length > 0)
     return `The source names ${unissued.slice(0, 4).join(", ")}, which no request_input secret answer in this attempt returned. Use only a handle an answer gave you, exactly as given. Nothing was executed.`;
+  const carded = handles.carded(files);
+  if (carded !== undefined)
+    return `${carded.path} line ${carded.line}: ${carded.handle} is a card answer, which never goes into source. Type it with a card-fill step: operation/card-fill-step.json, run with purpose card_fill. Nothing was executed.`;
   const published =
     step.purpose === "example" ? publishedHandlePath(files, [step.entrypoint]) : undefined;
   if (published !== undefined)
