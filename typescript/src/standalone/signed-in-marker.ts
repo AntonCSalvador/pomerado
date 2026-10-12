@@ -144,7 +144,7 @@ const SignedOutPage = Schema.NullOr(SignedOutRead);
 
 /**
  * The pages a build saw signed out, for its marker checks: the page a sign-in screen is on before
- * anything was typed, and a page a reset cleared of cookies and site storage. They stay in memory
+ * anything was typed, and a page a reset left signed out (see `makeBuildStart`). They stay in memory
  * for the build, and are never written or shown to a model. A page that cannot show the site
  * (see `signedOutPageCode`) is skipped, and so is one the host cannot read, such as one whose
  * document is still over 1 MiB: a later check has fewer pages to compare, and with none it reports
@@ -264,8 +264,11 @@ export const makeMarkerChecks = (input: {
       return checked;
     });
   return {
-    /** Keeps the page a reset cleared of cookies and site storage. */
-    afterClear: Effect.asVoid(signedOut.take),
+    /**
+     * Keeps the page a reset left signed out: one that cleared the browser's cookies and site
+     * storage, or one before any sign-in started on the browser.
+     */
+    afterSignedOutReset: Effect.asVoid(signedOut.take),
     /**
      * Keeps the page a sign-in screen is on, once the host found the screen's fields there and
      * Guardian allowed the step, before the host types: the build's first such page, while the

@@ -4,9 +4,10 @@ import { primaryPageCode, type HostExecute } from "./host-execute.js";
 
 /**
  * How a live step's page starts. `none` continues the page as the previous step left it. The
- * others reset the browser and then load the site root: `clear` removes exploration cookies and
- * site storage, `restore` puts back the session saved right after sign-in, and `keep` keeps the
- * browser's cookies and storage as they are.
+ * others reset the browser and then load the site root: `keep` keeps the browser's cookies and
+ * site storage as they are, `clear` removes them, and `restore` puts back a session a host saved.
+ * A build step only ever keeps or clears (see `startStateFor`); `restore` is for a host's own
+ * resets, such as a run's retry.
  */
 export type StartState = "none" | "clear" | "restore" | "keep";
 
@@ -26,15 +27,19 @@ export const isFirstWriteStep = (purpose: StepPurpose, writeSessionStarted: bool
 
 /**
  * A live example, a live test and a write session's first step start over at the site root, with
- * none of the page state exploration left. A signed-out build starts without its cookies and site
- * storage. A signed-in build starts from the session saved right after sign-in, or keeps its
- * session when none was saved. Every other step continues the current page.
+ * none of the page state exploration left. They keep the browser's cookies and site storage, so a
+ * site that trusts a browser session keeps trusting it. A browser where a sign-in started and no
+ * sign-in was verified is the exception: its reset clears them, so a half-finished sign-in never
+ * reaches a step. Every other step continues the current page. Whether the published tool works
+ * for a caller with nothing remembered is a fresh browser's question: see the live test contract.
  */
 export const startStateFor = (
   step: StartStep & {
     readonly writeSessionStarted: boolean;
-    readonly signedIn: boolean;
-    readonly sessionSaved: boolean;
+    /** Whether a sign-in step started on this browser. */
+    readonly signInStarted: boolean;
+    /** Whether a sign-in on this browser was verified. */
+    readonly signInVerified: boolean;
   },
 ): StartState => {
   const resets =
@@ -43,56 +48,39 @@ export const startStateFor = (
       step.purpose === "test" ||
       isFirstWriteStep(step.purpose, step.writeSessionStarted));
   if (!resets) return "none";
-  if (!step.signedIn) return "clear";
-  return step.sessionSaved ? "restore" : "keep";
+  return step.signInStarted && !step.signInVerified ? "clear" : "keep";
 };
 
 /**
- * The first live step after a settled sign-in saves the session before it runs, so the saved
- * session is the one right after sign-in, before exploration changes anything. A sign-in step
- * itself never saves.
+ * One build's start state on one browser: whether its write session started, whether a sign-in
+ * started or was verified on that browser, and what the current sign-in sent. A host calls
+ * `signIn()` on each sign-in step, a signed-in check included, `sent(...)` for what a sign-in
+ * step may have sent, `verified()` when the site shows the build signed in, `plan(step)` before
+ * each step and `dispatched(step)` once the step's page is ready. A failed page start stops the
+ * step and changes nothing, so the next step's plan asks again. A host that replaces the browser,
+ * such as for a new proxy, calls `browserReplaced()`: the new browser starts with an empty
+ * profile, so no sign-in has started on it. `signInStartedBefore` says whether a sign-in started
+ * on the current browser before this build, as on a browser that builds share.
  */
-export const shouldSaveSession = (
-  step: StartStep & {
-    readonly signedIn: boolean;
-    readonly signInSettled: boolean;
-    readonly sessionSaved: boolean;
-  },
-) =>
-  step.live &&
-  step.purpose !== "authenticate" &&
-  step.signedIn &&
-  step.signInSettled &&
-  !step.sessionSaved;
-
-/**
- * One build's start state: whether its write session started, whether it is signed in, what its
- * current sign-in sent, and the session saved after that sign-in. A host calls `signIn()` on each
- * sign-in step, a signed-in check included, `sent(...)` for what a sign-in step may have sent,
- * `verified()` when the site shows the build signed in, `plan(step)` before each step and
- * `dispatched(step)` once the step's page is ready. When the plan says `save`, the host saves the
- * session with `save(session)` before it starts the page. A failed save or page start stops the
- * step and changes nothing, so the next step's plan asks again.
- */
-export const makeStartTracker = <Session = unknown>() => {
+export const makeStartTracker = (
+  options: { readonly signInStartedBefore?: () => boolean } = {},
+) => {
   let writeSessionStarted = false;
-  let signedIn = false;
-  let signInSettled = false;
+  let signInStarted = false;
+  let signInVerified = false;
   let signInOpen = false;
   let sentIdentifier = false;
   let sentProof = false;
-  let saved: { readonly session: Session } | undefined;
+  const started = () => signInStarted || options.signInStartedBefore?.() === true;
   return {
     /**
      * A sign-in step, a signed-in check included. The first one after a verified sign-in, or the
-     * build's first, starts a new sign-in: nothing saved describes the browser until that sign-in
-     * is verified, and nothing sent counts for it yet. Later steps of the same sign-in, each
-     * screen of it, add to what it sent.
+     * build's first, starts a new sign-in: nothing sent counts for it yet. Later steps of the same
+     * sign-in, each screen of it, add to what it sent.
      */
     signIn: () => {
+      signInStarted = true;
       if (signInOpen) return;
-      saved = undefined;
-      signInSettled = false;
       sentIdentifier = false;
       sentProof = false;
       signInOpen = true;
@@ -116,39 +104,37 @@ export const makeStartTracker = <Session = unknown>() => {
      */
     verified: () => {
       if (!(sentIdentifier && sentProof)) return false;
-      signedIn = true;
-      signInSettled = true;
+      signInVerified = true;
       signInOpen = false;
       sentIdentifier = false;
       sentProof = false;
       return true;
     },
-    /** What to do before `step` runs. Planning changes nothing. */
-    plan: (step: StartStep): { readonly save: boolean; readonly start: StartState } => {
-      const save = shouldSaveSession({
-        ...step,
-        signedIn,
-        signInSettled,
-        sessionSaved: saved !== undefined,
-      });
-      const start = startStateFor({
-        ...step,
-        writeSessionStarted,
-        signedIn,
-        sessionSaved: save || saved !== undefined,
-      });
-      return { save, start };
+    /** Whether a sign-in started on this browser, before this build included. */
+    get signInStarted() {
+      return started();
     },
+    /** Whether a sign-in on this browser was verified, and no sign-in started since. */
+    get signedIn() {
+      return signInVerified && !signInOpen;
+    },
+    /** How `step`'s page starts. Planning changes nothing. */
+    plan: (step: StartStep): StartState =>
+      startStateFor({ ...step, writeSessionStarted, signInStarted: started(), signInVerified }),
     /** The step's page is ready and it runs now: a write session's first step starts it. */
     dispatched: (step: StartStep) => {
       if (isFirstWriteStep(step.purpose, writeSessionStarted)) writeSessionStarted = true;
     },
-    save: (session: Session) => {
-      saved = { session };
-    },
-    /** The session saved after sign-in, until the next sign-in step. */
-    get saved(): Session | undefined {
-      return saved?.session;
+    /**
+     * The host replaced the browser, which starts with an empty profile: it forgets every sign-in
+     * started, sent or verified on the old one. The write session stays as it was.
+     */
+    browserReplaced: () => {
+      signInStarted = false;
+      signInVerified = false;
+      signInOpen = false;
+      sentIdentifier = false;
+      sentProof = false;
     },
   };
 };
