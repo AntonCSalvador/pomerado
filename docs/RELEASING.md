@@ -41,9 +41,17 @@ Each step checks before it writes, so re-running a promotion for the version `la
 Two tag rulesets cover `v*` tags:
 
 - `release tags` blocks updating, force-pushing and deleting a `v*` tag, with no bypass.
-- `release tag creation` blocks creating a `v*` tag. GitHub Actions bypasses it, so the promote job can tag with the workflow's own token, while maintainers can't push a release tag by hand. The bypass covers any workflow token with `contents: write`, and in this repository only the promote job has that.
+- `release tag creation` blocks creating a `v*` tag. A dedicated release GitHub App bypasses it, so the promote job can tag, while maintainers can't push a release tag by hand. GitHub doesn't accept GitHub Actions as a bypass actor on a tag ruleset, so the workflow's own token can't create the tag.
 
 The creation rule sits in its own ruleset because a bypass covers every rule in its ruleset, and nothing may move or delete a release tag.
+
+The promote job's workflow token only reads contents. Just before the tag step, the job mints a short lived installation token from the release app, scoped to this repository with `contents: write`, and only the tag step uses it. Setting this up takes, once:
+
+1. A GitHub App installed only on this repository, with the repository permission Contents set to read and write and no other permissions or webhook.
+2. In the `npm-release` environment, the variable `RELEASE_APP_ID` holding the app's ID and the secret `RELEASE_APP_PRIVATE_KEY` holding one of its private keys.
+3. The app added as a bypass actor, always allowed, on the `release tag creation` ruleset.
+
+The promote job checks the variable and secret before it writes anything and fails with an error naming them when either is missing.
 
 To promote by hand, a maintainer runs:
 
