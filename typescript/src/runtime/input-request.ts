@@ -10,6 +10,23 @@ import { Data, Either, Schema, type Effect } from "effect";
 /** A question's key in the request and in the answer. */
 export const questionIdPattern = /^[a-z][a-z0-9_]{0,63}$/;
 export const QuestionId = Schema.String.pipe(Schema.pattern(questionIdPattern));
+
+/**
+ * The id of the minter's design question about how a tool input is used: `input_use_` and the
+ * input's name in lowercase snake_case, so `zip` is `input_use_zip` and `postalCode` is
+ * `input_use_postal_code`. A caller's answer to it is the only thing that lets an input that
+ * tailors the answer, such as a location or store, have a limited use, such as lookup only.
+ * Undefined when the name is empty or too long to form a question id.
+ */
+export const inputUseQuestionId = (input: string): string | undefined => {
+  const name = input
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "_");
+  const id = `input_use_${name}`;
+  return name.length > 0 && questionIdPattern.test(id) ? id : undefined;
+};
 /** The host's opaque name for an offered option; a script's or provider's own value stays private. */
 const OptionId = Schema.String.pipe(Schema.pattern(/^[a-z0-9_]{1,64}$/));
 
