@@ -242,7 +242,10 @@ continues, when:
    business input do not name or clearly imply: never guess it or take the site's preselected
    default, ask before clicking it;
 5. a supplied value is incompatible with what the site offers: ask to revise it or stop, as
-   the key rules say.
+   the key rules say;
+6. how the tool should use an input that tailors the answer is genuinely ambiguous, such as
+   whether a postal code sets the store or only finds nearby ones: ask the design question
+   `input_use_<input>` (.agents/core/SKILL.md, "Inputs that tailor the answer").
 
 When nobody answers before the question expires, `request_input` returns `no_answer`. Decide
 how to go on without it: continue with a sensible default and list it in `finish_build`
