@@ -376,6 +376,51 @@ for (const read of [1, 2, 3])
     await expect(page.locator("#account")).toBeVisible();
   });
 
+/**
+ * A code screen of one box and no button that sends the code once the box holds six digits, then
+ * puts the account in place of the box as the third read of it after that starts. A look of the
+ * host reads the box twice as it finds it, then once more to check it holds what was typed. A step
+ * of one field has no emptiness read, so that check alone decides whether the look reads the box
+ * as empty.
+ */
+const oneBoxTakenAtCheck = `<main id="view"><input id="otp" name="otp" maxlength="6" inputmode="numeric" aria-label="Code" autocomplete="one-time-code"></main>
+<script>
+const view = document.getElementById("view");
+const box = document.getElementById("otp");
+let reads = null;
+new MutationObserver((records) => {
+  for (const record of records) {
+    const starts = record.attributeName.startsWith("data-fixture-") && record.oldValue === null;
+    if (reads === null || !starts || record.target !== box || ++reads !== 3) continue;
+    view.innerHTML = '<p id="account">Signed in</p>';
+    return;
+  }
+}).observe(view, { attributes: true, attributeOldValue: true, subtree: true });
+box.addEventListener("input", () => {
+  if (reads !== null || !/^[0-9]{6}$/.test(box.value)) return;
+  reads = 0;
+  fetch("/api/code", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: box.value }) });
+});
+</script>`;
+
+test("a one-box code screen with no button that takes its box away as a submit call of the host checks it is reported sent by the page", async ({
+  page,
+}) => {
+  const { sent, release } = await serve(page, oneBoxTakenAtCheck);
+  release();
+  const oneBoxStep: AutofillStep = { fields: [{ selector: "#otp", slot: "code" }] };
+  const report = await fill(page, oneBoxStep, [code], { settleMs: 5_000 });
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: [{ slot: "code", status: "filled" }],
+    submit: "page",
+  });
+  expect(maySend(report)).toBe(true);
+  expect(report).not.toHaveProperty("failureDetail");
+  expect(sent).toEqual([code]);
+  await expect(page.locator("#account")).toBeVisible();
+});
+
 /** The host's calls, its first submit call failing as a call that never reached the page does. */
 const firstSubmitFails =
   (submits: { count: number }) =>
