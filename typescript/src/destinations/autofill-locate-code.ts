@@ -10,6 +10,14 @@ import { clipCode, controlNamingCode } from "./control-naming-code.js";
 const judgmentKey = `__pomerado_judgment_${randomUUID()}`;
 
 /**
+ * How long a step call's read of a control it already found may wait for that control. A page can
+ * take a control away while a call reads it, as a code widget that sends itself does when it loads
+ * the next page; Playwright's own default would wait out its whole timeout, or with none set
+ * forever, for a control that never comes back. The read fails then, and the call with it.
+ */
+export const elementReadMs = 5_000;
+
+/**
  * Page code: `where` reads a URL as the host judges it, never its query, fragment or credentials,
  * in any of which page code may have put a typed value: a frame by its origin,
  * a form or link destination by its origin and path, which the request watch counts, and an opaque
@@ -106,7 +114,7 @@ const readQuestion = async (frame, selector) => {
     for (let index = 0; index < count; index++)
       if (await candidates.nth(index).isVisible()) visible.push(candidates.nth(index));
     if (visible.length !== 1) return undefined;
-    const text = await visible[0].evaluate(${questionTextCode});
+    const text = await visible[0].evaluate(${questionTextCode}, undefined, { timeout: ${elementReadMs} });
     return text === null ? undefined : { locator: visible[0], text };
   } catch { return undefined; }
 };
@@ -129,7 +137,8 @@ const locate = async (selector, questionSelector) => {
   if (visible.length !== 1)
     return { error: visible.length === 0 ? "not_found" : "ambiguous_match", searched: { frames: frames.length, matches } };
   const [{ frame, locator }] = visible;
-  const handle = await locator.elementHandle();
+  const read = { timeout: ${elementReadMs} };
+  const handle = await locator.elementHandle(read);
   let owner = handle ? await handle.ownerFrame() : null;
   while (owner && ["about:blank", "about:srcdoc"].includes(owner.url())) owner = owner.parentFrame();
   const found = await locator.evaluate((element) => {
@@ -194,13 +203,13 @@ const locate = async (selector, questionSelector) => {
         text: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? null : element.textContent,
       },
     };
-  });
+  }, undefined, read);
   const described = Object.fromEntries(Object.entries(found.described).map(([key, value]) => [key, key === "tag" ? value : clip(value)]));
   const question = await readQuestion(frame, questionSelector);
   if (question !== undefined) described.questionText = question.text;
   // A recorded question with no one visible match, or none the host reads, is said so.
   else if (questionSelector != null) described.questionUnread = true;
-  const shape = await formControlShape(locator);
+  const shape = await formControlShape(locator, read);
   const control =
     (found.disabled || found.inert) && (shape === "select" || shape === "combobox") ? "other" : shape;
   return {

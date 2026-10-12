@@ -304,9 +304,6 @@ test("a widget with no button that loads the next page 1.5 s after its last digi
 }) => {
   const { sent, release } = await serve(page, inCallWidget("navigates"));
   release();
-  // A read the navigation left waiting on a box that is gone ends, as a browser call that waits
-  // too long does.
-  page.setDefaultTimeout(5_000);
   const report = await fill(page, boxesStep, [...code], { settleMs: 5_000 });
   expect(report).toMatchObject({ outcome: "filled", fields: filledBoxes, submit: "page" });
   expect(maySend(report)).toBe(true);
@@ -329,6 +326,55 @@ test("a refused code whose widget draws its boxes again while a submit call of t
   for (const box of boxesStep.fields) await expect(page.locator(box.selector)).toHaveValue("");
   expect(sent).toEqual(["135790"]);
 });
+
+/**
+ * A widget with no button that sends the code on its last digit and, once the site took it, puts
+ * the account in place of its boxes while one of the host's looks reads them. A look reads the
+ * boxes in order, then the box the host typed last once more; the widget takes them away at the
+ * `read`-th read of its last box since the look's first read of its first box, as each read
+ * starts. The host's test page marks each element it reads with a `data-fixture-` attribute
+ * (`isolatedLocatorPage`), which the widget sees.
+ */
+const takenWhileReadWidget = (read: number) => `<main id="view">${boxes}</main>
+<script>
+const view = document.getElementById("view");
+const boxes = () => [...document.querySelectorAll(".otp")];
+let taken = false;
+let lastBoxReads = null;
+new MutationObserver((records) => {
+  for (const record of records) {
+    const starts = record.attributeName.startsWith("data-fixture-") && record.oldValue === null;
+    if (!taken || !starts) continue;
+    if (record.target.id === "otp-1") lastBoxReads = 0;
+    else if (record.target.id === "otp-6" && lastBoxReads !== null && ++lastBoxReads === ${read}) {
+      view.innerHTML = '<p id="account">Signed in</p>';
+      return;
+    }
+  }
+}).observe(view, { attributes: true, attributeOldValue: true, subtree: true });
+boxes().forEach((box, index) => box.addEventListener("input", () => {
+  const next = boxes()[index + 1];
+  if (box.value !== "" && next) next.focus();
+  const typed = boxes().map((each) => each.value).join("");
+  if (!/^[0-9]{6}$/.test(typed)) return;
+  fetch("/api/code", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: typed }) })
+    .then((response) => { taken = response.ok; });
+}));
+</script>`;
+
+for (const read of [1, 2, 3])
+  test(`a widget with no button that takes its boxes away at read ${read} of its last box by a submit call of the host is reported sent by the page`, async ({
+    page,
+  }) => {
+    const { sent, release } = await serve(page, takenWhileReadWidget(read));
+    release();
+    const report = await fill(page, boxesStep, [...code], { settleMs: 5_000 });
+    expect(report).toMatchObject({ outcome: "filled", fields: filledBoxes, submit: "page" });
+    expect(maySend(report)).toBe(true);
+    expect(report).not.toHaveProperty("failureDetail");
+    expect(sent).toEqual([code]);
+    await expect(page.locator("#account")).toBeVisible();
+  });
 
 /** The host's calls, its first submit call failing as a call that never reached the page does. */
 const firstSubmitFails =

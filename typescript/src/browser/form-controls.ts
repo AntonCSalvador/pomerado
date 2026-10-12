@@ -72,7 +72,7 @@ export const CalendarDate = Schema.String.pipe(
  * value: `date_invalid`, `format_mismatch`, `control_unsupported`, `listbox_missing`,
  * `option_missing`, `option_ambiguous`, `option_disabled` or `not_committed`.
  *
- * - `formControlShape(control)`: the control's shape (`FormControlShape`).
+ * - `formControlShape(control, { timeout }?)`: the control's shape (`FormControlShape`).
  * - `formatDate(iso, format, locale?)`: an ISO `YYYY-MM-DD` date as `format` writes it (see
  *   the exported `formatDate`).
  * - `fillDate(control, iso, format, { timeout }?)`: fills an ISO date into whatever date control
@@ -109,7 +109,7 @@ const formControlFrame = async (control) => {
   const frame = handle === null ? null : await handle.ownerFrame();
   return frame ?? control.page().mainFrame();
 };
-const formControlShape = (control) =>
+const formControlShape = (control, options) =>
   control.evaluate((element) => {
     const popup = element.getAttribute("aria-haspopup");
     if (element instanceof HTMLSelectElement) return "select";
@@ -121,7 +121,7 @@ const formControlShape = (control) =>
     if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element.isContentEditable)
       return "text";
     return "other";
-  });
+  }, undefined, options);
 const formatDate = ${String(formatDate)};
 const formControlOrdinal = (day) => {
   const number = Number(day);

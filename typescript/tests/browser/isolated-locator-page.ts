@@ -60,10 +60,15 @@ export const isolatedLocatorPage = async (page: Page) => {
     frame: Frame,
     fn: unknown,
     arg: unknown,
+    options: unknown,
   ): Promise<unknown> => {
     const cdp = await sessionFor(frame);
     const key = `data-fixture-${randomUUID()}`;
-    await locator.evaluate((element, marker) => element.setAttribute(marker, ""), key);
+    // The evaluation's own timeout bounds each wait for the element, as Patchright's does.
+    const timeout: unknown =
+      typeof options === "object" && options !== null ? Reflect.get(options, "timeout") : undefined;
+    const wait = typeof timeout === "number" ? { timeout } : undefined;
+    await locator.evaluate((element, marker) => element.setAttribute(marker, ""), key, wait);
     const { root } = await cdp.send("DOM.getDocument", { depth: -1, pierce: true });
     const { frameTree } = await cdp.send("Page.getFrameTree");
     const pending = [{ node: root, frameId: frameTree.frame.id }];
@@ -80,7 +85,7 @@ export const isolatedLocatorPage = async (page: Page) => {
         pending.push({ node: node.contentDocument, frameId: node.frameId });
       }
     }
-    await locator.evaluate((element, marker) => element.removeAttribute(marker), key);
+    await locator.evaluate((element, marker) => element.removeAttribute(marker), key, wait);
     if (found === undefined) throw new Error("Fixture element missing");
     const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
       frameId: found.frameId,
@@ -98,7 +103,7 @@ export const isolatedLocatorPage = async (page: Page) => {
       get: (target, property) => {
         if (property === "evaluate")
           return (fn: unknown, arg: unknown, options: unknown, isolatedContext = true): unknown => {
-            if (isolatedContext) return evaluate(target, frame, fn, arg);
+            if (isolatedContext) return evaluate(target, frame, fn, arg, options);
             const mainEvaluate = boundMember(target, property);
             if (typeof mainEvaluate !== "function") throw new Error("Fixture evaluator missing");
             const result: unknown = Reflect.apply(mainEvaluate, target, [fn, arg, options]);
