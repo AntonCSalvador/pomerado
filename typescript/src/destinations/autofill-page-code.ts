@@ -93,9 +93,10 @@ export type AutofillFillCall =
  * the site once values are typed, so each call finds and judges every control again). Otherwise
  * checks the field the host just typed, then runs the call. A field that check cannot read counts
  * as empty, except in the submit call of a step with fields and no submit (`readsOnly`), which only
- * reads the page, given a settle wait (`looksAgain`): there a read that fails, as when the page
- * takes the field away while the call reads it, fails the call, a look the host takes again, and is
- * never a typed field left empty.
+ * reads the page: there a read that fails, as when the page takes the field away while the call
+ * reads it, fails the call, a look the host takes again, and is never a typed field left empty.
+ * With no settle wait the host takes no look again, so the failed call stands, and the host reports
+ * it as uncertain: what was typed may have been sent.
  */
 const fillCallCode = (
   call: AutofillFillCall,
@@ -135,9 +136,6 @@ if (
 // submit call compares against it with no address in its code.
 const typedAt = ${JSON.stringify(typedAt)};
 const readsOnly = ${JSON.stringify(call.kind === "submit")} && fields.length > 0 && submit === null;
-// The host takes such a look again when it fails only while it waits for the page to send, which
-// it does with a settle wait above 0.
-const looksAgain = readsOnly && ${JSON.stringify(call.kind === "submit" && call.settleMs > 0)};
 ${call.kind === "submit" ? pageSentCode : "await keep(typedAt, primary.url());"}
 const check = ${JSON.stringify(check)};
 if (check !== null) {
@@ -147,7 +145,7 @@ if (check !== null) {
     undefined,
     { timeout: ${elementReadMs} },
   );
-  const holds = await (looksAgain ? holding : holding.catch(() => false));
+  const holds = await (readsOnly ? holding : holding.catch(() => false));
   if (!holds) {
     ${call.kind === "submit" ? "if (await allEmptied()) return { pageSent: true, url: primary.url() };" : ""}
     return { checked: false, url: primary.url() };
@@ -166,7 +164,7 @@ ${fillCallBody(call)}`;
  * of such a step of several, as a widget does when it draws its boxes again after the site refused
  * what it sent: the host saw each earlier field hold its value when it typed the next. Lengths
  * only, never a value; a field it cannot read fails the call, as the check's own read does there
- * (`looksAgain`). A step with a submit is the host's to click: a form that locks, moves or
+ * (`readsOnly`). A step with a submit is the host's to click: a form that locks, moves or
  * redraws itself while it checks what was typed has not sent it, and the submit call waits on it
  * or refuses as before.
  */
@@ -190,12 +188,11 @@ if (readsOnly) {
 const allEmptied = async () => {
   if (fields.length < 2 || !readsOnly) return false;
   for (const { locator } of fields) {
-    const emptied = locator.evaluate(
+    const empty = await locator.evaluate(
       (element) => typeof element.value === "string" && element.value.length === 0,
       undefined,
       { timeout: ${elementReadMs} },
     );
-    const empty = await (looksAgain ? emptied : emptied.catch(() => false));
     if (!empty) return false;
   }
   return true;
