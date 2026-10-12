@@ -13,7 +13,9 @@ const judgmentKey = `__pomerado_judgment_${randomUUID()}`;
  * How long a step call's read of a control it already found may wait for that control. A page can
  * take a control away while a call reads it, as a code widget that sends itself does when it loads
  * the next page; Playwright's own default would wait out its whole timeout, or with none set
- * forever, for a control that never comes back. The read fails then, and the call with it.
+ * forever, for a control that never comes back. The read fails then, and the call with it. A date
+ * call's fill is the exception: it reads its field through the authoring library's `fillDate`,
+ * which bounds what it does to the field by its own timeout, not every read.
  */
 export const elementReadMs = 5_000;
 

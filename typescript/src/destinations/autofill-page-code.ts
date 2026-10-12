@@ -23,7 +23,7 @@ for (const frame of primary.frames()) {
   for (let index = 0; index < count && buttons.length < 20; index++) {
     const candidate = candidates.nth(index);
     if (!(await candidate.isVisible())) continue;
-    const words = clip(await candidate.evaluate((element) => element.getAttribute("aria-label") ?? (element instanceof HTMLInputElement ? (element.type === "image" ? element.alt : element.value) : element.textContent)));
+    const words = clip(await candidate.evaluate((element) => element.getAttribute("aria-label") ?? (element instanceof HTMLInputElement ? (element.type === "image" ? element.alt : element.value) : element.textContent), undefined, { timeout: ${elementReadMs} }));
     buttons.push(words ?? "(unlabelled button)");
   }
 }
@@ -93,8 +93,9 @@ export type AutofillFillCall =
  * the site once values are typed, so each call finds and judges every control again). Otherwise
  * checks the field the host just typed, then runs the call. A field that check cannot read counts
  * as empty, except in the submit call of a step with fields and no submit (`readsOnly`), which only
- * reads the page: there a read that fails, as when the page takes the field away while the call
- * reads it, fails the call, a look the host takes again, and is never a typed field left empty.
+ * reads the page, given a settle wait (`looksAgain`): there a read that fails, as when the page
+ * takes the field away while the call reads it, fails the call, a look the host takes again, and is
+ * never a typed field left empty.
  */
 const fillCallCode = (
   call: AutofillFillCall,
@@ -134,6 +135,9 @@ if (
 // submit call compares against it with no address in its code.
 const typedAt = ${JSON.stringify(typedAt)};
 const readsOnly = ${JSON.stringify(call.kind === "submit")} && fields.length > 0 && submit === null;
+// The host takes such a look again when it fails only while it waits for the page to send, which
+// it does with a settle wait above 0.
+const looksAgain = readsOnly && ${JSON.stringify(call.kind === "submit" && call.settleMs > 0)};
 ${call.kind === "submit" ? pageSentCode : "await keep(typedAt, primary.url());"}
 const check = ${JSON.stringify(check)};
 if (check !== null) {
@@ -143,7 +147,7 @@ if (check !== null) {
     undefined,
     { timeout: ${elementReadMs} },
   );
-  const holds = await (readsOnly ? holding : holding.catch(() => false));
+  const holds = await (looksAgain ? holding : holding.catch(() => false));
   if (!holds) {
     ${call.kind === "submit" ? "if (await allEmptied()) return { pageSent: true, url: primary.url() };" : ""}
     return { checked: false, url: primary.url() };
@@ -162,7 +166,7 @@ ${fillCallBody(call)}`;
  * of such a step of several, as a widget does when it draws its boxes again after the site refused
  * what it sent: the host saw each earlier field hold its value when it typed the next. Lengths
  * only, never a value; a field it cannot read fails the call, as the check's own read does there
- * (`readsOnly`). A step with a submit is the host's to click: a form that locks, moves or
+ * (`looksAgain`). A step with a submit is the host's to click: a form that locks, moves or
  * redraws itself while it checks what was typed has not sent it, and the submit call waits on it
  * or refuses as before.
  */
@@ -186,11 +190,12 @@ if (readsOnly) {
 const allEmptied = async () => {
   if (fields.length < 2 || !readsOnly) return false;
   for (const { locator } of fields) {
-    const empty = await locator.evaluate(
+    const emptied = locator.evaluate(
       (element) => typeof element.value === "string" && element.value.length === 0,
       undefined,
       { timeout: ${elementReadMs} },
     );
+    const empty = await (looksAgain ? emptied : emptied.catch(() => false));
     if (!empty) return false;
   }
   return true;
@@ -203,7 +208,7 @@ const fieldLocated = located.fields[${call.index}];
 const question = fields[${call.index}].question;
 try {
   // Emptied only when it holds something: Playwright clears with a Delete key a page sees.
-  if (await field.evaluate((element) => typeof element.value === "string" && element.value.length > 0))
+  if (await field.evaluate((element) => typeof element.value === "string" && element.value.length > 0, undefined, { timeout: ${elementReadMs} }))
     await field.fill("", { timeout: 5000 });
   await field.focus({ timeout: 5000 });
   // Keep this original-node binding in Patchright's isolated world, inaccessible to page code.
@@ -217,7 +222,7 @@ try {
     if (questionRequired) Object.defineProperty(element.ownerDocument.defaultView, key, { value: binding, configurable: true });
     element.setAttribute(key, "");
     return null;
-  }, [${JSON.stringify(call.bindingKey)}, question !== undefined], undefined, true);
+  }, [${JSON.stringify(call.bindingKey)}, question !== undefined], { timeout: ${elementReadMs} }, true);
   if (activeTag === null && question !== undefined) {
     await question.locator.evaluate((element, { key, text }) => {
       const scope = element.ownerDocument.defaultView;
@@ -226,7 +231,7 @@ try {
       if (!binding) throw new Error("Question binding unavailable");
       const readQuestionText = ${questionTextCode};
       binding.checkQuestion = () => readQuestionText(element) === text;
-    }, { key: ${JSON.stringify(call.bindingKey)}, text: question.text }, undefined, true);
+    }, { key: ${JSON.stringify(call.bindingKey)}, text: question.text }, { timeout: ${elementReadMs} }, true);
   }
   return activeTag === null
     ? { focused: true, located: fieldLocated, url: primary.url() }
