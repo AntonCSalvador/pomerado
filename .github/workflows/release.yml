@@ -172,8 +172,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: npm-release
+    # The workflow token only reads. The tag and the GitHub Release use a release app token, which
+    # the job mints just before the tag step.
     permissions:
-      contents: write
+      contents: read
       id-token: write
     defaults:
       run:
@@ -184,6 +186,17 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
     steps:
+      # Check the release app's configuration before anything writes, so a promotion doesn't move
+      # latest and then fail to tag.
+      - name: Check the release app configuration
+        env:
+          APP_ID: ${{ vars.RELEASE_APP_ID }}
+          HAS_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+        run: |
+          if [ -z "$APP_ID" ] || [ "$HAS_PRIVATE_KEY" != true ]; then
+            echo "::error::The npm-release environment needs the RELEASE_APP_ID variable and the RELEASE_APP_PRIVATE_KEY secret of the release GitHub App, which creates release tags. docs/RELEASING.md describes the setup."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -293,13 +306,25 @@ jobs:
             exit 1
           fi
           echo "latest moved from $previous to $VERSION." >> "$GITHUB_STEP_SUMMARY"
-      # Two tag rulesets cover v* tags. One lets only GitHub Actions tokens, such as this job's,
-      # create them. The other lets no one move or delete them, so a promotion after a rollback finds its
-      # tag and release already there. A tag that is already there must point to the commit the
-      # provenance names. docs/RELEASING.md describes both rulesets.
+      # Two tag rulesets cover v* tags. One lets only the release GitHub App create them, since
+      # GitHub can't make GitHub Actions a bypass actor on a tag ruleset. The other lets no one move
+      # or delete them, so a promotion after a rollback finds its tag and release already there. A
+      # tag that is already there must point to the commit the provenance names. The app token is
+      # scoped to this repository with contents: write, and only the tag step uses it.
+      # docs/RELEASING.md describes the app and both rulesets.
+      - name: Mint the release app token
+        id: release-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
       - name: Tag the commit and create the GitHub Release
         env:
           COMMIT: ${{ steps.published.outputs.commit }}
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
         run: |
           tag="v$VERSION"
           if ref="$(gh api "repos/$REPOSITORY/git/ref/tags/$tag" 2>/dev/null)"; then
@@ -317,7 +342,7 @@ jobs:
             fi
           else
             if ! gh api "repos/$REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$COMMIT" --silent; then
-              echo "::error::Couldn't create tag $tag. If a tag ruleset refused it, check that GitHub Actions may bypass the release tag creation ruleset, as docs/RELEASING.md describes."
+              echo "::error::Couldn't create tag $tag. If a tag ruleset refused it, check that the release GitHub App is installed on this repository with contents write access and may bypass the release tag creation ruleset, as docs/RELEASING.md describes."
               exit 1
             fi
           fi

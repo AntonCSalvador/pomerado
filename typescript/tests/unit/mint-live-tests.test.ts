@@ -675,6 +675,36 @@ it("publishes with the gaps when too little time is left for a batch, and the re
   expect(published.seen[0]?.coverage).toContain("ran out of time");
 });
 
+// A host whose cases may each run longer than the default gets no batch it cannot fit one case in:
+// such a batch would only end every case inconclusive for the deadline.
+it("refuses a batch as no_time when less than the host's case limit is left, and runs one that fits", async () => {
+  const attempt = async (batchMs: number) => {
+    const { host, batches } = liveTestHost({});
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("live_tests", runAll, "run"),
+          call("execute", example, "example"),
+          call("finish_build", finish, "finish"),
+        ][index] ?? prose(),
+      {
+        liveTests: { ...host, caseTimeoutMs: 120_000 },
+        // The attempt keeps two minutes after the batch; `batchMs` is what the batch may use.
+        deadline: Deadline.after(2 * 60_000 + batchMs),
+        reviewAndExecute: completedExample,
+        publish: publications().publish,
+      },
+      read,
+    );
+    const root = (f.workspace as unknown as { root: string }).root;
+    await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+    await f.run();
+    return { batches: batches.length, status: resultOf(f.requests[1], "run")["status"] };
+  };
+  expect(await attempt(90_000)).toEqual({ batches: 0, status: "no_time" });
+  expect(await attempt(150_000)).toEqual({ batches: 1, status: "ran" });
+});
+
 it("says time ran out only when the attempt's end, not the batch's own cap, stopped a case", async () => {
   const stopped = { status: "inconclusive" as const, reason: "deadline" as const };
   const record = async (attemptMs: number) => {
