@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { formControlsCode } from "../browser/form-controls.js";
 import type { AutofillPopup, DateOfBirthFormat } from "./autofill-contracts.js";
-import { locateCode, questionTextCode } from "./autofill-locate-code.js";
+import { elementReadMs, locateCode, questionTextCode } from "./autofill-locate-code.js";
 import { clipCode, controlNamingCode } from "./control-naming-code.js";
 import { pageCode, primaryPageCode } from "../runtime/host-execute.js";
 import { submissionGuardCode } from "./autofill-submission-guard.js";
@@ -91,7 +91,10 @@ export type AutofillFillCall =
  * under `judged`, or the page lost it, does nothing, keeps every control as found under `observed` and
  * hands them back, for the host to judge again by inspection's rule (page code may move a form off
  * the site once values are typed, so each call finds and judges every control again). Otherwise
- * checks the field the host just typed, then runs the call.
+ * checks the field the host just typed, then runs the call. A field that check cannot read counts
+ * as empty, except in the submit call of a step with fields and no submit (`readsOnly`), which only
+ * reads the page: there a read that fails, as when the page takes the field away while the call
+ * reads it, fails the call, a look the host takes again, and is never a typed field left empty.
  */
 const fillCallCode = (
   call: AutofillFillCall,
@@ -130,13 +133,17 @@ if (
 // Where the page was as the host typed each field, kept in the page under the fill's id, so the
 // submit call compares against it with no address in its code.
 const typedAt = ${JSON.stringify(typedAt)};
+const readsOnly = ${JSON.stringify(call.kind === "submit")} && fields.length > 0 && submit === null;
 ${call.kind === "submit" ? pageSentCode : "await keep(typedAt, primary.url());"}
 const check = ${JSON.stringify(check)};
 if (check !== null) {
   // Its length only, never its value.
-  const holds = await fields[check].locator
-    .evaluate((element) => typeof element.value === "string" && element.value.length > 0)
-    .catch(() => false);
+  const holding = fields[check].locator.evaluate(
+    (element) => typeof element.value === "string" && element.value.length > 0,
+    undefined,
+    { timeout: ${elementReadMs} },
+  );
+  const holds = await (readsOnly ? holding : holding.catch(() => false));
   if (!holds) {
     ${call.kind === "submit" ? "if (await allEmptied()) return { pageSent: true, url: primary.url() };" : ""}
     return { checked: false, url: primary.url() };
@@ -154,7 +161,8 @@ ${fillCallBody(call)}`;
  * `allEmptied`, for the check of the field typed last, reads whether the page emptied every field
  * of such a step of several, as a widget does when it draws its boxes again after the site refused
  * what it sent: the host saw each earlier field hold its value when it typed the next. Lengths
- * only, never a value. A step with a submit is the host's to click: a form that locks, moves or
+ * only, never a value; a field it cannot read fails the call, as the check's own read does there
+ * (`readsOnly`). A step with a submit is the host's to click: a form that locks, moves or
  * redraws itself while it checks what was typed has not sent it, and the submit call waits on it
  * or refuses as before.
  */
@@ -166,7 +174,7 @@ const pageSentCode = `const originAndPath = (url) => {
     return null;
   }
 };
-if (fields.length > 0 && submit === null) {
+if (readsOnly) {
   const typedPage = await kept(typedAt);
   if (typeof typedPage === "string" && originAndPath(typedPage) !== originAndPath(primary.url()))
     return { pageSent: true, url: primary.url() };
@@ -176,11 +184,13 @@ if (fields.length > 0 && submit === null) {
   if (fieldsDisabled.every(Boolean)) return { pageSent: true, url: primary.url() };
 }
 const allEmptied = async () => {
-  if (fields.length < 2 || submit !== null) return false;
+  if (fields.length < 2 || !readsOnly) return false;
   for (const { locator } of fields) {
-    const empty = await locator
-      .evaluate((element) => typeof element.value === "string" && element.value.length === 0)
-      .catch(() => false);
+    const empty = await locator.evaluate(
+      (element) => typeof element.value === "string" && element.value.length === 0,
+      undefined,
+      { timeout: ${elementReadMs} },
+    );
     if (!empty) return false;
   }
   return true;
