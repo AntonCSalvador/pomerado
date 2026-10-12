@@ -162,6 +162,8 @@ const liveTestHost = (outcomes: Outcomes, result?: LiveTestBatchResult) => {
               },
               durationMs: 20_000,
               lane: index % batch.workers,
+              // Each lane past the build's own browser opens new, so its first case runs cold.
+              start: index > 0 && index < batch.workers ? ("cold" as const) : ("warm" as const),
             })),
           }
         );
@@ -297,8 +299,15 @@ it("runs the cases a read designed as one batch and hands publication the host's
     ]),
   );
   expect(record.notTested).toEqual(cases.notTested);
+  // Each result says how its browser started, and each version counts the cases that passed cold.
+  expect(
+    record.cases.map((entry) => (entry.results["playwright"] as { start?: string }).start).sort(),
+  ).toEqual(["cold", "cold", "warm", "warm"]);
+  expect((published.seen[0]?.liveTests as { versions: unknown[] }).versions).toEqual([
+    expect.objectContaining({ version: "playwright", coldPasses: 1 }),
+  ]);
   expect(published.seen[0]?.coverage).toContain(
-    "4 cases. Playwright version (src/tool.ts): 3 pass, 1 fail, 0 inconclusive.",
+    "4 cases. Playwright version (src/tool.ts): 3 pass, 1 fail, 0 inconclusive; 1 passed cold.",
   );
 });
 
@@ -878,7 +887,7 @@ it("runs the cases as a batch on each version, and each version keeps its own re
     "page-2": ["pass", "pass"],
   });
   expect(published.seen[0]?.coverage).toContain(
-    "HTTP version (src/tool-http.mjs): 3 pass, 1 fail, 0 inconclusive.",
+    "HTTP version (src/tool-http.mjs): 3 pass, 1 fail, 0 inconclusive; 1 passed cold.",
   );
 });
 

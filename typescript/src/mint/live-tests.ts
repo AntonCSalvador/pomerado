@@ -9,7 +9,9 @@ import { outputCheckMeaning, outputChecks, type OutputCheck } from "../runtime/o
  *
  * The agent designs the cases from what it saw on the site, with real values the site offers,
  * and says what each one establishes. The host runs a batch after one Guardian review, each case
- * on a fresh page, in parallel browsers where the host has them, and the agent sees every result.
+ * on a fresh page that keeps its browser's site data, in parallel browsers where the host has
+ * them, and the agent sees every result. Each case run says whether it started warm or cold (see
+ * `LiveTestStart`).
  * Nothing here blocks publication: the publication review reads the record and judges the cases
  * against what the tool claims.
  *
@@ -306,6 +308,14 @@ export type LiveTestOutcome =
     }
   | { readonly status: "inconclusive"; readonly reason: LiveTestInconclusiveReason };
 
+/**
+ * How a case's browser started. `cold`: the case ran first on a new browser with an empty profile,
+ * as a caller the site remembers nothing about meets it. `warm`: it ran on a browser that kept the
+ * site data earlier steps left, such as the build's own browser or a lane after its first case.
+ */
+export const LiveTestStart = Schema.Literal("warm", "cold");
+export type LiveTestStart = typeof LiveTestStart.Type;
+
 /** One case's runs, as a host returns them. */
 export interface LiveTestCaseRun {
   readonly id: string;
@@ -315,6 +325,8 @@ export interface LiveTestCaseRun {
   readonly durationMs: number;
   /** Which of the batch's browsers ran it: 0 is the build's own. */
   readonly lane?: number;
+  /** How its browser started; a host sets it on every case it ran. */
+  readonly start?: LiveTestStart;
 }
 
 /** Runs one case and, for a `next_page` case, its next page, through a host's `run`. */
@@ -572,6 +584,7 @@ export interface LiveTestRecord {
   readonly outputChecks?: readonly LiveTestOutputCheck[];
   readonly durationMs: number;
   readonly lane?: number;
+  readonly start?: LiveTestStart;
   /** The case as it ran, so a result outlives the case's removal or edit. */
   readonly input?: Input;
   readonly purpose?: string;
@@ -605,6 +618,7 @@ export const LiveTestRecord: Schema.Schema<LiveTestRecord> = Schema.Struct({
   outputChecks: Schema.optionalWith(LiveTestOutputChecks, { exact: true }),
   durationMs: Schema.NonNegativeInt,
   lane: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
+  start: Schema.optionalWith(LiveTestStart, { exact: true }),
   input: Schema.optionalWith(Schema.Record({ key: Schema.String, value: Schema.Unknown }), {
     exact: true,
   }),
@@ -691,6 +705,7 @@ export const caseView = (
               }),
           durationMs: record.durationMs,
           ...(record.lane === undefined ? {} : { lane: record.lane }),
+          ...(record.start === undefined ? {} : { start: record.start }),
         }),
   };
 };
@@ -865,6 +880,12 @@ export const liveTestsEvidence = (options: {
         caseStatus(testCase, entry.records.get(testCase.id), entry.sourceDigest),
       ),
     ),
+    // The cases that passed on a new browser with an empty profile, on the published source.
+    coldPasses: file.cases.filter(
+      (testCase) =>
+        entry.records.get(testCase.id)?.start === "cold" &&
+        caseStatus(testCase, entry.records.get(testCase.id), entry.sourceDigest) === "pass",
+    ).length,
   }));
   const retiredFailures = retired.filter((entry) => entry.lastVerdict === "fail").length;
   const summary = nothing
@@ -876,7 +897,7 @@ export const liveTestsEvidence = (options: {
               entry.counts,
             )
               .map(([status, count]) => `${count} ${status}`)
-              .join(", ")}.`,
+              .join(", ")}${entry.coldPasses === 0 ? "; none passed cold" : `; ${entry.coldPasses} passed cold`}.`,
         )
         .join("")}${
         retired.length === 0
@@ -888,7 +909,7 @@ export const liveTestsEvidence = (options: {
       kind: "host_live_tests",
       note: nothing
         ? "Written by the host, never by the minter. The minter designed and ran no live test case, so beyond the example nothing was tested live."
-        : "Written by the host from its own runs, never by the minter. The same cases run on each version of the tool: playwright, the Kernel script, and http, the HTTP version, for each version that ships: a version that does not ship, such as an HTTP version the minter ruled out, is not listed. versions names each version's entrypoint, the source digest its results are judged against, and its counts. Each case's results hold its result on each version, from that version's own batches: one version's run never counts for the other. Each case ran on a fresh page after one Guardian review of its batch; purpose is the minter's account of what the case establishes. status is against that version's source being published: stale means the source or the case changed after the case ran, and not_run means no batch ran it on that version. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists, by version, cases the minter deleted, failures it replaced by changing the case, and failures that did not repeat when the unchanged case ran again on the same source (flaky), with their last result; excusedBy names a case that passes the same input with the same expectation on that version's published source after the source changed.",
+        : "Written by the host from its own runs, never by the minter. The same cases run on each version of the tool: playwright, the Kernel script, and http, the HTTP version, for each version that ships: a version that does not ship, such as an HTTP version the minter ruled out, is not listed. versions names each version's entrypoint, the source digest its results are judged against, and its counts. Each case's results hold its result on each version, from that version's own batches: one version's run never counts for the other. Each case ran in a fresh script process on a page reset to the site's origin, after one Guardian review of its batch; purpose is the minter's account of what the case establishes. A result's start says how its browser started: cold, first on a new browser with an empty profile, as a caller the site remembers nothing about meets it; warm, on a browser that kept the site data earlier steps left. versions counts each version's coldPasses, the cases that passed cold; a host with one browser runs no case cold. status is against that version's source being published: stale means the source or the case changed after the case ran, and not_run means no batch ran it on that version. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists, by version, cases the minter deleted, failures it replaced by changing the case, and failures that did not repeat when the unchanged case ran again on the same source (flaky), with their last result; excusedBy names a case that passes the same input with the same expectation on that version's published source after the source changed.",
       ...(outOfTime ? { outOfTime: true } : {}),
       ...(options.fileProblem === undefined ? {} : { casesFileProblem: options.fileProblem }),
       versions: versionViews,
