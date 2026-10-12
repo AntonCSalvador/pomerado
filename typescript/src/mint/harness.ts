@@ -43,6 +43,7 @@ import {
   BlockedReport,
   BuildBlocked,
   CaptureRequest,
+  defaultLiveTestCaseMs,
   ExecutionRefusal,
   ExecutionRequest,
   isReadOrWriteChoice,
@@ -2762,7 +2763,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "Private values in the explanation made it longer than 500 characters once screened. Shorten it, leave private values out, and call report_blocked again.",
           );
         // A policy block stands on a refusal on record: Guardian's deny or escalation of an
-        // execution, its publication refusal no correction gets past, or the owner's no to a
+        // execution, its publication refusal no correction gets past (an escalation for missing
+        // evidence is not one), or the owner's no to a
         // confirm question, unless the host's own guidance names the ending. The
         // minter's reading of its own instructions is none. A question handed back unanswered
         // also lets the minter stop: no answer is no consent, so it may end the build safely
@@ -2779,7 +2781,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         )
           return refused(
             "policy_not_refused",
-            "Nothing in this attempt refused this: Guardian denied or escalated no execution, refused no publication for privacy or authority or escalated one, and the owner answered no to nothing. A publication denial that names a correction is not a refusal: fix every finding and each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no to a confirm question is a refusal. Use site_lacks_capability only when the site does not offer what the task needs.",
+            "Nothing in this attempt refused this: Guardian denied or escalated no execution, refused no publication for privacy or authority, and the owner answered no to nothing. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no to a confirm question is a refusal. Use site_lacks_capability only when the site does not offer what the task needs.",
           );
         return undefined;
       };
@@ -3312,7 +3314,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               instruction: `The host could not read ${request.entrypoint} and its imports. Nothing was executed.`,
             });
           const { deadlineAt, attemptBound } = yield* liveTestDeadline;
-          if (deadlineAt - (yield* Clock.currentTimeMillis) < 60_000) {
+          // A batch with less time left than one case may take could only end every case
+          // inconclusive, so it runs nothing.
+          const caseLimitMs = host.caseTimeoutMs ?? defaultLiveTestCaseMs;
+          if (deadlineAt - (yield* Clock.currentTimeMillis) < caseLimitMs) {
             liveTestsOutOfTime = true;
             return JSON.stringify({
               kind: "host_live_tests",
@@ -4511,9 +4516,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         : "Publication diagnostic unavailable.",
                     repeatableRead,
                   },
-                  (error.code === "ReviewDenied" && error.review !== undefined
-                    ? "Not published: Guardian blocked this publication. Each finding's explanation says what is wrong, the evidence and the fix, at its file and byte range. Fix every finding and each missing item the rationale names, then call finish_build again with the same executionId. The existing example and result remain recorded."
-                    : "Not published. The existing example and result remain recorded. Source edits and another finish_build publication review may continue; this does not guarantee the failure is repairable.") +
+                  (error.code === "ReviewDenied" && error.review?.reason === "evidence"
+                    ? "Not published yet: Guardian needs more evidence to judge this publication, and the rationale names each missing item. Gather each one within your authority, such as running the live tests or cases it names so their results reach the test record, and fix every finding, then call finish_build again. Missing evidence is not a refusal and never a reason for a policy block. The existing example and result remain recorded."
+                    : error.code === "ReviewDenied" && error.review !== undefined
+                      ? "Not published: Guardian blocked this publication. Each finding's explanation says what is wrong, the evidence and the fix, at its file and byte range. Fix every finding and each missing item the rationale names, then call finish_build again with the same executionId. The existing example and result remain recorded."
+                      : "Not published. The existing example and result remain recorded. Source edits and another finish_build publication review may continue; this does not guarantee the failure is repairable.") +
                     " A fresh reviewed example read requires an available live host and host repeatableRead:true within the same input/account after confirmed executor cleanup. Otherwise never repeat the example or a write step that may have committed.",
                 );
               }
