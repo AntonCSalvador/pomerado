@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Clock, Effect, Either } from "effect";
 import { LocalOperationFailure, runLocalOperation } from "../execution/local-operation.js";
-import { MintFailure, type LiveTestHost } from "../mint/contracts.js";
+import { defaultLiveTestCaseMs, MintFailure, type LiveTestHost } from "../mint/contracts.js";
 import {
   batchReviewInput,
   runLiveTestCase,
@@ -16,7 +16,7 @@ import { mintError } from "./errors.js";
 import { mintListScope, refusedCursor } from "./list-cursors.js";
 
 /** How long one case may run. */
-const caseTimeoutMs = 60_000;
+const caseTimeoutMs = defaultLiveTestCaseMs;
 const authoredSource = /^(?:src|explore|test|scratch)\//u;
 
 /** What one local run of a case's input showed. Outputs stay in memory. */
@@ -61,6 +61,7 @@ export const localLiveTests = (state: MintState): LiveTestHost => {
   );
   return {
     maxWorkers: 1,
+    caseTimeoutMs,
     schemas: (entrypoint) =>
       Effect.gen(function* () {
         const result = yield* runLocalOperation({

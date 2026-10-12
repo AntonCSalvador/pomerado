@@ -618,7 +618,16 @@ export interface LiveTestHost {
   readonly run: (batch: LiveTestBatch) => Effect.Effect<LiveTestBatchResult, MintFailure>;
   /** The most browsers this host runs a batch on at once, the build's own included. */
   readonly maxWorkers: number;
+  /**
+   * How long one case may run on this host, in milliseconds; `defaultLiveTestCaseMs` when
+   * absent. The harness refuses a batch as `no_time`, running nothing, when less than this is
+   * left before the batch's deadline, since no case could finish.
+   */
+  readonly caseTimeoutMs?: number;
 }
+
+/** How long one live test case may run when its host names no limit of its own. */
+export const defaultLiveTestCaseMs = 60_000;
 
 /** One batch of a read's live test cases. */
 export interface LiveTestBatch {
