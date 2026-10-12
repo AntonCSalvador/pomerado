@@ -11,6 +11,7 @@ import {
   guardianPublicationPolicy,
   publicationDecisionPolicy,
   publicationLiveTestsPolicy,
+  publicationOutputPolicy,
   publicationSafetyDefaultPolicy,
 } from "../../src/guardian/publication.js";
 import {
@@ -480,6 +481,38 @@ describe("the publication policy", () => {
     expect(policy).toContain(
       "The local precheck covered only this build's own caller-supplied values and secret handles; it did not screen for provider credentials or other secrets, so inspect every published file for hard-coded API keys, tokens and passwords. Inspect the published files for hardcoded customer/private data,",
     );
+  });
+
+  // A caller may choose, in answer to a design question, that a tailoring input has a limited use,
+  // such as a postal code used only to look up nearby locations. The review counts that documented
+  // use as applied, still flags one no answer backs, and never extends it to an input that
+  // restricts the answer. Guardian is a model, so each case pins the rule that decides it, inside
+  // the unapplied supplied input rule of the policy every host shares.
+  it.each([
+    [
+      "a By design: tailoring input with a matching answer is applied, not a finding",
+      "A caller's design decision is the one exception that lets an input that tailors the answer have a limited use: when trusted_authority.answeredQuestions holds the caller's answer to a design question about how that input is used, and the input's description starts \"By design:\" and states the use that answer chose, such as a postal code used only to look up nearby locations that never changes the selected one, that documented use counts as the input applied and is not this finding. The code still applies the value in that use.",
+    ],
+    [
+      "a By design: description with no answer behind it is a finding",
+      "A \"By design:\" description that misses or contradicts the answer, or that no answer backs, is this finding, unless the tool's earlier revision already carried it word for word, which records an earlier answer; changing that use needs a new answer.",
+    ],
+    [
+      "a filter, sort or date with such an answer is still a finding",
+      "No answer or description makes a filter, sort, date or other value that restricts the answer lookup-only. For any other input, the fix is to throw InputNotApplied",
+    ],
+    [
+      "a filter, sort or date is excused by no answer at all",
+      "Neither the description nor an answer in trusted_authority.answeredQuestions excuses it.",
+    ],
+  ])("%s", (_case, rule) => {
+    const start = publicationOutputPolicy.indexOf("Unapplied supplied input:");
+    const unappliedSupplied = publicationOutputPolicy.slice(
+      start,
+      publicationOutputPolicy.indexOf("Wrong failure:", start),
+    );
+    expect(unappliedSupplied.split(rule)).toHaveLength(2);
+    expect(guardianPublicationPolicy.split(rule)).toHaveLength(2);
   });
 
   // A composed write that confirms from its own commit request's response, checked, is
