@@ -773,7 +773,7 @@ it("never counts a case the site blocked on the browser's egress against the too
     (testCase) => testCase.id === "sort-price",
   );
   expect(blocked).toMatchObject({ status: "inconclusive", got: "site_block" });
-  expect(published.seen[0]?.coverage).toContain("1 inconclusive.");
+  expect(published.seen[0]?.coverage).toContain("2 pass, 1 fail, 1 inconclusive;");
 });
 
 it("runs nothing when Guardian denies the batch, and says why", async () => {
