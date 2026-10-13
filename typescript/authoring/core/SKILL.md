@@ -263,9 +263,9 @@ the task can't run without it (below).
     `input_use_<input>`, `<input>` being the input's name in lowercase snake_case
     (`postalCode` is `input_use_postal_code`), with each use as an option. Always offer the
     full use, such as setting the store from the postal code, never only limited uses. When the
-    caller chooses a limited use, start the input's description with "By design:" and state
-    that use in plain words, such as "By design: used only to find nearby stores; it does not
-    change the selected store." Write it only from that answer, never from the request's
+    caller chooses a limited use, start the input's description with "By design:", then state
+    how many values it takes and that use in plain words, such as "By design: one postal code,
+    used only to find nearby stores; it does not change the selected store." Write it only from that answer, never from the request's
     wording, a free-text instruction or your own judgment, and never for a filter, sort or date,
     which stay strict whatever an answer says. The code still applies the value in that use, and
     a value the page does not take in it throws `InputNotApplied` (above).
@@ -297,7 +297,7 @@ the task can't run without it (below).
   output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
   and its example's own input and output must decode under them, so settle both before that
   example.
-- Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear.
+- Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear. A description that starts "By design:" keeps that marker first and puts the number of values after it, such as "By design: one postal code, …", never before it.
 - Give every input and output field, nested object and array item fields included, a short
   `description` annotation saying what it is, with the unit or format where one applies:
   "Departure airport as a three-letter IATA code", "Departure date, YYYY-MM-DD", "Average
