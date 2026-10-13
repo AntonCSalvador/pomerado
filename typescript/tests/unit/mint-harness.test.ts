@@ -3457,6 +3457,12 @@ const noFallbackEnding = "the build ends unpublished and reports Guardian's find
 const unresolvedSummary =
   "Not built: Guardian's input feedback on this tool's schema was not resolved (account_specific_enum, input_option). Guardian's rationale: Make the account an input.";
 
+/** The publication as the minter resubmits it after a feedback round, with its input corrected. */
+const correctedPublication = (round: number) => ({
+  ...publication,
+  metadata: { ...publication.metadata, description: `Read invoices (revision ${round})` },
+});
+
 it("ends a build with no fallback unpublished once input feedback outlasts its two rounds", async () => {
   const replies: Record<string, unknown>[] = [];
   let publications = 0;
@@ -3465,7 +3471,7 @@ it("ends a build with no fallback unpublished once input feedback outlasts its t
       Effect.gen(function* () {
         yield* turn.actions.execute(execution);
         for (let round = 0; round < 3; round++)
-          replies.push(JSON.parse(yield* turn.actions.finish(publication)));
+          replies.push(JSON.parse(yield* turn.actions.finish(correctedPublication(round))));
       }),
     {
       publish: () =>
@@ -3511,7 +3517,7 @@ it("reports no input feedback a later completed review replaced", async () => {
       Effect.gen(function* () {
         yield* turn.actions.execute(execution);
         yield* turn.actions.finish(publication);
-        yield* turn.actions.finish(publication);
+        yield* turn.actions.finish(correctedPublication(1));
       }),
     {
       publish: () =>
@@ -3552,7 +3558,7 @@ it("keeps a fallback host's instructions, screenings and snapshots", async () =>
         yield* turn.actions.execute(execution);
         for (let round = 0; round < 3; round++) {
           const before = screenings;
-          replies.push(JSON.parse(yield* turn.actions.finish(publication)));
+          replies.push(JSON.parse(yield* turn.actions.finish(correctedPublication(round))));
           perRound.push(screenings - before);
           if (capture !== undefined) snapshots.push(capture());
         }

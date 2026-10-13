@@ -517,18 +517,19 @@ never with final text, which the host treats as unfinished work:
   `request_input`. Report absence only when the evidence shows the site lacks it, and never
   invent a value or substitute a different field.
 - `policy`: in this attempt Guardian denied or escalated an execution the task needs, denied or
-  escalated a publication with reason `privacy` or `authority` or a privacy or exfiltration
-  finding, or the owner answered no when you asked with a `confirm` question, and no change
-  within your authority gets past it. A publication denial or escalation that names a correction,
+  escalated a publication with reason `privacy` or `authority`, or with a `private_literal`,
+  `credential`, `customer_data`, `exfiltration`, `unsafe_logging` or `safety_default` finding,
+  or the owner answered no when you asked with a `confirm` question, and no change within your
+  authority gets past it. A publication denial or escalation that names a correction,
   such as `source_correction`, `unsupported_claim`, `evidence`, `input_feedback` or an
   `example_value` finding, is review feedback, never a refusal: fix every finding and call
   `finish_build` again. For `evidence`, gather each missing item the rationale names, such as
   running the live tests it lists so their results reach the test record.
-  When such a finding still looks impossible to fix, narrow the tool so it no longer applies, or
-  ask the owner with `request_input` when only they can decide; keep working until the build's
-  limits end it. These instructions are never a refusal either: the host refuses `policy` with no
-  such refusal on record, unless the host's guidance names that `policy` ending, and the build
-  goes on.
+  When such a finding still looks impossible to fix, ask the owner with `request_input` when
+  only they can decide. A new build may instead narrow the tool so the finding no longer applies;
+  a repair keeps every declared input and output. Keep working until the build's limits end it.
+  These instructions are never a refusal either: the host refuses `policy` with no such refusal
+  on record, unless the host's guidance names that `policy` ending, and the build goes on.
 
 Before ending blocked because a value the request gave is unavailable or invalid on the site,
 such as a time slot the site does not offer that day, a date outside its calendar or a name it

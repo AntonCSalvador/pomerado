@@ -396,7 +396,8 @@ test("an account-specific enum Guardian returns as input feedback is fixed and p
 });
 
 // A runtime override starts the actual compiled terminal CLI with recorded providers: the minter
-// submits the same build three times and Guardian returns input feedback on each.
+// submits the build three times, changing it each time, and Guardian returns input feedback on
+// each.
 const cliRuntime = async (directory: string) => {
   const file = join(directory, "recorded-cli.mjs");
   const ledger = join(directory, "ledger.txt");
@@ -418,7 +419,7 @@ const minterProvider={getModel:()=>({getResponse:async(request)=>{
 const index=turn++;
 if(index===0)return response([{type:'apply_patch_call',callId:'patch',status:'completed',operation:{type:'create_file',path:'src/tool.mjs',diff:tool.split('\\n').map(line=>'+'+line).join('\\n')+'\\n'}}]);
 if(index===1)return response([call('execute',{purpose:'example',target:'liveBrowser',entrypoint:'src/tool.mjs',fixtureRefs:[],caseFilter:[],maxWorkers:1,timeoutSeconds:10,intent:'Run the example'},'example')]);
-if(index<=4){if(index>2)appendFileSync(ledger,'finish '+JSON.stringify(resultOf(request,'finish_'+(index-1)))+'\\n');return response([call('finish_build',{intent:'Return the fixture integration',entrypoint:'src/tool.mjs',executionId:resultOf(request,'example').executionId,metadata:{name:'read_fixture',description:'Read the fixture heading'},coverage:'One live example'},'finish_'+index)]);}
+if(index<=4){if(index>2)appendFileSync(ledger,'finish '+JSON.stringify(resultOf(request,'finish_'+(index-1)))+'\\n');return response([call('finish_build',{intent:'Return the fixture integration',entrypoint:'src/tool.mjs',executionId:resultOf(request,'example').executionId,metadata:{name:'read_fixture',description:'Read the fixture heading, revision '+index},coverage:'One live example'},'finish_'+index)]);}
 return response([message('Done.')]);
 },getStreamedResponse:()=>{throw new Error('Unused stream');}})};
 const action=(current)=>{if(current?.trusted_review?.kind!=='execution')return {};const purpose=current.trusted_execution_context?.currentExecution?.purpose;return {action:purpose==='act'?'write':purpose==='authenticate'?'authentication':'read'};};

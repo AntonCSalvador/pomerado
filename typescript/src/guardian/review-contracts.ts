@@ -82,7 +82,8 @@ export const publicationReasons = [
  * A publication refusal no correction within the minter's authority gets past: the tool would
  * expose private data or send it off the site, or needs authority the build does not have. Every
  * other denial or escalation names a correction, such as evidence the minter gathers, so it never
- * ends a build as a `policy` block.
+ * ends a build as a `policy` block. Nor does `host_owned`, a defect in a file the host wrote: the
+ * host ends that build as its own failure.
  */
 export const unfixablePublicationReasons = [
   "privacy",
