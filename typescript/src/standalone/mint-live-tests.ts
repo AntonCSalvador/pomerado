@@ -50,7 +50,8 @@ const outcomeOf = (
 /**
  * The local host's live tests: one Guardian review of the batch, whose input lists every case's
  * input marked `agent_chosen_batch`, then each case in turn on the build's own browser, its page
- * reset like any live test's first. It has one browser, so it runs one case at a time. It runs no
+ * reset like any live test's first. It has one browser, so it runs one case at a time, each warm,
+ * and none cold: the record shows that gap. It runs no
  * anti-bot handling, which is a hosted concern, and keeps no output past the batch.
  */
 export const localLiveTests = (state: MintState): LiveTestHost => {
@@ -155,7 +156,12 @@ export const localLiveTests = (state: MintState): LiveTestHost => {
             });
             continue;
           }
-          cases.push({ ...(yield* runLiveTestCase(testCase, runInput)), lane: 0 });
+          // One browser, which keeps the site data earlier steps left: every case runs warm.
+          cases.push({
+            ...(yield* runLiveTestCase(testCase, runInput)),
+            lane: 0,
+            start: "warm" as const,
+          });
         }
         // One history entry for the batch.
         yield* context.recorded(

@@ -1845,7 +1845,7 @@ it("keeps two answered requests in one attempt and publishes with both answers",
 });
 
 // A signed-out step that enters a contact detail only to set the store a read applies stays a read
-// once the owner confirms it: Guardian labels it read, and the build publishes with no task update.
+// once the owner confirms it: Guardian labels it read, and the read build publishes.
 it("publishes a read whose live contact step the owner confirmed, Guardian labelling it a read", async () => {
   const f = await fixture(
     (turn) =>
