@@ -28,7 +28,8 @@ permissions:
   contents: read
 # One canary at a time, in push order. A newer push replaces a canary still waiting to start, and
 # the newest canary includes its commits. So a replaced push gets no Check run of its own on main.
-# Its pull request ran Check on the same tree, since the branch had to be up to date with main.
+# Its pull request ran Check on the pull request's own tree, which can differ from the merged tree on
+# main. So the Check this workflow runs on a push to main is what validates the merged tree.
 # Promotions queue apart from canaries the same way.
 concurrency:
   group: release-${{ github.event_name }}
