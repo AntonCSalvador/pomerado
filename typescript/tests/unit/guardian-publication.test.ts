@@ -446,6 +446,18 @@ describe("the publication policy", () => {
     expect(guardianPublicationPolicy).toContain(`\n${publicationLiveTestsPolicy}\n`);
   });
 
+  // One case that uses an input covers it, so the review asks for no case per option value.
+  // Hosts with their own publication policy get it with the live tests.
+  it("counts an input as tested by one case that uses it, not one per value", () => {
+    expect(publicationLiveTestsPolicy).toContain(
+      "a declared input no case uses or changes from its default,",
+    );
+    expect(publicationLiveTestsPolicy).toContain(
+      "its other values, such as each option of a sort, need no case of their own and no notTested entry",
+    );
+    expect(publicationLiveTestsPolicy).not.toContain("a declared input or one of its values");
+  });
+
   // A site's own "Remember me" choice left at its default keeps the owner's session for later
   // runs. It is not a safety default, so neither review denies the host's sign-in step over it.
   it("leaves a site's own Remember me choice at its default in both reviews", () => {

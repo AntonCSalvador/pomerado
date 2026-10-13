@@ -32,7 +32,9 @@ pages differ. Choose the cases that would show the tool works for callers other 
 not mechanical variations of the example's input. Start as soon as you know the page and its
 inputs, and refine the cases once the example passes. Consider each of these where the site has
 it; none is required, and one case may serve several:
-- every input, alone and together with the others;
+- every input, alone and together with the others. One case that uses an input, or changes it
+  from its default, covers it: its other values, such as each order a sort offers, need no case
+  or `notTested` entry of their own unless one opens a page laid out differently;
 - smart combinations: controls that share a panel, a drawer or a page reload, a location or store
   set with a filter, controls that could undo or hide each other, and the combination a real
   caller would most likely send;
