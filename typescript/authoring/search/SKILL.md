@@ -91,7 +91,8 @@ Wait for the search's answer with `waitForOutcome` (core skill). Prefer naming i
 no-results message and its results over waiting for the results alone, and name results by the
 page's most stable sign, such as the result count or heading for the query, over one layout's
 classes. Read every field of every result you return from that result's own card on every run.
-Lean toward more information (core skill, output fields): return the facts on each card a caller
+Lean toward more information (core skill, output fields): return the facts each card shows
+without a click that a caller
 could reasonably use to choose among results, with full displayed values, and a maker or provider
 line in its own field, each fact once. Return only the site's results for these inputs, with
 related or recommended items, the filters the site offers and each card's whole text only as

@@ -73,6 +73,13 @@ const intentDerivedWriteSessionAllowedEffect =
 const signInAllowedEffect =
   "Signing in on the site's own sign-in page: the step enters the login and codes the caller supplied privately, either filled by the host or written as secret handles in the step's source, submits them, and checks whether the account is signed in. Nothing else on the site may change.";
 
+/**
+ * What Guardian may approve for a host card-fill step: the caller's card typed into the site's own
+ * checkout, which submits nothing by itself.
+ */
+const cardFillAllowedEffect =
+  "Typing the caller's payment card into the card fields of the site's own checkout, for the booking or purchase the caller asked for: the host types the card answers the caller gave privately and clicks nothing. Nothing on the site is submitted, booked or bought by this step.";
+
 const offlineAllowedEffect =
   "Offline local files, source checks and computation only. No live website, credentials or network.";
 
@@ -91,7 +98,9 @@ export const allowedEffectsFor = (
         : writeSessionAllowedEffect
       : step.purpose === "authenticate"
         ? signInAllowedEffect
-        : explorationAllowedEffect,
+        : step.purpose === "card_fill"
+          ? cardFillAllowedEffect
+          : explorationAllowedEffect,
 ];
 
 /**

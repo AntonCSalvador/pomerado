@@ -13,7 +13,7 @@ export type StartState = "none" | "clear" | "restore" | "keep";
 
 /** A build step's purpose, as the minting agent submits it. */
 export type StepPurpose =
-  "explore" | "authenticate" | "test" | "example" | "act" | "inspect" | "residual";
+  "explore" | "authenticate" | "test" | "example" | "act" | "inspect" | "residual" | "card_fill";
 
 /** A step about to run: its purpose, and whether it runs on the live browser. */
 export interface StartStep {

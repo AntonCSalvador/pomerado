@@ -7,7 +7,7 @@ import type { PlaywrightExecutor } from "../execution/playwright-execute.js";
 import type { ConfirmSession } from "../browser/dialogs/expected.js";
 import {
   identifierPreference,
-  type AutofillSlot,
+  type FillSlot,
   type AutofillStepReport,
   type AutofillStepRequest,
 } from "../destinations/autofill-step.js";
@@ -43,7 +43,7 @@ import type { KeptScriptAnswer } from "./script-answer-reuse.js";
 import type { StandaloneSession } from "./session.js";
 import type { RequestContext } from "./request-context.js";
 import type { PomeradoRequest } from "./contracts.js";
-const identifiers: ReadonlySet<AutofillSlot> = new Set(identifierPreference);
+const identifiers: ReadonlySet<FillSlot> = new Set(identifierPreference);
 /** What the host does with a sign-in step Guardian allows, for its review. */
 const signInStepNote =
   "The host fills the login's values, which never appear in this review, into the fields the step names and clicks the named submit on the sign-in screen of the authorized site.";

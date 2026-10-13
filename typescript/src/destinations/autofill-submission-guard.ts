@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Schema } from "effect";
 import type { AutofillFillCall } from "./autofill-page-code.js";
 import { foundEvidence, namedOrigin, refused, withCheck } from "./autofill-refusal.js";
-import type { AutofillSlot, Targets } from "./autofill-step.js";
+import type { FillSlot, Targets } from "./autofill-step.js";
 
 /**
  * Page code: arms the guard on a filled field's own window for one submit call (`call`), and says
@@ -191,7 +191,7 @@ const guardKey = `__pomerado_submission_${randomUUID()}`;
  * character, its code's boxes, into one code. A date part or a ZIP is never matched by value, since
  * a dropdown's or a hidden field's own value may hold one.
  */
-const secretMatch: Partial<Record<AutofillSlot, "within" | "token">> = {
+const secretMatch: Partial<Record<FillSlot, "within" | "token">> = {
   password: "within",
   recovery_code: "within",
   private_answer: "within",
@@ -204,7 +204,7 @@ const secretMatch: Partial<Record<AutofillSlot, "within" | "token">> = {
  * scheme and host no page chose.
  */
 export const guardedSubmit = (
-  step: { readonly fields: readonly { readonly slot: AutofillSlot }[] },
+  step: { readonly fields: readonly { readonly slot: FillSlot }[] },
   judged: typeof Targets.Type,
   call: {
     readonly settleMs: number;

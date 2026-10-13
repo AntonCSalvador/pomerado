@@ -355,6 +355,8 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
     | "file_handle"
     /** Source to publish sets a file input, handles a download or reads a file back itself. */
     | "file_readback"
+    /** Source to publish calls `fillCard` and could read a typed card back. */
+    | "card_readback"
     /** The live page URL the sign-in used carries one-time authorization values; asked once. */
     | "login_url_one_time"
     /** The login URL to publish carries a registered credential; refused every time. */
@@ -547,8 +549,31 @@ export const SignInStep = Schema.Union(
 );
 export type SignInStep = typeof SignInStep.Type;
 
+/**
+ * A host card-fill step: the payment card fields on the checkout showing now, each with the card
+ * handle the host types into it. It clicks nothing. Each handle is a card answer's, named once.
+ */
+export const CardFillStep = Schema.Struct({
+  fields: Schema.Array(
+    Schema.Struct({
+      selector: SignInSelector,
+      handle: Schema.String.pipe(Schema.pattern(/^\{\{secret\.s[1-9]\d*\}\}$/u)),
+    }),
+  ).pipe(
+    Schema.minItems(1),
+    Schema.maxItems(4),
+    Schema.filter((fields) => new Set(fields.map((field) => field.handle)).size === fields.length, {
+      message: () => "name each card handle once",
+    }),
+  ),
+});
+export type CardFillStep = typeof CardFillStep.Type;
+
 export const ExecutionRequest = Schema.Struct({
-  /** `act` is a step of a write build's one live write session; see the writes skill. */
+  /**
+   * `act` is a step of a write build's one live write session; see the writes skill. `card_fill`
+   * types the caller's card answers with `cardFillStep`.
+   */
   purpose: Schema.Literal(
     "explore",
     "authenticate",
@@ -557,6 +582,7 @@ export const ExecutionRequest = Schema.Struct({
     "act",
     "inspect",
     "residual",
+    "card_fill",
   ),
   target: Schema.Literal("pureFiles", "savedHTTP", "savedDOM", "liveBrowser"),
   loginUrl: Schema.optional(Schema.String),
@@ -574,6 +600,13 @@ export const ExecutionRequest = Schema.Struct({
   ),
   /** Only on authenticate, and only where the host offers autofill sign-in. */
   signInStep: Schema.optional(SignInStep),
+  /** Only on card_fill. */
+  cardFillStep: Schema.optional(
+    CardFillStep.annotations({
+      description:
+        "Only with purpose card_fill, target liveBrowser and entrypoint operation/card-fill-step.json: the payment card fields on the checkout showing now, each the field's own selector, on the site's page or inside the payment provider's frame (the host finds the frame that holds it), and the card handle a request_input answer gave you for it. The host types the caller's card into them and clicks nothing.",
+    }),
+  ),
   /**
    * Only when the caller's input is empty (`{}`), on a read build's example or a write build's
    * act step: the tool's input as JSON text, which the agent writes from the request and the
@@ -622,7 +655,16 @@ export interface LiveTestHost {
   readonly run: (batch: LiveTestBatch) => Effect.Effect<LiveTestBatchResult, MintFailure>;
   /** The most browsers this host runs a batch on at once, the build's own included. */
   readonly maxWorkers: number;
+  /**
+   * How long one case may run on this host, in milliseconds; `defaultLiveTestCaseMs` when
+   * absent. The harness refuses a batch as `no_time`, running nothing, when less than this is
+   * left before the batch's deadline, since no case could finish.
+   */
+  readonly caseTimeoutMs?: number;
 }
+
+/** How long one live test case may run when its host names no limit of its own. */
+export const defaultLiveTestCaseMs = 60_000;
 
 /** One batch of a read's live test cases. */
 export interface LiveTestBatch {

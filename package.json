@@ -146,6 +146,11 @@
       "import": "./dist/typescript/src/destinations/autofill-typed-page.js",
       "default": "./dist/typescript/src/destinations/autofill-typed-page.js"
     },
+    "./core/destinations/card-fill": {
+      "types": "./dist/typescript/src/destinations/card-fill.d.ts",
+      "import": "./dist/typescript/src/destinations/card-fill.js",
+      "default": "./dist/typescript/src/destinations/card-fill.js"
+    },
     "./core/destinations/credential-keyboard": {
       "types": "./dist/typescript/src/destinations/credential-keyboard.d.ts",
       "import": "./dist/typescript/src/destinations/credential-keyboard.js",
@@ -160,6 +165,11 @@
       "types": "./dist/typescript/src/destinations/login-fields.d.ts",
       "import": "./dist/typescript/src/destinations/login-fields.js",
       "default": "./dist/typescript/src/destinations/login-fields.js"
+    },
+    "./core/destinations/payment-frames": {
+      "types": "./dist/typescript/src/destinations/payment-frames.d.ts",
+      "import": "./dist/typescript/src/destinations/payment-frames.js",
+      "default": "./dist/typescript/src/destinations/payment-frames.js"
     },
     "./core/destinations/private-candidate": {
       "types": "./dist/typescript/src/destinations/private-candidate.d.ts",
@@ -355,6 +365,11 @@
       "types": "./dist/typescript/src/mint/file-handles.d.ts",
       "import": "./dist/typescript/src/mint/file-handles.js",
       "default": "./dist/typescript/src/mint/file-handles.js"
+    },
+    "./core/mint/card-readback": {
+      "types": "./dist/typescript/src/mint/card-readback.d.ts",
+      "import": "./dist/typescript/src/mint/card-readback.js",
+      "default": "./dist/typescript/src/mint/card-readback.js"
     },
     "./core/mint/file-readback": {
       "types": "./dist/typescript/src/mint/file-readback.d.ts",
@@ -645,6 +660,11 @@
       "types": "./dist/typescript/src/runtime/session-sign-in.d.ts",
       "import": "./dist/typescript/src/runtime/session-sign-in.js",
       "default": "./dist/typescript/src/runtime/session-sign-in.js"
+    },
+    "./core/runtime/script-card-fill": {
+      "types": "./dist/typescript/src/runtime/script-card-fill.d.ts",
+      "import": "./dist/typescript/src/runtime/script-card-fill.js",
+      "default": "./dist/typescript/src/runtime/script-card-fill.js"
     },
     "./core/runtime/script-input": {
       "types": "./dist/typescript/src/runtime/script-input.d.ts",

@@ -20,6 +20,7 @@ import { oneTimeLoginUrlParameters, refuseCredentialParts } from "../mint/login-
 import { holdsSecretHandle } from "../mint/secret-handles.js";
 import { holdsFileHandle } from "../mint/file-handles.js";
 import { fileReadback } from "../mint/file-readback.js";
+import { cardReadback } from "../mint/card-readback.js";
 import type { PublishedSignIn } from "../mint/sign-in-recorder.js";
 import { sourceDigest } from "../mint/step-checks.js";
 import { liveTestsEvidencePath } from "../mint/live-tests.js";
@@ -211,6 +212,12 @@ export const mintPublication =
         if (readback !== undefined)
           return yield* Effect.fail(
             new MintFailure({ code: "PublicationUnavailable", reason: "file_readback" }),
+          );
+        // Nor code that fills a card and could read it back. A tool asks for its own card at run
+        // time, so only its source's fillCard turns the check on.
+        if (cardReadback(runnable, false) !== undefined)
+          return yield* Effect.fail(
+            new MintFailure({ code: "PublicationUnavailable", reason: "card_readback" }),
           );
         yield* context.review({
           entrypoint: `operation/${publication.entrypoint}`,
