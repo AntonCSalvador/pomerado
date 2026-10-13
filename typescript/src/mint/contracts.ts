@@ -1163,7 +1163,9 @@ export type TaskUpdateHostResult =
 /**
  * Infrastructure outcomes that end a build incomplete through no choice of the agent. Maintenance
  * requeues such a repair within bounds, except a final one; an agent's own conclusion never
- * carries one.
+ * carries one. The exception is `publication_unavailable` beside `publicationDenial.reason`
+ * `host_owned`: Guardian found a defect in a file the host wrote, which recurs on every build
+ * until the host fixes it, so a host treats that outcome as final and never requeues or retries it.
  */
 const mintHostFailures = [
   "host_unavailable",
