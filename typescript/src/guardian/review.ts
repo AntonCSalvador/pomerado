@@ -302,7 +302,8 @@ export interface PendingExecution {
         | "inspect"
         | "residual"
         | "validate"
-        | "contract";
+        | "contract"
+        | "card_fill";
       readonly target: "pureFiles" | "savedHTTP" | "savedDOM" | "liveBrowser";
       /**
        * agent_chosen: a read's live test on an input the minting agent chose instead of the

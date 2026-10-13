@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { Effect, Schema, Scope } from "effect";
+import { Effect, Scope } from "effect";
 import { createLocalWorkspace } from "../execution/local-workspace.js";
 import { seedLocalRuntime } from "../execution/local-runtime-assets.js";
 import type { LocalOperationJournal } from "../execution/local-operation.js";
@@ -7,7 +7,7 @@ import type { PlaywrightExecutor } from "../execution/playwright-execute.js";
 import type { ConfirmSession } from "../browser/dialogs/expected.js";
 import {
   identifierPreference,
-  type AutofillSlot,
+  type FillSlot,
   type AutofillStepReport,
   type AutofillStepRequest,
 } from "../destinations/autofill-step.js";
@@ -28,11 +28,7 @@ import { mintSessionSignIns, signedInAtEntry } from "../runtime/session-sign-in.
 import {
   localStartHooks,
   makeStartTracker,
-  SavedSession,
-  saveSessionCode,
-  savedSessionStorageCapBytes,
   startPage,
-  type StartState,
 } from "../runtime/start-state.js";
 import { makeAfterSubmit } from "./after-submit.js";
 import { localSignInLogin, makeSignInBrowser, repeatedLoginFailure } from "./authentication.js";
@@ -47,7 +43,7 @@ import type { KeptScriptAnswer } from "./script-answer-reuse.js";
 import type { StandaloneSession } from "./session.js";
 import type { RequestContext } from "./request-context.js";
 import type { PomeradoRequest } from "./contracts.js";
-const identifiers: ReadonlySet<AutofillSlot> = new Set(identifierPreference);
+const identifiers: ReadonlySet<FillSlot> = new Set(identifierPreference);
 /** What the host does with a sign-in step Guardian allows, for its review. */
 const signInStepNote =
   "The host fills the login's values, which never appear in this review, into the fields the step names and clicks the named submit on the sign-in screen of the authorized site.";
@@ -64,50 +60,32 @@ const unavailable = (operation: string) => (error: unknown) =>
     code: "Unavailable",
     failureDetail: failureDetail("mint_host_dependency_failed", { operation, error }),
   });
-/** Browser code that returns the context's cookies and site storage, IndexedDB included. */
-export const saveStateCode = "return await context.storageState({ indexedDB: true });";
 /**
  * Where a build's live steps start. The first step that is not reset loads the request's URL once.
  * A live example, a live test and a write session's first step reset the page and load the site
- * root; see `startStateFor`. A new sign-in drops the session saved after the last one, and a
- * check counts the build signed in only once a sign-in step sent the login (see `sent`).
- * `leavePage` runs before each reset, so the page the last step left is never taken for the
- * reset step's page, even when the reset fails. `afterClear` runs once a reset cleared the
- * browser's cookies and site storage, on that signed-out page. `afterSignedInReset` runs once a
- * reset restored the session saved after a verified sign-in, which the reset's load may have
- * signed out; it may reset the page the same way again with `reopen`. A reset that keeps the
- * browser's session, while a later sign-in is unsettled, runs neither.
+ * root, keeping the browser's cookies and site storage unless a sign-in started and was never
+ * verified; see `startStateFor`. A check counts the build signed in only once a sign-in step sent
+ * the login (see `sent`). `leavePage` runs before each reset, so the page the last step left is
+ * never taken for the reset step's page, even when the reset fails. `afterSignedOutReset` runs
+ * once a reset left the page signed out: one that cleared the browser's cookies and site storage,
+ * or any reset before a sign-in started on the browser (`signInStartedBefore` counts one an
+ * earlier build on it started). `afterSignedInReset` runs once a reset kept the session of a
+ * verified sign-in, which the reset's load may have signed out; it may reset the page the same
+ * way again with `reopen`. A reset while a later sign-in is unsettled runs neither.
  */
 export const makeBuildStart = (
   browser: Pick<PlaywrightExecutor, "execute" | "targetId">,
   siteOrigin: string,
   enterRequest: Effect.Effect<void, Error>,
   leavePage: () => void,
-  afterClear: Effect.Effect<void> = Effect.void,
+  afterSignedOutReset: Effect.Effect<void> = Effect.void,
   afterSignedInReset: (
     reopen: Effect.Effect<void, MintFailure>,
   ) => Effect.Effect<void, MintFailure> = () => Effect.void,
+  signInStartedBefore: () => boolean = () => false,
 ) => {
-  const tracker = makeStartTracker<SavedSession>();
+  const tracker = makeStartTracker({ signInStartedBefore });
   const hooks = localStartHooks(browser.execute, browser.targetId);
-  // The context's storage and the tab's session storage, which is left out past its cap. A
-  // browser call returns at most 1 MiB, so when both together fail, the save reads the stored
-  // state alone, as it did before it kept session storage: it fails only where that read fails.
-  const readSession = browser.execute(saveSessionCode(browser.targetId, siteOrigin), 60).pipe(
-    Effect.flatMap(Schema.decodeUnknown(SavedSession)),
-    Effect.orElse(() =>
-      browser
-        .execute(saveStateCode, 60)
-        .pipe(Effect.map((state): SavedSession => ({ state, sessionStorage: [] }))),
-    ),
-    Effect.map(
-      (saved): SavedSession =>
-        Buffer.byteLength(JSON.stringify(saved.sessionStorage)) <= savedSessionStorageCapBytes
-          ? saved
-          : { ...saved, sessionStorage: [] },
-    ),
-    Effect.mapError(unavailable("standalone.saveSession")),
-  );
   let entered = false;
   const enter = Effect.suspend(() =>
     entered
@@ -123,8 +101,6 @@ export const makeBuildStart = (
   return {
     /** Loads the request's URL, unless a live step already loaded a page. */
     enter,
-    /** Saves the session as it is now, for the next reset that restores one. */
-    saveSession: readSession.pipe(Effect.map(tracker.save)),
     /** A sign-in step; see `makeStartTracker`. */
     signIn: tracker.signIn,
     /**
@@ -161,36 +137,26 @@ export const makeBuildStart = (
     verified: tracker.verified,
     /** Whether `step` starts on a reset page, not the one the last step left. Changes nothing. */
     resets: (step: Pick<ExecutionRequest, "purpose" | "target">) =>
-      tracker.plan({ purpose: step.purpose, live: step.target === "liveBrowser" }).start !== "none",
-    /** Saves the session when due, then resets the page or enters the site, before `step` runs. */
+      tracker.plan({ purpose: step.purpose, live: step.target === "liveBrowser" }) !== "none",
+    /** Resets the page or enters the site, before `step` runs. */
     before: (step: Pick<ExecutionRequest, "purpose" | "target">) =>
       Effect.gen(function* () {
         const live = step.target === "liveBrowser";
         const planned = { purpose: step.purpose, live };
         if (step.purpose === "authenticate") tracker.signIn();
-        const plan = tracker.plan(planned);
-        if (plan.save) tracker.save(yield* readSession);
-        if (plan.start === "none") {
+        const start = tracker.plan(planned);
+        if (start === "none") {
           if (live) yield* enter;
         } else {
-          const start: Exclude<StartState, "none"> = plan.start;
+          const siteData = start === "clear" ? "clear" : "keep";
           leavePage();
-          // The saved session as it is when the reset runs: a sign-in after it saves a new one.
           const reset = Effect.suspend(() =>
-            startPage(
-              browser.execute,
-              browser.targetId,
-              siteOrigin,
-              start === "restore"
-                ? { siteData: "restore", session: tracker.saved }
-                : { siteData: start },
-              hooks,
-            ),
+            startPage(browser.execute, browser.targetId, siteOrigin, { siteData }, hooks),
           ).pipe(Effect.mapError(unavailable("standalone.startPage")));
           yield* reset;
           entered = true;
-          if (start === "clear") yield* afterClear;
-          else if (start === "restore") yield* afterSignedInReset(reset);
+          if (siteData === "clear" || !tracker.signInStarted) yield* afterSignedOutReset;
+          else if (tracker.signedIn) yield* afterSignedInReset(reset);
         }
         tracker.dispatched(planned);
       }),
@@ -365,7 +331,7 @@ export const mintState = (
           siteOrigin,
           context.navigate,
           context.leavePage,
-          markers.afterClear,
+          markers.afterSignedOutReset,
           // A reset reloads the site, which signs out a site that keeps its session only in page
           // memory: the host signs in again before the step can reach the browser.
           (reopen) =>
@@ -376,6 +342,9 @@ export const mintState = (
               reopen,
               lostOnLoad,
             }).pipe(Effect.asVoid),
+          // Builds in a session share its browser: once the host typed a sign-in value in it, an
+          // earlier build's sign-in may still hold the browser.
+          () => session.signInTyping.typed,
         );
         // The build's automatic sign-ins with the sign-in it recorded and verified last.
         const sessionSignIn = makeLocalSessionSignIn({
@@ -390,7 +359,6 @@ export const mintState = (
           limits: mintSessionSignIns,
           scope: "check",
           spent: signInsSpent,
-          saveSession: start.saveSession,
         });
         /**
          * The origins a signed-in check found the login sent only to, off the site and its sign-in

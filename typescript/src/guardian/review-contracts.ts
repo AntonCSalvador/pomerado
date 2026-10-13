@@ -81,7 +81,8 @@ export const publicationReasons = [
 /**
  * A publication refusal no correction within the minter's authority gets past: the tool would
  * expose private data or send it off the site, or needs authority the build does not have. Every
- * other denial names a correction, so it never ends a build as a `policy` block.
+ * other denial or escalation names a correction, such as evidence the minter gathers, so it never
+ * ends a build as a `policy` block.
  */
 export const unfixablePublicationReasons = [
   "privacy",
@@ -98,14 +99,13 @@ export const unfixableFindingCategories = [
 
 /**
  * Whether a publication review's deny or escalation is a refusal a `policy` block may stand on:
- * an escalation, an unfixable reason, or an unfixable finding under any reason.
+ * an unfixable reason, or an unfixable finding under any reason. The outcome alone never decides
+ * it: an escalation for missing evidence asks the minter to gather it, like a denial does.
  */
 export const publicationRefusalUnfixable = (review: {
-  readonly outcome: "deny" | "escalate";
   readonly reason?: PublicationReason | undefined;
   readonly findings?: readonly { readonly category: string }[] | undefined;
 }) =>
-  review.outcome === "escalate" ||
   unfixablePublicationReasons.some((reason) => reason === review.reason) ||
   (review.findings ?? []).some((finding) =>
     unfixableFindingCategories.some((category) => category === finding.category),

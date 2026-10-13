@@ -13,6 +13,7 @@ import { localStartHooks, startPage } from "../runtime/start-state.js";
 import type { MintArtifact } from "../mint/input-feedback.js";
 import type { PomeradoRequest } from "./contracts.js";
 import { makeRunSignIn } from "./session-sign-in.js";
+import { sessionCardFill } from "./card-fill.js";
 import { admitArtifactCursor, sealArtifactOutput } from "./list-cursors.js";
 import type { StandaloneSession } from "./session.js";
 import { requestSite } from "./request-context.js";
@@ -102,6 +103,8 @@ export const runOperation = (
         incidents: noIncidents,
       }),
       ...(signIn === undefined ? {} : { signIn: signIn.hook() }),
+      // A card the script asked for is typed by the host; the script holds only its handles.
+      cardFill: sessionCardFill(session, siteOrigin),
       files,
     }).pipe(Effect.mapError(runOutcomeFailure(request.effect, "operation")));
     return yield* returnedRun(

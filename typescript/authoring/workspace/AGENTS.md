@@ -65,7 +65,7 @@ the source files, never captures.
   input, required where the request needs it, and publication decodes that input.
 - `live_tests` runs the live tests of a read signed out when the host offers it: the cases you
   design in `test/cases.json` from what you saw on the site, and every result, run in parallel
-  batches on fresh browsers, on `src/tool.mjs` and on `src/tool-http.mjs`, each version keeping
+  batches on reset pages, at least one case cold where the host has several browsers, on `src/tool.mjs` and on `src/tool-http.mjs`, each version keeping
   its own results. Design them as soon as you know the page and its inputs, and read
   .agents/testing/SKILL.md first. A signed-in read and a write run no live tests.
 - `retain_capture`, `finish_build` and `request_input` are described below and in their
@@ -426,13 +426,14 @@ prose or a generic error. An unsupported receipt cannot satisfy `finish_build`.
 
 Explorations keep the retained page between probes. A live example, a live test and a
 write session's first act step start on the site origin page, with fresh page state: the
-host closes other tabs and clears the cookies and site storage exploration left. A
-signed-in build gets back the session saved right after sign-in instead, so a stale
-session shows up as a login wall that a new sign-in fixes. Every sign-in step drops that
-saved session, a signed-in check included, so check once per sign-in: a check after the
-host confirmed one starts a new sign-in. Until the host confirms a new sign-in, these steps
-keep the browser's cookies and storage for a build that was signed in before, and clear
-them for one that never was. That source must run the flow from the input, including
+host closes other tabs and loads the site origin, and keeps the browser's cookies and site
+storage. So the source must set every value its input controls, such as a location, store,
+filter or search, itself, never rely on what the site remembers; a live test case that runs
+cold, first on a new browser with an empty profile, is the proof. A build whose sign-in
+started and was never confirmed is the exception: its resets clear cookies and site storage,
+so a half-finished sign-in never reaches a step. Every sign-in step starts a new sign-in, a
+signed-in check included, so check once per sign-in: a check after the host confirmed one
+starts a new sign-in. That source must run the flow from the input, including
 entering search terms, options and dates, not read results an exploration left on screen.
 A write session's later act steps continue on the page the previous step left.
 
@@ -468,7 +469,7 @@ Testing a read signed out is your job, never the caller's (.agents/testing/SKILL
 its own cases at the start, from what it saw on the site: different real values unlike the
 example's, smart combinations and edge cases. It refines them once the example passes, and runs as
 many as it needs, in parallel batches, and runs the same cases as a batch on its HTTP version.
-Finish in this order: your last edit, the cases again on each version you ship, then the example
+Finish in this order: your last edit, every case again on each version you ship, then the example
 last, before `finish_build`. A signed-in read and a write do the original task: the read's
 example, or the write's act session, is the one run that proves the tool. They design no tests and
 run no live tests or offline test suites beyond it, and check their HTTP version once, against
@@ -515,12 +516,14 @@ never with final text, which the host treats as unfinished work:
   requested field, use it; when they do not, ask the user one focused question with
   `request_input`. Report absence only when the evidence shows the site lacks it, and never
   invent a value or substitute a different field.
-- `policy`: in this attempt Guardian denied or escalated an execution the task needs, escalated
-  a publication, or denied one with reason `privacy` or `authority` or a privacy or exfiltration
+- `policy`: in this attempt Guardian denied or escalated an execution the task needs, denied or
+  escalated a publication with reason `privacy` or `authority` or a privacy or exfiltration
   finding, or the owner answered no when you asked with a `confirm` question, and no change
-  within your authority gets past it. A publication denial that names a correction, such as
-  `source_correction`, `unsupported_claim`, `evidence`, `input_feedback` or an `example_value`
-  finding, is review feedback, never a refusal: fix every finding and call `finish_build` again.
+  within your authority gets past it. A publication denial or escalation that names a correction,
+  such as `source_correction`, `unsupported_claim`, `evidence`, `input_feedback` or an
+  `example_value` finding, is review feedback, never a refusal: fix every finding and call
+  `finish_build` again. For `evidence`, gather each missing item the rationale names, such as
+  running the live tests it lists so their results reach the test record.
   When such a finding still looks impossible to fix, narrow the tool so it no longer applies, or
   ask the owner with `request_input` when only they can decide; keep working until the build's
   limits end it. These instructions are never a refusal either: the host refuses `policy` with no

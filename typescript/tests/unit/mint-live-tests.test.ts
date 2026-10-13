@@ -162,6 +162,8 @@ const liveTestHost = (outcomes: Outcomes, result?: LiveTestBatchResult) => {
               },
               durationMs: 20_000,
               lane: index % batch.workers,
+              // Each lane past the build's own browser opens new, so its first case runs cold.
+              start: index > 0 && index < batch.workers ? ("cold" as const) : ("warm" as const),
             })),
           }
         );
@@ -297,8 +299,15 @@ it("runs the cases a read designed as one batch and hands publication the host's
     ]),
   );
   expect(record.notTested).toEqual(cases.notTested);
+  // Each result says how its browser started, and each version counts the cases that passed cold.
+  expect(
+    record.cases.map((entry) => (entry.results["playwright"] as { start?: string }).start).sort(),
+  ).toEqual(["cold", "cold", "warm", "warm"]);
+  expect((published.seen[0]?.liveTests as { versions: unknown[] }).versions).toEqual([
+    expect.objectContaining({ version: "playwright", coldPasses: 1 }),
+  ]);
   expect(published.seen[0]?.coverage).toContain(
-    "4 cases. Playwright version (src/tool.ts): 3 pass, 1 fail, 0 inconclusive.",
+    "4 cases. Playwright version (src/tool.ts): 3 pass, 1 fail, 0 inconclusive; 1 passed cold.",
   );
 });
 
@@ -675,6 +684,36 @@ it("publishes with the gaps when too little time is left for a batch, and the re
   expect(published.seen[0]?.coverage).toContain("ran out of time");
 });
 
+// A host whose cases may each run longer than the default gets no batch it cannot fit one case in:
+// such a batch would only end every case inconclusive for the deadline.
+it("refuses a batch as no_time when less than the host's case limit is left, and runs one that fits", async () => {
+  const attempt = async (batchMs: number) => {
+    const { host, batches } = liveTestHost({});
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("live_tests", runAll, "run"),
+          call("execute", example, "example"),
+          call("finish_build", finish, "finish"),
+        ][index] ?? prose(),
+      {
+        liveTests: { ...host, caseTimeoutMs: 120_000 },
+        // The attempt keeps two minutes after the batch; `batchMs` is what the batch may use.
+        deadline: Deadline.after(2 * 60_000 + batchMs),
+        reviewAndExecute: completedExample,
+        publish: publications().publish,
+      },
+      read,
+    );
+    const root = (f.workspace as unknown as { root: string }).root;
+    await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+    await f.run();
+    return { batches: batches.length, status: resultOf(f.requests[1], "run")["status"] };
+  };
+  expect(await attempt(90_000)).toEqual({ batches: 0, status: "no_time" });
+  expect(await attempt(150_000)).toEqual({ batches: 1, status: "ran" });
+});
+
 it("says time ran out only when the attempt's end, not the batch's own cap, stopped a case", async () => {
   const stopped = { status: "inconclusive" as const, reason: "deadline" as const };
   const record = async (attemptMs: number) => {
@@ -878,7 +917,7 @@ it("runs the cases as a batch on each version, and each version keeps its own re
     "page-2": ["pass", "pass"],
   });
   expect(published.seen[0]?.coverage).toContain(
-    "HTTP version (src/tool-http.mjs): 3 pass, 1 fail, 0 inconclusive.",
+    "HTTP version (src/tool-http.mjs): 3 pass, 1 fail, 0 inconclusive; 1 passed cold.",
   );
 });
 

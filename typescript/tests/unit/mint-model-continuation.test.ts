@@ -533,20 +533,28 @@ const finding = (category: "example_value" | "exfiltration" | "customer_data") =
   explanation: "Synthetic finding explanation.",
 });
 
-// A publication denial that asks for a correction is feedback, not a refusal: the minter that
-// reports a policy block after one hears policy_not_refused, fixes the source and publishes.
+// A publication denial or escalation that asks for a correction is feedback, not a refusal: the
+// minter that reports a policy block after one hears policy_not_refused, fixes it and publishes.
+// An escalation for missing evidence is one: the minter gathers what the rationale names.
 it.each([
-  { reason: "source_correction" as const, findings: [finding("example_value")] },
-  { reason: "unsupported_claim" as const, findings: [] },
-  { reason: "evidence" as const, findings: [] },
+  {
+    outcome: "deny" as const,
+    reason: "source_correction" as const,
+    findings: [finding("example_value")],
+  },
+  { outcome: "deny" as const, reason: "unsupported_claim" as const, findings: [] },
+  { outcome: "deny" as const, reason: "evidence" as const, findings: [] },
+  { outcome: "escalate" as const, reason: "evidence" as const, findings: [] },
+  { outcome: "escalate" as const, reason: "source_correction" as const, findings: [] },
 ])(
-  "refuses a policy block after a correctable publication denial ($reason) and publishes the correction",
-  async ({ reason, findings }) => {
+  "refuses a policy block after a correctable publication refusal ($outcome, $reason) and publishes the correction",
+  async ({ outcome: decision, reason, findings }) => {
+    const missing = "No passing case tests the list's second page.";
     const review = denyPublicationOnce({
-      outcome: "deny",
+      outcome: decision,
       reason,
       reviewId: "review_correctable",
-      rationale: "The input schema pins the example's value. Accept any value of that kind.",
+      rationale: `The claim needs evidence or a correction. ${missing}`,
       findings,
     });
     const f = await fixture(
@@ -565,6 +573,8 @@ it.each([
     const outcome = await f.run();
     expect(outcome).toMatchObject({ build: "published", publicationRef: "corrected_revision" });
     expect(outcome.blocked).toBeUndefined();
+    // The minter reads what the review found missing before it reports the block.
+    expect(JSON.stringify(f.requests[2]?.input)).toContain(missing);
     expect(JSON.stringify(f.requests[3]?.input)).toContain("policy_not_refused");
     expect(review.publications()).toBe(2);
   },
@@ -579,7 +589,13 @@ it.each([
     reason: "source_correction" as const,
     findings: [finding("exfiltration")],
   },
-  { outcome: "escalate" as const, reason: "source_correction" as const, findings: [] },
+  { outcome: "escalate" as const, reason: "privacy" as const, findings: [] },
+  { outcome: "escalate" as const, reason: "authority" as const, findings: [] },
+  {
+    outcome: "escalate" as const,
+    reason: "evidence" as const,
+    findings: [finding("customer_data")],
+  },
 ])(
   "ends a policy block after an unfixable publication refusal ($outcome, $reason)",
   async ({ outcome, reason, findings }) => {

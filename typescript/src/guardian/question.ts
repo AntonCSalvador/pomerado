@@ -6,6 +6,7 @@ import {
   isProtectedQuestion,
   publicOptionLabel,
   type Question,
+  type SecretKind,
   type ValidAnswers,
 } from "../runtime/input-request.js";
 
@@ -34,7 +35,7 @@ interface ReviewedQuestion {
   readonly prompt: string;
   readonly options?: readonly ReviewedOption[];
   readonly followUp?: { readonly prompt: string; readonly defaultText?: string };
-  readonly secretKind?: "one_time_code" | "totp" | "private_text";
+  readonly secretKind?: SecretKind;
   readonly fields?: "username_password" | "password";
 }
 

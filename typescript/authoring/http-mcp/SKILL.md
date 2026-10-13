@@ -168,11 +168,11 @@ request:
 
 - **Kernel browser curl**, the default. It sends the browser's cookie jar, TLS fingerprint
   and proxy, and a Set-Cookie response updates that jar. It ignores CORS and runs no page
-  JavaScript. A live test starts with cleared cookies, so before curl's first request the
-  host gives the jar the cookies its own first load of the site set, as a run's entry page
-  load does; the first time, it loads the site origin in the page to get them. A jar that
-  already holds site cookies, such as a restored sign-in or your flow in progress, stays
-  as it is. The execution's `http.relay.preparation` says what the host did.
+  JavaScript. A live test on a new browser starts with an empty jar, so before curl's first
+  request the host gives the jar the cookies its own first load of the site set, as a run's
+  entry page load does; the first time, it loads the site origin in the page to get them. A
+  jar that already holds site cookies, such as a signed-in session or what exploration left,
+  stays as it is. The execution's `http.relay.preparation` says what the host did.
 - **The page's own fetch**, chosen with `requires: ["page-environment"]` (or
   `"service-worker"`). It runs in the site's page with `credentials: "include"`, CORS and
   browser cookie rules; the host loads the site origin in the page first when the page
@@ -225,8 +225,9 @@ refuses literal tokens.
   own (testing skill). A signed-in read checks it once, against the example: the caller's input
   (omit `testInput`), compared with the example's output. Either way, after a failure fix it and
   test again until it passes. A live test starts like the example: the site origin page, with the
-  session saved right after sign-in for a signed-in read, or with exploration cookies and storage
-  cleared for an anonymous one, so it cannot pass on state exploration left. The host records the
+  browser's cookies and storage kept, so the module sends every value its input controls itself
+  and never relies on what the site remembers; a case that runs cold, on a new browser with an
+  empty profile, shows it cannot pass on state exploration left. The host records the
   result as the HTTP version's live evidence: transport, duration and output schemas.
   - Refused before sending (`request_refused`), a module that fails to load, or a review denial:
     nothing reached the site. Fix it and test again.

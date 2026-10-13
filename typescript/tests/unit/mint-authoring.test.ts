@@ -561,7 +561,7 @@ it("leaves no heading, list or skill header of the local host's authoring empty"
  */
 it("gives both hosts the same stale-session rule", async () => {
   const sentence =
-    "A signed-in build gets back the session saved right after sign-in instead. When the page is signed out after that reset, or after a full page load your source asks about with `ensureSignedIn`, the host signs in again by itself; do not call `authenticate` for it. When the host cannot keep the site signed in, the step fails with `session_not_kept`: report that cause instead of signing in again. That source must perform the flow from its input, never rely on a page an exploration left open.";
+    "A sign-in that started and was never verified is the exception: that reset clears cookies and site storage. When the page is signed out after that reset, or after a full page load your source asks about with `ensureSignedIn`, the host signs in again by itself; do not call `authenticate` for it. When the host cannot keep the site signed in, the step fails with `session_not_kept`: report that cause instead of signing in again. That source must perform the flow from its input, never rely on a page an exploration left open.";
   const local = (await renderedTexts("typescript/authoring")).get("core") ?? "";
   expect(local.replace(/\s+/g, " ")).toContain(sentence);
   const root = await authoringCopy((_path, text) => text.replace(sectionMarker, ""));
@@ -726,17 +726,17 @@ it("renders the pinned standalone authoring", async () => {
     ...skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name]),
     ...[...guide.files].map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["d5b57a795ef28d237f96c3834d91841c16315f29d4bbb5629841d48e4d847a0a", "core"],
-    ["9cae349bff0ed3c9f0a6d5259022ebd09324363483d95d556627c79448edf92e", "search"],
-    ["4b9f115a5e58daf028404a8803376055a60f8269e8f9a06735662f0f11520dad", "auth"],
-    ["7684a05d1ae2a30577948164df630230839809f80c6066b1e9a69d53e0d112e2", "testing"],
+    ["50ddaceb7beb47cf7b734f3eb460db5873362fdaca2cb59e3776be2507d1f124", "core"],
+    ["75a63420916f47c44169f0a4856ecefcbc9ca2515bcbf39c12e054bb42c3db3a", "search"],
+    ["883a4b0d8cab78affbcc312706cd31e217e545a221b29ec1598189916a7d299b", "auth"],
+    ["e79bc2f238553375a7330326a98eba5e003a245384542891632b887c837a6c38", "testing"],
     ["ab913e2169b9be4ac767df8a88b29cf2e3e5f28779f29bfe9d7e175f07e56f8d", "pagination"],
     ["e7366f7bb289454dc3957aac9f857abe940ad0f3a6c8ced193bf920c119f2098", "forms"],
-    ["369720ea19f748bb9a18d1c11c6da4437736bb39e97af84ca897b168cbacd63e", "writes"],
+    ["9c9001a49b81704c1a294d08af018b2da2ada1c507a33013ad564ebff773746f", "writes"],
     ["0bc4d6c765154139547ec2e4500d14bbd1d086995fdd6b385b8f53f4e7ae7255", "cart"],
-    ["1eac5faab594f321ba3dc8b81361f05ce57998aa2c0d2bf1c502d33856cd85dd", "caller-input"],
+    ["bc41516483534bb879e2f9548218bbe8ed3e8cf825cfb7c7b7e9ff21fe73ba99", "caller-input"],
     ["3b7238d4a1af157b6cb2fa50b0ff3002b73e039b3afec4515a37e6ecc1dcd34e", "publication"],
-    ["63d33c7c1e84434c8908df584586fb5bac71090eba5ad672c702c7ac5aa5cd4a", "workspace/AGENTS.md"],
+    ["db81e26212ba4b9dee9c3f853a90e896ece1a0e5339c16661ea1cd1145a1ab74", "workspace/AGENTS.md"],
     ["e023d1b6f7bc3673118d4310d9813cfa878c554b68a353413e73592054d2704d", "workspace/README.md"],
   ]);
 });
