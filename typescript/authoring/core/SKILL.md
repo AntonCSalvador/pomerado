@@ -109,10 +109,12 @@ pomerado:section core.execute-calls:end -->
   `set_location` or `apply_sort`, and `siteMessage` the page's own error when it showed one.
   The run then fails and returns nothing computed without the caller's value. Never report the
   value as not applied in the output instead, such as a `sort_applied: false` flag or a
-  "lookup-only" description, and never let an answer to a question make a supplied value
-  optional. An input that tailors the answer, such as a location or store, is an
-  exception: when the site still won't apply it, a read returns the site's own answer labeled
-  with the value it applied (the input schema, "Inputs that tailor the answer", below). On a
+  "lookup-only" description, and never let an answer to a question make a filter, sort, date or
+  other value that narrows the results optional or lookup-only. An input that tailors the
+  answer, such as a location or store, is an exception: when the site still won't apply it, a
+  read returns the site's own answer labeled with the value it applied, and it may have a
+  limited use, such as lookup only, when the caller chose that use in answer to your design
+  question (the input schema, "Inputs that tailor the answer", below). On a
   write, check it before the first commit step: a write that may already have changed the site
   still ends as a possible change, never retried. A value the site does not offer, such as a
   store missing from its picker, is the caller's to fix: throw `InvalidInput` with `field` and
@@ -151,7 +153,10 @@ that asks.
   test case (testing skill); never return results for another option in its place.
 - A repair that finds a declared input broken, never applied or always reported unsupported
   fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract
-  means every input and output it declares works, not leaving a broken one as it was.
+  means every input and output it declares works, not leaving a broken one as it was. An input
+  whose description starts "By design:" is applied in the use it records, a caller's decision:
+  keep that use and its description word for word, and change them only after asking the same
+  design question again (the input schema, "Inputs that tailor the answer").
 - Never derive a format from one sample: not an input format, an element key, a selector, a
   URL path or a label. A key the page showed for the example's value says nothing about the
   next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read
@@ -249,6 +254,19 @@ that asks.
     `InputNotApplied` (above) before its first commit step instead.
   - Inputs that narrow the results (filters, sort, dates) stay strict: a value the page ignores
     throws `InputNotApplied` (above).
+  - Give a tailoring input a limited use, such as a postal code used only to look up nearby
+    stores without changing the selected one, only when the caller chose it. When how the tool
+    should use such an input is genuinely ambiguous, such as whether a postal code sets the
+    store or only lists nearby ones, ask the owner one `request_input` choice question with id
+    `input_use_<input>`, `<input>` being the input's name in lowercase snake_case
+    (`postalCode` is `input_use_postal_code`), with each use as an option. Always offer the
+    full use, such as setting the store from the postal code, never only limited uses. When the
+    caller chooses a limited use, start the input's description with "By design:" and state
+    that use in plain words, such as "By design: used only to find nearby stores; it does not
+    change the selected store." Write it only from that answer, never from the request's
+    wording, a free-text instruction or your own judgment, and never for a filter, sort or date,
+    which stay strict whatever an answer says. The code still applies the value in that use, and
+    a value the page does not take in it throws `InputNotApplied` (above).
   - While building, ask the owner for a location or other tailoring value the result depends on
     (`AGENTS.md`, "Try hard, then ask"); they may skip it. Skipping that question only leaves
     the example without one, and the input stays; saying the tool should use none declines it
