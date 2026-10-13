@@ -3,6 +3,7 @@ import { RunContext, RunState } from "@openai/agents";
 import { Effect, Schema } from "effect";
 import type { ReviewTurn } from "./review.js";
 import { siteDomain } from "../runtime/same-site.js";
+import { paymentFrameOrigins } from "../destinations/payment-frames.js";
 import { ownerNamedOrigins } from "./owner-named-origins.js";
 import { guardianModel } from "./model.js";
 import { guardianCompaction } from "./session.js";
@@ -44,7 +45,8 @@ export const guardianReviewInput = (
       }),
       allowedEffects: turn.pending.allowedEffects,
       answeredQuestions: absentWhenEmpty(
-        (turn.pending.answeredQuestions ?? []).map(({ question, answer, other, note }) => ({
+        (turn.pending.answeredQuestions ?? []).map(({ id, question, answer, other, note }) => ({
+          ...(id === undefined ? {} : { id }),
           question,
           answer,
           ...(other === undefined ? {} : { other }),
@@ -53,6 +55,8 @@ export const guardianReviewInput = (
       ),
       ownerNamedOrigins: absentWhenEmpty(ownerNamedOrigins(turn.pending)),
       taskUpdates: absentWhenEmpty(turn.pending.taskUpdates ?? []),
+      // The exact frame origins a host card-fill step may type a card answer into.
+      ...(reviewKindOf(turn.pending) === "execution" ? { paymentFrameOrigins } : {}),
     },
     ...extra,
     ...(turn.pending.questionCandidate === undefined

@@ -6,6 +6,7 @@ import {
   isProtectedQuestion,
   publicOptionLabel,
   type Question,
+  type SecretKind,
   type ValidAnswers,
 } from "../runtime/input-request.js";
 
@@ -34,7 +35,7 @@ interface ReviewedQuestion {
   readonly prompt: string;
   readonly options?: readonly ReviewedOption[];
   readonly followUp?: { readonly prompt: string; readonly defaultText?: string };
-  readonly secretKind?: "one_time_code" | "totp" | "private_text";
+  readonly secretKind?: SecretKind;
   readonly fields?: "username_password" | "password";
 }
 
@@ -144,14 +145,16 @@ export const questionForReview = <E>(
 
 /**
  * One question the owner answered through the host's question flow, as every later Guardian
- * review sees it: the screened prompt and the screened answer. A choice is its option's label (an
- * account-specific option's masked label, as the API shows it) or the owner's own text, a multiple
- * choice its labels with `other`, an option of the owner's own, and either may carry `note`, the
- * owner's clarification of their pick. A confirm is whether the owner confirmed, with any text.
+ * review sees it: the question's id, the screened prompt and the screened answer. A choice is its
+ * option's label (an account-specific option's masked label, as the API shows it) or the owner's
+ * own text, a multiple choice its labels with `other`, an option of the owner's own, and either
+ * may carry `note`, the owner's clarification of their pick. A confirm is whether the owner confirmed, with any text.
  * Every answer is the owner's words: an option the minting model wrote, once the owner picks it or
  * types it back, is their confirmation of what it says (`ownerNamedOrigins`).
  */
 export const AnsweredQuestion = Schema.Struct({
+  /** The question's id, which binds an answer to what it decides, such as `input_use_<input>`. */
+  id: Schema.optionalWith(Schema.String, { exact: true }),
   question: Schema.String,
   answer: Schema.Union(
     Schema.String,
@@ -167,9 +170,10 @@ export const AnsweredQuestion = Schema.Struct({
 export type AnsweredQuestion = typeof AnsweredQuestion.Type;
 
 /**
- * The answers to one request as Guardian sees them, screening every string through `screen`.
- * Protected answers (`isProtectedQuestion`: secrets and logins) never appear, not even their
- * prompts. Every other answer does, a confirm beside a notice included.
+ * The answers to one request as Guardian sees them, each under its question's id, screening every
+ * string through `screen`; an id is the request's own key, never caller text. Protected answers
+ * (`isProtectedQuestion`: secrets and logins) never appear, not even their prompts. Every other
+ * answer does, a confirm beside a notice included.
  */
 export const answersForReview = <E>(
   request: Pick<InputRequest, "notice" | "questions">,
@@ -224,6 +228,7 @@ export const answersForReview = <E>(
           ? []
           : [
               {
+                id: question.id,
                 question: yield* screen(question.prompt),
                 answer,
                 ...(other === undefined ? {} : { other: yield* screen(other) }),

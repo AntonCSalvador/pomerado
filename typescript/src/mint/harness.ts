@@ -43,6 +43,7 @@ import {
   BlockedReport,
   BuildBlocked,
   CaptureRequest,
+  defaultLiveTestCaseMs,
   ExecutionRefusal,
   ExecutionRequest,
   isReadOrWriteChoice,
@@ -67,9 +68,11 @@ import {
 } from "../guardian/task-update.js";
 import { siteDomain } from "../runtime/same-site.js";
 import { validateSignedInMarker } from "../destinations/signed-in-marker.js";
+import { isCardSlot } from "../destinations/payment-frames.js";
 import { finiteCaptureGap, finiteRunnerFailure } from "./runner-failure.js";
 import { isSecretHandle } from "./secret-handles.js";
 import { fileReadbackRule } from "./file-readback.js";
+import { cardReadbackRule } from "./card-readback.js";
 import type {
   AcceptedTaskUpdate,
   AllowedExecution,
@@ -1342,7 +1345,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             answers: visibleAnswers,
           });
           yield* reviewer.taskUpdated("The caller answered a question.");
-          const handles = Object.values(answers).some((answer) => answer.type === "secret");
+          const cardQuestion = (id: string) =>
+            submitted.questions.some(
+              (question) =>
+                question.id === id && question.type === "secret" && isCardSlot(question.secretKind),
+            );
+          const secretIds = Object.entries(answers)
+            .filter(([, answer]) => answer.type === "secret")
+            .map(([id]) => id);
+          const card = secretIds.some(cardQuestion);
+          // A card answer never goes into source, so the source handle rule is only for the rest.
+          const handles = secretIds.some((id) => !cardQuestion(id));
           if (askAgain !== undefined)
             return JSON.stringify({
               status: "answered",
@@ -1352,7 +1365,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           return JSON.stringify({
             status: "answered",
             answers: visibleAnswers,
-            instruction: `The caller answered. Continue in this attempt with these answers; verify the current page before acting on them, and before any further write.${handles ? " A secret answer is a handle such as {{secret.s1}}, never the value, which you never see. Write the handle exactly as given, as the whole string literal passed as the value to fill, type or pressSequentially, or as a field of a request to this site, in the Playwright code of a kernel.browsers.playwright.execute call in explore, test or act source; the host fills in the value when it runs that source live, and masks it in what comes back. It refuses a handle anywhere else, such as in a variable, a concatenation, a transform, a return value or a navigation. Offline targets get the handle text unchanged. An example and published source never hold a handle: a value the finished tool needs at run time is a declared secret question it asks with ask." : ""}`,
+            instruction: `The caller answered. Continue in this attempt with these answers; verify the current page before acting on them, and before any further write.${handles ? " A secret answer is a handle such as {{secret.s1}}, never the value, which you never see. Write the handle exactly as given, as the whole string literal passed as the value to fill, type or pressSequentially, or as a field of a request to this site, in the Playwright code of a kernel.browsers.playwright.execute call in explore, test or act source; the host fills in the value when it runs that source live, and masks it in what comes back. It refuses a handle anywhere else, such as in a variable, a concatenation, a transform, a return value or a navigation. Offline targets get the handle text unchanged. An example and published source never hold a handle: a value the finished tool needs at run time is a declared secret question it asks with ask." : ""}${card ? " A card answer (card_number, card_expiry, card_cvc, billing_postal_code) is never written in source: run an execution with purpose card_fill, target liveBrowser, entrypoint operation/card-fill-step.json and cardFillStep naming each card field's own selector, on the page or inside the payment provider's frame, with the card handle for it; the host types the values and clicks nothing." : ""}`,
           });
         });
       /** `handedBack`: the execution's unanswered script question went back to the minter. */
@@ -2762,7 +2775,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "Private values in the explanation made it longer than 500 characters once screened. Shorten it, leave private values out, and call report_blocked again.",
           );
         // A policy block stands on a refusal on record: Guardian's deny or escalation of an
-        // execution, its publication refusal no correction gets past, or the owner's no to a
+        // execution, its publication refusal no correction gets past (an escalation for missing
+        // evidence is not one), or the owner's no to a
         // confirm question, unless the host's own guidance names the ending. The
         // minter's reading of its own instructions is none. A question handed back unanswered
         // also lets the minter stop: no answer is no consent, so it may end the build safely
@@ -2779,7 +2793,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         )
           return refused(
             "policy_not_refused",
-            "Nothing in this attempt refused this: Guardian denied or escalated no execution, refused no publication for privacy or authority or escalated one, and the owner answered no to nothing. A publication denial that names a correction is not a refusal: fix every finding and each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no to a confirm question is a refusal. Use site_lacks_capability only when the site does not offer what the task needs.",
+            "Nothing in this attempt refused this: Guardian denied or escalated no execution, refused no publication for privacy or authority, and the owner answered no to nothing. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no to a confirm question is a refusal. Use site_lacks_capability only when the site does not offer what the task needs.",
           );
         return undefined;
       };
@@ -2915,7 +2929,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             : []),
           ...(settings.has("effect")
             ? [
-                "This build is now a write build, and every later execution is reviewed under write authority. Read .agents/writes/SKILL.md, and .agents/forms/SKILL.md for a form, before the next step. The write is the whole task the request asks for, done once through purpose act steps; it may take several steps, and drafts, autosaves and step saves along the way are part of it. Before the first act step, ask with request_input for any value the task needs that the input does not settle. The first act step starts with navigation to the site origin (keeping the session saved after sign-in), so it must navigate to any deeper task page it needs; what you observed so far stays valid evidence. From now on a live example or live test is refused, and so is a live explore once the session starts.",
+                "This build is now a write build, and every later execution is reviewed under write authority. Read .agents/writes/SKILL.md, and .agents/forms/SKILL.md for a form, before the next step. The write is the whole task the request asks for, done once through purpose act steps; it may take several steps, and drafts, autosaves and step saves along the way are part of it. Before the first act step, ask with request_input for any value the task needs that the input does not settle. The first act step starts with navigation to the site origin (keeping the browser's cookies and site storage), so it must navigate to any deeper task page it needs; what you observed so far stays valid evidence. From now on a live example or live test is refused, and so is a live explore once the session starts.",
               ]
             : []),
         ].join(" ");
@@ -3243,8 +3257,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               cases.length === 0
                 ? `Design the cases in ${liveTestCasesPath} from what you saw on the site, as the testing skill says: different real values unlike the example's, smart combinations, edge cases and one rerun of the example's input. Then call live_tests with action run.`
                 : cases.every((testCase) => testCase.status === "pass")
-                  ? "Every case passes on the current source. Check what the outputs mean (filters applied to every item, the order, the applied location), add a case for anything the tool claims that no case tests yet, then make your last edit, run the cases again, run the example last and call finish_build."
-                  : `Fix the code for each failing case at its frame, run the stale and not-run cases with action run, and add a case for anything the tool claims that no case tests yet. Publication review reads ${liveTestsEvidencePath}, the host's record of these results on the source you publish, against what the tool claims.`,
+                  ? "Every case passes on the current source. Check what the outputs mean (filters applied to every item, the order, the applied location), add a case for anything the tool claims that no case tests yet, then make your last edit, run every case again, run the example last and call finish_build."
+                  : `Fix the code for each failing case at its frame. While a fix is in progress, prefer rerunning only the failing cases, named in cases. Add a case for anything the tool claims that no case tests yet, then, after your last edit, run every case once with cases null. Publication review reads ${liveTestsEvidencePath}, the host's record of these results on the source you publish, against what the tool claims.`,
           };
         });
       /**
@@ -3312,7 +3326,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               instruction: `The host could not read ${request.entrypoint} and its imports. Nothing was executed.`,
             });
           const { deadlineAt, attemptBound } = yield* liveTestDeadline;
-          if (deadlineAt - (yield* Clock.currentTimeMillis) < 60_000) {
+          // A batch with less time left than one case may take could only end every case
+          // inconclusive, so it runs nothing.
+          const caseLimitMs = host.caseTimeoutMs ?? defaultLiveTestCaseMs;
+          if (deadlineAt - (yield* Clock.currentTimeMillis) < caseLimitMs) {
             liveTestsOutOfTime = true;
             return JSON.stringify({
               kind: "host_live_tests",
@@ -3431,6 +3448,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               ...(outputChecks === undefined ? {} : { outputChecks }),
               durationMs: Math.max(0, Math.round(run.durationMs)),
               ...(run.lane === undefined ? {} : { lane: run.lane }),
+              ...(run.start === undefined ? {} : { start: run.start }),
               input: testCase.input,
               purpose: testCase.purpose,
               expect: testCase.expect,
@@ -3782,7 +3800,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     ...parsed.value,
                     testPlan: {
                       plannedCases: planned,
-                      instruction: `Your example passed, so the tool's schemas are settled. Design the cases in ${liveTestCasesPath} as the testing skill says, from what you saw on the site: different real values unlike the example's (another record, retailer or store the site lists), smart combinations, edge cases and one rerun of the example's input. Run them with live_tests action run and fix every failing case. Then make your last edit, run the cases again and run the example last.`,
+                      instruction: `Your example passed, so the tool's schemas are settled. Design the cases in ${liveTestCasesPath} as the testing skill says, from what you saw on the site: different real values unlike the example's (another record, retailer or store the site lists), smart combinations, edge cases and one rerun of the example's input. Run them with live_tests action run and fix every failing case, preferring to rerun only the failing ones while you fix. Then make your last edit, run every case again and run the example last.`,
                     },
                   });
             }).pipe(
@@ -4394,6 +4412,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     {},
                     `Not published: the source moves or reads a file outside the host's file service. Rule: ${fileReadbackRule}. Remove that code, then call finish_build again.`,
                   );
+                if (error.reason === "card_readback")
+                  return notPublished(
+                    error.code,
+                    error.reason,
+                    {},
+                    `Not published: the source fills a card and could read it back. Rule: ${cardReadbackRule}. Remove that code, then call finish_build again.`,
+                  );
                 if (
                   error.reason === "session_token_literal" ||
                   error.reason === "session_token_placeholder"
@@ -4511,9 +4536,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         : "Publication diagnostic unavailable.",
                     repeatableRead,
                   },
-                  (error.code === "ReviewDenied" && error.review !== undefined
-                    ? "Not published: Guardian blocked this publication. Each finding's explanation says what is wrong, the evidence and the fix, at its file and byte range. Fix every finding and each missing item the rationale names, then call finish_build again with the same executionId. The existing example and result remain recorded."
-                    : "Not published. The existing example and result remain recorded. Source edits and another finish_build publication review may continue; this does not guarantee the failure is repairable.") +
+                  (error.code === "ReviewDenied" && error.review?.reason === "evidence"
+                    ? "Not published yet: Guardian needs more evidence to judge this publication, and the rationale names each missing item. Gather each one within your authority, such as running the live tests or cases it names so their results reach the test record, and fix every finding, then call finish_build again. Missing evidence is not a refusal and never a reason for a policy block. The existing example and result remain recorded."
+                    : error.code === "ReviewDenied" && error.review !== undefined
+                      ? "Not published: Guardian blocked this publication. Each finding's explanation says what is wrong, the evidence and the fix, at its file and byte range. Fix every finding and each missing item the rationale names, then call finish_build again with the same executionId. The existing example and result remain recorded."
+                      : "Not published. The existing example and result remain recorded. Source edits and another finish_build publication review may continue; this does not guarantee the failure is repairable.") +
                     " A fresh reviewed example read requires an available live host and host repeatableRead:true within the same input/account after confirmed executor cleanup. Otherwise never repeat the example or a write step that may have committed.",
                 );
               }

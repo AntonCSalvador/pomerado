@@ -53,6 +53,7 @@ const { makeScriptInput, ScriptInput, ScriptInputFailure } =
 const { InputAnswers } = await import("../runtime/input-request.js");
 const { DialogChoice, DialogFailure } = await import("../runtime/dialogs.js");
 const { SessionSignInAnswer } = await import("../runtime/session-sign-in.js");
+const { ScriptCardFillAnswer } = await import("../runtime/script-card-fill.js");
 const { FileOutput, FileRefusalReason, FileRefused, PlacedFile } = await import("../runtime/files.js");
 const refusalOf = (detail: {
   readonly field?: string;
@@ -283,6 +284,19 @@ const executeLocally = (operation: Parameters<typeof executeKernelOperation>[0])
                       ? Effect.succeed({ signedInAgain: answer.signedInAgain })
                       : Effect.fail(new Error(`The host did not sign in again: ${answer.cause}`)),
                   ),
+                ),
+              ),
+          }
+        : {}),
+      // The host types the card answers behind the handles; the child only ever holds handles.
+      ...(start.cardFill === true && start.offline !== true
+        ? {
+            cardFill: (request) =>
+              Effect.runPromise(
+                (atFirstCall ? journal.enteringDispatch : Effect.void).pipe(
+                  Effect.zipRight(call({ kind: "card_fill", step: request })),
+                  Effect.flatMap((value) => Schema.decodeUnknown(ScriptCardFillAnswer)(value)),
+                  Effect.mapError(localError),
                 ),
               ),
           }

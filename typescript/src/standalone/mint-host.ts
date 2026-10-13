@@ -29,6 +29,7 @@ import { memoryPublicationDecisions } from "./publication-decisions.js";
 import { listed, signInOriginsToAsk } from "./sign-in-origin-question.js";
 import { forgetScriptAnswers } from "./script-answer-reuse.js";
 import type { FileHandles } from "../mint/file-handles.js";
+import { secretKindsOf } from "../mint/secret-handles.js";
 /**
  * Steps the local host refuses before review. It keeps no write maintenance, so it has no
  * possible write to inspect or finish. And once a write session started, a sign-in runs only as
@@ -99,7 +100,7 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
             }),
           ),
         ),
-        Effect.map((answers) => handles.issue(answers)),
+        Effect.map((answers) => handles.issue(answers, secretKindsOf(candidate.questions))),
         Effect.tap((issued) => Effect.sync(() => context.askedByAgent(candidate, issued))),
         Effect.mapError(askError),
       ),

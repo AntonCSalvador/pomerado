@@ -16,6 +16,15 @@ import type {
 import type { ScriptQuestionDeclarations } from "../runtime/script-input.js";
 import { asksAsDeclared } from "./declared-questions.js";
 import {
+  type CardFillOutcome,
+  type RunCardHandles,
+  makeRunCardHandles,
+  scriptCardFillAnswer,
+} from "../destinations/card-fill.js";
+import { isCardSlot } from "../destinations/payment-frames.js";
+import type { InputRequest, ValidAnswers } from "../runtime/input-request.js";
+import type { ScriptCardFillRequest } from "../runtime/script-card-fill.js";
+import {
   sessionSignInAnswerMs,
   sessionSignInFillMs,
   sessionSignInSettleMs,
@@ -63,6 +72,15 @@ export interface LocalOperationOptions {
    * `ensureSignedIn` answers that it did not sign in again.
    */
   readonly signIn?: SessionSignInHook;
+  /**
+   * The host's card fill for a script's `fillCard`, on the same browser: it types the card answers
+   * behind the step's handles, which this run's `ask` issued in place of each card answer. Absent,
+   * `fillCard` throws, and a card answer still reaches the script only as a handle.
+   */
+  readonly cardFill?: (input: {
+    readonly step: ScriptCardFillRequest;
+    readonly handles: RunCardHandles;
+  }) => Effect.Effect<CardFillOutcome, Error>;
   /**
    * Set when this host signs list cursors: the position the caller's cursor holds, once
    * `admitListCursor` checked it. Absent, a run refuses any cursor that would continue a runtime
@@ -190,10 +208,29 @@ export const answerSessionSignIn = (
     yield* settle;
     return { outcome: "refused", cause: "session_sign_in_failed" } satisfies SessionSignInAnswer;
   });
+/**
+ * The answers as the script receives them: each card answer replaced by a handle this run's
+ * `fillCard` names, so the card never enters the child.
+ */
+const scriptAnswers = (request: InputRequest, answers: ValidAnswers, handles: RunCardHandles) =>
+  Object.fromEntries(
+    Object.entries(answers).map(([id, answer]) => {
+      const question = request.questions.find((candidate) => candidate.id === id);
+      return [
+        id,
+        question?.type === "secret" &&
+        isCardSlot(question.secretKind) &&
+        typeof answer.value === "string"
+          ? handles.issue(answer.value, question.secretKind)
+          : answer.value,
+      ];
+    }),
+  );
 const handleRequest = (
   options: LocalOperationOptions,
   deadline: Deadline,
   message: Exclude<LocalOperationMessage, { kind: "result" | "error" | "cancel" | "journal" }>,
+  cardHandles: RunCardHandles,
 ): Effect.Effect<unknown, Error> =>
   Effect.suspend<unknown, Error, never>(() => {
     if (message.kind === "execute") {
@@ -265,9 +302,20 @@ const handleRequest = (
         );
       return suspended(deadline, options.ask(message.request)).pipe(
         // ScriptInput validates raw answers in the child; the host has already typed them.
-        Effect.map((answers) =>
-          Object.fromEntries(Object.entries(answers).map(([id, answer]) => [id, answer.value])),
-        ),
+        Effect.map((answers) => scriptAnswers(message.request, answers, cardHandles)),
+      );
+    }
+    if (message.kind === "card_fill") {
+      const cardFill = options.cardFill;
+      if (
+        cardFill === undefined ||
+        options.browser === undefined ||
+        options.mode === "contract" ||
+        options.target === "pureFiles"
+      )
+        return Effect.fail(new Error("Local operation card fill is unavailable"));
+      return suspended(deadline, cardFill({ step: message.step, handles: cardHandles })).pipe(
+        Effect.map(scriptCardFillAnswer),
       );
     }
     return options.decideDialog === undefined
@@ -339,6 +387,8 @@ const receiveOperation = (
   Effect.gen(function* () {
     const completed = yield* Deferred.make<LocalOperationResult, Error>();
     const pending = new Map<string, Fiber.RuntimeFiber<void, never>>();
+    // The run's card answers, which only its own `fillCard` names; nothing keeps them past it.
+    const cardHandles = makeRunCardHandles();
     let finished = false;
     let current: LocalOperationJournal = { effect: "not_sent", commits: [] };
     const listener = (raw: unknown) => {
@@ -362,7 +412,7 @@ const receiveOperation = (
         Effect.runSync(Deferred.fail(completed, new Error("Duplicate local operation request")));
         return;
       }
-      const task = handleRequest(options, deadline, message).pipe(
+      const task = handleRequest(options, deadline, message, cardHandles).pipe(
         Effect.exit,
         Effect.flatMap((exit) => {
           if (Exit.isSuccess(exit))
@@ -524,6 +574,12 @@ export const runLocalOperation = (
         options.mode !== "contract" &&
         options.target !== "pureFiles"
           ? { signIn: true }
+          : {}),
+        ...(options.cardFill !== undefined &&
+        options.browser !== undefined &&
+        options.mode !== "contract" &&
+        options.target !== "pureFiles"
+          ? { cardFill: true }
           : {}),
       });
       const result = yield* response.completed.pipe(

@@ -33,8 +33,25 @@ The promote job:
    - Its subject is `pkg:npm/pomerado@<version>`, with a sha512 digest equal to that integrity.
    - It was built by `.github/workflows/release.yml` in this repository, from `refs/heads/main`, on a GitHub-hosted runner. A release from the retired tag workflow, 0.2.0 or earlier, may name its own `v<version>` tag instead of `main`.
    - The commit it names is on `main`.
-3. Moves `latest` to the version, unless it already names it, and reads `latest` back, retrying briefly while npm catches up.
-4. Tags that commit `v<version>` and creates the GitHub Release with generated notes, unless a rollback finds them already there. A tag that is already there must point to that commit. A tag ruleset blocks moving or deleting any `v*` tag.
+3. Moves `latest` to the version, unless it already names it, and reads `latest` back. It reads `latest` from the registry's dist-tags endpoint, which the registry serves uncached. `npm view` reads the package document, which npm's CDN caches for up to five minutes, so it can show the old `latest` for that long after a move.
+4. Tags that commit `v<version>` and creates the GitHub Release with generated notes, unless a rollback finds them already there. A tag that is already there must point to that commit.
+
+Each step checks before it writes, so re-running a promotion for the version `latest` already names succeeds and changes nothing.
+
+Two tag rulesets cover `v*` tags:
+
+- `release tags` blocks updating, force-pushing and deleting a `v*` tag, with no bypass.
+- `release tag creation` blocks creating a `v*` tag. A dedicated release GitHub App bypasses it, so the promote job can tag, while maintainers can't push a release tag by hand. GitHub doesn't accept GitHub Actions as a bypass actor on a tag ruleset, so the workflow's own token can't create the tag.
+
+The creation rule sits in its own ruleset because a bypass covers every rule in its ruleset, and nothing may move or delete a release tag.
+
+The promote job's workflow token only reads contents. Just before the tag step, the job mints a short lived installation token from the release app, scoped to this repository with `contents: write`, and only the tag step uses it. Setting this up takes, once:
+
+1. A GitHub App installed only on this repository, with the repository permission Contents set to read and write and no other permissions or webhook.
+2. In the `npm-release` environment, the variable `RELEASE_APP_ID` holding the app's ID and the secret `RELEASE_APP_PRIVATE_KEY` holding one of its private keys.
+3. The app added as a bypass actor, always allowed, on the `release tag creation` ruleset.
+
+The promote job checks the variable and secret before it writes anything and fails with an error naming them when either is missing.
 
 To promote by hand, a maintainer runs:
 

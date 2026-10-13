@@ -143,6 +143,10 @@ const locate = async (selector, questionSelector) => {
   const handle = await locator.elementHandle(read);
   let owner = handle ? await handle.ownerFrame() : null;
   while (owner && ["about:blank", "about:srcdoc"].includes(owner.url())) owner = owner.parentFrame();
+  // Each frame between the owner and the top document, nearest first, by origin.
+  const ancestors = [];
+  for (let up = owner ? owner.parentFrame() : null; up && up.parentFrame(); up = up.parentFrame())
+    if (!["about:blank", "about:srcdoc"].includes(up.url())) ancestors.push(where(up.url(), false));
   const found = await locator.evaluate((element) => {
     const associated =
       "form" in element && element.form instanceof HTMLFormElement ? element.form : element.closest("form");
@@ -152,6 +156,9 @@ const locate = async (selector, questionSelector) => {
       Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, name).get.call(associated);
     const actions = associated ? [formProperty("action")] : [];
     const methods = associated ? [formProperty("method")] : [];
+    // Whether the form or a control in it says GET itself: a bare form reads as GET too, but a
+    // page that submits it with code sends nothing in an address.
+    let explicitGet = associated ? (associated.getAttribute("method") ?? "").trim().toLowerCase() === "get" : false;
     // A link-style sign-in action may navigate instead of submitting its containing form.
     const href = element instanceof HTMLAnchorElement ? element.getAttribute("href") : null;
     if (href !== null) actions.push(new URL(href, document.baseURI).href);
@@ -160,6 +167,7 @@ const locate = async (selector, questionSelector) => {
       if (action !== null) actions.push(new URL(action, document.baseURI).href);
       const method = control.getAttribute("formmethod");
       if (method !== null) methods.push(method.toLowerCase());
+      if (method !== null && method.trim().toLowerCase() === "get") explicitGet = true;
     }
     // The method a submission with it as the submitter goes by, as the browser reads it: a submit
     // button's own formmethod, else its form's. Another control's, such as a "Forgot password"
@@ -189,7 +197,7 @@ const locate = async (selector, questionSelector) => {
     return {
       disabled,
       inert,
-      target: { documentOrigin: self.origin, actions, methods, submitMethod, editable, empty },
+      target: { documentOrigin: self.origin, actions, methods, explicitGet, submitMethod, editable, empty },
       described: {
         role: element.getAttribute("role"),
         formMethod: methods.join(",") || null,
@@ -221,6 +229,7 @@ const locate = async (selector, questionSelector) => {
     target: {
       ...found.target,
       ownerUrl: owner ? where(owner.url(), false) : null,
+      ancestors,
       actions: found.target.actions.map((action) => where(action, true)),
       control,
     },

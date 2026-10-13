@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Context, Data, Effect, Either, Schema, SchemaAST } from "effect";
+import { isCardSlot } from "../destinations/payment-frames.js";
 import type { Deadline } from "./deadline.js";
 import {
   ConfirmQuestion,
@@ -310,7 +311,19 @@ export const makeScriptInput = (
         () => handle(request),
         (resume) => Effect.sync(() => resume?.()),
       );
-      const valid = validateAnswer(request, answers);
+      // A card answer reaches the script as the run's handle, never the card, so only the host
+      // checks the card against its declared length.
+      const valid = validateAnswer(
+        {
+          ...request,
+          questions: request.questions.map((question) => {
+            if (question.type !== "secret" || !isCardSlot(question.secretKind)) return question;
+            const { maxLength: _checkedByHost, ...rest } = question;
+            return rest;
+          }),
+        },
+        answers,
+      );
       if (Either.isLeft(valid)) return yield* new ScriptInputFailure({ code: "Unavailable" });
       const values: Record<string, ScriptAnswer> = {};
       for (const asked of questions) {

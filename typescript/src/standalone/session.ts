@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { Effect } from "effect";
 import { makePlaywrightExecutor } from "../execution/playwright-execute.js";
-import { makeRunSecrets } from "../inputs/secrets.js";
+import { makeRunSecrets, registerSecretAnswer } from "../inputs/secrets.js";
 import { localRuntimeAssets } from "../execution/local-runtime-assets.js";
 import type { InputAsker } from "../runtime/input-request.js";
 import type { SessionTyping } from "./authentication.js";
@@ -30,8 +30,15 @@ export const makeSession = (options: PomeradoOptions) =>
       options.ask(request, bounds).pipe(
         Effect.tap((answers) =>
           Effect.sync(() => {
-            for (const answer of Object.values(answers)) {
-              if (answer.type === "secret") secrets.register(answer.value);
+            for (const [id, answer] of Object.entries(answers)) {
+              if (answer.type === "secret") {
+                const question = request.questions.find((candidate) => candidate.id === id);
+                registerSecretAnswer(
+                  secrets,
+                  question?.type === "secret" ? question.secretKind : undefined,
+                  answer.value,
+                );
+              }
               if (answer.type === "credential") {
                 if (answer.value.username !== undefined) secrets.register(answer.value.username);
                 if (answer.value.password !== undefined) secrets.register(answer.value.password);

@@ -1,4 +1,10 @@
 import { Effect } from "effect";
+import {
+  cardDigitRun,
+  cardValueForms,
+  isCardSlot,
+  shortCardPart,
+} from "../destinations/payment-frames.js";
 
 /**
  * A quoted value in a page's accessibility snapshot, escaped as Playwright's YAML writer does: a
@@ -136,9 +142,30 @@ export const makeRunSecrets = () => {
       if (!short) values.set(shownForm, undefined);
       else if (!values.has(shownForm)) values.set(shownForm, tokenPattern(shownForm));
   };
+  /**
+   * A payment card's own patterns, masked only in what a model or log sees (`redact`), never
+   * checked in source: a card number's digits in any grouping, and a short card part (a security
+   * code, a short expiry or postal code) only where no digit adjoins it, so "ZX1239" and a file's
+   * `123` stay as they are.
+   */
+  const cardPatterns = new Map<string, RegExp>();
+  /** Registers a card number's digit run (`pattern`, global), masked whatever its grouping. */
+  const registerCardPattern = (pattern: RegExp) => {
+    cardPatterns.set(pattern.source, pattern);
+  };
+  /** Registers a short card part, of a few characters, as whole digit tokens. */
+  const registerCardToken = (value: string) => {
+    for (const [shownForm] of shownForms(value)) {
+      const escaped = shownForm.replace(/[\\^$.*+?()[\]{}|/]/gu, "\\$&");
+      registerCardPattern(new RegExp(`(?<![0-9])${escaped}(?![0-9])`, "gu"));
+    }
+  };
   const ordered = () => [...values].sort(([left], [right]) => right.length - left.length);
   const redact = (text: string) =>
-    ordered().reduce((result, [secret]) => result.split(secret).join("[private]"), text);
+    [...cardPatterns.values()].reduce(
+      (result, pattern) => result.replace(pattern, "[private]"),
+      ordered().reduce((result, [secret]) => result.split(secret).join("[private]"), text),
+    );
   /** The longest proper prefix of a registered form that `text` ends with, as a length. */
   const splitPrefix = (text: string) =>
     ordered().reduce((longest, [secret]) => {
@@ -210,11 +237,31 @@ export const makeRunSecrets = () => {
     });
   return {
     register,
+    registerCardPattern,
+    registerCardToken,
     redact,
     redactCut,
     assertAbsent,
     carries,
     json,
-    clear: () => values.clear(),
+    clear: () => {
+      values.clear();
+      cardPatterns.clear();
+    },
   };
+};
+export type RunSecrets = ReturnType<typeof makeRunSecrets>;
+
+/**
+ * Registers one `secret` answer of kind `kind`. A card answer is also masked in the forms a page
+ * shows it in (`cardValueForms`), a short part only as a whole token, and a card number's digits
+ * in any grouping.
+ */
+export const registerSecretAnswer = (secrets: RunSecrets, kind: string | undefined, value: string) => {
+  if (!isCardSlot(kind)) return secrets.register(value);
+  for (const form of cardValueForms(kind, value))
+    if (form.length <= shortCardPart) secrets.registerCardToken(form);
+    else secrets.register(form);
+  const run = kind === "card_number" ? cardDigitRun(value) : undefined;
+  if (run !== undefined) secrets.registerCardPattern(run);
 };
