@@ -135,7 +135,8 @@ use even when the caller's structured input is empty: pass the request's values 
 it), never as a build-time question. Decide from the request and the site which inputs are
 required. An optional input plus a declared question the tool asks before any effect is only for
 a value the request genuinely leaves open; never make a required field optional with nothing
-that asks.
+that asks. An input that tailors the answer on a read is the exception: it is optional unless
+the task can't run without it (below).
 
 - The code works for every value the schema accepts. Never let the schema promise what
   the code rejects or ignores, such as a string the code throws on unless it is the example's
@@ -248,9 +249,9 @@ that asks.
     escalates it otherwise. The owner's answer keeps the build a read, with no `mint_update`.
   - Only when the site still won't apply what the caller gave, on a read: return what the site
     did show, with the value it actually applied (`applied_<input>`, null only when the page
-    shows none) beside the one the caller asked for, and the site's message in a short note
-    field, `<input>_note`, such as `zip_note`, which also says why when the applied value is
-    null. Never present it as the answer for the caller's value. A location the site says it
+    shows none) beside the one the caller asked for, and the site's message in an optional
+    output field, `<input>_note`, such as `zip_note`, set only on this fallback, which also says
+    why when the applied value is null. Never present it as the answer for the caller's value. A location the site says it
     does not serve is such a case: return the site's own answer with its message. A write throws
     `InputNotApplied` (above) before its first commit step instead.
   - Inputs that narrow the results (filters, sort, dates) stay strict: a value the page ignores

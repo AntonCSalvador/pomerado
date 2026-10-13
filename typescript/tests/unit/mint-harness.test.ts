@@ -1844,6 +1844,56 @@ it("keeps two answered requests in one attempt and publishes with both answers",
   expect(f.seen).toHaveLength(1);
 });
 
+// A signed-out step that enters a contact detail only to set the store a read applies stays a read
+// once the owner confirms it: Guardian labels it read, and the read build publishes.
+it("publishes a read whose live contact step the owner confirmed, Guardian labelling it a read", async () => {
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        expect(
+          JSON.parse(
+            yield* turn.actions.requestInput({
+              questions: [
+                {
+                  id: "guest_email",
+                  type: "confirm",
+                  prompt: "May the example enter guest@example.com to set the pickup store?",
+                },
+              ],
+            }),
+          ),
+        ).toMatchObject({ status: "answered", answers: { guest_email: { confirmed: true } } });
+        const receipt = yield* turn.actions.execute({ ...execution, target: "liveBrowser" });
+        expect(JSON.parse(receipt)).toMatchObject({ status: "completed" });
+        expect(JSON.parse(yield* turn.actions.finish(publication))).toMatchObject({
+          status: "published",
+        });
+      }),
+    {
+      askInput: () => Effect.succeed({ guest_email: { type: "confirm", value: { confirmed: true } } }),
+      reviewAndExecute: (_input, beforeDispatch = () => Effect.void) =>
+        beforeDispatch(readAllow).pipe(
+          Effect.as({
+            executionId: "execution_one",
+            status: "completed" as const,
+            effect: "verified" as const,
+            resultRef: "store-result-ref",
+            observations: { result: "Pickup store set" },
+            review: {
+              outcome: "allow" as const,
+              rationale: "Sets the store.",
+              reviewId: "review_fixture",
+              action: "read" as const,
+            },
+          }),
+        ),
+    },
+  );
+  const outcome = await f.run({ ...request, siteOrigin: "https://shop.example.test" });
+  expect(outcome).toMatchObject({ build: "published", publicationRef: "published-revision" });
+  expect(outcome.executions).toMatchObject([{ status: "completed", effect: "verified" }]);
+});
+
 /**
  * The caller's form answers, validated as a host validates them: the request the caller sees is
  * the one the harness hands the host, asked from the minting agent.
