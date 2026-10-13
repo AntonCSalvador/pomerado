@@ -640,9 +640,13 @@ export interface LiveTestHost {
    * MUST first have Guardian review the whole batch once, as a live test of a read whose
    * `currentExecution.input` is `agent_chosen_batch` and whose submitted input lists every case's
    * input, and run nothing unless Guardian allows it. Then it runs each case like an example:
-   * a fresh script process on a page reset to the site's origin with the site's data cleared, in
-   * the build's browser or, at most `batch.workers` at once, on separate fresh browsers opened
-   * like it, never in tabs of one browser. `runLiveTestCase` runs a case and its next page. A
+   * a fresh script process on a page reset to the site's origin that keeps the browser's site
+   * data, in the build's browser or, at most `batch.workers` at once, on separate browsers opened
+   * like it, never in tabs of one browser. A host with more than one browser runs at least one
+   * case first on a new browser with an empty profile, and marks each case run's `start`: `cold`
+   * for a case that ran first on such a browser, `warm` for one that ran on a browser that kept
+   * site data from earlier steps. A host with one browser runs every case warm, and the record
+   * shows that no case passed cold. `runLiveTestCase` runs a case and its next page. A
    * case a host problem, a challenge or the deadline stopped is `inconclusive`; a case not run by
    * `batch.deadlineAt` (epoch milliseconds) is `inconclusive` with reason `deadline`. A host may
    * record the batch as one history entry marked `agent_chosen_batch`, as the local host does;
@@ -688,7 +692,7 @@ export type LiveTestBatchResult =
 /**
  * The live_tests tool: `plan` shows the cases in `test/cases.json` and each case's latest result
  * (with full outputs for the cases named in `cases`); `run` runs the named cases, or every case when `cases` is null, as one batch
- * after one Guardian review, at most `maxWorkers` at once on separate fresh browsers.
+ * after one Guardian review, at most `maxWorkers` at once on separate browsers.
  */
 export const LiveTestsRequest = Schema.Struct({
   action: Schema.Literal("plan", "run"),

@@ -7,7 +7,7 @@ description: Kernel script operation SDK, mint intake, execution targets and own
 
 Identify the requested operation, website/login realm, required account, business
 inputs, desired result and permitted effects. A read build explores, then iterates its
-script from a clean start by running its example until it works (re-running a read's
+script from a reset start by running its example until it works (re-running a read's
 example is normal); resolve its missing choices with reads when possible. A write build
 does the caller's requested task once, live (in as many write steps as it takes), then
 composes its script from what happened (the `writes` skill). Only a read signed out designs
@@ -277,6 +277,7 @@ that asks.
   output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
   and its example's own input and output must decode under them, so settle both before that
   example.
+- Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear.
 - Give every input and output field, nested object and array item fields included, a short
   `description` annotation saying what it is, with the unit or format where one applies:
   "Departure airport as a three-letter IATA code", "Departure date, YYYY-MM-DD", "Average
@@ -630,14 +631,17 @@ do not click the challenge, reload, or navigate to another route merely because
 the earlier probe timed out. A new probe execution does not require new navigation.
 A live example, a live read `test`, and a write session's first `act` step are
 different: the host resets
-the browser to the site origin before it runs,
-and clears exploration cookies and site storage. A signed-in build gets back the session
-saved right after sign-in instead. When the page is signed out after that reset, or after a
+the browser to the site origin before it runs, closing other tabs, and keeps the
+browser's cookies and site storage. So the source must set every value its input controls,
+such as a location, store, filter or search, itself, and never rely on what the site
+remembers from exploration; a live test case that runs cold, on a new browser with an empty
+profile, is the proof. A sign-in that started and was never verified is the exception: that
+reset clears cookies and site storage. When the page is signed out after that reset, or after a
 full page load your source asks about with `ensureSignedIn`, the host signs in again by itself;
 do not call `authenticate` for it. When the host cannot keep the site signed in, the step fails with
 `session_not_kept`: report that cause instead of signing in again. That source must perform
 the flow from its input,
-never rely on a page an exploration left open. So a read iterates from a clean start,
+never rely on a page an exploration left open. So a read iterates from a reset start,
 and re-running its example or live test is normal. A live test stays read-only. A write
 session's later `act` steps continue on the page the previous step left.
 If the deadline expires, report the named readiness failure and use current

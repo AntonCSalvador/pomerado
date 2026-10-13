@@ -212,8 +212,6 @@ export const makeLocalSessionSignIn = (options: {
    * attempt; a new count by default.
    */
   readonly spent?: { attempt: number; scope: number };
-  /** Saves the session the sign-in left, for the resets after it. */
-  readonly saveSession: Effect.Effect<void, Error>;
   readonly timing?: SignInReplayTiming;
 }) => {
   const spent = options.spent ?? { attempt: 0, scope: 0 };
@@ -313,9 +311,6 @@ export const makeLocalSessionSignIn = (options: {
       yield* replay(sign, bound, options.login.login).pipe(
         Effect.tapError((error) => Effect.sync(() => options.login.failed(error))),
         Effect.mapError((error) => failed("session_sign_in_failed", "replay_failed", error)),
-      );
-      yield* options.saveSession.pipe(
-        Effect.mapError((error) => failed("session_sign_in_failed", "session_save_failed", error)),
       );
       return { signedInAgain: true, alreadySignedIn: false } as const;
     });
@@ -466,7 +461,6 @@ export const makeRunSignIn = (
     siteOrigin,
     limits: runSessionSignIns,
     scope: "attempt",
-    saveSession: Effect.void,
   });
   return { before, hook: again.hook };
 };
