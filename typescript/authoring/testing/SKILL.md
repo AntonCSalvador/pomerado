@@ -18,8 +18,9 @@ here unless the build is a read that has not signed in.
 Use execute with purpose=test, target, relative entrypoint/test file, fixtureRefs,
 caseFilter, maxWorkers and timeoutSeconds. Fixtures are host-authorized immutable
 inputs. Offline cases may use isolated workers; a live test is one read-only flow. It starts
-like the example: the site origin page, with exploration cookies and site storage cleared. A
-read proves its operation with purpose=example and iterates from that clean start; running the
+like the example: the site origin page, with the browser's cookies and site storage kept. So
+the tool sets every value its input controls itself, never relying on what the site remembers.
+A read proves its operation with purpose=example and iterates from that start; running the
 example or a live test again is normal.
 
 ## Test a read signed out as much as it needs
@@ -32,7 +33,12 @@ pages differ. Choose the cases that would show the tool works for callers other 
 not mechanical variations of the example's input. Start as soon as you know the page and its
 inputs, and refine the cases once the example passes. Consider each of these where the site has
 it; none is required, and one case may serve several:
-- every input, alone and together with the others;
+- every input, alone and together with the others. Each input needs a case that uses it, or
+  changes it from its default, and that case covers it: its other values, such as each order a
+  sort offers, need no case or `notTested` entry of their own unless one opens a page with a
+  different structure (other fields or sections), never one that only reorders or filters the
+  same rows. One case may set several inputs together when that combination still returns
+  results whose output shows each input was applied, such as rows that satisfy each filter;
 - smart combinations: controls that share a panel, a drawer or a page reload, a location or store
   set with a filter, controls that could undo or hide each other, and the combination a real
   caller would most likely send;
@@ -49,7 +55,9 @@ it; none is required, and one case may serve several:
 - a location or other input that tailors the answer applied and read back, and one the site
   won't apply (`result`, with the applied value beside the requested one and the site's message,
   never presented as the requested one's results);
-- the example's own input once more, which runs on a fresh browser where the host has them;
+- the example's own input once more, which a host with several browsers runs cold, first on a
+  new browser with an empty profile: the proof that the tool works for a caller the site
+  remembers nothing about, with no location, store or filter left from your exploration;
 - whatever you saw this site could break on while exploring: a panel that loads late, a pop-up,
   a layout that changes with the number of results, a value written differently on another page.
 
@@ -58,7 +66,7 @@ About 10 to 20 cases is typical. Write them in `test/cases.json`:
 ```json
 {
   "cases": [
-    { "id": "example-again", "purpose": "The example's input on a fresh browser.", "input": { "query": "desk lamp" }, "expect": "result" },
+    { "id": "example-again", "purpose": "The example's input on a new browser, cold.", "input": { "query": "desk lamp" }, "expect": "result" },
     { "id": "second-store", "purpose": "Another store from the store picker; its results page has no pickup column.", "input": { "query": "desk lamp", "store": "Mill Street" }, "expect": "result" },
     { "id": "sort-in-stock", "purpose": "Sort and the in-stock switch share the filter drawer, which reloads the list.", "input": { "query": "desk lamp", "sort": "price_low", "in_stock": true }, "expect": "result" },
     { "id": "nothing", "purpose": "A price ceiling no lamp is under returns an empty list.", "input": { "query": "desk lamp", "max_price": 1 }, "expect": "empty" },
@@ -83,13 +91,18 @@ with why. A choice the request, the caller or the owner declined is not part of 
 skill), so it is never tested.
 
 Run them with `live_tests` action `run` (`cases` null runs them all; `maxWorkers` up to 3). One
-Guardian review covers the batch; each case starts like the example, on its own fresh browser
-where the host has them, and you get every result: its status, what it returned, and a failure's
+Guardian review covers the batch; each case starts like the example, on a page reset to the
+site origin that keeps its browser's site data, in parallel browsers where the host has them.
+Each result says whether the case ran `cold`, first on a new browser with an empty profile, or
+`warm`, on a browser that kept what earlier steps left. A case that passes warm and fails cold
+relies on something the site remembered: set that value from the input. You get every result: its status, what it returned, and a failure's
 error with the source line that threw. Name cases in action `plan` to read their full outputs,
 and check what they mean, not just pass or fail: every item matches the filters, the order follows
 the sort, the applied location is the one asked for or labeled as another, page 2 differs from
 page 1. A failing case is a bug in the tool: fix the code at that line. Never drop the input, narrow the schema or change a
-case's expectation to match what it returned to make it pass; fix the code. A
+case's expectation to match what it returned to make it pass; fix the code. While a fix is in
+progress, prefer rerunning only the failing cases, named in `cases`: a batch of every case waits
+on its slowest case, and the cases that passed run again once after your last edit. A
 run that returns partly filled results, or passes only when run again, is missing a wait for
 content: fix the wait, not the retry, then run that input again a few times.
 
@@ -123,12 +136,12 @@ add any case that catches a real risk. A tool that returns a list runs page two 
 cursor page one returned, and reaches a last page (pagination skill).
 
 Results count only for the version, the source and the case as they ran: an edit makes them stale.
-Finish in this order: make your last edit, run the cases again on each version you ship, run the
-example last, then call `finish_build`. Publication review reads the host's record of your cases
-(`publication/tests.json`), not your account of them, and judges them against what the tool
-claims: a failing case, or a claim no passing case tests while time remained, holds publication
-back. Deleting or changing a case after it failed does not hide the failure: the record keeps its
-last result as retired, and so does a failure that passes when run again on the same code, as
+Finish in this order: make your last edit, run every case once more (`cases` null) on each
+version you ship, run the example last, then call `finish_build`. Publication review reads the
+host's record of your cases (`publication/tests.json`), not your account of them, and judges
+them against what the tool claims: a failing case, or a claim no passing case tests while time
+remained, holds publication back. Deleting or changing a case after it failed does not hide the
+failure: the record keeps its last result as retired, and so does a failure that passes when run again on the same code, as
 flaky. When `live_tests` answers `no_time`, run the example last and publish; the record says time
 ran out.
 
