@@ -37,7 +37,7 @@ it; none is required, and one case may serve several:
   sort offers, need no case or `notTested` entry of their own unless one opens a page with a
   different structure (other fields or sections), never one that only reorders or filters the
   same rows. One case may set several inputs together when that combination still returns
-  results, so its output shows each was applied;
+  results whose output shows each input was applied, such as rows that satisfy each filter;
 - smart combinations: controls that share a panel, a drawer or a page reload, a location or store
   set with a filter, controls that could undo or hide each other, and the combination a real
   caller would most likely send;
