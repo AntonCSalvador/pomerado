@@ -1,6 +1,6 @@
 /**
- * Approval gate, run by .github/workflows/approval.yml. It posts the `Approval` commit status on a
- * pull request's head commit, which the ruleset on main requires.
+ * Approval gate, run by .github/workflows/approval.yml. It posts the `Approval` commit status on
+ * pull requests' head commits, which the ruleset on main requires from the approval GitHub App.
  *
  * - A maintainer's pull request passes. A maintainer is a user whom GitHub's API reports with
  *   write, maintain or admin permission on this repository. The payload's author association is
@@ -9,17 +9,24 @@
  *   owner is a user listed in .github/CODEOWNERS who also has write permission. As with dismissed
  *   stale reviews, an approval of an earlier commit stops counting after a push. A later change
  *   request or dismissal of the same reviewer's review withdraws the approval, and a later comment
- *   leaves it standing, as on GitHub.
+ *   leaves it standing, as on GitHub. While any reviewer with write permission has changes
+ *   requested as their latest verdict, the pull request fails, as GitHub's required reviews do.
  *
  * Every user CODEOWNERS lists counts as an owner of every path, which is what the file assigns.
- * Team entries are skipped, because the workflow's token can't read team membership.
+ * Team entries are skipped, since the gate's token has no organization permissions.
  *
- * The workflow runs this file from the base branch, never from the pull request. It reads each fact
+ * A status belongs to a commit, not a pull request, and several open pull requests can share a head
+ * commit. The gate evaluates every open pull request at the commit and posts success when any of
+ * them passes, since each would merge the same code. So opening another pull request at a commit
+ * can't take away the status a maintainer's pull request earned there.
+ *
+ * The workflow runs this file from the default branch, never from a pull request. It reads each fact
  * from GitHub's API, so nothing a pull request contains or sends decides the result.
  *
  * Usage, in the workflow: node tools/approval-gate.ts
  */
 import { appendFileSync, readFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 
 /** The status context the ruleset requires. */
 export const statusContext = "Approval";
@@ -36,7 +43,6 @@ export interface GitHub {
 }
 
 export interface Verdict {
-  readonly sha: string;
   readonly state: "success" | "failure";
   /** The status description, at most 140 characters. */
   readonly description: string;
@@ -71,79 +77,127 @@ const canWrite = async (github: GitHub, repo: string, login: string): Promise<bo
   return body?.permission !== undefined && writeRoles.has(body.permission);
 };
 
-/** Decides the `Approval` status for a pull request's current head commit. */
+/** Decides the `Approval` status of one pull request at `sha`, the head commit it is checked for. */
 export const evaluate = async (
   github: GitHub,
   repo: string,
-  number: number,
+  pull: PullRequest,
+  sha: string,
   codeOwners: readonly string[],
 ): Promise<Verdict> => {
-  const pull = (await github.get(`/repos/${repo}/pulls/${number}`)) as PullRequest | undefined;
-  if (pull === undefined) throw new Error(`Pull request ${number} was not found.`);
-  const sha = pull.head.sha;
-  const author = pull.user.login.toLowerCase();
   if (await canWrite(github, repo, pull.user.login)) {
-    return { sha, state: "success", description: "The author has write access, so no code owner approval is needed." };
+    return { state: "success", description: "The author has write access, so no code owner approval is needed." };
   }
   // GitHub lists reviews oldest first, so the last verdict per reviewer is the one that stands.
   const latest = new Map<string, Review & { readonly user: { readonly login: string } }>();
-  for (const review of (await github.list(`/repos/${repo}/pulls/${number}/reviews`)) as Review[]) {
+  for (const review of (await github.list(`/repos/${repo}/pulls/${pull.number}/reviews`)) as Review[]) {
     if (review.user !== null && verdictStates.has(review.state)) {
       latest.set(review.user.login.toLowerCase(), { ...review, user: review.user });
     }
   }
   const owners = new Set(codeOwners);
+  let approver: string | undefined;
   let staleApproval = false;
   for (const [login, review] of latest) {
-    if (review.state !== "APPROVED" || !owners.has(login) || login === author) continue;
+    if (review.state === "DISMISSED") continue;
+    if (review.state === "APPROVED" && !owners.has(login)) continue;
     if (!(await canWrite(github, repo, review.user.login))) continue;
-    if (review.commit_id === sha) {
-      return { sha, state: "success", description: `Code owner @${review.user.login} approved the head commit.` };
+    if (review.state === "CHANGES_REQUESTED") {
+      return { state: "failure", description: `@${review.user.login} requested changes.` };
     }
-    staleApproval = true;
+    if (review.commit_id === sha) approver ??= review.user.login;
+    else staleApproval = true;
+  }
+  if (approver !== undefined) {
+    return { state: "success", description: `Code owner @${approver} approved the head commit.` };
   }
   const description = staleApproval
     ? "A code owner approved an earlier commit. The head commit needs a code owner's approval."
     : "The author lacks write access, so the head commit needs a code owner's approval.";
-  return { sha, state: "failure", description };
+  return { state: "failure", description };
 };
 
-/** The open pull requests an event asks the gate to evaluate. */
-export const pullsToEvaluate = async (
+/**
+ * Decides the status of `sha` from the open pull requests whose head it is. It is undefined when
+ * no open pull request is at `sha` any longer: each push is evaluated at its own head.
+ */
+export const evaluateCommit = async (
+  github: GitHub,
+  repo: string,
+  sha: string,
+  codeOwners: readonly string[],
+): Promise<(Verdict & { readonly pulls: readonly number[] }) | undefined> => {
+  const open = (await github.list(`/repos/${repo}/pulls?state=open`)) as PullRequest[];
+  const pulls = open.filter((pull) => pull.head.sha === sha);
+  let failure: Verdict | undefined;
+  for (const pull of pulls) {
+    const verdict = await evaluate(github, repo, pull, sha, codeOwners);
+    if (verdict.state === "success") return { ...verdict, pulls: [pull.number] };
+    failure ??= verdict;
+  }
+  return failure === undefined ? undefined : { ...failure, pulls: pulls.map((pull) => pull.number) };
+};
+
+/** The head commits an event asks the gate to evaluate. */
+export const commitsToEvaluate = async (
   github: GitHub,
   repo: string,
   eventName: string,
   event: unknown,
-): Promise<number[]> => {
+): Promise<string[]> => {
+  // The event's commit only points at what to evaluate. The verdict comes from the API.
   if (eventName === "pull_request_target") {
-    return [(event as { readonly pull_request: PullRequest }).pull_request.number];
+    return [(event as { readonly pull_request: PullRequest }).pull_request.head.sha];
   }
+  // A submitted or dismissed review woke the gate. The review's run names the head commit it ran for.
   if (eventName === "workflow_run") {
-    // A submitted or dismissed review woke the gate. The review's run names the head commit it ran
-    // for, and the pull requests still at that commit are the ones to evaluate again. A pull request
-    // that has moved on was evaluated at its new head when it was pushed.
-    const sha = (event as { readonly workflow_run: { readonly head_sha: string } }).workflow_run.head_sha;
+    return [(event as { readonly workflow_run: { readonly head_sha: string } }).workflow_run.head_sha];
+  }
+  // A maintainer's dispatch evaluates every open pull request again.
+  if (eventName === "workflow_dispatch") {
     const open = (await github.list(`/repos/${repo}/pulls?state=open`)) as PullRequest[];
-    return open.filter((pull) => pull.head.sha === sha).map((pull) => pull.number);
+    return [...new Set(open.map((pull) => pull.head.sha))];
   }
   throw new Error(`The approval gate doesn't handle ${eventName} events.`);
 };
 
-const client = (token: string, api: string) => {
-  const request = async (method: "GET" | "POST", path: string, body?: unknown) => {
-    const response = await fetch(`${api}${path}`, {
-      method,
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-        "x-github-api-version": "2022-11-28",
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    });
-    if (method === "GET" && response.status === 404) return undefined;
-    if (!response.ok) throw new Error(`${method} ${path} answered ${response.status}: ${await response.text()}`);
-    return (await response.json()) as unknown;
+export interface ClientOptions {
+  /** Requests per call, counting the first. Failures GitHub may recover from are tried again. */
+  readonly attempts?: number;
+  readonly wait?: (milliseconds: number) => Promise<unknown>;
+}
+
+/** GitHub's REST API. It retries network errors, 5xx, 429 and rate limit answers, with backoff. */
+export const createClient = (token: string, api: string, options: ClientOptions = {}) => {
+  const attempts = options.attempts ?? 4;
+  const wait = options.wait ?? delay;
+  const request = async (method: "GET" | "POST", path: string, body?: unknown): Promise<unknown> => {
+    for (let attempt = 1; ; attempt += 1) {
+      let problem: string;
+      try {
+        const response = await fetch(`${api}${path}`, {
+          method,
+          headers: {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            "x-github-api-version": "2022-11-28",
+          },
+          body: body === undefined ? null : JSON.stringify(body),
+        });
+        if (method === "GET" && response.status === 404) return undefined;
+        if (response.ok) return (await response.json()) as unknown;
+        problem = `${method} ${path} answered ${response.status}: ${await response.text()}`;
+        const rateLimited = response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0";
+        if (response.status < 500 && response.status !== 429 && !rateLimited) throw new Error(problem);
+      } catch (error) {
+        // fetch throws a TypeError when the request never got an answer.
+        if (!(error instanceof TypeError)) throw error;
+        problem = `${method} ${path} failed: ${error.message}`;
+      }
+      if (attempt >= attempts) throw new Error(`${problem} (after ${attempt} attempts)`);
+      await wait(1000 * 4 ** (attempt - 1));
+    }
   };
   return {
     get: (path: string) => request("GET", path),
@@ -168,19 +222,23 @@ const main = async (): Promise<void> => {
     return value;
   };
   const repo = env("GITHUB_REPOSITORY");
-  const github = client(env("GITHUB_TOKEN"), env("GITHUB_API_URL"));
+  const github = createClient(env("APPROVAL_APP_TOKEN"), env("GITHUB_API_URL"));
   const event = JSON.parse(readFileSync(env("GITHUB_EVENT_PATH"), "utf8")) as unknown;
   const codeOwners = parseCodeOwners(readFileSync(".github/CODEOWNERS", "utf8"));
   const targetUrl = `${env("GITHUB_SERVER_URL")}/${repo}/actions/runs/${env("GITHUB_RUN_ID")}`;
-  for (const number of await pullsToEvaluate(github, repo, env("GITHUB_EVENT_NAME"), event)) {
-    const verdict = await evaluate(github, repo, number, codeOwners);
-    await github.post(`/repos/${repo}/statuses/${verdict.sha}`, {
+  for (const sha of await commitsToEvaluate(github, repo, env("GITHUB_EVENT_NAME"), event)) {
+    const verdict = await evaluateCommit(github, repo, sha, codeOwners);
+    if (verdict === undefined) {
+      console.log(`No open pull request is at ${sha} any longer.`);
+      continue;
+    }
+    await github.post(`/repos/${repo}/statuses/${sha}`, {
       state: verdict.state,
       context: statusContext,
       description: verdict.description,
       target_url: targetUrl,
     });
-    const line = `Pull request ${number} at ${verdict.sha}: ${verdict.state}. ${verdict.description}`;
+    const line = `${sha} (pull request ${verdict.pulls.join(", ")}): ${verdict.state}. ${verdict.description}`;
     console.log(line);
     const summary = process.env["GITHUB_STEP_SUMMARY"];
     if (summary) appendFileSync(summary, `${line}\n`);
