@@ -146,9 +146,10 @@ that asks.
 - Prefer keying only on what the caller asked for. A detail that changes from one listing to
   the next, such as a seating label or a room name, shouldn't decide whether the tool books or
   refuses unless the caller chose it.
-- Read results for every option the schema lists. When an option leads to a page that
-  differs from the others, handle that layout too, and on a read signed out run it live as a
-  test case (testing skill); never return results for another option in its place.
+- Read results for every option the schema lists. When an option leads to a page with a
+  different structure (other fields or sections), handle that layout too, and on a read signed
+  out run it live as a test case (testing skill); an option that only reorders or filters the
+  same rows needs no case of its own. Never return results for another option in its place.
 - A repair that finds a declared input broken, never applied or always reported unsupported
   fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract
   means every input and output it declares works, not leaving a broken one as it was.

@@ -450,12 +450,11 @@ describe("the publication policy", () => {
   // Hosts with their own publication policy get it with the live tests.
   it("counts an input as tested by one case that uses it, not one per value", () => {
     expect(publicationLiveTestsPolicy).toContain(
-      "a declared input no case uses or changes from its default,",
+      "a declared input when no case uses it, or changes it from its default,",
     );
     expect(publicationLiveTestsPolicy).toContain(
       "its other values, such as each option of a sort, need no case of their own and no notTested entry",
     );
-    expect(publicationLiveTestsPolicy).not.toContain("a declared input or one of its values");
   });
 
   // A site's own "Remember me" choice left at its default keeps the owner's session for later

@@ -34,7 +34,8 @@ inputs, and refine the cases once the example passes. Consider each of these whe
 it; none is required, and one case may serve several:
 - every input, alone and together with the others. One case that uses an input, or changes it
   from its default, covers it: its other values, such as each order a sort offers, need no case
-  or `notTested` entry of their own unless one opens a page laid out differently;
+  or `notTested` entry of their own unless one opens a page with a different structure (other
+  fields or sections), never one that only reorders or filters the same rows;
 - smart combinations: controls that share a panel, a drawer or a page reload, a location or store
   set with a filter, controls that could undo or hide each other, and the combination a real
   caller would most likely send;
