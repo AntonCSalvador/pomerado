@@ -32,6 +32,8 @@ interface Pull {
   readonly sha?: string;
   readonly reviews?: readonly Review[];
   readonly association?: string;
+  /** The repository the head branch is in: this one unless it names a fork, or null once the fork is deleted. */
+  readonly headRepo?: string | null;
 }
 
 interface Fixture {
@@ -46,7 +48,10 @@ const fakeApi = (fixture: Fixture) => {
   const pulls = fixture.pulls.map((pull) => ({
     number: pull.number,
     user: { login: pull.author },
-    head: { sha: pull.sha ?? head },
+    head: {
+      sha: pull.sha ?? head,
+      repo: pull.headRepo === null ? null : { full_name: pull.headRepo ?? repo },
+    },
     author_association: pull.association ?? "CONTRIBUTOR",
   }));
   const permission = /^\/repos\/example-org\/example-repo\/collaborators\/([^/]+)\/permission$/;
@@ -138,6 +143,17 @@ describe("approval gate", () => {
     // A change request from someone without write access doesn't block, as on GitHub.
     const reader = { login: "outside-reader", state: "CHANGES_REQUESTED", sha: head };
     expect(await outside([reader, approved], { "outside-reader": "read" })).toMatchObject({ state: "success" });
+  });
+
+  it("needs a code owner's approval for a maintainer's pull request from a fork", async () => {
+    // The fork's owner can push to its branch without write access here, so the author's access doesn't vouch for it.
+    for (const headRepo of ["outside-dev/example-repo", null]) {
+      const pull = { number: 7, author: "maintainer", headRepo };
+      const fixture = { permissions: { ...permissions, maintainer: "write" }, pulls: [pull] };
+      expect(await evaluateCommit(github(fixture), repo, head, owners)).toMatchObject({ state: "failure" });
+      const approved = { ...fixture, pulls: [{ ...pull, reviews: [{ login: "owner-one", state: "APPROVED", sha: head }] }] };
+      expect(await evaluateCommit(github(approved), repo, head, owners)).toMatchObject({ state: "success" });
+    }
   });
 
   it("asks the API for the author's permission rather than trusting the author association", async () => {
@@ -251,20 +267,47 @@ describe("approval gate API client", () => {
     }
   });
 
+  it("tries a rate-limited request again", async () => {
+    const fixture = { permissions, pulls: [] };
+    const limits = [
+      { status: 429, headers: {} },
+      { status: 403, headers: { "x-ratelimit-remaining": "0" } },
+    ];
+    for (const limit of limits) {
+      let requests = 0;
+      const api = await serve(fixture, (_request, response) => {
+        requests += 1;
+        if (requests > 1) return false;
+        response.writeHead(limit.status, limit.headers).end("{}");
+        return true;
+      });
+      try {
+        const client = createClient("test-token", api.url, { attempts: 3, wait: async () => undefined });
+        expect(await client.get(`/repos/${repo}/pulls`)).toEqual([]);
+        expect(requests).toBe(2);
+      } finally {
+        await api.close();
+      }
+    }
+  });
+
   it("doesn't try a request GitHub refused again", async () => {
     const fixture = { permissions, pulls: [] };
-    let requests = 0;
-    const api = await serve(fixture, (_request, response) => {
-      requests += 1;
-      response.writeHead(401).end("{}");
-      return true;
-    });
-    try {
-      const client = createClient("test-token", api.url, { attempts: 3, wait: async () => undefined });
-      await expect(client.get(`/repos/${repo}/pulls`)).rejects.toThrow("answered 401");
-      expect(requests).toBe(1);
-    } finally {
-      await api.close();
+    // A 403 with rate limit left is a refusal, not a rate limit.
+    for (const refusal of [{ status: 401, headers: {} }, { status: 403, headers: { "x-ratelimit-remaining": "42" } }]) {
+      let requests = 0;
+      const api = await serve(fixture, (_request, response) => {
+        requests += 1;
+        response.writeHead(refusal.status, refusal.headers).end("{}");
+        return true;
+      });
+      try {
+        const client = createClient("test-token", api.url, { attempts: 3, wait: async () => undefined });
+        await expect(client.get(`/repos/${repo}/pulls`)).rejects.toThrow(`answered ${refusal.status}`);
+        expect(requests).toBe(1);
+      } finally {
+        await api.close();
+      }
     }
   });
 });
