@@ -746,6 +746,36 @@ it("says time ran out only when the attempt's end, not the batch's own cap, stop
   expect((await record(5 * 60_000)).outOfTime).toBe(true);
 });
 
+it("never counts a case the site blocked on the browser's egress against the tool", async () => {
+  const { host, batches } = liveTestHost({ "sort-price": { status: "inconclusive", reason: "site_block" } });
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("live_tests", runAll, "run"),
+        call("execute", example, "example"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+  await f.run();
+
+  expect(batches).toHaveLength(1);
+  const blocked = (resultOf(f.requests[1], "run")["cases"] as { id: string }[]).find(
+    (testCase) => testCase.id === "sort-price",
+  );
+  expect(blocked).toMatchObject({ status: "inconclusive", got: "site_block" });
+  expect(published.seen[0]?.coverage).toContain("2 pass, 1 fail, 1 inconclusive;");
+});
+
 it("runs nothing when Guardian denies the batch, and says why", async () => {
   const { host, batches } = liveTestHost(
     {},
