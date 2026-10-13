@@ -1,0 +1,49 @@
+# Approval gate. It posts the `Approval` commit status on each pull request's head commit, and the
+# ruleset on main requires it. A maintainer's pull request passes at once. An outside contributor's
+# pull request passes once a code owner approves its current head commit. tools/approval-gate.ts
+# holds the rules, and typescript/tests/unit/approval-gate.test.ts tests them.
+#
+# A pull request can't change this gate. pull_request_target runs this file and the script as they
+# are on the base branch, and workflow_run runs them from the default branch. The job checks out
+# that trusted commit only, never the pull request's code, and reads each fact from GitHub's API.
+# Its token can read the repository and pull requests and write commit statuses, nothing more.
+#
+# Reviews don't trigger pull_request_target, and a pull_request_review run uses the pull request's
+# own copy of its workflow with a read-only token for a fork. So approval-review.yml only marks
+# that a review was submitted or dismissed, and its completion starts this workflow again here.
+name: Approval gate
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_run:
+    workflows: [Approval review]
+    types: [completed]
+permissions: {}
+# Runs for one head commit wait for each other, and each reads the reviews as they stand when it
+# starts, so the last status posted reflects the latest review.
+concurrency:
+  group: approval-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+jobs:
+  approval:
+    name: Evaluate approval
+    runs-on: ${{ github.repository == 'Pomerado/pomerado' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      # Without a ref, checkout takes the commit the event names: the base branch's head for
+      # pull_request_target, and the default branch's head for workflow_run.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          package-manager-cache: false
+      - name: Post the Approval status
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/approval-gate.ts

@@ -13,7 +13,7 @@ There are two channels:
 
 ## Canaries
 
-1. A pull request merges into `main` after a green `CI` check, a `review/clear` check from the independent review, and a code owner's approval. Rulesets on `main` enforce all three. A repository admin may merge without the approval, never without the two checks.
+1. A pull request merges into `main` after a green `CI` check, a `review/clear` check from the independent review, and an `Approval` check. Rulesets on `main` require all three. `Approval` passes at once for a maintainer's pull request, and for an outside contributor's once a code owner approves its current head commit.
 2. The merge starts the Release workflow. It picks the canary version `X.Y.Z-canary.N`:
    - `X.Y.Z` is the `version` in `package.json` while npm doesn't have it, and the next patch version once it does.
    - `N` is the workflow's run number, so a later canary always sorts higher.
