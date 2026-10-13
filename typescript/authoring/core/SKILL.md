@@ -500,7 +500,8 @@ on the rendered page, with whitespace normalized and invisible characters remove
 instead of returning hidden text; `as: "accessible"` reads what a screen reader reads instead.
 `textContent` always includes hidden text, scripts and styles, and so does `innerText` of an
 element that is not rendered, such as a hidden duplicate of the block you meant. `readRows`
-reads a window of rows in one call, each field relative to its row. Never select by a generated
+reads a window of rows in one call, each field relative to its row. Read a list's rows in one
+call: `readRows` and `waitForRows` read every returned row at once. Never select by a generated
 CSS class, a hashed or build-numbered name such as `.e-1a2b3c` or `.css-1x2y3z`: it changes on
 the site's next deploy.
 Never read it from a broad container, whole-page text, tag-stripped HTML, a regex over page-wide
