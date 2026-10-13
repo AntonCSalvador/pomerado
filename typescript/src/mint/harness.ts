@@ -2793,7 +2793,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         )
           return refused(
             "policy_not_refused",
-            "Nothing in this attempt refused this: Guardian denied or escalated no execution, refused no publication for privacy or authority, and the owner answered no to nothing. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no to a confirm question is a refusal. Use site_lacks_capability only when the site does not offer what the task needs.",
+            "Nothing in this attempt refused this: Guardian denied or escalated no execution, refused no publication for privacy or authority or for a finding no correction gets past, and the owner answered no to nothing. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no to a confirm question is a refusal. Use site_lacks_capability only when the site does not offer what the task needs.",
           );
         return undefined;
       };
@@ -3555,6 +3555,50 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 ),
           ),
         );
+      /** Captures retained in this attempt, as evidence a later submission may rest on. */
+      let capturesRetained = 0;
+      /**
+       * What the last publication Guardian denied rested on: the request, the digests of the
+       * entrypoint's and the HTTP version's import closures and of each flagged file, and the
+       * evidence the host holds. The same again is refused before a second review. Kept in memory
+       * only, so a takeover drops it.
+       */
+      let deniedSubmission:
+        | {
+            readonly paths: readonly string[];
+            readonly key: string;
+            readonly liveTests: readonly LiveTestRecord[];
+          }
+        | undefined;
+      const currentLiveTests = () => [
+        ...liveTestRecords.playwright.values(),
+        ...liveTestRecords.http.values(),
+        ...liveTestReplaced,
+      ];
+      const submissionKey = (proposed: PublicationRequest, paths: readonly string[]) =>
+        Effect.forEach(paths, stepDigest).pipe(
+          Effect.map((digests) =>
+            JSON.stringify({
+              proposed,
+              digests,
+              executions: executions.length,
+              revision: taskState.revision,
+              answers: answeredQuestions.size,
+              captures: capturesRetained,
+            }),
+          ),
+        );
+      const unchangedSinceDenial = (proposed: PublicationRequest) =>
+        Effect.gen(function* () {
+          const denied = deniedSubmission;
+          if (denied === undefined) return false;
+          const liveTests = currentLiveTests();
+          return (
+            liveTests.length === denied.liveTests.length &&
+            liveTests.every((record, index) => record === denied.liveTests[index]) &&
+            (yield* submissionKey(proposed, denied.paths)) === denied.key
+          );
+        });
       const actions: MintActions = {
         retainCapture: (input) =>
           serial.withPermits(1)(
@@ -3566,7 +3610,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 return yield* new MintFailure({ code: "InvalidRequest" });
               if (!dependencies.retainCapture)
                 return yield* new MintFailure({ code: "CaptureUnavailable" });
-              return yield* dependencies.retainCapture(submitted);
+              const retained = yield* dependencies.retainCapture(submitted);
+              capturesRetained++;
+              return retained;
             }),
           ),
         readSource: (path, range) =>
@@ -4006,6 +4052,21 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   executionContext: yield* executionContext(),
                 });
               }
+              // Guardian denied this same submission, and a second review would deny it again.
+              if (yield* unchangedSinceDenial(proposed)) {
+                const reason = "unchanged_since_denial";
+                pendingDecision = hostRefusalDecision(reason, evidence.executionId, write);
+                yield* diagnose({ phase: "publication", code: "PublicationUnavailable", reason });
+                return JSON.stringify({
+                  status: "not_published",
+                  code: "PublicationUnavailable",
+                  reason,
+                  userInputRequired: false,
+                  instruction:
+                    "Not published: nothing changed since Guardian denied this submission, so it was not reviewed again. Fix that denial's findings, or end as its instruction says.",
+                  executionContext: yield* executionContext(),
+                });
+              }
               const minterCoverage = yield* screenMintText(dependencies, proposed.coverage);
               const assumptions = yield* screenAssumptions(proposed.assumptions);
               const readBackUnavailable = withheld
@@ -4093,6 +4154,20 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 publicationRefusalUnfixable(denial)
               )
                 guardianRefused = true;
+              if (publication._tag === "Left" && publication.left.code === "ReviewDenied") {
+                const paths = [
+                  ...new Set([
+                    proposed.entrypoint,
+                    httpVersionPath,
+                    ...(denial?.findings ?? []).map((finding) => workspacePath(finding.path)),
+                  ]),
+                ];
+                deniedSubmission = {
+                  paths,
+                  key: yield* submissionKey(proposed, paths),
+                  liveTests: currentLiveTests(),
+                };
+              }
               publicationDenial =
                 publication._tag === "Left" && publication.left.code === "ReviewDenied"
                   ? {
@@ -4250,9 +4325,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     instruction: "Nothing was published. End this attempt; do not execute again.",
                   });
                 }
-                // Every finding is in a file the host wrote, which no edit of the minter's changes
-                //: it stops and reports rather than resubmitting unchanged.
-                if (error.review?.reason === "host_owned")
+                // Every finding is in a file the host wrote, which no edit of the minter's fixes:
+                // a defect of the host's, so the host ends the build as its own failure, never as
+                // the minter's policy block.
+                if (error.review?.reason === "host_owned") {
+                  terminal ??= {
+                    build: "incomplete",
+                    hostFailure: "publication_unavailable",
+                    summary:
+                      "Not published: Guardian's publication review found a defect in a file the host wrote, which no source edit can fix. The existing execution outcomes and protected results remain retained.",
+                  };
                   return notPublished(
                     error.code,
                     "host_owned",
@@ -4261,8 +4343,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       rationale: yield* screenRationale(error.review.rationale),
                       reviewId: error.review.reviewId,
                     },
-                    "Not published: every finding is in a host-owned file, which cannot be fixed from source. Do not edit source for it, run anything again or call finish_build unchanged. Stop and report the findings and Guardian's rationale in your final answer.",
+                    "Not published: every finding is in a host-owned file, which cannot be fixed from source. The host ends this attempt as its own failure; do not edit source for it, run anything again or call finish_build again.",
                   );
+                }
                 // A gate refusal names its file and what matched there. It is the minter's to fix,
                 // never a review outage to retry.
                 if (error.publicationBlock !== undefined) {
