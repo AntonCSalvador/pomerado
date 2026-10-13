@@ -277,6 +277,7 @@ that asks.
   output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
   and its example's own input and output must decode under them, so settle both before that
   example.
+- Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear.
 - Give every input and output field, nested object and array item fields included, a short
   `description` annotation saying what it is, with the unit or format where one applies:
   "Departure airport as a three-letter IATA code", "Departure date, YYYY-MM-DD", "Average
