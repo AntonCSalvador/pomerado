@@ -16,6 +16,18 @@ export interface PublicationScope {
     readonly current: boolean;
     readonly owner: "host" | "minter";
   }[];
+  /**
+   * The inputs the tool's published revision declares, each by name with its description, when
+   * this publication replaces a published tool. A host supplies it from its own record of that
+   * revision, never from anything the minter wrote, so Guardian can tell a repair that keeps a
+   * caller's earlier decision on how an input is used, a "By design:" description, word for word.
+   * Absent, a repair gets no such allowance. The local host keeps no published revisions and
+   * supplies none.
+   */
+  readonly publishedInputs?: readonly {
+    readonly name: string;
+    readonly description?: string;
+  }[];
 }
 
 /**

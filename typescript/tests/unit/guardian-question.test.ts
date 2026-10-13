@@ -481,11 +481,11 @@ it("gives a review every plain answer, screened and masked, and no secret or log
     ),
   );
   expect(reviewed).toEqual([
-    { question: "<Which plan?>", answer: "<Team plan>" },
-    { question: "<Which size?>", answer: "<Twelve seats>" },
-    { question: "<Which tier?>", answer: "<Pro>" },
-    { question: "<Which extras?>", answer: ["<Audit log>", "<Single sign-on>"] },
-    { question: "<Continue?>", answer: { confirmed: true, text: "<Platform>" } },
+    { id: "plan", question: "<Which plan?>", answer: "<Team plan>" },
+    { id: "size", question: "<Which size?>", answer: "<Twelve seats>" },
+    { id: "tier", question: "<Which tier?>", answer: "<Pro>" },
+    { id: "extras", question: "<Which extras?>", answer: ["<Audit log>", "<Single sign-on>"] },
+    { id: "go", question: "<Continue?>", answer: { confirmed: true, text: "<Platform>" } },
   ]);
 });
 
@@ -534,11 +534,13 @@ it("gives a review the owner's own option and note beside their picks, as the ow
   );
   expect(reviewed).toEqual([
     {
+      id: "store",
       question: "<Which store?>",
       answer: "<Main store at https://main.example.test>",
       note: "<Orders live at https://orders.tenant.example.org>",
     },
     {
+      id: "regions",
       question: "<Which regions?>",
       answer: ["<North>"],
       other: "<Islands at https://islands.example.net>",
@@ -559,8 +561,12 @@ it("gives a review the owner's own option and note beside their picks, as the ow
   expect(input).toMatchObject({
     trusted_authority: {
       answeredQuestions: [
-        { answer: "<Main store at https://main.example.test>", note: reviewed[0]?.note },
-        { answer: ["<North>"], other: reviewed[1]?.other, note: "<Weekdays only>" },
+        {
+          id: "store",
+          answer: "<Main store at https://main.example.test>",
+          note: reviewed[0]?.note,
+        },
+        { id: "regions", answer: ["<North>"], other: reviewed[1]?.other, note: "<Weekdays only>" },
       ],
       ownerNamedOrigins: ["https://orders.tenant.example.org", "https://islands.example.net"],
     },
@@ -640,6 +646,6 @@ it("gives a review the owner's confirm answer beside a notice", async () => {
     ),
   );
   expect(reviewed).toEqual([
-    { question: "Do you approve the site's terms?", answer: { confirmed: true } },
+    { id: "approve", question: "Do you approve the site's terms?", answer: { confirmed: true } },
   ]);
 });
