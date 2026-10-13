@@ -2929,7 +2929,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             : []),
           ...(settings.has("effect")
             ? [
-                "This build is now a write build, and every later execution is reviewed under write authority. Read .agents/writes/SKILL.md, and .agents/forms/SKILL.md for a form, before the next step. The write is the whole task the request asks for, done once through purpose act steps; it may take several steps, and drafts, autosaves and step saves along the way are part of it. Before the first act step, ask with request_input for any value the task needs that the input does not settle. The first act step starts with navigation to the site origin (keeping the session saved after sign-in), so it must navigate to any deeper task page it needs; what you observed so far stays valid evidence. From now on a live example or live test is refused, and so is a live explore once the session starts.",
+                "This build is now a write build, and every later execution is reviewed under write authority. Read .agents/writes/SKILL.md, and .agents/forms/SKILL.md for a form, before the next step. The write is the whole task the request asks for, done once through purpose act steps; it may take several steps, and drafts, autosaves and step saves along the way are part of it. Before the first act step, ask with request_input for any value the task needs that the input does not settle. The first act step starts with navigation to the site origin (keeping the browser's cookies and site storage), so it must navigate to any deeper task page it needs; what you observed so far stays valid evidence. From now on a live example or live test is refused, and so is a live explore once the session starts.",
               ]
             : []),
         ].join(" ");
@@ -3448,6 +3448,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               ...(outputChecks === undefined ? {} : { outputChecks }),
               durationMs: Math.max(0, Math.round(run.durationMs)),
               ...(run.lane === undefined ? {} : { lane: run.lane }),
+              ...(run.start === undefined ? {} : { start: run.start }),
               input: testCase.input,
               purpose: testCase.purpose,
               expect: testCase.expect,

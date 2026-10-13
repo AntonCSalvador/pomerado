@@ -93,8 +93,9 @@ core skill), and keep the flow's calls in a module the composed script will impo
 too. Run each step with `execute` purpose `act`, target `liveBrowser`.
 
 - The first `act` step claims the build's write. The host resets the browser to
-  the site origin page first, with fresh page state (a signed-in build
-  keeps the session saved right after sign-in), so that step starts the flow there.
+  the site origin page first, with fresh page state that keeps the browser's cookies
+  and site storage (a signed-in build keeps its session), so that step starts the flow
+  there and sets every value its input controls itself.
 - Later steps continue on the page exactly as the previous step left it. Keep steps
   small and read the actual state after each submission. On multi-step forms, a
   button named Continue, Next or Save may save a draft, persist that page, or finish

@@ -7,10 +7,12 @@ import {
   nativeExecutionEnvironment,
 } from "../../src/guardian/execution-policy.js";
 import { makeOpenAIReviewer } from "../../src/guardian/openai.js";
+import { answersForReview } from "../../src/guardian/question.js";
 import {
   guardianPublicationPolicy,
   publicationDecisionPolicy,
   publicationLiveTestsPolicy,
+  publicationOutputPolicy,
   publicationSafetyDefaultPolicy,
 } from "../../src/guardian/publication.js";
 import {
@@ -619,6 +621,69 @@ describe("the OpenAI publication reviewer", () => {
     expect(result).toMatchObject({ _tag: "Left", left: { code: "TurnLimitExceeded" } });
     expect(requests).toHaveLength(12);
   });
+
+  // Guardian lets a "By design:" input, a limited use such as a postal code that only lists
+  // nearby stores, count as applied on two facts the host alone controls: the caller's answer to
+  // the input's design question, bound to it by the question's id, and on a repair the host's
+  // record of the published revision's inputs. The review gets the answer under its id and the
+  // record exactly when the host supplies one, beside the shared rule that reads them.
+  it.each([
+    [
+      "a repair whose host supplies the published revision's inputs",
+      [
+        {
+          name: "postalCode",
+          description: "By design: used only to find nearby stores; it does not change the selected store.",
+        },
+        { name: "query" },
+      ],
+    ],
+    ["a build whose host supplies none", undefined],
+  ])(
+    "gives %s the caller's design answer by its id, and the published inputs only as supplied",
+    async (_case, publishedInputs) => {
+      const prompt = "Should the postal code set the store, or only list nearby stores?";
+      const answeredQuestions = await Effect.runPromise(
+        answersForReview(
+          {
+            questions: [
+              {
+                id: "input_use_postal_code",
+                type: "choice",
+                prompt,
+                options: [
+                  { id: "set_store", label: "Set the store from it" },
+                  { id: "nearby_only", label: "Only list nearby stores" },
+                ],
+              },
+            ],
+          },
+          { input_use_postal_code: { type: "choice", value: "nearby_only" } },
+          Effect.succeed,
+        ),
+      );
+      const publication = {
+        files: pending.publication?.files ?? [],
+        ...(publishedInputs === undefined ? {} : { publishedInputs }),
+      };
+      const requests = scripted(() => [message(allow)]);
+      await Effect.runPromise(
+        makeGuardian(
+          makeOpenAIReviewer("Synthetic policy {{ tenant_policy_config }}", false, native),
+        ).review({ ...pending, answeredQuestions, publication }, sourcesOf(files)),
+      );
+      const request = reviewRequest(requests[0]);
+      expect(request["trusted_authority"]).toMatchObject({
+        answeredQuestions: [
+          { id: "input_use_postal_code", question: prompt, answer: "Only list nearby stores" },
+        ],
+      });
+      expect(request["trusted_publication"]).toEqual(publication);
+      if (publishedInputs === undefined)
+        expect(request["trusted_publication"]).not.toHaveProperty("publishedInputs");
+      expect(policyOf(requests[0])).toContain(publicationOutputPolicy);
+    },
+  );
 
   it("gives an execution review no publication policy or index", async () => {
     const requests = scripted((index) =>

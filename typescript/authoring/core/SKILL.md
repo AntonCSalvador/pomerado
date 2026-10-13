@@ -7,7 +7,7 @@ description: Kernel script operation SDK, mint intake, execution targets and own
 
 Identify the requested operation, website/login realm, required account, business
 inputs, desired result and permitted effects. A read build explores, then iterates its
-script from a clean start by running its example until it works (re-running a read's
+script from a reset start by running its example until it works (re-running a read's
 example is normal); resolve its missing choices with reads when possible. A write build
 does the caller's requested task once, live (in as many write steps as it takes), then
 composes its script from what happened (the `writes` skill). Only a read signed out designs
@@ -109,10 +109,12 @@ pomerado:section core.execute-calls:end -->
   `set_location` or `apply_sort`, and `siteMessage` the page's own error when it showed one.
   The run then fails and returns nothing computed without the caller's value. Never report the
   value as not applied in the output instead, such as a `sort_applied: false` flag or a
-  "lookup-only" description, and never let an answer to a question make a supplied value
-  optional. An input that tailors the answer, such as a location or store, is an
-  exception: when the site still won't apply it, a read returns the site's own answer labeled
-  with the value it applied (the input schema, "Inputs that tailor the answer", below). On a
+  "lookup-only" description, and never let an answer to a question make a filter, sort, date or
+  other value that narrows the results optional or lookup-only. An input that tailors the
+  answer, such as a location or store, is an exception: when the site still won't apply it, a
+  read returns the site's own answer labeled with the value it applied, and it may have a
+  limited use, such as lookup only, when the caller chose that use in answer to your design
+  question (the input schema, "Inputs that tailor the answer", below). On a
   write, check it before the first commit step: a write that may already have changed the site
   still ends as a possible change, never retried. A value the site does not offer, such as a
   store missing from its picker, is the caller's to fix: throw `InvalidInput` with `field` and
@@ -152,7 +154,10 @@ that asks.
   same rows needs no case of its own. Never return results for another option in its place.
 - A repair that finds a declared input broken, never applied or always reported unsupported
   fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract
-  means every input and output it declares works, not leaving a broken one as it was.
+  means every input and output it declares works, not leaving a broken one as it was. An input
+  whose description starts "By design:" is applied in the use it records, a caller's decision:
+  keep that use and its description word for word, and change them only after asking the same
+  design question again (the input schema, "Inputs that tailor the answer").
 - Never derive a format from one sample: not an input format, an element key, a selector, a
   URL path or a label. A key the page showed for the example's value says nothing about the
   next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read
@@ -250,6 +255,19 @@ that asks.
     `InputNotApplied` (above) before its first commit step instead.
   - Inputs that narrow the results (filters, sort, dates) stay strict: a value the page ignores
     throws `InputNotApplied` (above).
+  - Give a tailoring input a limited use, such as a postal code used only to look up nearby
+    stores without changing the selected one, only when the caller chose it. When how the tool
+    should use such an input is genuinely ambiguous, such as whether a postal code sets the
+    store or only lists nearby ones, ask the owner one `request_input` choice question with id
+    `input_use_<input>`, `<input>` being the input's name in lowercase snake_case
+    (`postalCode` is `input_use_postal_code`), with each use as an option. Always offer the
+    full use, such as setting the store from the postal code, never only limited uses. When the
+    caller chooses a limited use, start the input's description with "By design:" and state
+    that use in plain words, such as "By design: used only to find nearby stores; it does not
+    change the selected store." Write it only from that answer, never from the request's
+    wording, a free-text instruction or your own judgment, and never for a filter, sort or date,
+    which stay strict whatever an answer says. The code still applies the value in that use, and
+    a value the page does not take in it throws `InputNotApplied` (above).
   - While building, ask the owner for a location or other tailoring value the result depends on
     (`AGENTS.md`, "Try hard, then ask"); they may skip it. Skipping that question only leaves
     the example without one, and the input stays; saying the tool should use none declines it
@@ -278,6 +296,7 @@ that asks.
   output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
   and its example's own input and output must decode under them, so settle both before that
   example.
+- Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear.
 - Give every input and output field, nested object and array item fields included, a short
   `description` annotation saying what it is, with the unit or format where one applies:
   "Departure airport as a three-letter IATA code", "Departure date, YYYY-MM-DD", "Average
@@ -631,14 +650,17 @@ do not click the challenge, reload, or navigate to another route merely because
 the earlier probe timed out. A new probe execution does not require new navigation.
 A live example, a live read `test`, and a write session's first `act` step are
 different: the host resets
-the browser to the site origin before it runs,
-and clears exploration cookies and site storage. A signed-in build gets back the session
-saved right after sign-in instead. When the page is signed out after that reset, or after a
+the browser to the site origin before it runs, closing other tabs, and keeps the
+browser's cookies and site storage. So the source must set every value its input controls,
+such as a location, store, filter or search, itself, and never rely on what the site
+remembers from exploration; a live test case that runs cold, on a new browser with an empty
+profile, is the proof. A sign-in that started and was never verified is the exception: that
+reset clears cookies and site storage. When the page is signed out after that reset, or after a
 full page load your source asks about with `ensureSignedIn`, the host signs in again by itself;
 do not call `authenticate` for it. When the host cannot keep the site signed in, the step fails with
 `session_not_kept`: report that cause instead of signing in again. That source must perform
 the flow from its input,
-never rely on a page an exploration left open. So a read iterates from a clean start,
+never rely on a page an exploration left open. So a read iterates from a reset start,
 and re-running its example or live test is normal. A live test stays read-only. A write
 session's later `act` steps continue on the page the previous step left.
 If the deadline expires, report the named readiness failure and use current

@@ -217,7 +217,7 @@ describe("makeMarkerChecks", () => {
   it("counts a signed-out page the host never saw settle only when it shows the marker", async () => {
     const tab = modeledTab({ at: "/", shows: ["/account"], settled: false });
     const markers = markerChecks(tab);
-    await Effect.runPromise(markers.afterClear);
+    await Effect.runPromise(markers.afterSignedOutReset);
     expect(tab.snapshots).toBe(1);
     // The page may have shown more after the host read it, so it proves no marker absent.
     expect(await Effect.runPromise(markers.check(accountMarker))).toHaveProperty(

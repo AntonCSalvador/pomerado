@@ -65,7 +65,7 @@ the source files, never captures.
   input, required where the request needs it, and publication decodes that input.
 - `live_tests` runs the live tests of a read signed out when the host offers it: the cases you
   design in `test/cases.json` from what you saw on the site, and every result, run in parallel
-  batches on fresh browsers, on `src/tool.mjs` and on `src/tool-http.mjs`, each version keeping
+  batches on reset pages, at least one case cold where the host has several browsers, on `src/tool.mjs` and on `src/tool-http.mjs`, each version keeping
   its own results. Design them as soon as you know the page and its inputs, and read
   .agents/testing/SKILL.md first. A signed-in read and a write run no live tests.
 - `retain_capture`, `finish_build` and `request_input` are described below and in their
@@ -242,7 +242,10 @@ continues, when:
    business input do not name or clearly imply: never guess it or take the site's preselected
    default, ask before clicking it;
 5. a supplied value is incompatible with what the site offers: ask to revise it or stop, as
-   the key rules say.
+   the key rules say;
+6. how the tool should use an input that tailors the answer is genuinely ambiguous, such as
+   whether a postal code sets the store or only finds nearby ones: ask the design question
+   `input_use_<input>` (.agents/core/SKILL.md, "Inputs that tailor the answer").
 
 When nobody answers before the question expires, `request_input` returns `no_answer`. Decide
 how to go on without it: continue with a sensible default and list it in `finish_build`
@@ -423,13 +426,14 @@ prose or a generic error. An unsupported receipt cannot satisfy `finish_build`.
 
 Explorations keep the retained page between probes. A live example, a live test and a
 write session's first act step start on the site origin page, with fresh page state: the
-host closes other tabs and clears the cookies and site storage exploration left. A
-signed-in build gets back the session saved right after sign-in instead, so a stale
-session shows up as a login wall that a new sign-in fixes. Every sign-in step drops that
-saved session, a signed-in check included, so check once per sign-in: a check after the
-host confirmed one starts a new sign-in. Until the host confirms a new sign-in, these steps
-keep the browser's cookies and storage for a build that was signed in before, and clear
-them for one that never was. That source must run the flow from the input, including
+host closes other tabs and loads the site origin, and keeps the browser's cookies and site
+storage. So the source must set every value its input controls, such as a location, store,
+filter or search, itself, never rely on what the site remembers; a live test case that runs
+cold, first on a new browser with an empty profile, is the proof. A build whose sign-in
+started and was never confirmed is the exception: its resets clear cookies and site storage,
+so a half-finished sign-in never reaches a step. Every sign-in step starts a new sign-in, a
+signed-in check included, so check once per sign-in: a check after the host confirmed one
+starts a new sign-in. That source must run the flow from the input, including
 entering search terms, options and dates, not read results an exploration left on screen.
 A write session's later act steps continue on the page the previous step left.
 

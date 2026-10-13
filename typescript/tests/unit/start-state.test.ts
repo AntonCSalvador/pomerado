@@ -12,14 +12,12 @@ import {
   isFirstWriteStep,
   localStartHooks,
   makeStartTracker,
-  saveSessionCode,
-  shouldSaveSession,
   startPage,
   startStateFor,
   stopLoadingCode,
   type StepPurpose,
 } from "../../src/runtime/start-state.js";
-import { makeBuildStart, saveStateCode } from "../../src/standalone/mint-state.js";
+import { makeBuildStart } from "../../src/standalone/mint-state.js";
 
 const purposes: readonly StepPurpose[] = [
   "explore",
@@ -32,48 +30,53 @@ const purposes: readonly StepPurpose[] = [
 ];
 
 describe("startStateFor", () => {
-  const signedOut = { writeSessionStarted: false, signedIn: false, sessionSaved: false };
-  it.each(purposes)("starts a live %s as the table says when signed out", (purpose) => {
-    const resets = purpose === "example" || purpose === "test" || purpose === "act";
-    expect(startStateFor({ purpose, live: true, ...signedOut })).toBe(resets ? "clear" : "none");
+  const fresh = { writeSessionStarted: false, signInStarted: false, signInVerified: false };
+  const resetting = (purpose: StepPurpose) =>
+    purpose === "example" || purpose === "test" || purpose === "act";
+  it.each(purposes)("keeps the site data of a live %s before any sign-in started", (purpose) => {
+    expect(startStateFor({ purpose, live: true, ...fresh })).toBe(
+      resetting(purpose) ? "keep" : "none",
+    );
+  });
+  it.each(purposes)("clears a live %s's site data while a sign-in is unverified", (purpose) => {
+    expect(
+      startStateFor({ purpose, live: true, ...fresh, signInStarted: true }),
+    ).toBe(resetting(purpose) ? "clear" : "none");
+  });
+  it.each(purposes)("keeps a live %s's site data once a sign-in was verified", (purpose) => {
+    expect(
+      startStateFor({ purpose, live: true, ...fresh, signInStarted: true, signInVerified: true }),
+    ).toBe(resetting(purpose) ? "keep" : "none");
   });
   it.each(purposes)("never resets a %s that does not run on the live browser", (purpose) => {
-    for (const signedIn of [false, true])
-      for (const sessionSaved of [false, true])
+    for (const signInStarted of [false, true])
+      for (const signInVerified of [false, true])
         expect(
           startStateFor({
             purpose,
             live: false,
             writeSessionStarted: false,
-            signedIn,
-            sessionSaved,
+            signInStarted,
+            signInVerified,
           }),
         ).toBe("none");
   });
-  it.each(["example", "test", "act"] as const)(
-    "restores a signed-in %s's saved session, else keeps its session",
-    (purpose) => {
-      const step = { purpose, live: true, writeSessionStarted: false, signedIn: true };
-      expect(startStateFor({ ...step, sessionSaved: true })).toBe("restore");
-      expect(startStateFor({ ...step, sessionSaved: false })).toBe("keep");
-    },
-  );
   it("continues the page for a write session's later steps", () => {
-    for (const signedIn of [false, true])
+    for (const signInStarted of [false, true])
       expect(
         startStateFor({
           purpose: "act",
           live: true,
           writeSessionStarted: true,
-          signedIn,
-          sessionSaved: signedIn,
+          signInStarted,
+          signInVerified: false,
         }),
       ).toBe("none");
   });
   it("still resets examples and tests once a write session started", () => {
-    const step = { live: true, writeSessionStarted: true, signedIn: false, sessionSaved: false };
-    expect(startStateFor({ ...step, purpose: "example" })).toBe("clear");
-    expect(startStateFor({ ...step, purpose: "test" })).toBe("clear");
+    const step = { live: true, ...fresh, writeSessionStarted: true };
+    expect(startStateFor({ ...step, purpose: "example" })).toBe("keep");
+    expect(startStateFor({ ...step, purpose: "test" })).toBe("keep");
   });
 });
 
@@ -83,23 +86,6 @@ describe("isFirstWriteStep", () => {
     expect(isFirstWriteStep("act", true)).toBe(false);
     for (const purpose of purposes.filter((candidate) => candidate !== "act"))
       expect(isFirstWriteStep(purpose, false)).toBe(false);
-  });
-});
-
-describe("shouldSaveSession", () => {
-  const due = { live: true, signedIn: true, signInSettled: true, sessionSaved: false };
-  it.each(purposes.filter((purpose) => purpose !== "authenticate"))(
-    "saves before a live %s after a settled sign-in",
-    (purpose) => {
-      expect(shouldSaveSession({ purpose, ...due })).toBe(true);
-    },
-  );
-  it("never saves on a sign-in step, offline, signed out, mid sign-in or a second time", () => {
-    expect(shouldSaveSession({ purpose: "authenticate", ...due })).toBe(false);
-    expect(shouldSaveSession({ purpose: "explore", ...due, live: false })).toBe(false);
-    expect(shouldSaveSession({ purpose: "explore", ...due, signedIn: false })).toBe(false);
-    expect(shouldSaveSession({ purpose: "explore", ...due, signInSettled: false })).toBe(false);
-    expect(shouldSaveSession({ purpose: "explore", ...due, sessionSaved: true })).toBe(false);
   });
 });
 
@@ -114,73 +100,52 @@ describe("makeStartTracker", () => {
     tracker.sent("proof");
     return tracker.verified();
   };
-  it("saves once after a verified sign-in and restores before each example", () => {
-    const tracker = makeStartTracker<string>();
-    expect(tracker.plan(live("explore"))).toEqual({ save: false, start: "none" });
-    expect(signIn(tracker)).toBe(true);
-    expect(tracker.plan(live("explore"))).toEqual({ save: true, start: "none" });
-    tracker.save("signed-in");
-    expect(tracker.plan(live("example"))).toEqual({ save: false, start: "restore" });
-    expect(tracker.plan(live("example"))).toEqual({ save: false, start: "restore" });
-    expect(tracker.saved).toBe("signed-in");
-  });
-  it("restores a session saved by the step that is about to reset", () => {
+  it("keeps site data before a sign-in, clears it while one is open and keeps it once verified", () => {
     const tracker = makeStartTracker();
-    signIn(tracker);
-    expect(tracker.plan(live("example"))).toEqual({ save: true, start: "restore" });
-  });
-  it("asks again for a save that did not happen", () => {
-    const tracker = makeStartTracker();
-    signIn(tracker);
-    expect(tracker.plan(live("explore")).save).toBe(true);
-    expect(tracker.plan(live("explore")).save).toBe(true);
+    expect(tracker.plan(live("explore"))).toBe("none");
+    expect(tracker.plan(live("example"))).toBe("keep");
+    expect(tracker.signInStarted).toBe(false);
+    tracker.signIn();
+    expect(tracker.signInStarted).toBe(true);
+    expect(tracker.plan(live("example"))).toBe("clear");
+    tracker.sent("identifier");
+    tracker.sent("proof");
+    expect(tracker.verified()).toBe(true);
+    expect(tracker.signedIn).toBe(true);
+    expect(tracker.plan(live("example"))).toBe("keep");
+    expect(tracker.plan(live("test"))).toBe("keep");
   });
   it("counts a sign-in only once it sent an identifier and a password, code or approval", () => {
     const tracker = makeStartTracker();
     // A page that shows the account proves nothing before a sign-in step sent the login.
     expect(tracker.verified()).toBe(false);
-    expect(tracker.plan(live("example"))).toEqual({ save: false, start: "clear" });
+    expect(tracker.plan(live("example"))).toBe("keep");
     tracker.signIn();
     tracker.sent("identifier");
     expect(tracker.submitted).toBe(false);
     expect(tracker.verified()).toBe(false);
-    expect(tracker.plan(live("example"))).toEqual({ save: false, start: "clear" });
+    expect(tracker.plan(live("example"))).toBe("clear");
     tracker.signIn();
     tracker.sent("proof");
     expect(tracker.submitted).toBe(true);
     expect(tracker.verified()).toBe(true);
-    expect(tracker.plan(live("example"))).toEqual({ save: true, start: "restore" });
+    expect(tracker.plan(live("example"))).toBe("keep");
   });
-  it("drops the saved session and what was sent on a new sign-in until it is verified", () => {
-    const tracker = makeStartTracker<string>();
+  it("keeps the session of a verified sign-in through a check again, which must send the login anew", () => {
+    const tracker = makeStartTracker();
     signIn(tracker);
-    tracker.save("first");
-    tracker.signIn();
-    expect(tracker.saved).toBeUndefined();
-    expect(tracker.submitted).toBe(false);
-    expect(tracker.verified()).toBe(false);
-    // Still signed in, but nothing saved describes the browser: keep its session.
-    expect(tracker.plan(live("example"))).toEqual({ save: false, start: "keep" });
-    tracker.sent("identifier");
-    tracker.sent("proof");
-    expect(tracker.verified()).toBe(true);
-    expect(tracker.plan(live("explore"))).toEqual({ save: true, start: "none" });
-    tracker.save("second");
-    expect(tracker.saved).toBe("second");
-  });
-  it("refuses a check again after a confirmed sign-in and drops its session", () => {
-    const tracker = makeStartTracker<string>();
-    signIn(tracker);
-    tracker.save("first");
     // A confirmed sign-in is over: what it sent counts for no later check.
     expect(tracker.submitted).toBe(false);
     expect(tracker.verified()).toBe(false);
-    expect(tracker.saved).toBe("first");
-    // A check is a sign-in step too, so it drops the session saved after the last sign-in.
+    // A check is a sign-in step too: it starts a new sign-in, unsettled until it verifies.
     tracker.signIn();
-    expect(tracker.saved).toBeUndefined();
+    expect(tracker.signedIn).toBe(false);
     expect(tracker.verified()).toBe(false);
-    expect(tracker.plan(live("example"))).toEqual({ save: false, start: "keep" });
+    expect(tracker.plan(live("example"))).toBe("keep");
+    tracker.sent("identifier");
+    tracker.sent("proof");
+    expect(tracker.verified()).toBe(true);
+    expect(tracker.signedIn).toBe(true);
   });
   it("adds each screen of an open sign-in to what it sent", () => {
     const tracker = makeStartTracker();
@@ -190,76 +155,80 @@ describe("makeStartTracker", () => {
     tracker.sent("proof");
     expect(tracker.verified()).toBe(true);
   });
-  it("keeps no new-browser method a local build never calls", () => {
-    expect(Object.keys(makeStartTracker())).not.toContain("invalidate");
+  it("forgets every sign-in when the host replaces the browser", () => {
+    const open = makeStartTracker();
+    open.signIn();
+    open.sent("identifier");
+    expect(open.plan(live("example"))).toBe("clear");
+    open.browserReplaced();
+    expect(open.signInStarted).toBe(false);
+    expect(open.plan(live("example"))).toBe("keep");
+    // What the old browser's sign-in sent counts for nothing on the new one.
+    open.signIn();
+    open.sent("proof");
+    expect(open.submitted).toBe(false);
+    expect(open.verified()).toBe(false);
+    const verified = makeStartTracker();
+    signIn(verified);
+    verified.browserReplaced();
+    expect(verified.signedIn).toBe(false);
+    expect(verified.plan(live("example"))).toBe("keep");
+    // A sign-in on the new browser is unverified again until its own check.
+    verified.signIn();
+    expect(verified.plan(live("example"))).toBe("clear");
+  });
+  it("clears until this build verifies a sign-in when one started on the browser before it", () => {
+    let before = false;
+    const tracker = makeStartTracker({ signInStartedBefore: () => before });
+    expect(tracker.plan(live("example"))).toBe("keep");
+    before = true;
+    expect(tracker.signInStarted).toBe(true);
+    expect(tracker.plan(live("example"))).toBe("clear");
+    signIn(tracker);
+    expect(tracker.plan(live("example"))).toBe("keep");
   });
   it("starts the write session once its first act is dispatched, not when it is planned", () => {
     const tracker = makeStartTracker();
-    expect(tracker.plan(live("act"))).toEqual({ save: false, start: "clear" });
-    // A plan whose save or reset failed leaves the next act to reset again.
-    expect(tracker.plan(live("act"))).toEqual({ save: false, start: "clear" });
+    expect(tracker.plan(live("act"))).toBe("keep");
+    // A plan whose reset failed leaves the next act to reset again.
+    expect(tracker.plan(live("act"))).toBe("keep");
     tracker.dispatched(live("act"));
-    expect(tracker.plan(live("act"))).toEqual({ save: false, start: "none" });
+    expect(tracker.plan(live("act"))).toBe("none");
+    // Replacing the browser leaves the write session as it was.
+    tracker.browserReplaced();
+    expect(tracker.plan(live("act"))).toBe("none");
   });
 });
 
 // The build's wiring on a modeled browser that names each call it receives.
 const modeledBuild = (
   options: {
-    /** Saves that fail, the stored state alone included. */
-    readonly saveFailures?: number;
-    /** Saves whose stored state and tab storage together fail, as one past a call's result cap. */
-    readonly combinedSaveFailures?: number;
     readonly resetFailures?: number;
     readonly rootLoads?: boolean;
-    /** Records the host keeping the page a reset cleared, as the local mint state does. */
-    readonly keepsClearedPage?: boolean;
+    /** Records the host keeping the page a reset left signed out, as the local mint state does. */
+    readonly keepsSignedOutPage?: boolean;
     /**
-     * Records the host's re-sign-in check after a reset that restored a signed-in session;
+     * Records the host's re-sign-in check after a reset that kept a verified sign-in's session;
      * `reopen` has it reset the page the same way once more, as after a sign-in.
      */
     readonly checksAfterReset?: "check" | "reopen";
+    /** Whether a sign-in started on the browser before this build. */
+    readonly signInStartedBefore?: () => boolean;
   } = {},
 ) => {
   const targetId = "primary-target";
   const calls: string[] = [];
-  const resets: string[] = [];
   /** How many calls the build had made each time it left the page. */
   const left: number[] = [];
-  let saveFailures = options.saveFailures ?? 0;
-  let combinedSaveFailures = options.combinedSaveFailures ?? 0;
   let resetFailures = options.resetFailures ?? 0;
-  const state = { cookies: [{ name: "login", value: "member" }], origins: [] };
   const execute: HostExecute = (code) =>
     Effect.suspend((): Effect.Effect<unknown, Error> => {
-      if (code === saveSessionCode(targetId, "https://site.test")) {
-        if (saveFailures > 0 || combinedSaveFailures > 0) {
-          combinedSaveFailures = Math.max(0, combinedSaveFailures - 1);
-          calls.push("save failed");
-          return Effect.fail(new Error("Save failed"));
-        }
-        calls.push("save");
-        return Effect.succeed({
-          state,
-          sessionStorage: [{ origin: "https://site.test", entries: [["tab", "member"]] }],
-        });
-      }
-      if (code === saveStateCode) {
-        if (saveFailures > 0) {
-          saveFailures--;
-          calls.push("state save failed");
-          return Effect.fail(new Error("Save failed"));
-        }
-        calls.push("state save");
-        return Effect.succeed(state);
-      }
       if (code === stopLoadingCode(targetId)) {
         calls.push("stop");
         return Effect.void;
       }
       if (code.includes("Storage.clearDataForOrigin")) {
         const siteData = /const siteData = "(\w+)"/u.exec(code)?.[1] ?? "?";
-        resets.push(code);
         if (resetFailures > 0) {
           resetFailures--;
           calls.push(`reset:${siteData} failed`);
@@ -280,7 +249,7 @@ const modeledBuild = (
     () => {
       left.push(calls.length);
     },
-    options.keepsClearedPage === true
+    options.keepsSignedOutPage === true
       ? Effect.sync(() => {
           calls.push("keep signed-out page");
         })
@@ -291,6 +260,7 @@ const modeledBuild = (
           Effect.sync(() => {
             calls.push("signed-in check");
           }).pipe(Effect.zipRight(options.checksAfterReset === "reopen" ? reopen : Effect.void)),
+    options.signInStartedBefore,
   );
   const step = (purpose: StepPurpose, target: "liveBrowser" | "pureFiles" = "liveBrowser") =>
     Effect.runPromise(
@@ -317,7 +287,7 @@ const modeledBuild = (
     expect(start.verified()).toBe(true);
     return outcome;
   };
-  return { start, step, signIn, calls, resets, left };
+  return { start, step, signIn, calls, left };
 };
 /** A sign-in step's requested fields, one per slot. */
 const asked = (...slots: readonly AutofillSlot[]): AutofillStepRequest["fields"] =>
@@ -338,127 +308,94 @@ const filled = (
 });
 
 describe("makeBuildStart", () => {
-  it("resets before a live example but not an exploration, saving nothing signed out", async () => {
+  it("resets before a live example but not an exploration, keeping the site data", async () => {
     const build = modeledBuild();
     await build.step("explore");
     await build.step("example");
     await build.step("explore");
     // The exploration runs on its retained page; the example resets first. A later exploration
     // continues the example's page rather than loading the request's URL again.
-    expect(build.calls).toEqual(["entry", "run", "reset:clear", "root", "run", "run"]);
+    expect(build.calls).toEqual(["entry", "run", "reset:keep", "root", "run", "run"]);
   });
 
-  it("keeps the page a clearing reset loaded, after the root loads, and no restored page", async () => {
-    const build = modeledBuild({ keepsClearedPage: true });
+  it("keeps the signed-out page of each reset before a sign-in and of a clearing one, never a signed-in one", async () => {
+    const build = modeledBuild({ keepsSignedOutPage: true });
     await build.step("explore");
     await build.step("test");
-    await build.signIn();
+    // A sign-in step that sent nothing yet: the next reset clears what it may have left.
+    await build.step("authenticate");
+    await build.step("example");
+    build.start.sent(
+      filled([
+        ["username", "filled"],
+        ["password", "filled"],
+      ]),
+      asked("username", "password"),
+    );
+    expect(build.start.verified()).toBe(true);
     await build.step("example");
     expect(build.calls).toEqual([
       "entry",
+      "run",
+      "reset:keep",
+      "root",
+      "keep signed-out page",
+      "run",
       "run",
       "reset:clear",
       "root",
       "keep signed-out page",
       "run",
-      "run",
-      "save",
-      "reset:restore",
+      "reset:keep",
       "root",
       "run",
     ]);
   });
 
-  it("keeps no signed-out page when the clearing reset fails", async () => {
-    const build = modeledBuild({ keepsClearedPage: true, resetFailures: 1 });
+  it("keeps no signed-out page when the reset fails", async () => {
+    const build = modeledBuild({ keepsSignedOutPage: true, resetFailures: 1 });
     await build.step("explore");
     await build.step("example");
-    expect(build.calls).toEqual(["entry", "run", "reset:clear failed"]);
+    expect(build.calls).toEqual(["entry", "run", "reset:keep failed"]);
   });
 
-  it("saves the signed-in session once and restores it before each signed-in example", async () => {
-    const build = modeledBuild();
+  it("clears until its own sign-in verifies on a browser where an earlier build signed in", async () => {
+    const build = modeledBuild({ keepsSignedOutPage: true, signInStartedBefore: () => true });
+    await build.step("example");
     await build.signIn();
-    for (const purpose of ["explore", "example", "example"] as const) await build.step(purpose);
+    await build.step("example");
     expect(build.calls).toEqual([
-      "entry",
-      "run",
-      "save",
-      "run",
-      "reset:restore",
+      "reset:clear",
       "root",
+      "keep signed-out page",
       "run",
-      "reset:restore",
-      "root",
       "run",
-    ]);
-    expect(build.resets[0]).toContain('"login"');
-  });
-
-  it("restores the signed-in session and the root before each live test", async () => {
-    const build = modeledBuild();
-    await build.signIn();
-    for (const purpose of ["explore", "test", "test"] as const) await build.step(purpose);
-    expect(build.calls).toEqual([
-      "entry",
-      "run",
-      "save",
-      "run",
-      "reset:restore",
-      "root",
-      "run",
-      "reset:restore",
+      "reset:keep",
       "root",
       "run",
     ]);
   });
 
-  it("runs nothing signed in until the session after sign-in is saved", async () => {
-    const build = modeledBuild({ saveFailures: 1 });
-    const outcomes = [];
-    outcomes.push(await build.signIn());
-    for (const purpose of ["explore", "explore", "example", "example"] as const)
-      outcomes.push(await build.step(purpose));
-    expect(outcomes.map((outcome) => outcome._tag)).toEqual([
-      "Right",
-      "Left",
-      "Right",
-      "Right",
-      "Right",
-    ]);
-    expect(outcomes[1]).toMatchObject({ left: { code: "Unavailable" } });
-    expect(build.calls).toEqual([
-      "entry",
-      "run",
-      "save failed",
-      "state save failed",
-      "save",
-      "run",
-      "reset:restore",
-      "root",
-      "run",
-      "reset:restore",
-      "root",
-      "run",
-    ]);
-  });
-
-  it("checks the session after each reset that restored it, never after a clear or a kept session", async () => {
+  it("checks the session after each reset that kept a verified sign-in's, never before one or while a later sign-in is open", async () => {
     const build = modeledBuild({ checksAfterReset: "check" });
     await build.step("example");
     await build.signIn();
     await build.step("example");
+    await build.step("test");
     // A sign-in step opens a new sign-in, unsettled until it verifies: the reset keeps the
     // browser's session, which the host does not check.
     await build.step("authenticate");
     await build.step("example");
     expect(build.calls).toEqual([
-      "reset:clear",
+      "reset:keep",
       "root",
       "run",
       "run",
-      "save",
-      "reset:restore",
+      "reset:keep",
+      "root",
+      "signed-in check",
+      "run",
+      "reset:keep",
       "root",
       "signed-in check",
       "run",
@@ -469,30 +406,17 @@ describe("makeBuildStart", () => {
     ]);
   });
 
-  it("lets the check reset the page the same way again, with the session saved last", async () => {
+  it("lets the check reset the page the same way again", async () => {
     const build = modeledBuild({ checksAfterReset: "reopen" });
     await build.signIn();
     await build.step("test");
     expect(build.calls).toEqual([
       "entry",
       "run",
-      "save",
-      "reset:restore",
+      "reset:keep",
       "root",
       "signed-in check",
-      "reset:restore",
-      "root",
-      "run",
-    ]);
-    // The session the host saves after a sign-in again is the one the reopened page restores.
-    await Effect.runPromise(build.start.saveSession);
-    await build.step("example");
-    expect(build.calls.slice(9)).toEqual([
-      "save",
-      "reset:restore",
-      "root",
-      "signed-in check",
-      "reset:restore",
+      "reset:keep",
       "root",
       "run",
     ]);
@@ -502,7 +426,7 @@ describe("makeBuildStart", () => {
     const build = modeledBuild({ resetFailures: 1 });
     const outcome = await build.step("example");
     expect(outcome).toMatchObject({ _tag: "Left", left: { code: "Unavailable" } });
-    expect(build.calls).toEqual(["reset:clear failed"]);
+    expect(build.calls).toEqual(["reset:keep failed"]);
   });
 
   it("leaves the last page before each reset, one that fails included", async () => {
@@ -514,8 +438,8 @@ describe("makeBuildStart", () => {
     expect(build.calls).toEqual([
       "entry",
       "run",
-      "reset:clear failed",
-      "reset:clear",
+      "reset:keep failed",
+      "reset:keep",
       "root",
       "run",
       "run",
@@ -527,49 +451,16 @@ describe("makeBuildStart", () => {
   it("stops a root that fails to load and still runs the step", async () => {
     const build = modeledBuild({ rootLoads: false });
     expect((await build.step("example"))._tag).toBe("Right");
-    expect(build.calls).toEqual(["reset:clear", "root", "stop", "run"]);
+    expect(build.calls).toEqual(["reset:keep", "root", "stop", "run"]);
   });
 
-  it("keeps the session after a new sign-in until it is verified and saved again", async () => {
-    const build = modeledBuild();
-    await build.signIn();
-    await build.step("example");
-    await build.step("authenticate");
-    await build.step("example");
-    build.start.sent(
-      filled([
-        ["email", "filled"],
-        ["code", "filled"],
-      ]),
-      asked("email", "code"),
-    );
-    expect(build.start.verified()).toBe(true);
-    await build.step("example");
-    expect(build.calls).toEqual([
-      "entry",
-      "run",
-      "save",
-      "reset:restore",
-      "root",
-      "run",
-      "run",
-      "reset:keep",
-      "root",
-      "run",
-      "save",
-      "reset:restore",
-      "root",
-      "run",
-    ]);
-  });
-
-  it("leaves an example signed out when a page showed the account before any sign-in", async () => {
+  it("leaves an example's site data kept when a page showed the account before any sign-in", async () => {
     const build = modeledBuild();
     await build.step("explore");
     expect(build.start.submitted).toBe(false);
     expect(build.start.verified()).toBe(false);
     await build.step("example");
-    expect(build.calls).toEqual(["entry", "run", "reset:clear", "root", "run"]);
+    expect(build.calls).toEqual(["entry", "run", "reset:keep", "root", "run"]);
   });
 
   it("counts what a fill typed, whatever became of a submit it could click, and an uncertain step's fields", async () => {
@@ -658,33 +549,11 @@ describe("makeBuildStart", () => {
     expect(typed.start.submitted).toBe(true);
   });
 
-  it("drops the session on a check again after a confirmed sign-in, and keeps the browser's", async () => {
-    const build = modeledBuild();
-    await build.signIn();
-    await build.step("example");
-    // The check is a sign-in step: it starts a new sign-in, which nothing has sent yet.
-    build.start.signIn();
-    expect(build.start.submitted).toBe(false);
-    expect(build.start.verified()).toBe(false);
-    await build.step("example");
-    expect(build.calls).toEqual([
-      "entry",
-      "run",
-      "save",
-      "reset:restore",
-      "root",
-      "run",
-      "reset:keep",
-      "root",
-      "run",
-    ]);
-  });
-
   it("resets a write session's first step only", async () => {
     const build = modeledBuild();
     await build.step("act");
     await build.step("act");
-    expect(build.calls).toEqual(["reset:clear", "root", "run", "run"]);
+    expect(build.calls).toEqual(["reset:keep", "root", "run", "run"]);
   });
 
   it("resets a write session's first step again when the reset before it failed", async () => {
@@ -692,52 +561,7 @@ describe("makeBuildStart", () => {
     const outcomes = [];
     for (const purpose of ["act", "act", "act"] as const) outcomes.push(await build.step(purpose));
     expect(outcomes.map((outcome) => outcome._tag)).toEqual(["Left", "Right", "Right"]);
-    expect(build.calls).toEqual(["reset:clear failed", "reset:clear", "root", "run", "run"]);
-  });
-
-  it("saves the stored state alone when it and the tab's storage together fail", async () => {
-    const build = modeledBuild({ combinedSaveFailures: 1 });
-    await build.signIn();
-    expect((await build.step("example"))._tag).toBe("Right");
-    await build.step("example");
-    expect(build.calls).toEqual([
-      "entry",
-      "run",
-      "save failed",
-      "state save",
-      "reset:restore",
-      "root",
-      "run",
-      "reset:restore",
-      "root",
-      "run",
-    ]);
-    // Both resets restore the stored state the second call read, and no tab storage.
-    for (const reset of build.resets) {
-      expect(reset).toContain(
-        'const restored = {"cookies":[{"name":"login","value":"member"}],"origins":[]};',
-      );
-      expect(reset).toContain("const tabStorage = new Map([]);");
-    }
-  });
-
-  it("resets a write session's first step again when the save before it failed", async () => {
-    const build = modeledBuild({ saveFailures: 1 });
-    await build.signIn();
-    const outcomes = [];
-    for (const purpose of ["act", "act", "act"] as const) outcomes.push(await build.step(purpose));
-    expect(outcomes.map((outcome) => outcome._tag)).toEqual(["Left", "Right", "Right"]);
-    expect(build.calls).toEqual([
-      "entry",
-      "run",
-      "save failed",
-      "state save failed",
-      "save",
-      "reset:restore",
-      "root",
-      "run",
-      "run",
-    ]);
+    expect(build.calls).toEqual(["reset:keep failed", "reset:keep", "root", "run", "run"]);
   });
 
   it("leaves the browser alone for a step that does not run on it", async () => {

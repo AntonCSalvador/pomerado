@@ -87,8 +87,8 @@ registration and password reset do not belong in the recipe.
 Record a field only after observing its unique visible enabled match in the intended frame and
 form, and a submit after observing its unique visible match there, even one the page enables only
 once the fields hold input. The host validates the live login; a signed-out replay is verified
-only by a later registered run. A signed-in example starts from the session saved right after
-sign-in, so it proves the business flow after authentication, not that the recorded sign-in works
+only by a later registered run. A signed-in example starts on the browser's signed-in session,
+so it proves the business flow after authentication, not that the recorded sign-in works
 from the published `loginUrl`. Report sign-in replay as unverified unless a separate registered
 run actually starts signed out at that URL and completes the recorded steps; never clear a live
 session or repeat a write merely to test it. A saved DOM supports
