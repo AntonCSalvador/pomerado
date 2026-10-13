@@ -13,7 +13,7 @@ There are two channels:
 
 ## Canaries
 
-1. A pull request merges into `main` after a green `CI` check, a `review/clear` check from the independent review, and a code owner's approval. Rulesets on `main` enforce all three. A repository admin may merge without the approval, never without the two checks.
+1. A pull request merges into `main` after a green `CI` check, a `review/clear` check from the independent review, and an `Approval` check. Rulesets on `main` require all three. `Approval` passes at once for a maintainer's pull request, and for an outside contributor's once a code owner approves its current head commit. [The approval gate](#the-approval-gate) describes it.
 2. The merge starts the Release workflow. It picks the canary version `X.Y.Z-canary.N`:
    - `X.Y.Z` is the `version` in `package.json` while npm doesn't have it, and the next patch version once it does.
    - `N` is the workflow's run number, so a later canary always sorts higher.
@@ -60,6 +60,24 @@ gh workflow run release.yml --repo Pomerado/pomerado --ref main \
   -f version=0.2.1-canary.57 \
   -f integrity="$(npm view pomerado@0.2.1-canary.57 dist.integrity)"
 ```
+
+## The approval gate
+
+The [approval gate workflow](../.github/workflows/approval.yml) posts the `Approval` commit status on each open pull request's head commit, with the rules in `tools/approval-gate.ts`:
+
+- A pull request passes at once when GitHub's API reports its author with write, maintain or admin permission on the repository.
+- Any other pull request passes once a user that `.github/CODEOWNERS` lists, who also has write permission, approves its current head commit. An approval of an earlier commit stops counting after a push. The pull request fails while any reviewer with write permission has changes requested.
+- When several open pull requests share a head commit, the commit passes if any of them passes.
+
+It runs when a pull request opens, reopens, gets a push or leaves draft, and again after each submitted or dismissed review. A maintainer re-evaluates every open pull request with `gh workflow run approval.yml --repo Pomerado/pomerado --ref main`, for example after a GitHub outage left a pull request without the status.
+
+The status comes from a dedicated approval GitHub App, and the ruleset on `main` requires `Approval` from that App. A workflow that a pull request adds runs as GitHub Actions, so a job or status it names `Approval` can't satisfy the rule. Setting this up takes, once:
+
+1. A GitHub App installed only on this repository, with the repository permissions Commit statuses set to read and write and Pull requests set to read, and no other permissions or webhook. Metadata read comes with every App.
+2. An `approval-gate` environment that deploys only from `main`, with no required reviewers. It holds the variable `APPROVAL_APP_ID`, the App's ID, and the secret `APPROVAL_APP_PRIVATE_KEY`, one of its private keys. Only the approval gate workflow uses it.
+3. `Approval` in the required status checks of the ruleset on `main` that requires `CI` and `review/clear`, with the approval App as its source.
+
+The workflow checks the variable and secret first and fails with an error naming them when either is missing. Without the status, the pull request can't merge.
 
 ## Changes and versions
 

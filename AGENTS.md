@@ -39,7 +39,7 @@ GITLEAKS=/path/to/gitleaks bash tools/ci-scan.sh secrets
 - Never run `gh pr merge`. A maintainer merges.
 - Bring `main` into your branch with a merge, not a rebase. Never force-push.
 - A pull request merges only after an independent review and green CI.
-- Rulesets on `main` enforce this. They require a pull request, a green `CI` check and a `review/clear` check on the current head, and a code owner's approval. A repository admin may merge without the approval, never without the two checks. The release workflow runs the full check again on every push to `main`, which validates the merged result.
+- Rulesets on `main` enforce this. They require a pull request and three checks on the current head: a green `CI`, `review/clear` from the independent review, and `Approval`. The approval gate in `.github/workflows/approval.yml` posts `Approval` through its own GitHub App. It passes at once when the author is a maintainer, someone with write access. An outside contributor's pull request also needs a code owner's approval of its current head commit before `Approval` passes. [docs/RELEASING.md](docs/RELEASING.md#the-approval-gate) describes the gate and its setup. The release workflow runs the full check again on every push to `main`, which validates the merged result.
 - Maintainers merge by hand with a merge commit until a merge queue takes over.
 - A push after a review needs a new independent review.
 - Write the failing test first for a change in behavior.

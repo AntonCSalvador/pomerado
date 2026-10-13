@@ -70,6 +70,6 @@ Browser tests run the built `dist/`, so build before you run them. The content s
 
 Describe the problem, the resulting behavior and how you verified it. Link related issues, and note any checks you could not run. Keep credentials, personal data and customer data out of code, tests, commit messages and pull request text.
 
-A maintainer approves the CI run on your pull request, then reviews it. Alan ([@alanmrsa](https://github.com/alanmrsa)) or Akshay ([@AkshayM21](https://github.com/AkshayM21)) reviews and approves every pull request before it merges, our own included. Push fixes as new commits, and merge `main` into your branch rather than rebasing. Each merge publishes a canary to npm, and [Releasing](docs/RELEASING.md) covers how `latest` moves.
+A maintainer approves the CI run on your pull request, then reviews it. Alan ([@alanmrsa](https://github.com/alanmrsa)) or Akshay ([@AkshayM21](https://github.com/AkshayM21)) approves every outside contributor's pull request before it merges, and the `Approval` check waits for that approval of your latest commit. Push fixes as new commits, and merge `main` into your branch rather than rebasing. Each merge publishes a canary to npm, and [Releasing](docs/RELEASING.md) covers how `latest` moves.
 
 Contributions are made under the repository's [MIT License](LICENSE), inbound = outbound. There is no Contributor License Agreement. Third-party code keeps its own license, with its license and notice under `third-party/`.
