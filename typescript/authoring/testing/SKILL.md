@@ -94,7 +94,9 @@ error with the source line that threw. Name cases in action `plan` to read their
 and check what they mean, not just pass or fail: every item matches the filters, the order follows
 the sort, the applied location is the one asked for or labeled as another, page 2 differs from
 page 1. A failing case is a bug in the tool: fix the code at that line. Never drop the input, narrow the schema or change a
-case's expectation to match what it returned to make it pass; fix the code. A
+case's expectation to match what it returned to make it pass; fix the code. While a fix is in
+progress, prefer rerunning only the failing cases, named in `cases`: a batch of every case waits
+on its slowest case, and the cases that passed run again once after your last edit. A
 run that returns partly filled results, or passes only when run again, is missing a wait for
 content: fix the wait, not the retry, then run that input again a few times.
 
@@ -128,12 +130,12 @@ add any case that catches a real risk. A tool that returns a list runs page two 
 cursor page one returned, and reaches a last page (pagination skill).
 
 Results count only for the version, the source and the case as they ran: an edit makes them stale.
-Finish in this order: make your last edit, run the cases again on each version you ship, run the
-example last, then call `finish_build`. Publication review reads the host's record of your cases
-(`publication/tests.json`), not your account of them, and judges them against what the tool
-claims: a failing case, or a claim no passing case tests while time remained, holds publication
-back. Deleting or changing a case after it failed does not hide the failure: the record keeps its
-last result as retired, and so does a failure that passes when run again on the same code, as
+Finish in this order: make your last edit, run every case once more (`cases` null) on each
+version you ship, run the example last, then call `finish_build`. Publication review reads the
+host's record of your cases (`publication/tests.json`), not your account of them, and judges
+them against what the tool claims: a failing case, or a claim no passing case tests while time
+remained, holds publication back. Deleting or changing a case after it failed does not hide the
+failure: the record keeps its last result as retired, and so does a failure that passes when run again on the same code, as
 flaky. When `live_tests` answers `no_time`, run the example last and publish; the record says time
 ran out.
 
