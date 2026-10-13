@@ -289,11 +289,11 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "ending, and the build goes on. Before ending blocked because a value the request gave is unavailable or invalid on the site, such as a time slot the site does not offer that day, a date outside its calendar or a name it does not list, ask the owner with `request_input` to revise it or stop, as the key rules say. End blocked only when they stop or their answer cannot be met either. In maintenance, follow the intake screen instead. Give the evidence in `intent`",
   ],
   // Only what the caller asked for decides whether a tool books or refuses, every listed option
-  // gets read, a repair fixes a broken input, and a format read from one sample breaks on the
-  // next value, so the minter reads it off the page.
+  // gets read, a repair fixes a broken input but keeps a caller's documented design decision, and
+  // a format read from one sample breaks on the next value, so the minter reads it off the page.
   [
     "core",
-    "never just the example's value. The example's values are one case, never limits. - Prefer keying only on what the caller asked for. A detail that changes from one listing to the next, such as a seating label or a room name, shouldn't decide whether the tool books or refuses unless the caller chose it. - Read results for every option the schema lists. When an option leads to a page that differs from the others, handle that layout too, and on a read signed out run it live as a test case (testing skill); never return results for another option in its place. - A repair that finds a declared input broken, never applied or always reported unsupported fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract means every input and output it declares works, not leaving a broken one as it was. - Never derive a format from one sample: not an input format, an element key, a selector, a URL path or a label. A key the page showed for the example's value says nothing about the next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read the format off the page for the value you need, such as the day cell whose visible label or accessible name is the caller's date, or a key the page itself lists, never a key rebuilt from the one you saw. - Inputs are values a caller knows",
+    "never just the example's value. The example's values are one case, never limits. - Prefer keying only on what the caller asked for. A detail that changes from one listing to the next, such as a seating label or a room name, shouldn't decide whether the tool books or refuses unless the caller chose it. - Read results for every option the schema lists. When an option leads to a page with a different structure (other fields or sections), handle that layout too, and on a read signed out run it live as a test case (testing skill); an option that only reorders or filters the same rows needs no case of its own. Never return results for another option in its place. - A repair that finds a declared input broken, never applied or always reported unsupported fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract means every input and output it declares works, not leaving a broken one as it was. An input whose description starts \"By design:\" is applied in the use it records, a caller's decision: keep that use and its description word for word, and change them only after asking the same design question again (the input schema, \"Inputs that tailor the answer\"). - Never derive a format from one sample: not an input format, an element key, a selector, a URL path or a label. A key the page showed for the example's value says nothing about the next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read the format off the page for the value you need, such as the day cell whose visible label or accessible name is the caller's date, or a key the page itself lists, never a key rebuilt from the one you saw. - Inputs are values a caller knows",
   ],
   // The minter reads the never-loosened needed values, the facts a caller could use, typed output
   // and kept rows before it writes the schema and the parser, so a fact the code could not read
@@ -726,17 +726,17 @@ it("renders the pinned standalone authoring", async () => {
     ...skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name]),
     ...[...guide.files].map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["f9a4aeae815be7240b7a180b52d397e71213d1057c239a7d8d10a64d0263522a", "core"],
+    ["6a5c2e2dac484a10f3c9f6471a39e68f190abbb77d103fcc54719112b2eba03b", "core"],
     ["75a63420916f47c44169f0a4856ecefcbc9ca2515bcbf39c12e054bb42c3db3a", "search"],
     ["883a4b0d8cab78affbcc312706cd31e217e545a221b29ec1598189916a7d299b", "auth"],
-    ["e79bc2f238553375a7330326a98eba5e003a245384542891632b887c837a6c38", "testing"],
+    ["4a2a7dc9657c7329748fd28c51f866a1b92d8d772498eac89312c415aea62778", "testing"],
     ["ab913e2169b9be4ac767df8a88b29cf2e3e5f28779f29bfe9d7e175f07e56f8d", "pagination"],
     ["e7366f7bb289454dc3957aac9f857abe940ad0f3a6c8ced193bf920c119f2098", "forms"],
     ["9c9001a49b81704c1a294d08af018b2da2ada1c507a33013ad564ebff773746f", "writes"],
     ["0bc4d6c765154139547ec2e4500d14bbd1d086995fdd6b385b8f53f4e7ae7255", "cart"],
     ["bc41516483534bb879e2f9548218bbe8ed3e8cf825cfb7c7b7e9ff21fe73ba99", "caller-input"],
     ["3b7238d4a1af157b6cb2fa50b0ff3002b73e039b3afec4515a37e6ecc1dcd34e", "publication"],
-    ["b772990fd8963c4e58f1627ce8e0b4a7f7f3b19325de0176c4d3e4e56be78b36", "workspace/AGENTS.md"],
+    ["db81e26212ba4b9dee9c3f853a90e896ece1a0e5339c16661ea1cd1145a1ab74", "workspace/AGENTS.md"],
     ["e023d1b6f7bc3673118d4310d9813cfa878c554b68a353413e73592054d2704d", "workspace/README.md"],
   ]);
 });
