@@ -45,6 +45,7 @@ it("loads modular skill references and keeps auth discovery outside managed logi
     "auth",
     "testing",
     "pagination",
+    "records",
     "forms",
     "writes",
     "cart",
@@ -726,18 +727,19 @@ it("renders the pinned standalone authoring", async () => {
     ...skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name]),
     ...[...guide.files].map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["1371212dc421317aeeabdbce66d10e9e4bb7748ab2cd8fdcaf366f33a167f9ad", "core"],
+    ["fc89d9487dbb262b15f6fac61dfb6b196fbfd9d8d59b7665d71123de2b45e109", "core"],
     ["75a63420916f47c44169f0a4856ecefcbc9ca2515bcbf39c12e054bb42c3db3a", "search"],
-    ["883a4b0d8cab78affbcc312706cd31e217e545a221b29ec1598189916a7d299b", "auth"],
+    ["fa84bb9e59708979eaef5d48acf493c063f71d03f625ee015962c41f46e348ca", "auth"],
     ["a881b02be82a5f206bf342beff5c77b4f586dda61a24625b77e86d6be6f75a38", "testing"],
     ["ab913e2169b9be4ac767df8a88b29cf2e3e5f28779f29bfe9d7e175f07e56f8d", "pagination"],
+    ["ae427467741b8f4a61613997a43faa1551f28b187eab4af6926f6139cc1895db", "records"],
     ["e7366f7bb289454dc3957aac9f857abe940ad0f3a6c8ced193bf920c119f2098", "forms"],
-    ["b680f4de3f9ab89130b4d21ae850be7dc0744c00932faf6c1bcaba6ec7e540ba", "writes"],
+    ["45ad5319c0d0a3c86cecda238ac6ed7043236427423a8f45f1805b4866f4ba8c", "writes"],
     ["0bc4d6c765154139547ec2e4500d14bbd1d086995fdd6b385b8f53f4e7ae7255", "cart"],
     ["bc41516483534bb879e2f9548218bbe8ed3e8cf825cfb7c7b7e9ff21fe73ba99", "caller-input"],
     ["25977e8469cd13d988648365920a4a5a92b80a4fbed542c8b31bb342424014fe", "publication"],
-    ["26450856f8326692f1d545fdfb3122054606f457d39adf0e68db62605b0b21c5", "workspace/AGENTS.md"],
-    ["e023d1b6f7bc3673118d4310d9813cfa878c554b68a353413e73592054d2704d", "workspace/README.md"],
+    ["53cd457803cea5d2e392c13270d000cafc7fba4e43f0fa543bebc18980205632", "workspace/AGENTS.md"],
+    ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
 

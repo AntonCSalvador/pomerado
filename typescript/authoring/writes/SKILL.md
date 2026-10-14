@@ -213,6 +213,24 @@ build never runs a live `example`. The session is the one run that proves the wr
 no tests and build no offline test suite for it. Its HTTP version gets one offline replay of
 the session (http-mcp skill), and the testing skill is not for a write.
 
+## Check the read-back
+
+The read-back compares what the site saved with what the caller asked for, in the form the site
+saves it.
+
+- A reference, such as a person, an assignee, a linked record or a linked row, is often saved as
+  the referenced record's ID while the page shows its label. Take the caller's label or ID as the
+  input. Before the commit, look the ID up through the site's own list: the picker's options, the
+  member list or the linked table's rows, which a read of the same site often already returns.
+  When no entry matches, throw `InvalidInput` with `field` and `available`; when several match
+  equally, ask the caller (core skill, the input schema). Write that ID or pick that entry, and
+  compare the read-back by ID, never a label against an ID. Return the reference as
+  `{ id, label }` (records skill). Never drop a reference field for this: the lookup is the fix.
+- When the write changed state that already existed, compare values, not object identity or the
+  order of an object's keys: the same person or record returned as a new object is unchanged. A
+  field the site updates on every save, such as an updated-at time, a version counter or an edit
+  history, is not an unrequested change.
+
 ## Compose and publish
 
 Write `src/tool.mjs`, the `playwright` version: a Kernel script running the whole

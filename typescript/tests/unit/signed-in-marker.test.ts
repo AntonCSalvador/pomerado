@@ -43,6 +43,12 @@ describe("matchSignedOutSnapshots", () => {
       expect(matchSignedOutSnapshots({ selector }, signedOut), selector).toBe("matches");
   });
 
+  // Playwright reads a role name's `i` or `s` flag after a space too.
+  it("reads a role name's case flag written after a space", () => {
+    for (const selector of ['role=link[name="account" i]', 'role=link[name="Account" s]'])
+      expect(matchSignedOutSnapshots({ selector }, signedOut), selector).toBe("matches");
+  });
+
   it("does not count what the signed-out page hides or never renders", () => {
     for (const selector of [
       '[aria-label="Account menu"]',

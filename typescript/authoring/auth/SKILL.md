@@ -311,6 +311,14 @@ shows.
 
 - Prefer stable attributes and names (`aria-label`, a role, visible text, a test id) over
   generated class names such as `css-1q2w3e`.
+- Send the marker as a Playwright selector string, never a locator call: CSS (with `:has-text()`,
+  `:text-is()` and `:visible`), `text=`, `data-testid=` or `role=`. A role marker gives its name
+  as an attribute: `role=link[name="Sign out"]` matches that whole name,
+  `role=link[name="sign out" i]` matches it ignoring case, and `role=link[name=/sign out/i]`
+  matches a pattern. `exact` is an option of `getByRole`, not a selector attribute: `[exact]` or
+  `[exact=true]` fails the check as an unknown attribute. Give a role only `name`, and `level`
+  for a heading; the signed-out check cannot read other attributes. A selector that crosses
+  frames (`>>`, `internal:`) is refused.
 - Never send a `urlPath` alone on a single-page app, or for a page the site also serves signed
   out; never the login page's path.
 - Test it with `check_signed_in_marker` and choose another until every check passes:

@@ -815,7 +815,8 @@ const roleStep = (body: string): Step => {
     if (name === "include-hidden")
       includeHidden = value === undefined || unquote(value).value !== "false";
     else if (name === "name" && value !== undefined) {
-      const matches = textMatcher(value, false);
+      // An attribute's case flag may follow its quoted value after a space: `"Sign out" i`.
+      const matches = textMatcher(value.replace(/^(["'])(.*)\1\s+([is])$/isu, "$1$2$1$3"), false);
       tests.push((element) => {
         const computed = nameOf(element, role);
         return computed === unknownName ? "unknown" : matches(computed);
