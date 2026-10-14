@@ -2,9 +2,12 @@
  * Approval gate, run by .github/workflows/approval.yml. It posts the `Approval` commit status on
  * pull requests' head commits, which the ruleset on main requires from the approval GitHub App.
  *
- * - A maintainer's pull request passes. A maintainer is a user whom GitHub's API reports with
- *   write, maintain or admin permission on this repository. The payload's author association is
- *   never enough on its own, so the gate always asks the API.
+ * - A maintainer's pull request from a branch of this repository passes. A maintainer is a user
+ *   whom GitHub's API reports with write, maintain or admin permission on this repository. The
+ *   payload's author association is never enough on its own, so the gate always asks the API. Only
+ *   users with write access can push to this repository's branches. A fork's owner can push to its
+ *   branch without that access, so a pull request from a fork needs a code owner's approval even
+ *   when a maintainer opened it.
  * - Any other pull request passes only once a code owner approves its current head commit. A code
  *   owner is a user listed in .github/CODEOWNERS who also has write permission. As with dismissed
  *   stale reviews, an approval of an earlier commit stops counting after a push. A later change
@@ -51,7 +54,8 @@ export interface Verdict {
 interface PullRequest {
   readonly number: number;
   readonly user: { readonly login: string };
-  readonly head: { readonly sha: string };
+  /** `repo` is null once the head branch's fork is deleted. */
+  readonly head: { readonly sha: string; readonly repo: { readonly full_name: string } | null };
 }
 
 interface Review {
@@ -85,7 +89,8 @@ export const evaluate = async (
   sha: string,
   codeOwners: readonly string[],
 ): Promise<Verdict> => {
-  if (await canWrite(github, repo, pull.user.login)) {
+  const sameRepository = pull.head.repo?.full_name.toLowerCase() === repo.toLowerCase();
+  if (sameRepository && (await canWrite(github, repo, pull.user.login))) {
     return { state: "success", description: "The author has write access, so no code owner approval is needed." };
   }
   // GitHub lists reviews oldest first, so the last verdict per reviewer is the one that stands.
@@ -113,7 +118,9 @@ export const evaluate = async (
   }
   const description = staleApproval
     ? "A code owner approved an earlier commit. The head commit needs a code owner's approval."
-    : "The author lacks write access, so the head commit needs a code owner's approval.";
+    : sameRepository
+      ? "The author lacks write access, so the head commit needs a code owner's approval."
+      : "The pull request comes from a fork, so the head commit needs a code owner's approval.";
   return { state: "failure", description };
 };
 
