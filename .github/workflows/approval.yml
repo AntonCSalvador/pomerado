@@ -1,10 +1,11 @@
 # Approval gate. It posts the `Approval` commit status on pull requests' head commits, and the
-# ruleset on main requires it. A maintainer's pull request passes at once. An outside contributor's
-# pull request passes once a code owner approves its current head commit. tools/approval-gate.ts
-# holds the rules, and typescript/tests/unit/approval-gate.test.ts tests them.
+# ruleset on main requires it. A maintainer's pull request from a branch of this repository passes
+# at once. Any other pull request passes once a code owner approves its current head commit.
+# tools/approval-gate.ts holds the rules, and typescript/tests/unit/approval-gate.test.ts tests them.
+# docs/RELEASING.md lists the known limits, including that merge_group events aren't handled.
 #
-# A pull request can't change this gate. pull_request_target runs this file and the script as they
-# are on the base branch, and workflow_run and workflow_dispatch run them from the default branch.
+# A pull request can't change this gate. pull_request_target, workflow_run and workflow_dispatch all
+# run this file and the script as they are on the default branch.
 # The job checks out that trusted commit only, never a pull request's code, and reads each fact from
 # GitHub's API.
 #
@@ -29,7 +30,8 @@ on:
   workflow_dispatch:
 permissions: {}
 # Runs for one head commit wait for each other, and each reads the reviews as they stand when it
-# starts, so the last status posted reflects the latest review.
+# starts, so the last status posted reflects the latest review. A dispatch covers many commits, so
+# it has a group of its own and isn't serialized with them.
 concurrency:
   group: >-
     approval-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha
@@ -55,8 +57,8 @@ jobs:
             echo "::error::The approval-gate environment needs the APPROVAL_APP_ID variable and the APPROVAL_APP_PRIVATE_KEY secret of the approval GitHub App, which posts the Approval status. docs/RELEASING.md describes the setup."
             exit 1
           fi
-      # Without a ref, checkout takes the commit the event names: the base branch's head for
-      # pull_request_target, and the default branch's head for workflow_run and workflow_dispatch.
+      # Without a ref, checkout takes the commit the event names, the default branch's head for
+      # each event this workflow handles.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
