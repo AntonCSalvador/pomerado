@@ -23,8 +23,8 @@ describe("URL boundaries", () => {
     ],
     [
       "a pipe table cell after the URL",
-      "|https://portal.example/a|ghp_abcdefghijklmnopqrstuvwxyz0123456789|",
-      "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+      "|https://portal.example/a|Bearer synthetic-bearer-0123456789|",
+      "synthetic-bearer-0123456789",
     ],
   ])("screens text glued after a URL: %s", (_label, text, secret) => {
     const redacted = redactDiagnosticText(text);
