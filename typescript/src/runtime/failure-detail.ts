@@ -15,7 +15,7 @@ import {
   providerKeyPattern,
 } from "../privacy/credential-policy.js";
 import { isSecretKey } from "../privacy/secret-keys.js";
-import { urlSpans } from "../privacy/url-spans.js";
+import { urlReaches, urlSpans } from "../privacy/url-spans.js";
 
 /**
  * Detailed failure record shared by every host failure class. The finite fields (`subCause`,
@@ -235,28 +235,52 @@ const withoutUrls = (text: string) => {
   return result + text.slice(cursor);
 };
 
+/**
+ * The length of `text` outside its URLs, for the stored bounds. A URL is also measured to the next
+ * space or quote, as releases before URLs ended at field delimiters measured it, so a record such a
+ * release bounded still decodes.
+ */
+const lengthOutsideUrls = (text: string) => {
+  const spans = diagnosticUrlSpans(text).concat(urlReaches(text));
+  spans.sort((left, right) => left.start - right.start);
+  let inside = 0;
+  let covered = 0;
+  for (const span of spans) {
+    inside += Math.max(0, span.end - Math.max(span.start, covered));
+    covered = Math.max(covered, span.end);
+  }
+  return text.length - inside;
+};
+
 const limitOutsideUrls = (text: string, max: number, tokenBoundary = false) => {
   if (text.length <= max) return { value: text, omitted: 0 };
   let value = "";
   let cursor = 0;
   let remaining = max;
   let omitted = 0;
+  // The last character appended, kept apart: reading it from `value`, a string built by `+=`,
+  // flattens that string each time, which is quadratic over many URLs.
+  let last = "";
+  const append = (piece: string) => {
+    value += piece;
+    if (piece !== "") last = piece.charAt(piece.length - 1);
+  };
   const appendPlain = (plain: string) => {
     if (remaining >= plain.length) {
-      value += plain;
+      append(plain);
       remaining -= plain.length;
       return;
     }
     const end = /[\uD800-\uDBFF]/.test(plain.charAt(remaining - 1)) ? remaining - 1 : remaining;
     const prefix = tokenBoundary ? plain.slice(0, end).replace(/\S*$/, "") : plain.slice(0, end);
-    value += prefix;
+    append(prefix);
     omitted += plain.length - prefix.length;
     remaining = 0;
   };
   for (const span of diagnosticUrlSpans(text)) {
     appendPlain(text.slice(cursor, span.start));
-    if (omitted > 0 && value !== "" && !/\s$/.test(value)) value += " ";
-    value += text.slice(span.start, span.end);
+    if (omitted > 0 && last !== "" && !/\s/.test(last)) append(" ");
+    append(text.slice(span.start, span.end));
     cursor = span.end;
   }
   appendPlain(text.slice(cursor));
@@ -505,7 +529,7 @@ export interface FailureDetail {
 
 const Token = Schema.String.pipe(Schema.pattern(/^[A-Za-z][A-Za-z0-9_.:/-]{0,95}$/));
 const BoundedText = (max: number) =>
-  Schema.String.pipe(Schema.filter((value) => withoutUrls(value).length <= max + 32));
+  Schema.String.pipe(Schema.filter((value) => lengthOutsideUrls(value) <= max + 32));
 const NonNegative = Schema.Number.pipe(Schema.finite(), Schema.nonNegative());
 const ContextKey = Schema.String.pipe(Schema.pattern(/^[A-Za-z][A-Za-z0-9_]{0,95}$/));
 const ContextValue = Schema.Union(
