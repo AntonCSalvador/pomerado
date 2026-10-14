@@ -341,6 +341,14 @@ const sourceReadParameters = {
   offset: { type: ["integer", "null"], minimum: 0 },
   limit: { type: ["integer", "null"], minimum: 1, maximum: 64000 },
 } as const;
+/**
+ * A read that ended because its call was cancelled or timed out, or its attempt is stopping,
+ * not because of the file. It ends a several-file call as it ends a single read.
+ */
+const cancelled = (error: unknown, signal: AbortSignal | undefined): boolean =>
+  signal?.aborted === true ||
+  (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) ||
+  (Runtime.isFiberFailure(error) && Cause.isInterruptedOnly(error[Runtime.FiberFailureCauseId]));
 /** One file's host result in a several-file call: its JSON object, or its text as returned. */
 const sourceResult = (path: string, text: string): unknown => {
   try {
@@ -627,6 +635,8 @@ export const makeOpenAIMinter = (
                 const files: unknown[] = [];
                 let returned = 0;
                 for (const file of several) {
+                  // A cancelled or timed-out call ends here, as a single read's does.
+                  details?.signal?.throwIfAborted();
                   if (returned >= readSourceMaxTotal) {
                     files.push({ path: file.path, status: "not_read", reason: "call_size_limit" });
                     continue;
@@ -636,6 +646,7 @@ export const makeOpenAIMinter = (
                     returned += text.length;
                     files.push(sourceResult(file.path, text));
                   } catch (error) {
+                    if (cancelled(error, details?.signal)) throw error;
                     // A failed file fails alone, as a call naming only it would.
                     files.push({
                       path: file.path,

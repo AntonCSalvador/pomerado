@@ -49,8 +49,9 @@ interface ObservedTool {
  * A host observer that records each traced tool dispatch, as a host that counts skill reads sees
  * it: one call per dispatch, with the path it reads and whether the read returned.
  */
-const recordingObserver = () => {
+const recordingObserver = (afterRead?: (readPath: string) => Promise<void>) => {
   const tools: ObservedTool[] = [];
+  const started: string[] = [];
   const observerFactory: ModelObserverFactory = () => ({
     attach: () => undefined,
     tool: async (call, invoke) => {
@@ -59,9 +60,11 @@ const recordingObserver = () => {
         arguments: call.arguments,
         ...(call.readPath === undefined ? {} : { readPath: call.readPath }),
       };
+      if (call.readPath !== undefined) started.push(call.readPath);
       try {
         const result = await invoke();
         tools.push({ ...record, outcome: "returned" });
+        if (call.readPath !== undefined) await afterRead?.(call.readPath);
         return result;
       } catch (error) {
         tools.push({ ...record, outcome: "failed" });
@@ -89,13 +92,16 @@ const recordingObserver = () => {
     }),
     flush: async () => undefined,
   });
-  return { tools, observerFactory };
+  return { tools, started, observerFactory };
 };
 
 /** Runs the scripted responses, then ends the attempt blocked, recording every model request. */
-const scripted = async (responses: readonly ModelResponse[]) => {
+const scripted = async (
+  responses: readonly ModelResponse[],
+  afterRead?: (readPath: string) => Promise<void>,
+) => {
   const sent: ModelRequest[] = [];
-  const observer = recordingObserver();
+  const observer = recordingObserver(afterRead);
   const f = await fixture(() => blocked, {
     model: makeOpenAIMinter(
       {
@@ -118,6 +124,9 @@ const scripted = async (responses: readonly ModelResponse[]) => {
     root: f.workspace.root,
     sent,
     reads: () => observer.tools.filter(({ name }) => name === "read_source"),
+    /** Every read whose dispatch began, whether or not it finished. */
+    started: () => [...observer.started],
+    start: (signal: AbortSignal) => f.run(signal),
     run: async () => expect(await f.run()).toMatchObject({ build: "incomplete" }),
   };
 };
@@ -251,6 +260,48 @@ it("leaves the rest of the files unread once a call's results reach the size lim
   });
   // A file left unread is never read, so it never counts as read.
   expect(f.reads().map(({ readPath }) => readPath)).toEqual(["src/tool.ts", "src/large.txt"]);
+});
+
+it("stops a several-file call's reads once the call is cancelled", async () => {
+  const controller = new AbortController();
+  let running: Promise<unknown> | undefined;
+  const settled = () =>
+    Promise.race([
+      (running ?? Promise.resolve()).then(
+        () => undefined,
+        () => undefined,
+      ),
+      new Promise((resolve) => setTimeout(resolve, 5_000)),
+    ]);
+  const f = await scripted(
+    [
+      respond(
+        "read_source",
+        {
+          path: null,
+          offset: null,
+          limit: null,
+          paths: [
+            { path: "src/tool.ts", offset: null, limit: null },
+            { path: skill, offset: null, limit: null },
+            { path: "src/tool.ts", offset: 7, limit: 7 },
+          ],
+        },
+        "several",
+      ),
+    ],
+    async (readPath) => {
+      if (readPath !== "src/tool.ts" || controller.signal.aborted) return;
+      // The run is cancelled while the call's first file is being read.
+      controller.abort();
+      await settled();
+    },
+  );
+  running = f.start(controller.signal);
+  await settled();
+  // Give a call that kept going the time to start its next read.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(f.started()).toEqual(["src/tool.ts"]);
 });
 
 const skillRead = { path: skill, offset: null, limit: null };
