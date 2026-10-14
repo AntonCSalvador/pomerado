@@ -27,7 +27,11 @@ export interface ModelObserver {
       readonly callId?: string;
       readonly arguments: string;
       readonly intent?: string;
-      /** Set only by a trusted host file-read tool after selecting its source path. */
+      /**
+       * Set only by a trusted host file-read tool after selecting its source path. A call that
+       * reads several files dispatches once per file, each with its own path and arguments,
+       * under the same `callId`.
+       */
       readonly readPath?: string;
     },
     invoke: () => Promise<A>,
