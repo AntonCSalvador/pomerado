@@ -3258,7 +3258,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 ? `Design the cases in ${liveTestCasesPath} from what you saw on the site, as the testing skill says: different real values unlike the example's, smart combinations, edge cases and one rerun of the example's input. Then call live_tests with action run.`
                 : cases.every((testCase) => testCase.status === "pass")
                   ? "Every case passes on the current source. Check what the outputs mean (filters applied to every item, the order, the applied location), add a case for anything the tool claims that no case tests yet, then make your last edit, run every case again, run the example last and call finish_build."
-                  : `Fix the code for each failing case at its frame. While a fix is in progress, prefer rerunning only the failing cases, named in cases. Add a case for anything the tool claims that no case tests yet, then, after your last edit, run every case once with cases null. Publication review reads ${liveTestsEvidencePath}, the host's record of these results on the source you publish, against what the tool claims.`,
+                  : `Fix the code for each failing case at its frame. While a fix is in progress, prefer rerunning only the failing cases, together in one batch named in cases. Add a case for anything the tool claims that no case tests yet, then, after your last edit, run every case once with cases null. Publication review reads ${liveTestsEvidencePath}, the host's record of these results on the source you publish, against what the tool claims.`,
           };
         });
       /**

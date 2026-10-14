@@ -641,8 +641,9 @@ export interface LiveTestHost {
    * `currentExecution.input` is `agent_chosen_batch` and whose submitted input lists every case's
    * input, and run nothing unless Guardian allows it. Then it runs each case like an example:
    * a fresh script process on a page reset to the site's origin that keeps the browser's site
-   * data, in the build's browser or, at most `batch.workers` at once, on separate browsers opened
-   * like it, never in tabs of one browser. A host with more than one browser runs at least one
+   * data, in the build's browser or on separate browsers opened like it, never in tabs of one
+   * browser. A host may run cases on up to its own `maxWorkers` browsers at once, whatever
+   * `batch.workers` says. A host with more than one browser runs at least one
    * case first on a new browser with an empty profile, and marks each case run's `start`: `cold`
    * for a case that ran first on such a browser, `warm` for one that ran on a browser that kept
    * site data from earlier steps. A host with one browser runs every case warm, and the record
@@ -671,7 +672,11 @@ export interface LiveTestBatch {
   readonly entrypoint: string;
   readonly sourceDigest: string;
   readonly cases: readonly LiveTestBatchCase[];
-  /** How many cases may run at once, each on its own browser; 1 to the host's `maxWorkers`. */
+  /**
+   * How many cases the harness asks to run at once, each on its own browser; 1 to the host's
+   * `maxWorkers`. A host may run cases on up to its own `maxWorkers` browsers at once, whatever
+   * this says.
+   */
   readonly workers: number;
   /** When the batch must end, in epoch milliseconds. */
   readonly deadlineAt: number;
@@ -692,7 +697,8 @@ export type LiveTestBatchResult =
 /**
  * The live_tests tool: `plan` shows the cases in `test/cases.json` and each case's latest result
  * (with full outputs for the cases named in `cases`); `run` runs the named cases, or every case when `cases` is null, as one batch
- * after one Guardian review, at most `maxWorkers` at once on separate browsers.
+ * after one Guardian review, on separate browsers where the host has them. A host may run cases on
+ * up to its own `maxWorkers` browsers at once, whatever the request's `maxWorkers` says.
  */
 export const LiveTestsRequest = Schema.Struct({
   action: Schema.Literal("plan", "run"),
