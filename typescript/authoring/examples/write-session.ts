@@ -3,9 +3,9 @@ import { defineOperation, normalizeText, timeoutDefaults } from "../../src/brows
 import type { KernelOperationContext } from "../../src/browser/index.js";
 
 // Observed contract: /checkout fills item, quantity and a gift-wrap add-on the page offers
-// unchecked, Continue opens a review step showing the item and the order total, and Place
-// order shows "Order ORD-…" on its confirmation page. Adapt every selector and condition from
-// your own session's evidence.
+// unchecked, Continue opens a review step showing the item and the order total, some accounts
+// get a membership offer over the review, and Place order shows "Order ORD-…" on its
+// confirmation page. Adapt every selector and condition from your own session's evidence.
 // Every on-path option is an input: the add-on is the caller's choice, never kept or cleared
 // unasked. An account-specific value (a passenger, saved card or address) would be a free-form
 // input, never an enum member, example or default.
@@ -15,9 +15,12 @@ export const OrderInput = Schema.Struct({
     description: "How many to order, 1 to 99",
   }),
   gift_wrap: Schema.Boolean.annotations({ description: "Whether to add gift wrap" }),
-  max_total_minor: Schema.Int.pipe(Schema.positive()).annotations({
-    description: "Highest order total to accept, in minor units of the site's currency",
-  }),
+  // Only when the request sets a limit; without one the tool places the order at any total.
+  max_total_minor: Schema.optional(
+    Schema.Int.pipe(Schema.positive()).annotations({
+      description: "Highest order total to accept, in minor units of the site's currency",
+    }),
+  ),
 });
 type OrderInput = typeof OrderInput.Type;
 const Placed = Schema.Struct({
@@ -58,7 +61,17 @@ const fillCheckout = async ({ kernel, sessionId, siteOrigin, input, errors }: Co
       await form.getByLabel("Quantity", { exact: true }).fill(String(input.quantity), { timeout: 5000 });
       await form.getByLabel("Gift wrap", { exact: true }).setChecked(input.gift_wrap, { timeout: 5000 });
       await form.getByRole("button", { name: "Continue", exact: true }).click({ timeout: 5000 });
-      await page.getByRole("button", { name: "Place order", exact: true }).waitFor({ timeout: 10000 });
+      const place = page.getByRole("button", { name: "Place order", exact: true });
+      // The membership offer shows only to some accounts, so it is conditional: decline it when
+      // it shows and go on when it does not. It is outside this tool's purpose, so declining
+      // needs no input, and the tool never accepts it.
+      const offer = page.getByRole("dialog", { name: "Membership offer", exact: true });
+      await place.or(offer).first().waitFor({ timeout: 10000 });
+      if (await offer.isVisible()) {
+        await offer.getByRole("button", { name: "No thanks", exact: true }).click({ timeout: 5000 });
+        await offer.waitFor({ state: "hidden", timeout: 5000 });
+      }
+      await place.waitFor({ timeout: 10000 });
       return { review_shown: true };
     `,
   });
@@ -74,6 +87,8 @@ const fillCheckout = async ({ kernel, sessionId, siteOrigin, input, errors }: Co
 };
 
 // The review's total in minor units, read the same way before the commit mark and inside it.
+// This site shows a two-decimal total with a "." separator, such as "$37.50"; parse the format
+// your site shows.
 const readTotal = `
   const totalText = await page.getByLabel("Order total", { exact: true }).innerText({ timeout: 5000 });
   const total_minor = Math.round(Number(totalText.replace(/[^0-9.]/g, "")) * 100);
@@ -83,7 +98,7 @@ const readTotal = `
  * Every check that can refuse runs here, before the commit mark: the review shows the item asked
  * for, and its total is within the caller's limit. Nothing here changes the site.
  */
-const checkReview = async ({ kernel, sessionId, input, errors }: Context) => {
+export const checkReview = async ({ kernel, sessionId, input, errors }: Context) => {
   const answer = await kernel.browsers.playwright.execute(sessionId, {
     timeout_sec: 30,
     code: `
@@ -105,7 +120,7 @@ const checkReview = async ({ kernel, sessionId, input, errors }: Context) => {
     throw new errors.OperationFailure("review_item_mismatch", { dispatch: "not_sent" });
   // Over the caller's own limit is a refusal: InvalidInput naming the input, a stable kind and
   // both values, thrown before the mark so the run reports that it changed nothing.
-  if (review.total_minor > input.max_total_minor)
+  if (input.max_total_minor !== undefined && review.total_minor > input.max_total_minor)
     throw new errors.InvalidInput(
       `The order total is ${review.total_minor}, over max_total_minor ${input.max_total_minor}`,
       { field: "max_total_minor", kind: "over_price_limit" },
@@ -114,7 +129,7 @@ const checkReview = async ({ kernel, sessionId, input, errors }: Context) => {
 };
 
 /** The one commit, then the confirmation the site shows for it. Never clicked twice. */
-const placeAndConfirm = async (
+export const placeAndConfirm = async (
   { kernel, sessionId, errors, verified, enteringCommit }: Context,
   checkedTotal: number,
 ) => {

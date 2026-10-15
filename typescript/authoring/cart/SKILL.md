@@ -48,18 +48,21 @@ declared question (the caller-input skill). Never invent it, and never save it t
 unasked. A save option the page pre-selects is a question, as `AGENTS.md` says; in the
 tool, an unset save option means off, not the page's default.
 
-The same holds for a delivery address or payment method the account already has and the page
-pre-selects, and for a paid add-on, membership, trial or protection plan the checkout offers:
-take each from the input, or ask before the commit mark which saved address or payment to use
-and whether to accept the offer (the writes skill). Never keep the page's selection or click an
-offer's accept or decline control unasked.
+Choosing the delivery address and payment method is part of a checkout's job, even when the
+account has saved ones the page pre-selects: take each from the input, such as which saved
+address or a new one, or ask before the commit mark which to use (the writes skill). Never use
+the page's selection silently. A paid add-on within the tool's purpose, such as a protection
+plan for the item bought, is an input or a question too. A paid membership, subscription or
+trial the checkout offers is outside its purpose: decline it without asking, never accept it
+without an input the caller set, and handle its pop-up as conditional (the forms skill), since
+it shows only to some accounts.
 
 ## Minimums and refusals
 
 When the site refuses the order as asked, such as an order under its minimum or an empty cart
 at checkout, the tool throws `InvalidInput` with the site's reason, before its commit mark
 whenever the page shows the limit first. A checkout that takes a limit of the caller's, such as
-a maximum total, reads the final total and compares it before the mark, and refuses with
+a maximum total, reads the final total and compares it before the order's commit mark, and refuses with
 `InvalidInput`, `field` that input and `kind: "over_price_limit"`, giving the total and the
 limit (the caller-input skill). Never add items, raise a quantity or change the
 delivery method to meet a limit. While building, ask the caller to revise or stop, as
