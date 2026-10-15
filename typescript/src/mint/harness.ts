@@ -2992,14 +2992,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               confirmation,
               effect: buildEffect === "write" ? "write" : "read",
               ...(yield* publicationRefusals),
-              // The harness reviews a maintenance update only once the owner may confirm it,
-              // unless it only adds or tightens output fields, which nobody needs to confirm.
+              // Who can confirm, as the host says; a change that only adds or tightens output
+              // fields reaches review even when nobody can.
               ...(request.mode === "maintenance"
-                ? {
-                    maintenance: {
-                      confirmer: keepsContract(submitted) ? ("none" as const) : ("owner" as const),
-                    },
-                  }
+                ? { maintenance: { confirmer: yield* maintenanceConfirmer } }
                 : {}),
             },
             {
@@ -4942,13 +4938,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       // Only the tool's owner confirms a change that takes from the registered
                       // contract; adding or tightening an output field takes nothing away.
                       const confirmer = yield* maintenanceConfirmer;
-                      if (confirmer !== "owner")
+                      if (confirmer === "none")
                         return taskUpdateAnswer("update_refused", {
                           reason: "owner_unavailable",
                           instruction:
                             "No one who owns this tool can confirm a change that loosens or removes an output, or changes a requirement or the purpose, now, so nothing changed. Keep the registered contract: publish a repair that still returns every required output field (adding or tightening a field needs no confirmation), or end with report_blocked, reason site_lacks_capability, naming the field the site no longer shows.",
                         });
-                      if (submitted.confirmedBy.length === 0)
+                      // The owner's own request may confirm what it names, which Guardian judges.
+                      if (confirmer === "owner" && submitted.confirmedBy.length === 0)
                         return taskUpdateAnswer("clarification_required", {
                           source: "host",
                           reason: "confirmation_required",
