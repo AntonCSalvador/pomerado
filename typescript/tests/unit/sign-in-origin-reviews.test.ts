@@ -1,9 +1,10 @@
 import { expect, it } from "vitest";
 import {
+  providerReachedBySite,
   signInOriginDecision,
-  signInOriginReview,
   workspaceOriginDecision,
-  workspaceOriginReview,
+  type SignInNavigation,
+  type SignInPathEntry,
 } from "../../src/guardian/sign-in-origin-reviews.js";
 
 const rationale = "The site's own sign-in sent this account there.";
@@ -30,29 +31,42 @@ it.each([
   expect(signInOriginDecision({ rationale, ...decision })).toBe(expected);
 });
 
-it("asks only for the outcomes and labels each kind decides, privately", () => {
-  const path = [{ role: "site" as const, origin: "https://app.example.com", pathname: "/login", stage: "entry" as const }];
-  const workspace = workspaceOriginReview({
-    siteOrigin: "https://app.example.com",
-    parent: "example.com",
-    candidateOrigin: "https://acme.example.com",
-    path,
-    sentBefore: "identifier",
-    intent: "Read the account's invoices.",
-  });
-  expect(workspace).toMatchObject({
-    kind: "workspace_origin",
-    outcomes: ["allow", "deny"],
-    labels: ["workspace", "shared_host", "unrecognized"],
-    private: true,
-  });
-  const provider = signInOriginReview({
-    siteOrigin: "https://app.example.com",
-    providerOrigin: "https://id.example.net",
-    path,
-    screen: { fields: [] },
-    intent: "Read the account's invoices.",
-  });
-  expect(provider).toMatchObject({ kind: "sign_in_origin", outcomes: ["allow", "deny"], private: true });
-  expect(provider.labels).toBeUndefined();
+const provider = "https://id.example.net";
+const entry = (
+  role: SignInPathEntry["role"],
+  origin: string,
+  via: SignInNavigation,
+): SignInPathEntry => ({ role, origin, pathname: "/login", stage: "screen", via });
+const site = entry("site", "https://app.example.com", "agent_navigation");
+
+it.each([
+  ["redirect", true],
+  ["form_submit", true],
+  ["link", false],
+  ["agent_navigation", false],
+  ["unknown", false],
+] as const)("a provider first reached by %s is reached by the site: %s", (via, expected) => {
+  expect(providerReachedBySite([site, entry("provider", provider, via)], provider)).toBe(expected);
+});
+
+it("refuses a provider the path never reached", () => {
+  expect(providerReachedBySite([site, entry("provider", "https://id.example.org", "redirect")], provider)).toBe(
+    false,
+  );
+});
+
+it("judges a provider by the first entry on its origin only", () => {
+  // Reached by a link first, a later redirect back to it does not make the site lead there.
+  expect(
+    providerReachedBySite(
+      [site, entry("provider", provider, "link"), site, entry("provider", provider, "redirect")],
+      provider,
+    ),
+  ).toBe(false);
+  expect(
+    providerReachedBySite(
+      [site, entry("provider", provider, "redirect"), entry("provider", provider, "agent_navigation")],
+      provider,
+    ),
+  ).toBe(true);
 });
