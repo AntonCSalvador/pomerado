@@ -1,6 +1,7 @@
 import {
   applyOutputOverrides,
   lintOutput,
+  lintSchemas,
   outputCheckMeaning,
   type OutputFinding,
   type OutputOverride,
@@ -31,18 +32,24 @@ export interface OutputNotes {
 /**
  * The example output's findings with the minter's overrides applied. `controlLabels` are the
  * accessible names of the buttons and links on the page the example ended on, when the host kept
- * them. The notes carry no sample: the reviewer reads values in the example output itself.
+ * them. The notes carry no sample: the reviewer reads values in the example output itself. They
+ * add `lintSchemas`' advisory findings on the declared schemas, which never block.
  */
 export const outputNotes = (input: {
   readonly output: unknown;
   readonly outputSchema?: unknown;
+  /** The tool's input schema, which `lintSchemas` compares each output field with. */
+  readonly inputSchema?: unknown;
   readonly controlLabels?: readonly string[];
   readonly overrides?: readonly OutputOverride[];
 }): OutputNotes => {
-  const findings = lintOutput(input.output, {
-    ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
-    ...(input.controlLabels === undefined ? {} : { controlLabels: input.controlLabels }),
-  });
+  const findings = [
+    ...lintOutput(input.output, {
+      ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
+      ...(input.controlLabels === undefined ? {} : { controlLabels: input.controlLabels }),
+    }),
+    ...lintSchemas(input.inputSchema, input.outputSchema),
+  ];
   const applied = applyOutputOverrides(findings, input.overrides);
   return {
     findings: applied.findings,

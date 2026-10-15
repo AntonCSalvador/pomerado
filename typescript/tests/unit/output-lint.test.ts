@@ -1,8 +1,12 @@
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
+import { outputNotes } from "../../src/mint/output-notes.js";
+import { contractJsonSchema } from "../../src/runtime/operation.js";
 import {
   applyOutputOverrides,
   controlLabelsFromAriaSnapshot,
   lintOutput,
+  lintSchemas,
   type OutputCheck,
 } from "../../src/runtime/output-lint.js";
 
@@ -455,5 +459,126 @@ describe("bounded cost", () => {
     const cardText = large.find((finding) => finding.check === "card_text");
     expect(cardText).toMatchObject({ path: "results[].text", partial: true, blocking: false });
     expect(cardText?.count).toBeLessThan(3_000);
+  });
+});
+
+describe("advisory checks of the declared schemas", () => {
+  const schemaChecks = (input: unknown, output: unknown) =>
+    lintSchemas(input, output).map(({ path, check }) => `${path} ${check}`);
+  const date = Schema.String.pipe(Schema.pattern(/^\d{4}-\d{2}-\d{2}$/u));
+
+  it("flags a required string that accepts an empty string or whitespace alone", () => {
+    const output = contractJsonSchema(
+      Schema.Struct({
+        plain: Schema.String,
+        nonEmpty: Schema.NonEmptyString,
+        trimmed: Schema.Trimmed,
+        spaced: Schema.String.pipe(Schema.pattern(/^[\w ]*$/u)),
+        strict: Schema.NonEmptyTrimmedString,
+        dated: date,
+        kind: Schema.Literal("flight", "train"),
+        note: Schema.optional(Schema.String),
+        count: Schema.Number,
+      }),
+    );
+    expect(schemaChecks(undefined, output).sort()).toEqual([
+      "nonEmpty loose_text",
+      "plain loose_text",
+      "spaced loose_text",
+      "trimmed loose_text",
+    ]);
+  });
+
+  it("follows nested objects, arrays, references and nullable unions", () => {
+    const Leg = Schema.Struct({ carrier: Schema.String, code: Schema.NonEmptyTrimmedString });
+    const output = contractJsonSchema(
+      Schema.Struct({
+        trip: Schema.Struct({ legs: Schema.Array(Leg), tags: Schema.Array(Schema.String) }),
+        maybe: Schema.NullOr(Schema.String),
+      }),
+    );
+    expect(schemaChecks(undefined, output).sort()).toEqual([
+      "maybe loose_text",
+      "trip.legs[].carrier loose_text",
+      "trip.tags[] loose_text",
+    ]);
+  });
+
+  it("reads constraints beside a reference and in every branch of a union", () => {
+    const output = {
+      type: "object",
+      required: ["code", "either", "typed"],
+      properties: {
+        code: { $ref: "#/$defs/Text", pattern: "^[A-Z]{3}$" },
+        either: { anyOf: [{ type: "string", minLength: 1, pattern: "\\S" }, { type: "string" }] },
+        typed: { type: ["string", "null"], minLength: 2 },
+      },
+      $defs: { Text: { type: "string" } },
+    };
+    expect(schemaChecks(undefined, output)).toEqual(["either loose_text"]);
+  });
+
+  it("flags an output field looser than the input field of the same name", () => {
+    const input = contractJsonSchema(
+      Schema.Struct({
+        cabin: Schema.Literal("economy", "business"),
+        departDate: date,
+        origin: Schema.NonEmptyTrimmedString,
+        passengers: Schema.Number,
+        promo: Schema.optional(Schema.String),
+        seat: Schema.Literal("aisle", "window"),
+      }),
+    );
+    const output = contractJsonSchema(
+      Schema.Struct({
+        searched: Schema.Struct({
+          cabin: Schema.NonEmptyTrimmedString,
+          departDate: Schema.NonEmptyTrimmedString,
+          origin: Schema.Trimmed.pipe(Schema.pattern(/\S/u)),
+          passengers: Schema.optional(Schema.Number),
+          promo: Schema.optional(Schema.String),
+          seat: Schema.Literal("aisle", "window", "middle"),
+        }),
+        results: Schema.Array(
+          Schema.Struct({ departDate: Schema.NullOr(date), cabin: Schema.Literal("economy") }),
+        ),
+      }),
+    );
+    expect(schemaChecks(input, output).sort()).toEqual([
+      "results[].departDate looser_than_input",
+      "searched.cabin looser_than_input",
+      "searched.departDate looser_than_input",
+      "searched.origin looser_than_input",
+      "searched.passengers looser_than_input",
+      "searched.seat looser_than_input",
+    ]);
+  });
+
+  it("compares no field whose name more than one input field has", () => {
+    const input = contractJsonSchema(
+      Schema.Struct({
+        outbound: Schema.Struct({ date }),
+        inbound: Schema.Struct({ date }),
+      }),
+    );
+    const output = contractJsonSchema(Schema.Struct({ date: Schema.NonEmptyTrimmedString }));
+    expect(schemaChecks(input, output)).toEqual([]);
+  });
+
+  it("never blocks, and reaches the publication notes beside the value checks", () => {
+    const inputSchema = contractJsonSchema(Schema.Struct({ cabin: Schema.Literal("economy") }));
+    const outputSchema = contractJsonSchema(
+      Schema.Struct({ cabin: Schema.NonEmptyTrimmedString, title: Schema.String }),
+    );
+    const notes = outputNotes({ output: { cabin: "economy", title: "A" }, outputSchema, inputSchema });
+    expect(notes.blocking).toEqual([]);
+    expect(notes.any).toBe(true);
+    const text = JSON.parse(notes.text) as { findings: { path: string; check: string }[] };
+    expect(text.findings.map(({ path, check }) => `${path} ${check}`).sort()).toEqual([
+      "cabin looser_than_input",
+      "title loose_text",
+    ]);
+    // A run's own output check never reports them.
+    expect(lintOutput({ cabin: "economy", title: "A" }, { outputSchema })).toEqual([]);
   });
 });

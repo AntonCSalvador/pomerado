@@ -11,6 +11,10 @@
  * whole card's text). Every finding is a lead, never a verdict: when a flagged value is correct as
  * returned, such as code on a tool that returns code or page text that only resembles code, the
  * minter names its path and check with the reason as an override, and the reviewer sees both.
+ *
+ * `lintSchemas` adds two advisory checks of the declared schemas rather than the values
+ * (`loose_text`, `looser_than_input`). `lintOutput` never reports them, so a run's checks and
+ * telemetry stay as they were.
  */
 
 export const outputChecks = [
@@ -28,6 +32,8 @@ export const outputChecks = [
   "duplicate_records",
   "constant_field",
   "empty_field",
+  "loose_text",
+  "looser_than_input",
 ] as const;
 export type OutputCheck = (typeof outputChecks)[number];
 
@@ -312,6 +318,9 @@ const schemaResolver = (root: unknown) => {
   };
   return {
     root: resolve(root),
+    /** The node a local `$ref` names, resolved; undefined when there is none. */
+    reference: (node: Json): Json | undefined =>
+      typeof node["$ref"] === "string" ? resolve({ $ref: node["$ref"] }) : undefined,
     property: (node: Json | undefined, key: string) =>
       branches(node)
         .map((branch) => (isRecord(branch["properties"]) ? branch["properties"][key] : undefined))
@@ -625,6 +634,259 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
   }));
 };
 
+/**
+ * One way a schema node can be satisfied, its keywords merged from the node, its local `$ref`
+ * target and its `allOf` branches. `types` undefined accepts any type.
+ */
+interface SchemaShape {
+  readonly types: ReadonlySet<string> | undefined;
+  readonly minLength: number;
+  readonly maxLength: number | undefined;
+  readonly patterns: readonly string[];
+  readonly enum: readonly unknown[] | undefined;
+  readonly format: boolean;
+  readonly properties: ReadonlyMap<string, readonly unknown[]>;
+  readonly required: ReadonlySet<string>;
+  readonly items: readonly unknown[];
+}
+
+/** The most alternatives one node expands to, so a schema of many unions costs a bounded time. */
+const shapeLimit = 32;
+
+const ownShape = (node: Json): SchemaShape => {
+  const type = node["type"];
+  const values = Array.isArray(node["enum"])
+    ? node["enum"]
+    : "const" in node
+      ? [node["const"]]
+      : undefined;
+  return {
+    types:
+      typeof type === "string"
+        ? new Set([type])
+        : Array.isArray(type)
+          ? new Set(type.filter((entry): entry is string => typeof entry === "string"))
+          : undefined,
+    minLength: typeof node["minLength"] === "number" ? node["minLength"] : 0,
+    maxLength: typeof node["maxLength"] === "number" ? node["maxLength"] : undefined,
+    patterns: typeof node["pattern"] === "string" ? [node["pattern"]] : [],
+    enum: values,
+    format: typeof node["format"] === "string",
+    properties: new Map(
+      Object.entries(isRecord(node["properties"]) ? node["properties"] : {}).map(
+        ([key, child]) => [key, [child]] as const,
+      ),
+    ),
+    required: new Set(
+      Array.isArray(node["required"])
+        ? node["required"].filter((key): key is string => typeof key === "string")
+        : [],
+    ),
+    items: "items" in node ? [node["items"]] : [],
+  };
+};
+
+/** Both shapes' constraints at once, as `allOf` holds them. */
+const bothShapes = (left: SchemaShape, right: SchemaShape): SchemaShape => {
+  const properties = new Map(left.properties);
+  for (const [key, nodes] of right.properties)
+    properties.set(key, [...(properties.get(key) ?? []), ...nodes]);
+  return {
+    types:
+      left.types === undefined
+        ? right.types
+        : right.types === undefined
+          ? left.types
+          : new Set([...left.types].filter((type) => right.types?.has(type))),
+    minLength: Math.max(left.minLength, right.minLength),
+    maxLength:
+      left.maxLength === undefined
+        ? right.maxLength
+        : Math.min(left.maxLength, right.maxLength ?? left.maxLength),
+    patterns: [...left.patterns, ...right.patterns],
+    enum:
+      left.enum === undefined
+        ? right.enum
+        : right.enum === undefined
+          ? left.enum
+          : left.enum.filter((value) => right.enum?.includes(value)),
+    format: left.format || right.format,
+    properties,
+    required: new Set([...left.required, ...right.required]),
+    items: [...left.items, ...right.items],
+  };
+};
+
+const compiledPatterns = new Map<string, RegExp | undefined>();
+/** A JSON Schema pattern as a regular expression; undefined when it does not compile here. */
+const compiledPattern = (pattern: string) => {
+  if (!compiledPatterns.has(pattern)) {
+    let compiled: RegExp | undefined;
+    for (const flags of ["u", ""])
+      try {
+        compiled = new RegExp(pattern, flags);
+        break;
+      } catch {
+        compiled = undefined;
+      }
+    compiledPatterns.set(pattern, compiled);
+  }
+  return compiledPatterns.get(pattern);
+};
+
+const isNullShape = (shape: SchemaShape) =>
+  shape.types !== undefined && shape.types.size === 1 && shape.types.has("null");
+const isStringShape = (shape: SchemaShape) =>
+  shape.types !== undefined && shape.types.size === 1 && shape.types.has("string");
+/** Whether a string shape surely accepts `text`. A pattern that does not compile here never does. */
+const acceptsText = (shape: SchemaShape, text: string) =>
+  !shape.format &&
+  text.length >= shape.minLength &&
+  (shape.maxLength === undefined || text.length <= shape.maxLength) &&
+  (shape.enum === undefined || shape.enum.includes(text)) &&
+  shape.patterns.every((pattern) => compiledPattern(pattern)?.test(text) === true);
+
+/** A field as its schema declares it: whether its key is required, and its shapes. */
+interface DeclaredField {
+  readonly path: string;
+  readonly key: string | undefined;
+  readonly required: boolean;
+  readonly nullable: boolean;
+  /** The shapes other than null. */
+  readonly shapes: readonly SchemaShape[];
+}
+
+/**
+ * Every field a JSON Schema declares, at any depth, with the paths `lintOutput` names: properties
+ * by name from `$`, array items as `[]`. An array's item is always required.
+ */
+const declaredFields = (root: unknown): DeclaredField[] => {
+  const schema = schemaResolver(root);
+  const expand = (node: unknown, depth: number): SchemaShape[] => {
+    if (!isRecord(node) || depth > 16) return [ownShape({})];
+    let shapes = [ownShape(node)];
+    const combine = (alternatives: readonly SchemaShape[]) => {
+      shapes = shapes
+        .flatMap((shape) => alternatives.map((alternative) => bothShapes(shape, alternative)))
+        .slice(0, shapeLimit);
+    };
+    const target = schema.reference(node);
+    if (target !== undefined) combine(expand(target, depth + 1));
+    if (Array.isArray(node["allOf"]))
+      for (const branch of node["allOf"]) combine(expand(branch, depth + 1));
+    const union = [node["anyOf"], node["oneOf"]].find(Array.isArray);
+    if (union !== undefined) combine(union.flatMap((branch: unknown) => expand(branch, depth + 1)));
+    return shapes;
+  };
+  const fields: DeclaredField[] = [];
+  const visit = (
+    nodes: readonly unknown[],
+    path: string,
+    key: string | undefined,
+    required: boolean,
+    depth: number,
+  ) => {
+    if (depth > 32) return;
+    const all = expand({ allOf: nodes }, 0);
+    const nullable = all.some(
+      (shape) => shape.types?.has("null") === true || shape.enum?.includes(null) === true,
+    );
+    // Null is recorded once, as `nullable`; the shapes keep the other types and values.
+    const shapes = all
+      .filter((shape) => !isNullShape(shape))
+      .map((shape) => ({
+        ...shape,
+        types:
+          shape.types === undefined
+            ? undefined
+            : new Set([...shape.types].filter((type) => type !== "null")),
+        enum: shape.enum?.filter((value) => value !== null),
+      }));
+    fields.push({ path, key, required, nullable, shapes });
+    const children = new Map<string, { nodes: unknown[]; required: boolean }>();
+    for (const shape of shapes)
+      for (const [name, childNodes] of shape.properties) {
+        const child = children.get(name);
+        if (child === undefined)
+          children.set(name, { nodes: [...childNodes], required: shape.required.has(name) });
+        else {
+          child.nodes.push(...childNodes);
+          child.required &&= shape.required.has(name);
+        }
+      }
+    for (const [name, child] of children)
+      visit(child.nodes, path === "$" ? name : `${path}.${name}`, name, child.required, depth + 1);
+    const items = shapes.flatMap((shape) => shape.items);
+    if (items.length > 0) visit(items, `${path}[]`, undefined, true, depth + 1);
+  };
+  if (isRecord(root)) visit([root], "$", undefined, true, 0);
+  return fields;
+};
+
+/** Whether every shape is a string, so the text checks apply. */
+const textField = (field: DeclaredField) =>
+  field.shapes.length > 0 && field.shapes.every(isStringShape);
+
+/** How `output` is looser than `input`, the input field of the same name. */
+const looserThan = (output: DeclaredField, input: DeclaredField) => {
+  if (input.required && !input.nullable && (!output.required || output.nullable)) return true;
+  if (!textField(input) || !textField(output)) return false;
+  // An enum is held when the output's values are all the input's; a pattern when the output
+  // repeats it or takes an enum instead. A pattern written another way is a lead to check.
+  const inputValues = input.shapes.every((shape) => shape.enum !== undefined)
+    ? new Set(input.shapes.flatMap((shape) => shape.enum ?? []))
+    : undefined;
+  const outputEnum = output.shapes.every((shape) => shape.enum !== undefined);
+  if (
+    inputValues !== undefined &&
+    !(outputEnum && output.shapes.every((shape) => shape.enum?.every((value) => inputValues.has(value))))
+  )
+    return true;
+  const inputPatterns = input.shapes.map((shape) => shape.patterns);
+  if (
+    inputValues === undefined &&
+    inputPatterns.every((patterns) => patterns.length > 0) &&
+    !output.shapes.every(
+      (shape) =>
+        shape.enum !== undefined ||
+        inputPatterns.some((patterns) => patterns.every((pattern) => shape.patterns.includes(pattern))),
+    )
+  )
+    return true;
+  const least = (field: DeclaredField) => Math.min(...field.shapes.map((shape) => shape.minLength));
+  return least(output) < least(input);
+};
+
+/**
+ * Advisory checks of a tool's declared JSON Schemas, never of its values, apart from `lintOutput`
+ * so a run's output checks and telemetry are unchanged. `loose_text`: a required output string
+ * whose schema accepts an empty string or a lone space, such as one with no minLength and no
+ * pattern. `looser_than_input`: an output field looser than the input field of the same name,
+ * found by property name at any depth when only one input field has it: an enum dropped or
+ * widened, a pattern neither repeated nor replaced by an enum, a smaller minLength, or optional
+ * or nullable where the input is required. Neither blocks: whether a field holds a needed value
+ * is the publication review's judgment.
+ */
+export const lintSchemas = (inputSchema: unknown, outputSchema: unknown): OutputFinding[] => {
+  const inputs = new Map<string, DeclaredField | undefined>();
+  for (const field of declaredFields(inputSchema))
+    if (field.key !== undefined)
+      inputs.set(field.key, inputs.has(field.key) ? undefined : field);
+  const findings: OutputFinding[] = [];
+  for (const field of declaredFields(outputSchema)) {
+    if (
+      field.required &&
+      textField(field) &&
+      field.shapes.some((shape) => acceptsText(shape, "") || acceptsText(shape, " "))
+    )
+      findings.push({ path: field.path, check: "loose_text", count: 1, blocking: false });
+    const input = field.key === undefined ? undefined : inputs.get(field.key);
+    if (input !== undefined && looserThan(field, input))
+      findings.push({ path: field.path, check: "looser_than_input", count: 1, blocking: false });
+  }
+  return findings;
+};
+
 /** A finding as the reviewer reads it: with the minter's reason when it overrode it. */
 export type ReviewedOutputFinding = OutputFinding;
 
@@ -667,6 +929,10 @@ export const outputCheckMeaning: Readonly<Record<OutputCheck, string>> = {
   duplicate_records: "repeats a whole record",
   constant_field: "has the same value in every record",
   empty_field: "is empty or null in every record",
+  loose_text:
+    "is a required string whose declared schema accepts an empty string or whitespace alone",
+  looser_than_input:
+    "is declared looser than the input field of the same name: its enum or pattern dropped, a smaller minLength, or optional or nullable where the input is required",
 };
 
 /**
@@ -682,5 +948,5 @@ export const outputChecksNotice = (findings: readonly OutputFinding[]) =>
           meaning: outputCheckMeaning[finding.check],
         })),
         instruction:
-          "The host checked every value this run returned. Check each finding against the page. Fix a wrong value at the read in source: read rendered text with visibleText, visibleTexts or readRows, expand collapsed text before reading it and read it back, and scope rows to the main list; never clean a string afterwards. A check can be wrong: when a value is correct as it is, such as code the tool is meant to return or the page's own text that only resembles code, name its path and check with the reason in finish_build's outputOverrides. A field that holds code or markup on purpose can declare its contentMediaType instead; its findings then name that type and never block. Blocking findings (script, css, markup, template_residue) refuse finish_build until fixed or overridden; the others never block. The publication reviewer reads every finding and every override with its reason.",
+          "The host checked every value this run returned. Check each finding against the page. Fix a wrong value at the read in source: read rendered text with visibleText, visibleTexts or readRows, expand collapsed text before reading it and read it back, and scope rows to the main list; never clean a string afterwards. A check can be wrong: when a value is correct as it is, such as code the tool is meant to return or the page's own text that only resembles code, name its path and check with the reason in finish_build's outputOverrides. A field that holds code or markup on purpose can declare its contentMediaType instead; its findings then name that type and never block. Blocking findings (script, css, markup, template_residue) refuse finish_build until fixed or overridden; the others never block. loose_text and looser_than_input judge the declared schema, not a value: type a needed value's field as strictly as the core skill says, and keep a field loose only where the page may genuinely not show its value. The publication reviewer reads every finding and every override with its reason.",
       };
