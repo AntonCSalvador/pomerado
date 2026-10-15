@@ -212,9 +212,11 @@ async ({kernel,sessionId}) => kernel.browsers.playwright.execute(sessionId,{code
     const transcript = JSON.stringify(last?.input);
     expect(transcript).not.toContain("Receipt 1042");
     expect(transcript).not.toContain("2026-01-02,12.50");
-    const reviewed = guardian.reviews.map((review) =>
-      String((review.input["submitted_call"] as Record<string, unknown>)["entrypoint"]),
-    );
+    const reviewed = guardian.reviews
+      .filter((review) => review.kind === "execution")
+      .map((review) =>
+        String((review.input["submitted_call"] as Record<string, unknown>)["entrypoint"]),
+      );
     expect(reviewed).toEqual(["operation/explore/look.mjs"]);
     // Guardian's own rules for the step it reviewed cover file handles and read-backs.
     const instructions = guardian.reviews[0]?.instructions ?? "";

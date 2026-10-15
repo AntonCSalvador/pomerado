@@ -541,17 +541,17 @@ export const SignInStep = Schema.Union(
   Schema.Struct({ approval: AutofillApproval, popup: Schema.optional(AutofillPopup) }),
   // The site showed that the login's password or code was wrong: the host asks the owner
   // for a correction in place and never sends the rejected value again. Or, once the login was
-  // sent, it showed the account itself locked, suspended or disabled (`account`), quoting the
-  // page's visible words (`marker`): no correction gets past that, and the build ends
-  // `account_locked`.
+  // sent, it showed the account itself locked or suspended (`account`), at the visible element
+  // `selector` names, which the host checks shows: no correction gets past that, and the build
+  // ends `account_locked`.
   Schema.Struct({
     rejected: Schema.Union(
       Schema.Struct({ slot: CredentialRejectedField }),
       Schema.Struct({
-        account: Schema.Literal(true),
-        marker: Schema.String.pipe(Schema.pattern(/\S/), Schema.maxLength(300)).annotations({
+        account: Schema.Literal("locked", "suspended"),
+        selector: SignInSelector.annotations({
           description:
-            "The page's own visible words that say the account is locked, suspended or disabled, copied as shown",
+            "The visible element whose text says the account is locked or suspended (disabled or closed counts as suspended)",
         }),
       }),
     ),
@@ -1341,6 +1341,17 @@ export type MintOutcome = {
   readonly diagnostics: readonly string[];
 };
 
+/** The host's answer to `abandon_sign_in` (`MintDependencies.abandonSignIn`). */
+export type AbandonSignInResult =
+  | { readonly outcome: "abandoned" }
+  | {
+      readonly outcome: "refused";
+      /** Such as `write_build`, `sign_in_required` or `signed_in`. */
+      readonly reason: "write_build" | "sign_in_required" | "signed_in" | (string & {});
+      /** What the minter reads about the refusal; screened before it does. */
+      readonly notice?: string;
+    };
+
 /** One site default a build took instead of asking. */
 export interface BuildAssumption {
   readonly kind: "site_default";
@@ -1419,6 +1430,8 @@ export interface MintActions {
   readonly checkSignedInMarker?: (input: unknown) => Effect.Effect<string, MintFailure>;
   /** A read's planned live tests (`LiveTestsRequest`); absent where the host runs none. */
   readonly liveTests?: (input: unknown) => Effect.Effect<string, MintFailure>;
+  /** Gives up signing in, so the build goes on signed out; absent where the host has no hook. */
+  readonly abandonSignIn?: (input: unknown) => Effect.Effect<string, MintFailure>;
 }
 
 /**
@@ -1429,6 +1442,7 @@ export interface HostToolDescriptions {
   readonly captchaState?: string;
   readonly requestBrowserRecovery?: string;
   readonly checkSignedInMarker?: string;
+  readonly abandonSignIn?: string;
 }
 
 export interface MintTurn {
@@ -2112,6 +2126,14 @@ export interface MintDependencies {
    * no live_tests tool, and a read signed out tests one input at a time with execute.
    */
   readonly liveTests?: LiveTestHost;
+  /**
+   * The minter's `abandon_sign_in`: it gives up signing in, so the build goes on signed out. The
+   * host decides whether it may: it refuses a write build, a task that needs the site signed in
+   * and a build whose sign-in already verified, with a reason and a notice. Guardian does not
+   * review it. On `abandoned` the harness drops the unresolved sign-in, so explore, the example,
+   * live tests and publication go on signed out. Absent, the minter is offered no such tool.
+   */
+  readonly abandonSignIn?: () => Effect.Effect<AbandonSignInResult, MintFailure>;
   /** The host's own descriptions of its optional tools, in place of the generic ones. */
   readonly hostToolDescriptions?: HostToolDescriptions;
   readonly projection: MintProjection;

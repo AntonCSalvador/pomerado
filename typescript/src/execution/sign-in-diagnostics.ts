@@ -125,6 +125,8 @@ export interface SignInDiagnostic {
    * failure spends no sign-in allowance and the same sign-in may simply be tried again.
    */
   readonly nothingSubmitted?: true;
+  /** For `AccountLocked`: what the site said of the account, `locked` or `suspended`. */
+  readonly account?: "locked" | "suspended";
   /** For `AutofillRefused`: what the host refused to type, where, and which check refused it. */
   readonly hostRefusal?: HostRefusal;
   readonly identityErrorCode?: typeof IdentityErrorCode.Type;

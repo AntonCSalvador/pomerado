@@ -761,7 +761,7 @@ export const makeOpenAIMinter = (
                 : tool({
                     ...hostTool(
                       "mint_update",
-                      "Change this build's task settings after the caller confirmed the change: input values, a requirement, constraint or prerequisite (add, drop or revise), the purpose, read to write (effect), the target site or the login; in maintenance, only a requirement, the purpose or an output field (output) of the published tool's contract. An output change adds a field (add) or makes one stricter (tighten: optional or nullable to required, or a narrower type) with no confirmation needed, since callers keep everything they received; to fix a gap, such as a fact the page shows that the output lacks, or a needed value the schema lets be null, add or tighten it. Loosening one (optional, nullable, widen) or removing it (remove) needs its owner's confirmation, and remove also needs reason: why the field must go, from what the site shows now. Ask with request_input first when the request does not already settle the change, then name the answered questions in confirmedBy; the caller picking an option you wrote confirms what that option says, as do their own words. summary says the change in plain words, as the caller would read it. recommend update keeps the same task and workflow: changed values, dates or options, a dropped prerequisite, a read becoming a write, or a sister domain of the same product. recommend new_mint when the caller now wants a different task or another product's workflow, with suggestedRequest, the request they could submit for it; a changed site origin alone decides neither. Guardian reviews the change. Results: updated (continue under the returned task), clarification_required (ask, then call again), reword (revise; nothing changed and the build continues), new_mint_recommended (the build ends blocked and the caller gets the recommendation), review_unavailable (submit the same call again), update_refused (nothing changed; the instruction says why), update_invalid (correct the request and call again). A site, login or effect change always names the caller's confirming answers in confirmedBy. No update removes the requested action itself, allows repeating a write that may have committed, or overturns a Guardian decision, except that the caller's confirmed answer can overturn one that held a step to their own request, such as a time, a value or a search setting. A caller's answer never overturns a decision made for safety or for a Pomerado scope limit. intent states the evidence for the change.",
+                      "Change this build's task settings after the caller confirmed the change: input values, a requirement, constraint or prerequisite (add, drop or revise), the purpose, read to write (effect), the target site or the login (sign_in, different_login, or signed_out when the owner chose what the site shows without signing in); in maintenance, only a requirement, the purpose or an output field (output) of the published tool's contract. An output change adds a field (add) or makes one stricter (tighten: optional or nullable to required, or a narrower type) with no confirmation needed, since callers keep everything they received; to fix a gap, such as a fact the page shows that the output lacks, or a needed value the schema lets be null, add or tighten it. Loosening one (optional, nullable, widen) or removing it (remove) needs its owner's confirmation, and remove also needs reason: why the field must go, from what the site shows now. Ask with request_input first when the request does not already settle the change, then name the answered questions in confirmedBy; the caller picking an option you wrote confirms what that option says, as do their own words. summary says the change in plain words, as the caller would read it. recommend update keeps the same task and workflow: changed values, dates or options, a dropped prerequisite, a read becoming a write, or a sister domain of the same product. recommend new_mint when the caller now wants a different task or another product's workflow, with suggestedRequest, the request they could submit for it; a changed site origin alone decides neither. Guardian reviews the change. Results: updated (continue under the returned task), clarification_required (ask, then call again), reword (revise; nothing changed and the build continues), new_mint_recommended (the build ends blocked and the caller gets the recommendation), review_unavailable (submit the same call again), update_refused (nothing changed; the instruction says why), update_invalid (correct the request and call again). A site, login or effect change always names the caller's confirming answers in confirmedBy. No update removes the requested action itself, allows repeating a write that may have committed, or overturns a Guardian decision, except that the caller's confirmed answer can overturn one that held a step to their own request, such as a time, a value or a search setting. A caller's answer never overturns a decision made for safety or for a Pomerado scope limit. intent states the evidence for the change.",
                       "The task was not updated. Inspect the finite failure; correct the request or continue under the current task.",
                       (request) => updateTask(request),
                     ),
@@ -811,6 +811,20 @@ export const makeOpenAIMinter = (
                       (request) => checkMarker(request),
                     ),
                     parameters: parameters(withIntent(SignedInMarkerCheckRequest)),
+                  });
+            const abandon = turn.actions.abandonSignIn;
+            const abandonSignIn =
+              abandon === undefined
+                ? undefined
+                : tool({
+                    ...hostTool(
+                      "abandon_sign_in",
+                      turn.hostToolDescriptions?.abandonSignIn ??
+                        "Give up signing in, so the build goes on signed out: use it only when a sign-in failed and cannot be resolved, or the owner chose the public part only, and the request can be met, at least in part, from what the site shows signed out. The host decides whether it may: it refuses a write build, a task that needs the site signed in, and a build whose sign-in already verified. Guardian does not review it. intent states why signing in is given up and what the site shows signed out.",
+                      "The request to give up signing in did not complete. Nothing changed; read its result before continuing.",
+                      (request) => abandon(request),
+                    ),
+                    parameters: parameters(withIntent(Schema.Struct({}))),
                   });
             const runLiveTests = turn.actions.liveTests;
             const liveTests =
@@ -874,6 +888,7 @@ export const makeOpenAIMinter = (
                     ...(captchaState === undefined ? [] : [captchaState]),
                     ...(requestBrowserRecovery === undefined ? [] : [requestBrowserRecovery]),
                     ...(checkSignedInMarker === undefined ? [] : [checkSignedInMarker]),
+                    ...(abandonSignIn === undefined ? [] : [abandonSignIn]),
                     ...(liveTests === undefined ? [] : [liveTests]),
                   ]
               ).map((entry) => recoverFunction(entry)),

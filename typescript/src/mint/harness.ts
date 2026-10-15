@@ -498,6 +498,9 @@ const withHostNotices = (
     ...(actions.checkSignedInMarker === undefined
       ? {}
       : { checkSignedInMarker: wrap(actions.checkSignedInMarker) }),
+    ...(actions.abandonSignIn === undefined
+      ? {}
+      : { abandonSignIn: wrap(actions.abandonSignIn) }),
   };
 };
 
@@ -2945,10 +2948,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           );
           return decision.outcome === "allow_business" ? screened : undefined;
         }).pipe(
-          Effect.catchAll((error) =>
-            diagnose({ phase: "stop_explanation", code: failureCode(error) }).pipe(
-              Effect.as(undefined),
-            ),
+          // Nothing about the explanation may change how the build ended: a failed screen or
+          // review, a defect included, keeps nothing. Only an interruption goes on.
+          Effect.catchAllCause((cause) =>
+            Cause.isInterruptedOnly(cause)
+              ? Effect.failCause(cause)
+              : diagnose({
+                  phase: "stop_explanation",
+                  code: Option.match(Cause.failureOption(cause), {
+                    onNone: () => "Defect",
+                    onSome: failureCode,
+                  }),
+                }).pipe(Effect.as(undefined)),
           ),
         );
       /** A `mint_update` result for the agent: its status and what the host says. */
@@ -3027,6 +3038,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           ...(settings.has("input")
             ? [
                 "The changed input values are the host-bound input from now on: an example or act step runs them, and the tool's input schema takes them.",
+              ]
+            : []),
+          ...(changes.some((change) => change.setting === "login" && change.change === "signed_out")
+            ? [
+                "The task now runs signed out: never call execute purpose authenticate again. Explore, run the example and live tests, and publish without signing in, from the part of the request the site shows signed out.",
               ]
             : []),
           ...(settings.has("effect")
@@ -3201,6 +3217,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const effectChanged = next.effect === "write" && buildEffect !== "write";
           const siteChanged = next.siteOrigin !== taskState.siteOrigin;
           taskState = next;
+          // The task now runs signed out: a failed sign-in no longer holds anything back.
+          if (
+            accepted.changes.some(
+              (change) => change.setting === "login" && change.change === "signed_out",
+            )
+          )
+            unresolvedSignIn = undefined;
           // An applied update changes the remaining work, which may settle an unresolved write.
           yield* reviewer.taskUpdated(
             `The caller confirmed a task update (revision ${next.revision}): ${accepted.summary}`,
@@ -5217,6 +5240,47 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     return JSON.stringify({
                       kind: "host_browser_recovery",
                       ...(yield* request(rationale)),
+                    });
+                  }),
+                ),
+            }),
+        // The minter gives up signing in, so the build goes on signed out. The host decides
+        // whether it may; Guardian does not review it. It holds the execution permit, ordered
+        // with the steps around it.
+        ...(dependencies.abandonSignIn === undefined || questionOnly
+          ? {}
+          : {
+              abandonSignIn: (_input: unknown) =>
+                serial.withPermits(1)(
+                  Effect.gen(function* () {
+                    const abandon = dependencies.abandonSignIn;
+                    if (abandon === undefined)
+                      return yield* new MintFailure({ code: "Unavailable" });
+                    yield* active();
+                    const result = yield* abandon();
+                    yield* diagnose({
+                      phase: "sign_in",
+                      reason: "abandon_sign_in",
+                      outcome: result.outcome,
+                      ...(result.outcome === "refused" ? { refusal: result.reason } : {}),
+                    });
+                    if (result.outcome === "refused")
+                      return JSON.stringify({
+                        status: "abandon_sign_in_refused",
+                        reason: result.reason,
+                        ...(result.notice === undefined
+                          ? {}
+                          : { notice: yield* screenMintText(dependencies, result.notice) }),
+                        userInputRequired: false,
+                        instruction:
+                          "The host did not let this build give up signing in, so nothing changed. Resolve the sign-in as its last result says, or end the build if nothing can.",
+                      });
+                    unresolvedSignIn = undefined;
+                    return JSON.stringify({
+                      status: "sign_in_abandoned",
+                      userInputRequired: false,
+                      instruction:
+                        "The build gave up signing in and goes on signed out. Never call execute purpose authenticate again. Explore, run the example and live tests, and publish from the part of the request the site shows signed out; when that part is missing or much less than asked, ask the owner with request_input whether to continue with it or stop.",
                     });
                   }),
                 ),

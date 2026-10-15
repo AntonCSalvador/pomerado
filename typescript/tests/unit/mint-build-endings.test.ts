@@ -1,11 +1,12 @@
 import {
   makeMintContinuationFixture,
+  makeMintHarnessFixture,
   portableJobSession,
   readAllow,
 } from "../support/mint-fixtures.js";
 import { Usage } from "@openai/agents";
 import type { ModelResponse } from "@openai/agents";
-import { Effect } from "effect";
+import { Deferred, Effect, Fiber } from "effect";
 import { afterEach, expect, it } from "vitest";
 import { MintFailure } from "../../src/mint/contracts.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
@@ -478,4 +479,150 @@ it("hands a declined login request back with the public-only guidance", async ()
   // The second login question hears the owner's answer again; nobody is asked twice.
   expect(JSON.stringify(f.requests[2]?.input)).toContain("without signing in");
   expect(loginRequests).toBe(1);
+});
+
+const failedSignIn = new MintFailure({
+  code: "Unavailable",
+  authentication: { phase: "login_poll", code: "AuthenticationFailed", afterSubmission: true },
+});
+const lacksPublicPart = {
+  reason: "site_lacks_capability",
+  explanation: "Signed out, the site shows no order history.",
+};
+
+// A sign-in the minter cannot get past may be given up, where the host allows it: the build goes
+// on signed out, so its blocked ending is no longer held back by the unresolved sign-in.
+it.each([
+  { outcome: "abandoned", status: "sign_in_abandoned", ends: true },
+  { outcome: "refused", status: "abandon_sign_in_refused", ends: false },
+] as const)(
+  "gives up a failed sign-in when the host allows it: $outcome",
+  async ({ outcome, status, ends }) => {
+    let abandons = 0;
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("execute", authenticate),
+          call("abandon_sign_in", { intent: "The account page cannot be signed in." }),
+          call("report_blocked", lacksPublicPart),
+        ][index] ?? prose("Stopping."),
+      {
+        reviewAndExecute: () => Effect.fail(failedSignIn),
+        abandonSignIn: () =>
+          Effect.sync(() => {
+            abandons++;
+            return outcome === "abandoned"
+              ? { outcome }
+              : { outcome, reason: "sign_in_required", notice: "This task needs the account." };
+          }),
+      },
+    );
+    const outcome_ = await f.run();
+    expect(abandons).toBe(1);
+    expect(JSON.stringify(f.requests[2]?.input)).toContain(status);
+    if (ends) expect(outcome_.blocked).toMatchObject({ reason: "site_lacks_capability" });
+    else {
+      expect(outcome_).not.toHaveProperty("blocked");
+      expect(JSON.stringify(f.requests[3]?.input)).toContain("sign_in_unresolved");
+    }
+  },
+);
+
+// The owner confirmed that the task runs signed out: once the update applies, a failed sign-in
+// holds nothing back.
+it("drops a failed sign-in once an update makes the task run signed out", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate),
+        call(
+          "request_input",
+          {
+            questions: [
+              {
+                id: "public",
+                type: "confirm",
+                prompt: "Should the tool read only what the site shows without signing in?",
+              },
+            ],
+          },
+          "ask",
+        ),
+        call(
+          "mint_update",
+          {
+            summary: "Read only what the site shows without signing in.",
+            changes: [
+              {
+                setting: "login",
+                change: "signed_out",
+                text: "Read only what the site shows signed out.",
+              },
+            ],
+            confirmedBy: ["public"],
+            recommend: "update",
+            intent: "The owner confirmed reading signed out.",
+          },
+          "update",
+        ),
+        call("report_blocked", lacksPublicPart),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: () => Effect.fail(failedSignIn),
+      askInput: () => Effect.succeed({ public: { type: "confirm", value: { confirmed: true } } }),
+      reviewTaskUpdate: () =>
+        Effect.succeed({ outcome: "allow" as const, rationale: "Confirmed.", reviewId: "r1" }),
+      applyTaskUpdate: () => Effect.succeed({ outcome: "applied" as const }),
+    },
+  );
+  const outcome = await f.run();
+  expect(JSON.stringify(f.requests[3]?.input)).toContain("runs signed out");
+  expect(outcome.blocked).toMatchObject({ reason: "site_lacks_capability" });
+});
+
+const harnessFixture = makeMintHarnessFixture(
+  cleanups,
+  { mode: "mint", intent: "Read public data", businessInput: {}, observations: [] },
+  portableJobSession,
+);
+
+// The host's hook has no guard of its own, so giving up the sign-in waits for the execution in
+// flight, a sign-in step included, and never runs beside it.
+it("never gives up a sign-in while an execution is in flight", async () => {
+  const order: string[] = [];
+  const f = await harnessFixture(
+    (turn) =>
+      Effect.gen(function* () {
+        const abandon = turn.actions.abandonSignIn;
+        if (abandon === undefined) throw new Error("Missing abandon_sign_in");
+        const signIn = yield* Effect.fork(turn.actions.execute(authenticate));
+        yield* Deferred.await(entered);
+        const giveUp = yield* Effect.fork(abandon({}));
+        // Let the request to give up run as far as it can while the sign-in is still in flight.
+        yield* Effect.yieldNow();
+        yield* Effect.sleep("20 millis");
+        order.push("sign_in_released");
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(signIn);
+        expect(JSON.parse(yield* Fiber.join(giveUp))).toMatchObject({
+          status: "sign_in_abandoned",
+        });
+      }),
+    {
+      reviewAndExecute: () =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.zipRight(Deferred.await(release)),
+          Effect.zipRight(Effect.fail(failedSignIn)),
+        ),
+      abandonSignIn: () =>
+        Effect.sync(() => {
+          order.push("abandoned");
+          return { outcome: "abandoned" as const };
+        }),
+    },
+  );
+  const entered = Effect.runSync(Deferred.make<void>());
+  const release = Effect.runSync(Deferred.make<void>());
+  await f.run();
+  expect(order).toEqual(["sign_in_released", "abandoned"]);
 });

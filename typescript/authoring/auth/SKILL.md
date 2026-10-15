@@ -226,9 +226,10 @@ counter. Worker takeover preserves these counters and rejected-value history.
 
 If, once the login was sent, the site says the account itself is locked, suspended, disabled or
 closed, no field is wrong and no correction helps: send
-`signInStep: { rejected: { account: true, marker: "<the page's visible words>" } }`, copying the
-words that say so. The build then ends as `account_locked`; never send `rejected.slot` for it,
-retry the sign-in or ask for another login.
+`signInStep: { rejected: { account: "locked", selector: "<the visible message>" } }`, or
+`account: "suspended"` for a suspended, disabled or closed account, naming the visible element
+whose text says so; the host checks it shows. The build then ends as `account_locked`; never send
+`rejected.slot` for it, retry the sign-in or ask for another login.
 
 When the owner declines a login request (`login_declined`, or `login_request` with `declined`), they
 have no account or want only what the site shows signed out. Never ask for a login or
@@ -236,6 +237,13 @@ authenticate again in that build. Build the part of the request the site shows s
 that part is missing or much less than asked, ask with `request_input` before you build, naming
 what the site shows without signing in, whether to continue with it or stop. When they stop, or
 nothing useful is public, end with `report_blocked` reason `owner_declined`.
+
+When a sign-in failed and nothing in your authority resolves it, or the owner chose the public
+part, and the request can still be met, at least in part, signed out: where the host offers
+`abandon_sign_in`, call it, or record the owner's confirmed choice with `mint_update` change
+`login` `signed_out`. Either way the build goes on signed out, and you never authenticate again.
+The host refuses `abandon_sign_in` for a write build, a task that needs the account, or a sign-in
+that already verified.
 
 A rejected code permits at most two fresh-code corrections within the remaining sign-in time.
 This does not extend the unchanged password's limit of two sends, including sends before worker
