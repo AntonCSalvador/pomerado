@@ -72,6 +72,36 @@ describe("URL boundaries", () => {
       "see https://portal.example/a;eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.ZmFrZXNpZ25hdHVyZQ now",
       "ZmFrZXNpZ25hdHVyZQ",
     ],
+    [
+      "a bearer credential followed by a closer",
+      "see https://portal.example/a,Bearer synthetic-bearer-0123456789) end",
+      "synthetic-bearer-0123456789",
+    ],
+    [
+      "a bearer credential followed by punctuation",
+      "(see https://portal.example/a|Bearer synthetic-bearer-0123456789!)",
+      "synthetic-bearer-0123456789",
+    ],
+    [
+      "a credential key with a colon after a pipe",
+      "see https://portal.example/a|password:Synth3tic9 end",
+      "Synth3tic9",
+    ],
+    [
+      "a credential key with a colon in a CSV row",
+      "see 1001,https://portal.example/a,password:Synth3tic9 end",
+      "Synth3tic9",
+    ],
+    [
+      "a key after an escaped angle bracket",
+      "see https://portal.example/a?q=1&amp;lt;password=Synthetic14 now",
+      "Synthetic14",
+    ],
+    [
+      "a key after an escaped quote",
+      "see https://portal.example/a?q=1&quot;password=Synthetic15 now",
+      "Synthetic15",
+    ],
   ])("screens text glued after a URL: %s", (_label, text, secret) => {
     const redacted = redactDiagnosticText(text);
     expect(redacted).not.toContain(secret);
@@ -116,8 +146,33 @@ describe("URL boundaries", () => {
     ["a key after a comma in the query", "https://shop.example/a?q=x,y=2"],
     ["a list of dates in the query", "https://shop.example/a?from=x,to=y&ids=7,8"],
     ["a word after a comma in the fragment", "https://shop.example/a#top,section"],
+    [
+      "a list of dates before a code",
+      "https://cal.example/find?dates=2026-01-31,2026-02-07&otp=482913",
+    ],
+    [
+      "a list of long numbers before a key",
+      "https://api.example/v1?ids=123456789,987654321&apikey=AKIAFAKEFAKEFAKE1234",
+    ],
+    [
+      "a search filter before an API key",
+      "https://search.example/1/indexes/items/query?filters=date:2026-01-31,2026-02-07&x-search-api-key=synthetic-search-key",
+    ],
+    ["a list of dates in the path", "https://air.example/flights/SFO-JFK/2026-01-31,2026-02-07"],
+    ["a list of addresses", "https://mail.example/invite?emails=a@x.example,b@y.example"],
+    ["a list of phone numbers", "https://tel.example/call?phone=4155550123,4155550124"],
+    ["a date after a pipe in the query", "https://shop.example/s?q=a|2026-01-01"],
+    ["a capitalized word after a comma", "https://shop.example/s?q=a,Ada"],
+    ["a word after a pipe in the path", "https://shop.example/a|b/c"],
+    [
+      "chained character references",
+      "https://shop.example/a?x=1&amp;amp;access_token=raw-in-url&amp;#x26;y=2&amp;nbsp;z",
+    ],
     ["a scheme-relative URL", "//cdn.example/lib.js?v=1,2"],
+    ["a key with a colon after a comma", "https://shop.example/a?f=x,date:2026-02-07"],
     ["a schemeless host", "www.shop.example/a?ids=4,5"],
+    ["an escaped apostrophe", "https://wiki.example/wiki/Ender&#39;s_Game"],
+    ["an escaped apostrophe in hex", "https://wiki.example/wiki/Ender&#x27;s_Game"],
   ])("keeps a real URL whole: %s", (_label, url) => {
     const text = `failed at ${url}. Retry later`;
     expect(spanTexts(text)).toEqual([url]);
@@ -125,14 +180,34 @@ describe("URL boundaries", () => {
   });
 
   it.each([
-    ["the separator written before it", "1001,https://portal.example/a,Synthetic", "1001,"],
-    ["an address field", "https://portal.example/a,ada@mail.example", ""],
-    ["a long number field", "https://portal.example/a;555-010-0199", ""],
-    ["a date field", "https://portal.example/a,2026-01-31", ""],
-    ["a name field", "https://portal.example/a,Ada Lovelace", ""],
-    ["a key after a comma", "https://portal.example/a,mode=fast", ""],
-    ["a pipe outside the query", "https://portal.example/a|b", ""],
+    ["a host past a closer", "see //x)//AKIAFAKEFAKEFAKE1234.example/a end"],
+    ["a port with trailing punctuation", "see //AKIAFAKEFAKEFAKE1234:1: end"],
+    ["a period past its end", "see //AKIAFAKEFAKEFAKE1234. end"],
+    ["a period past a closer", "see (//AKIAFAKEFAKEFAKE1234). end"],
+    ["an at sign past a closer", "see //AKIAFAKEFAKEFAKE1234)@x end"],
+    ["a dotted credential field past its end", "see //AKIAFAKEFAKEFAKE1234,password=a.b end"],
+  ])("checks a scheme-relative host as written and as ended: %s", (_label, text) => {
+    expect(redactDiagnosticText(text)).not.toContain("AKIAFAKEFAKEFAKE1234");
+  });
+
+  it("keeps a URL in a CSV row whole", () => {
+    const text = "1,https://x.example/a?d=a,b&k=v,done";
+    expect(spanTexts(text)).toEqual(["https://x.example/a?d=a,b&k=v,done"]);
+    expect(redactDiagnosticText(text)).toBe(text);
+  });
+
+  it.each([
+    ["a credential key after a comma", "https://portal.example/a,password=Synthetic", ""],
+    ["a credential key after a pipe", "https://portal.example/a|api_key=Synthetic", ""],
+    [
+      "a credential shape after a semicolon",
+      "https://portal.example/a;bearer synthetic-bearer-0123456789",
+      "",
+    ],
     ["an unbalanced bracket", "(https://portal.example/a)", "("],
+    ["an escaped angle bracket", "https://portal.example/a&lt;b", ""],
+    ["an angle bracket escaped twice", "https://portal.example/a&amp;lt;b", ""],
+    ["a numeric quote reference", "https://portal.example/a&#x22;b", ""],
     ["a backslash escape", "https://portal.example/a\\nnext line", ""],
   ])("ends a URL at %s", (_label, text, before) => {
     expect(urlSpans(text)).toEqual([
@@ -141,7 +216,7 @@ describe("URL boundaries", () => {
   });
 
   it("still accepts a stored detail whose URL an older release measured to the next space", () => {
-    const url = `https://portal.example/a,mode=${"x".repeat(17_000)}`;
+    const url = `https://portal.example/a,password=${"x".repeat(17_000)}`;
     const stored = { failureDetail: { subCause: "unclassified", context: { url } } };
     expect(failureDetailMetadata(stored)?.failureDetail.context?.["url"]).toBe(url);
   });
@@ -172,6 +247,12 @@ describe("URL boundaries", () => {
       `${"|https://a.example/a".repeat(50_000)}|`,
       "https://a.example/a ".repeat(50_000),
       `${"&amp;".repeat(50_000)}https://a.example/${"&amp;".repeat(50_000)}`,
+      `https://a.example/?${"&amp;amp;amp;amp;x;".repeat(25_000)}`,
+      `https://a.example/?${",password".repeat(50_000)}`,
+      `https://a.example/?${",password :".repeat(30_000)}`,
+      `https://a.example/?${"&amp;amp;amp;l".repeat(25_000)}`,
+      `${"//a.b)".repeat(40_000)}`,
+      `${"//a.b,password=x".repeat(50_000)}`,
     ];
     const started = performance.now();
     for (const text of inputs) {
