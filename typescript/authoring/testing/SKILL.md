@@ -90,7 +90,7 @@ the example's input. List under `notTested` anything the tool claims that you ch
 with why. A choice the request, the caller or the owner declined is not part of the tool (core
 skill), so it is never tested.
 
-Run them with `live_tests` action `run` (`cases` null runs them all; `maxWorkers` up to 3). One
+Run them with `live_tests` action `run` (`cases` null runs them all). One
 Guardian review covers the batch; each case starts like the example, on a page reset to the
 site origin that keeps its browser's site data, in parallel browsers where the host has them.
 Each result says whether the case ran `cold`, first on a new browser with an empty profile, or
@@ -101,8 +101,9 @@ and check what they mean, not just pass or fail: every item matches the filters,
 the sort, the applied location is the one asked for or labeled as another, page 2 differs from
 page 1. A failing case is a bug in the tool: fix the code at that line. Never drop the input, narrow the schema or change a
 case's expectation to match what it returned to make it pass; fix the code. While a fix is in
-progress, prefer rerunning only the failing cases, named in `cases`: a batch of every case waits
-on its slowest case, and the cases that passed run again once after your last edit. A
+progress, prefer rerunning only the failing cases, all of them together in one batch named in
+`cases`, not one batch each: a batch of every case waits on its slowest case, each batch waits on
+its own review, and the cases that passed run again once after your last edit. A
 run that returns partly filled results, or passes only when run again, is missing a wait for
 content: fix the wait, not the retry, then run that input again a few times.
 
