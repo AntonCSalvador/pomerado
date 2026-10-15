@@ -2,6 +2,17 @@ import { makeGuardianSession } from "./session.js";
 import type { GuardianSession, GuardianSessionOptions } from "./session.js";
 import { QuestionDecision } from "./question.js";
 import { anchorQuotedFindings, decodePublicationDecision } from "./publication.js";
+import {
+  publicationContext,
+  publicationDelta,
+  publicationDeltaCounts,
+  publicationRound,
+} from "./publication-delta.js";
+import type {
+  PublicationDelta,
+  PublicationRound,
+  PublicationRoundFile,
+} from "./publication-delta.js";
 import type { AnsweredQuestion, PendingQuestion } from "./question.js";
 import { TaskUpdateDecision } from "./task-update.js";
 import { wholeSource } from "./source.js";
@@ -414,6 +425,8 @@ export interface ReviewSources {
   readonly entrypoint?: unknown;
   /** Executed sources byte-identical to a read already in this conversation's view. */
   readonly unchangedSources?: readonly string[];
+  /** A later publication round's change since the mint's prior round, and that round's decision. */
+  readonly publicationDelta?: PublicationDelta;
 }
 
 export interface ReviewTurn {
@@ -642,6 +655,37 @@ export const makeGuardian = (
         Effect.asVoid,
       ));
   const session = continuity === undefined ? undefined : makeGuardianSession(continuity);
+  /** The latest publication round of a Guardian without a session, which keeps it here instead. */
+  let ownPublicationRound: PublicationRound | undefined;
+  const priorPublicationRound = () =>
+    session === undefined ? ownPublicationRound : session.publicationRound();
+  const keepPublicationRound = (round: PublicationRound) => {
+    if (session === undefined) ownPublicationRound = round;
+    else session.keepPublicationRound(round);
+  };
+  /**
+   * Every indexed file's screened text as Guardian would read it, through the host's own reader
+   * so no read counts as Guardian's. A file the host cannot read has no text and is not compared.
+   */
+  const publicationFiles = (
+    scope: PublicationScope,
+    readSource: ReviewTurn["readSource"],
+  ): Effect.Effect<readonly PublicationRoundFile[]> =>
+    Effect.forEach(
+      scope.files,
+      (file) =>
+        // error-reporting-allow: typed-recovery a file the host cannot read is left for Guardian to read, as in a first round
+        Effect.option(wholeSource(readSource, file.path)).pipe(
+          Effect.map((text): PublicationRoundFile => ({
+            path: file.path,
+            published: file.published,
+            current: file.current,
+            owner: file.owner,
+            ...Option.match(text, { onNone: () => ({}), onSome: (value) => ({ text: value }) }),
+          })),
+        ),
+      { concurrency: 4 },
+    );
   /**
    * Runs one review again after an outage, each time as a fresh review with its own ID, until
    * it completes or the outage outlasts the retry budget.
@@ -782,6 +826,18 @@ export const makeGuardian = (
           ),
         );
       run.started({ reviewId, reviewKind });
+      // A publication round reads its files to keep them for the next round, and a later round
+      // is reviewed against the prior one.
+      const roundFiles =
+        pending.publication === undefined
+          ? undefined
+          : yield* publicationFiles(pending.publication, readSource);
+      const roundContext = roundFiles === undefined ? {} : publicationContext(pending);
+      const priorRound = roundFiles === undefined ? undefined : priorPublicationRound();
+      const delta =
+        roundFiles === undefined || priorRound === undefined
+          ? undefined
+          : publicationDelta(priorRound, roundFiles, roundContext);
       const observeModelTrace = diagnostics?.observeModelTrace;
       // Follow-up rounds for a refused outcome or a skipped entrypoint read, within this attempt.
       let followUpRounds = 0;
@@ -826,6 +882,7 @@ export const makeGuardian = (
                   (total, file) => total + file.byteLength,
                   0,
                 ),
+                ...(delta === undefined ? {} : { delta: publicationDeltaCounts(delta) }),
                 timing,
               },
       );
@@ -982,6 +1039,7 @@ export const makeGuardian = (
             ...(unchanged.length === 0 ? {} : { unchangedSources: unchanged }),
           };
         }
+        if (delta !== undefined) sources = { ...sources, publicationDelta: delta };
         const kindName = pending.hostReview?.kind ?? kind;
         const outcomes = reviewOutcomesOf(pending);
         /** A decision whose outcome this review's kind does not return. */
@@ -1059,6 +1117,12 @@ export const makeGuardian = (
           );
         // Output that is not a decision at all fails to decode as InvalidDecision.
         const decision = yield* decode(decisionForKind(pending, raw));
+        // The decided round is what the next one is reviewed against; the completion saves it.
+        const round =
+          roundFiles === undefined
+            ? undefined
+            : publicationRound(roundFiles, roundContext, decision);
+        if (round !== undefined) keepPublicationRound(round);
         if (requireEntrypoint && decision.outcome === "allow" && entrypointReadAt !== epoch())
           return yield* new ReviewFailure({ code: "EntrypointNotRead" });
         yield* emit(

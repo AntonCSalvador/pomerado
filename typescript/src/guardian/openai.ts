@@ -11,6 +11,7 @@ import {
 import { guardianDecisionFormat, reviewKindOf, withholdPrivateReviews } from "./review-layout.js";
 import { guardianContinuityPolicy } from "./session.js";
 import { guardianPublicationPolicy } from "./publication.js";
+import { publicationDeltaPolicy } from "./publication-delta.js";
 import { guardianModel, guardianModelCallBound } from "./model.js";
 import type { GuardianModelCallBound } from "./model.js";
 import { sourceMatches } from "./source.js";
@@ -141,8 +142,9 @@ const guardianInstructions = (policy: string, turn: ReviewTurn) =>
 /**
  * The kind's policy, sent in the review's user message: for an execution, recovery or
  * publication review the allow, deny or escalate outcome policy, then the host's own or, for a
- * publication review without one, the core publication policy, then a question or task update
- * review's policy, which names its own outcomes.
+ * publication review without one, the core publication policy, and for a later publication
+ * round the delta policy, then a question or task update review's policy, which names its own
+ * outcomes.
  */
 const reviewPolicy = (turn: ReviewTurn, options: GuardianModelOptions) => {
   const specialized = options.specialize?.(turn);
@@ -157,6 +159,10 @@ const reviewPolicy = (turn: ReviewTurn, options: GuardianModelOptions) => {
     kind === "question" || kind === "update" ? undefined : executionOutcomePolicy,
     kind === "execution" ? executionActionPolicy : undefined,
     corePublicationReview(turn, specialized) ? guardianPublicationPolicy : host,
+    // Whichever policy judges the publication, a later round reads it as a delta.
+    kind === "publication" && turn.sources?.publicationDelta !== undefined
+      ? publicationDeltaPolicy
+      : undefined,
     kind === "question" ? questionPolicy : undefined,
     kind === "update" ? taskUpdatePolicy : undefined,
   ]
