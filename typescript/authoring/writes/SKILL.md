@@ -78,11 +78,12 @@ During the session:
   field filled with a secret handle.
 - When the write changes state that already exists, such as a saved record or a cart
   (.agents/cart/SKILL.md), read that state before the committing step and again after it,
-  in the session and in the composed script, and check that only the requested change
-  happened. Fail when it did not. Read both through the same query or view, selecting the
-  same fields: two read paths, such as a list's row and the record's own detail view, can
-  return the same unchanged field in different shapes, and a comparison across them then
-  reports a change that never happened. "Check the read-back" below says how to compare.
+  in the session and in the composed script. Fail when a field the input sets did not change
+  as asked. Any other difference follows "Check the read-back" below: the script still calls
+  `verified()` and reports the difference in its output. Read both through the same query or
+  view, selecting the same fields: two read paths, such as a list's row and the record's own
+  detail view, can return the same unchanged field in different shapes, and a comparison
+  across them then reports a change that never happened.
 - If a step meets an option the input does not settle, stop that step before choosing
   it and ask. A `request_input` question during the session waits in place; a choice
   that exists only on the page mid-flow, such as a seat on the flight just chosen, is
@@ -175,9 +176,10 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   Confirm step): pass the caller's text through `normalizeText` from `pomerado/runtime`, as
   `visibleText` already does with the page's. Compare a chosen option's value only where the
   view shows that value; otherwise compare the label it shows. When the write changed state
-  that already existed, the same read also checks that only the requested change happened.
-  Write each read-back step to check that match in its own code and call `verified()` when it
-  holds, so the first one that matches is the confirming step. Read one
+  that already existed, the same read is also the after read of the before-and-after
+  comparison, which runs after `verified()` ("Check the read-back"). Write each read-back step
+  to check the requested fields in its own code and call `verified()` when they hold, so the
+  first one that matches is the confirming step. Read one
   confirmation, list or detail view: find the record there by that identity, never by its
   position, such as the first or newest row, and prefer finding each value in it by a stable
   id, its column header or a `data-` attribute over its cell's position. Read only that record,
@@ -231,8 +233,9 @@ and is not a second write.
 - Check against the before and after reads your `act` steps returned first. Use response bodies
   under `captures/` only for what those outputs lack.
 - Only a body saved whole counts. A body the capture marks pending, incomplete, omitted, withheld
-  or unavailable, a truncated step output, or a field that carries a mask or redaction note
-  leaves that part not checked, never passed: name it in `coverage`.
+  or unavailable, an empty body where the site sends one, a truncated step output, or a field
+  that carries a mask or redaction note leaves that part not checked, never passed: name it in
+  `coverage`.
 - An exchange you cannot find in `captures/` is not evidence that it was not sent. Read the
   capture index's gaps, the host's capture notices (a lost publication, a new browser) and every
   capture session before concluding anything from its absence.
@@ -264,11 +267,13 @@ the caller asked for, in the form the site saves it.
   never call `verified()` on a read-back that cannot tell, and publish the write `unverifiable`
   when no read-back can.
 - When the write changed state that already existed, check that every field the input sets
-  now matches it. For every other field, flag only a change the session's own correct write did
-  not make too. The session read the record before and after its write: a field that changed
-  there without being asked for, such as an updated-at time, a version counter, an edit
-  history, a last editor or text the site derives from what was written, changes on every
-  correct save, so leave it out of the comparison. Compare the remaining fields by value, after
+  now matches it. For every other field, flag only a change the session's own confirmed write
+  did not make too. The session read the record before and after that write: a field the site
+  changed there on its own, without being asked, such as an updated-at time, a version counter,
+  an edit history, a last editor or text the site derives from what was written, changes on
+  every correct save, so leave it out of the comparison. A field the flow itself cleared or
+  reset by mistake, such as one a form sent back empty, is not one the site maintains: fix the
+  flow, never leave it out. Compare the remaining fields by value, after
   bringing both reads to one shape, never by object identity, serialized text or the order of
   an object's keys: the same person or record returned as a new object is unchanged. Compare a
   reference, such as a person or a linked record, by its stable id.
@@ -276,10 +281,13 @@ the caller asked for, in the form the site saves it.
   applied: call `verified()` then. Run the before-and-after comparison after it, over the reads
   the call already made, and report a difference it finds in the output, in a field the output
   schema declares for it, never by throwing. A throw after a confirmed save reports a write that
-  landed as possibly completed and sends it to maintenance.
+  landed as possibly completed and sends it to maintenance. When the script confirms from the
+  commit response, take the comparison's after read through the before read's query in the same
+  call, before `verified()`, so that `verified()` stays the last call to the site.
 - A write with branches, such as create when nothing matches and update when one does, runs
-  one branch in the session. Keep every branch's commit, confirmation and comparison in shared
-  code that reads back through the same calls. Check a branch the session did not run offline,
+  one branch in the session. Each branch may make its own commit call, such as a create call
+  and an update call; keep their confirmation and comparison in shared code that reads back
+  through the same calls. Check a branch the session did not run offline,
   as above, against captured shapes: a record from the session's before read, or from a list
   response, has the shape an update reads back. When no captured shape can stand in for it,
   ask the owner in the build's bundled `request_input` question, before the session's first

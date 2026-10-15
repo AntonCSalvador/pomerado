@@ -502,8 +502,8 @@ example, or the write's act session, is the one run that proves the tool. They d
 run no live tests or offline test suites beyond it, and check their HTTP version once, against
 that run. A write still checks its composed script's read-back and comparison offline over what
 the session read (writes skill). The scope follows what the tool is now: a read that signs in or
-becomes a write keeps to the one run from then on, and a repair that rebuilds one as a read signed out tests it fully.
-Report skipped, unsupported or missing bodies honestly.
+becomes a write keeps to the one run from then on, and a repair that rebuilds one as a read
+signed out tests it fully. Report skipped, unsupported or missing bodies honestly.
 
 <!-- pomerado:section agents.implementations -->
 
