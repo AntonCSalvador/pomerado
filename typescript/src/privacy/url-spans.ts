@@ -12,26 +12,22 @@ import {
  * copies, because browser navigation and HTTP requests need the whole URL. Nothing inside these
  * spans is masked, aliased or registered.
  *
- * So a URL must end where it really ends, or the text glued to it escapes screening. A URL runs
- * to the next space, quote or angle bracket and loses trailing sentence punctuation, and ends
- * earlier at:
+ * So a URL must end where it really ends, or the text glued to it escapes screening. Core screens
+ * only credentials outside URLs, so a URL ends early only where a credential or a structural
+ * closer begins. A URL runs to the next space, quote or angle bracket and loses trailing sentence
+ * punctuation, and ends earlier at:
  * - an unbalanced `)`, `]` or `}` (balanced ones, as in `/wiki/Foo_(bar)`, stay, trimming
  *   included);
  * - a backslash escape other than `\/`, `\u` or `\x`;
- * - the field separator written just before it: a `,` or `;` touching it, or a `|` across spaces,
- *   as in a CSV row or a table, unless the `;` closes a character reference such as `&amp;`;
- * - a `|` outside the query, or in it before an empty segment;
- * - a `,`, `;` or `|` whose next field holds an `@`, a long number (9 to 19 digits), a date or a
- *   capitalized name of two or more words, or whose `key=` value does;
  * - a `,`, `;` or `|` whose next field starts with a credential: a credential-named `key=`
- *   (`,password=…`, in the query or fragment too), a bearer or basic credential, an AWS access
- *   key ID, a provider API key or a JSON Web Token;
- * - a `,` outside the query that starts any `key=`. Matrix parameters such as `;v=1` and lists
- *   in the query such as `?ids=1,2,3` or `?q=x,y=2` stay.
+ *   (`,password=…`), a bearer or basic credential, an AWS access key ID, a provider API key or a
+ *   JSON Web Token, in the path, query or fragment alike. A `;` that closes a character
+ *   reference, such as `&amp;` or the chained `&amp;amp;`, is no delimiter.
  *
- * A URL found inside another never extends it. The rules read a bounded window at each
- * delimiter, so the scan stays linear. They lean toward ending a URL: a delimiter followed by
- * what looks like a new field ends it, and the text after it is screened like any other text.
+ * Every other field stays part of the URL, so lists of dates, numbers, addresses or names in a
+ * path or query (`?dates=2026-01-31,2026-02-07&otp=…`), matrix parameters (`;v=1`) and a URL in a
+ * CSV row stay whole. A URL found inside another never extends it. The rules read a bounded
+ * window at each delimiter, so the scan stays linear.
  */
 export interface UrlSpan {
   readonly start: number;
@@ -63,49 +59,25 @@ const schemeRelativeStart = /(?<![A-Za-z0-9+.:/\\-])\/\/(?=[^\s"'`<>])/gu;
 const openers = "([{";
 const closers = ")]}";
 
-/** The `;` at `index` ends a character reference such as `&amp;`, `&#38;` or `&#x26;`. */
-const endsEntity = (text: string, index: number) =>
-  /&(?:amp|lt|gt|quot|apos|nbsp|#\d{1,6}|#x[0-9a-f]{1,6})$/iu.test(
-    text.slice(Math.max(0, index - 9), index),
-  );
-
-/** The field separator written just before a URL: `,` or `;` touching it, or `|` across spaces. */
-const separatorBefore = (text: string, start: number) => {
-  const before = text[start - 1];
-  if (before === "," || (before === ";" && !endsEntity(text, start - 1))) return before;
-  let index = start - 1;
-  while (index >= Math.max(0, start - 16) && (text[index] === " " || text[index] === "\t")) index--;
-  return text[index] === "|" ? "|" : undefined;
-};
-
 /**
- * A long number: 9 to 19 digits with only phone or card punctuation between, as a phone, card,
- * account or identity number is written.
+ * The `;` at `index` ends a character reference such as `&amp;`, `&#38;` or `&#x26;`, or one
+ * escaped again for markup, such as `&amp;amp;`, `&amp;#x26;` or `&amp;lt;`.
  */
-const isLongNumber = (value: string) => {
-  const run = /^\+?\(?\d[\d ().-]*/u.exec(value)?.[0] ?? "";
-  const digits = run.replace(/\D/gu, "").length;
-  return digits >= 9 && digits <= 19;
-};
-
-/** A field value that belongs to a person: a long number, a date or a name of two or more words. */
-const personalValue = (value: string) =>
-  isLongNumber(value) ||
-  /^\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}(?!\d)/u.test(value) ||
-  /^\p{Lu}[\p{L}'’.-]* \p{Lu}/u.test(value);
+const endsEntity = (text: string, index: number) =>
+  /&(?:amp;){0,3}(?:amp|lt|gt|quot|apos|nbsp|#\d{1,6}|#x[0-9a-f]{1,6})$/iu.test(
+    text.slice(Math.max(0, index - 24), index),
+  );
 
 const nextField = /[^\r\n,;|"'`<>]{0,64}/uy;
 
 /**
  * The field after the delimiter at `index`, to the next delimiter or line end and at most 64
- * characters; its first segment, to a space or a URL delimiter; and the key of the `key=` that
- * starts it.
+ * characters, and the key of the `key=` that starts it.
  */
 const fieldAfter = (text: string, index: number) => {
   nextField.lastIndex = index + 1;
   const field = nextField.exec(text)?.[0] ?? "";
-  const segment = /^[^\s&/?#]*/u.exec(field)?.[0] ?? "";
-  return { field, segment, key: /^([A-Za-z_][\w.-]*)=/u.exec(segment)?.[1] };
+  return { field, key: /^([A-Za-z_][\w.-]*)=/u.exec(field)?.[1] };
 };
 
 const sticky = (pattern: RegExp) => new RegExp(pattern.source, "uy");
@@ -129,21 +101,15 @@ const startsCredential = (field: string) => {
   return providerKey !== undefined && isProviderKey(providerKey);
 };
 
-/** What follows a delimiter is a new field, not more of the URL. */
-const startsField = (text: string, index: number, delimiter: string, query: boolean) => {
-  const { field, segment, key } = fieldAfter(text, index);
-  if (field === "") return delimiter === "|";
-  const value = key === undefined ? field : field.slice(key.length + 1);
-  if (segment.includes("@") || personalValue(value) || startsCredential(field)) return true;
-  if (key !== undefined && isCredentialAssignmentKey(key)) return true;
-  if (delimiter === "|") return !query || segment === "";
-  return delimiter === "," && !query && key !== undefined;
+/** What follows the delimiter at `index` is a credential, not more of the URL. */
+const startsCredentialField = (text: string, index: number) => {
+  const { field, key } = fieldAfter(text, index);
+  return (key !== undefined && isCredentialAssignmentKey(key)) || startsCredential(field);
 };
 
-/** A URL scan's state: open bracket counts, whether it is past `?` or `#`, and the trim floor. */
+/** A URL scan's state: open bracket counts and the trim floor. */
 interface Scan {
   readonly depths: number[];
-  query: boolean;
   floor: number;
 }
 
@@ -163,29 +129,24 @@ const isDelimiter = (text: string, index: number, character: string) =>
   character === "," || character === "|" || (character === ";" && !endsEntity(text, index));
 
 /** The URL ends at `index`, by the rules above. */
-const endsAt = (text: string, index: number, scan: Scan, separator: string | undefined) => {
+const endsAt = (text: string, index: number, scan: Scan) => {
   const character = text[index] ?? "";
   if (terminator.test(character)) return true;
   // A backslash escape other than JSON's `\/` (or a script's `&` and `\x26`) is a line
   // break, a tab or a quote written in a string: the URL ends before it.
   if (character === "\\" && !"/ux".includes(text[index + 1] ?? " ")) return true;
-  if (character === "?" || character === "#") scan.query = true;
   if (bracketEnds(scan, character, index)) return true;
-  return (
-    isDelimiter(text, index, character) &&
-    (character === separator || startsField(text, index, character, scan.query))
-  );
+  return isDelimiter(text, index, character) && startsCredentialField(text, index);
 };
 
 /**
- * Where the URL whose text starts at `bodyStart` ends (`end`, trailing punctuation trimmed) and
- * where its scan stopped (`stop`). `start` is where the URL itself starts.
+ * Where the URL whose text starts at `bodyStart` ends (`end`, trailing punctuation trimmed, down
+ * to `start` at most) and where its scan stopped (`stop`).
  */
 const urlEnd = (text: string, start: number, bodyStart: number) => {
-  const separator = separatorBefore(text, start);
-  const scan: Scan = { depths: [0, 0, 0], query: false, floor: start };
+  const scan: Scan = { depths: [0, 0, 0], floor: start };
   let index = bodyStart;
-  while (index < text.length && !endsAt(text, index, scan, separator)) index++;
+  while (index < text.length && !endsAt(text, index, scan)) index++;
   return { end: trimmedEnd(text, scan.floor, index), stop: index };
 };
 
