@@ -383,9 +383,11 @@ the request names. Leave out what is unrelated to the tool's purpose or of no us
   `card_text` section below.
 - A list that can run past one page returns one page per call and a cursor to the next, as the
   pagination skill says.
-- A tool that extracts records or table rows from an app, such as a CRM's records or a table's
-  rows, returns a small default keyed by field name and offers every other field through its
-  inputs, as the records skill says.
+- A tool that extracts records or table rows from an app whose fields are user-defined or found
+  at run time, such as a CRM's records or a table's rows, follows the records skill, which takes
+  precedence over the lean toward more fields above and one typed field per fact below: a small
+  default keyed by field name, with every other field through its `fields` and `include` inputs.
+  A record type whose fields are fixed and known keeps one typed field per fact.
 
 **Optional sections (`include`).** Some parts of a page cost every run extra clicks or waits, or
 are large and repeated on every record: the filters, facets and sorts the site offers, each

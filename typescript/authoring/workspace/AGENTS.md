@@ -299,13 +299,14 @@ as a field, a column type or an option the first version could not write or read
 review finding against it, solve it when the site offers a way; its own lists, lookups and
 responses usually do. A write that picks a person, a linked record or another reference by its
 label, where the saved record holds the reference's ID, looks the ID up from the caller's label
-through the site's own list, writes it and compares IDs on the read-back
+through the site's own list, writes it and compares IDs on the read-back; when the site shows no
+ID and no list to resolve one, it compares the label the read-back shows
 (.agents/writes/SKILL.md, "Check the read-back"). When you are unsure whether or how to solve
 it, ask the owner one `request_input` batch that holds every open point, rather than blocking
 the build or dropping the capability on your own. Leave a capability out only when it is
-genuinely hard and optional to the request, and say in the tool's description what it leaves
-out and why. Never leave out one the request names without the owner's answer. A write still
-confirms what it wrote.
+genuinely hard and optional to the request, or the owner chose that, and say in the tool's
+description what it leaves out and why. A write still confirms what it wrote, and one no
+read-back can confirm follows the writes skill's rule for an unverifiable write.
 
 **Change the task with `mint_update`.** An answer changes nothing by itself. When the caller
 confirms a change to the task, call `mint_update` with it: changed input values, dates or

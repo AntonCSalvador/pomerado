@@ -1,16 +1,25 @@
 ---
 name: records
-description: Read before building a tool that reads or writes records or table rows in an app, such as CRM records, database or spreadsheet rows, contracts or invoices: a small default keyed by field names, a field projection, field definitions only on request, and output the site's write tools accept.
+description: Read before building a tool that reads or writes records or table rows in an app whose fields are user-defined or found at run time, such as a CRM's objects, a database or spreadsheet's rows or an app's custom objects: a small default keyed by field names, a field projection, field definitions only on request, and output the site's write tools accept.
 ---
 
 # Records and tables
 
-Read this when the task is extracting records or tables: a CRM's contacts or deals, the rows of a
-table, database or spreadsheet app, contracts, invoices, tickets, or any other list or detail of
-data the caller keeps in an app. A caller of such a tool often wants a quick, small answer and
-sometimes the full detail, and the request rarely says which. Offer both without being asked, as
-below. The core skill's output rules and the pagination skill still apply; this says how a
-record read keeps its default small and every other field one input away.
+Read this when the task is extracting records or table rows from an app whose fields are the
+caller's own: user-defined or found at run time, such as a CRM's objects and custom fields, the
+rows of a table, database or spreadsheet app, or an app's custom objects. Such a record type can
+hold dozens of fields, and its owner adds and renames them. A caller of such a tool often wants a
+quick, small answer and sometimes the full detail, and the request rarely says which. Offer both
+without being asked, as below.
+
+For these tools this skill takes precedence over the core and search skills' lean toward more
+information and their one typed output field per fact: the default output is small, and the
+`fields` projection and the `include` sections give every other field. A record type whose fields
+are fixed and known while building, such as an invoice or ticket list with the same columns for
+every account, keeps the core skill's typed fields, one per fact; it takes from this skill only
+the small default with `fields` and `include: ["schema"]` where its records are large, and the
+round-trip rule. A tool that only writes such records takes "Output that round-trips" and the
+writes skill's read-back. The pagination skill still applies.
 
 ## Record everything, return a little
 
@@ -19,13 +28,14 @@ name people see for it, its type, whether a caller can write it, its choices, an
 another record or a person, what it points to and how a write names it. Read them from the
 site's own field list, column headers, settings page or the data request the page sends. That
 survey is build evidence: it decides the tool's keys, its `fields` input and its `schema`
-section. The core skill's lean toward more information holds through those inputs; only the
-default output is small. A list of 20 records should come to a few kilobytes, not tens.
+section. Only the published default is small. A list of 20 records should come to a few
+kilobytes, not tens.
 
 ## The default output
 
 By default a call returns the records alone. Each record has its own identifier as the site
-uses it, `id`, and an object `fields` of its values:
+uses it, `id`, and an object `fields` of its values. Because the field set is the caller's own,
+the values are one object typed by the value union below, in place of one output field per fact:
 
 - Keyed by the name people see for each field or column, such as `Company` or `Close date`, or the
   site's own API name for it where its write path takes that name. Never key by an internal
@@ -69,10 +79,12 @@ Add these to the input schema even when the request does not name them:
   record returns only those fields and its `id`, every named field present and null where this
   record's is empty. Match names ignoring case and spacing. A name the record type does not have
   throws `InvalidInput` with `field: "fields"` and `available`, the names the site lists
-  (caller-input skill).
+  (caller-input skill), and so does a name that matches several of the site's names that way,
+  with those names as `available`; never pick one.
 - `include` (core skill, optional sections) with:
-  - `schema`: the record type's field definitions, once per call beside the records, never
-    repeated in each record. Keep it compact: for each field its `name` (the key the output and
+  - `schema`: the definitions of every field of the record type, whatever `fields` picks, once
+    beside the records, never repeated in each record. A call with a `cursor` leaves it out,
+    since the first page returned it, and its description says so. Keep it compact: for each field its `name` (the key the output and
     writes use), its `label` when that differs, `type`, `writable`, `choices` (labels) for a
     choice field, and for a link its `target`, the record type or list it points to, and
     `write_key`, the key and value form a write takes for it, such as the linked record's `id`.
@@ -105,5 +117,6 @@ description which types the tool leaves out and why; when unsure, ask the owner 
 ## Describe it
 
 The description says that a call returns the records with their filled-in fields, keyed by field
-name, that `fields` picks fields, that `include: ["schema"]` adds the field definitions, and how
-the site pages.
+name, so a missing key means empty, that `fields` picks fields and returns each one named, null
+when empty, that `include: ["schema"]` adds the field definitions on the first page, and how the
+site pages.
