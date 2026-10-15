@@ -45,6 +45,18 @@ type Context = KernelOperationContext<OrderInput>;
 // The act steps and the composed script share these calls, so the published script repeats
 // exactly what the session did.
 
+// The membership offer shows only to some accounts, so it is conditional: decline it when it
+// shows and go on when it does not. It is outside this tool's purpose, so declining needs no
+// input, and the tool never accepts it. Both calls before the commit mark check for it, so an
+// offer that opens late is declined too.
+const declineOffer = `
+  const offer = page.getByRole("dialog", { name: "Membership offer", exact: true });
+  if (await offer.isVisible()) {
+    await offer.getByRole("button", { name: "No thanks", exact: true }).click({ timeout: 5000 });
+    await offer.waitFor({ state: "hidden", timeout: 5000 });
+  }
+`;
+
 /** From the site origin page: open the checkout, fill it from the input and stop at the review step. */
 const fillCheckout = async ({ kernel, sessionId, siteOrigin, input, errors }: Context) => {
   if (siteOrigin === undefined)
@@ -62,15 +74,8 @@ const fillCheckout = async ({ kernel, sessionId, siteOrigin, input, errors }: Co
       await form.getByLabel("Gift wrap", { exact: true }).setChecked(input.gift_wrap, { timeout: 5000 });
       await form.getByRole("button", { name: "Continue", exact: true }).click({ timeout: 5000 });
       const place = page.getByRole("button", { name: "Place order", exact: true });
-      // The membership offer shows only to some accounts, so it is conditional: decline it when
-      // it shows and go on when it does not. It is outside this tool's purpose, so declining
-      // needs no input, and the tool never accepts it.
-      const offer = page.getByRole("dialog", { name: "Membership offer", exact: true });
-      await place.or(offer).first().waitFor({ timeout: 10000 });
-      if (await offer.isVisible()) {
-        await offer.getByRole("button", { name: "No thanks", exact: true }).click({ timeout: 5000 });
-        await offer.waitFor({ state: "hidden", timeout: 5000 });
-      }
+      await place.or(page.getByRole("dialog", { name: "Membership offer", exact: true })).first().waitFor({ timeout: 10000 });
+      ${declineOffer}
       await place.waitFor({ timeout: 10000 });
       return { review_shown: true };
     `,
@@ -102,6 +107,7 @@ export const checkReview = async ({ kernel, sessionId, input, errors }: Context)
   const answer = await kernel.browsers.playwright.execute(sessionId, {
     timeout_sec: 30,
     code: `
+      ${declineOffer}
       if ((await page.getByRole("button", { name: "Place order", exact: true }).count()) !== 1)
         return { failure: "review_missing" };
       ${readTotal}

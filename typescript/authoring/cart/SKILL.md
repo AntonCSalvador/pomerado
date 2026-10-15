@@ -62,9 +62,9 @@ it shows only to some accounts.
 When the site refuses the order as asked, such as an order under its minimum or an empty cart
 at checkout, the tool throws `InvalidInput` with the site's reason, before its commit mark
 whenever the page shows the limit first. A checkout that takes a limit of the caller's, such as
-a maximum total, reads the final total and compares it before the order's commit mark, and refuses with
-`InvalidInput`, `field` that input and `kind: "over_price_limit"`, giving the total and the
-limit (the caller-input skill). Never add items, raise a quantity or change the
+a maximum total, reads the final total and compares it before the order's commit mark, and
+refuses with `InvalidInput`, `field` that input and `kind: "over_price_limit"`, giving the total
+and the limit (the caller-input skill). Never add items, raise a quantity or change the
 delivery method to meet a limit. While building, ask the caller to revise or stop, as
 `AGENTS.md` says. When they stop, or their answer cannot be met either, end with
 `report_blocked` and explain the site's limit: a build that only reached the limit never

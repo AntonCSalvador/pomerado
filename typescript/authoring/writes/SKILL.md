@@ -135,8 +135,8 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   `OperationFailure` naming the change, such as `total_changed`; otherwise it clicks once
   and waits for the confirmation. That guard is expected. An entered mark counts as possibly
   sent even when its call stopped before the click, so a check that can refuse placed there
-  reports a possible change and sends a write that never happened to maintenance. If the call returns an unexpected page or fails while waiting for an
-  assumed review, read back before another submission: the task may already be
+  reports a possible change and sends a write that never happened to maintenance. If the call
+  returns an unexpected page or fails while waiting for an assumed review, read back before another submission: the task may already be
   complete. The host cannot see a commit sent as a GET link or over a websocket, so
   the mark is its evidence of whether the commit step ran.
 - Prefer marking the commit at the step that submits the booking or order. A hold that

@@ -90,9 +90,11 @@ first:
   that narrows, orders or configures what the tool returns, a location included, is an optional
   input, even one the request never mentioned and one you never asked about (core skill, the
   input schema). The one exception is a choice the request, the caller or the owner declined,
-  which is never an input for any caller (core skill). Guardian counts such an input as part of
-  the tool, never as scope drift or an unsupported claim. Each input you accept is applied and read
-  back (core skill, the input schema, and `AGENTS.md`; the search skill for a search). An input
+  which is never an input for any caller (core skill), unless it is a paid add-on within the
+  tool's purpose, the payment method or the delivery address a write still meets on its path,
+  which stays an input or a declared question (writes skill). Guardian counts such an input as
+  part of the tool, never as scope drift or an unsupported claim. Each input you accept is
+  applied and read back (core skill, the input schema, and `AGENTS.md`; the search skill for a search). An input
   that tailors the answer, such as a location, store or vehicle, that the site won't apply
   returns what the site showed with the applied value beside the caller's and the site's
   message, which review accepts in place of a refusal (core skill, "Inputs that tailor the

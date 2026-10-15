@@ -1373,6 +1373,14 @@ test("write-session example commits once across its act steps and reads the site
     confirmation: undefined,
   });
   expect(orders).toEqual([]);
+  // A membership offer opens late, after the review loaded: the check before the mark declines it.
+  await page.evaluate(() => {
+    const offer = document.createElement("div");
+    offer.setAttribute("role", "dialog");
+    offer.setAttribute("aria-label", "Membership offer");
+    offer.innerHTML = `<button onclick="window.declineOffer(); this.parentElement.remove()">No thanks</button>`;
+    document.body.append(offer);
+  });
   // The next step continues on the review page the first one left.
   const placed = await runExample(page, placeStep, input, { siteOrigin: origin });
   expect(placed).toMatchObject({
@@ -1382,16 +1390,15 @@ test("write-session example commits once across its act steps and reads the site
     commits: [{ name: "place-order", state: "confirmed" }],
   });
   expect(orders).toEqual(["lamp"]);
+  expect(site.declined).toBe(1);
   // The composed script runs the same calls from a blank page and declares its confirmation.
-  // This account gets the membership offer the session never saw: the script declines it and
-  // places the order.
+  // This time the offer shows with the review: the script declines it and places the order.
   expect(placeOrder.write).toEqual({ confirmation: "readback", commits: ["place-order"] });
-  expect(site.declined).toBe(0);
   site.offer = true;
   await page.goto("about:blank");
   const composed = await runExample(page, placeOrder, input, { siteOrigin: origin });
   expect(composed).toMatchObject({ confirmation: "readback", effect: "verified" });
-  expect(site.declined).toBe(1);
+  expect(site.declined).toBe(2);
   expect(orders).toEqual(["lamp", "lamp"]);
 });
 
