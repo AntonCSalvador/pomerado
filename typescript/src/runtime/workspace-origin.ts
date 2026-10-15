@@ -175,17 +175,36 @@ export const admitScreenOrigin = (
   step: RecordedScreen,
   live: string,
 ): ScreenOriginAdmission => {
-  const { relation, pinned, candidate, siteOrigin } = context;
+  const { relation, siteOrigin } = context;
   const sibling = relation !== undefined && workspaceHost(siteOrigin, relation.parent, live);
-  if (step.origin !== "workspace") {
-    if (live === recordedScreenOrigin(step, undefined)) return { admitted: true };
-    if (relation !== undefined && pinned !== undefined && live === pinned)
-      return { admitted: true };
-    if (sibling && pinned === undefined) return refused(context, live, "workspace_unverified");
-    return refused(context, live, "screen_origin_changed");
-  }
-  if (relation === undefined) return refused(context, live, "screen_origin_changed");
-  if (live === (candidate ?? pinned)) return { admitted: true };
+  if (step.origin === "workspace")
+    return relation === undefined
+      ? refused(context, live, "screen_origin_changed")
+      : admitWorkspaceScreen(context, live, sibling);
+  return admitExactScreen(context, step, live, sibling);
+};
+
+/** An exact recorded screen: its own origin, or the login's pinned workspace under a relation. */
+const admitExactScreen = (
+  context: ScreenOriginContext,
+  step: RecordedScreen,
+  live: string,
+  sibling: boolean,
+): ScreenOriginAdmission => {
+  const { relation, pinned } = context;
+  if (live === recordedScreenOrigin(step, undefined)) return { admitted: true };
+  if (relation !== undefined && pinned !== undefined && live === pinned) return { admitted: true };
+  if (sibling && pinned === undefined) return refused(context, live, "workspace_unverified");
+  return refused(context, live, "screen_origin_changed");
+};
+
+/** A workspace screen: the replay's workspace origin, or a new one the identifier anchor admits. */
+const admitWorkspaceScreen = (
+  context: ScreenOriginContext,
+  live: string,
+  sibling: boolean,
+): ScreenOriginAdmission => {
+  if (live === (context.candidate ?? context.pinned)) return { admitted: true };
   if (sibling && identifierAnchorAdmits(context)) return { admitted: true, learned: live };
   if (sibling) return refused(context, live, "workspace_unverified");
   return refused(context, live, "screen_origin_changed");
