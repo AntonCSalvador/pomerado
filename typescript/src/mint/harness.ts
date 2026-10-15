@@ -3969,7 +3969,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     const decline = error.loginDeclined ?? "public_only";
                     loginDeclined = decline;
                     unresolvedSignIn = undefined;
-                    yield* diagnose({ phase: "sign_in", reason: "login_declined", declined: decline });
+                    yield* diagnose({
+                      phase: "sign_in",
+                      reason: "login_declined",
+                      declined: decline,
+                    });
                     return loginDeclinedAnswer(decline);
                   }),
               ),
@@ -4288,15 +4292,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 };
               }
               // Guardian's public reason reaches the caller screened like the caller's other
-              // text: credentials and host-private values out, cut to its bound.
+              // text: credentials and host-private values out, cut to its bound. A screen that
+              // fails keeps nothing, and the denial stands without it.
               const publicReason =
                 denial?.publicReason === undefined
                   ? undefined
-                  : cutToLimit(
-                      redactCallerText(
-                        yield* screenMintText(dependencies, denial.publicReason),
-                      ).trim(),
-                      publicReasonLimit,
+                  : yield* screenMintText(dependencies, denial.publicReason).pipe(
+                      Effect.map((screened) =>
+                        cutToLimit(redactCallerText(screened).trim(), publicReasonLimit),
+                      ),
+                      Effect.orElseSucceed(() => undefined),
                     );
               publicationDenial =
                 publication._tag === "Left" && publication.left.code === "ReviewDenied"
@@ -4855,7 +4860,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   if (login === "supplied" || login === "held") loginHeld = true;
                   if (login === "no_account" || login === "public_only") {
                     loginDeclined = login;
-                    yield* diagnose({ phase: "sign_in", reason: "login_declined", declined: login });
+                    yield* diagnose({
+                      phase: "sign_in",
+                      reason: "login_declined",
+                      declined: login,
+                    });
                     return JSON.stringify({
                       status: "login_request",
                       login: "declined",
