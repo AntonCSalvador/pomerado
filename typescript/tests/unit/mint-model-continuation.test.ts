@@ -525,12 +525,25 @@ const denyPublicationOnce = (review: NonNullable<MintFailure["review"]>) => {
   };
 };
 
-const finding = (category: "example_value" | "exfiltration" | "customer_data") => ({
+const finding = (
+  category: "example_value" | "exfiltration" | "customer_data" | "schema_mismatch",
+) => ({
   path: "src/tool.ts",
   byteStart: 0,
   byteEnd: 6,
   category,
   explanation: "Synthetic finding explanation.",
+});
+
+/** The model's patch of one workspace file. */
+const patch = (
+  operation:
+    | { readonly type: "update_file"; readonly path: string; readonly diff: string }
+    | { readonly type: "create_file"; readonly path: string; readonly diff: string },
+  callId: string,
+): ModelResponse => ({
+  usage: new Usage(),
+  output: [{ type: "apply_patch_call" as const, callId, status: "completed" as const, operation }],
 });
 
 // A publication denial or escalation that asks for a correction is feedback, not a refusal: the
@@ -566,6 +579,14 @@ it.each([
             reason: "policy",
             explanation: "Guardian refused to publish this tool.",
           }),
+          patch(
+            {
+              type: "update_file",
+              path: "src/tool.ts",
+              diff: "@@\n-export default {};\n+export default { corrected: true };",
+            },
+            "correction",
+          ),
           call("finish_build", publication, "corrected_publication"),
         ][index] ?? prose(),
       { publish: review.publish },
@@ -623,6 +644,111 @@ it.each([
     expect(review.publications()).toBe(1);
   },
 );
+
+// A finding only the host can fix is the host's defect, never the minter's policy block: the host
+// ends the build as its own failure at once, instead of prompting the minter to go on.
+it("ends the build as the host's failure after a publication denial for a host-owned file", async () => {
+  const review = denyPublicationOnce({
+    outcome: "deny",
+    reason: "host_owned",
+    reviewId: "review_host_owned",
+    rationale: "Synthetic defect in a file the host wrote.",
+    findings: [{ ...finding("schema_mismatch"), path: "operation/publication/routes.json" }],
+  });
+  const f = await fixture(
+    (_request, index) =>
+      [call("execute", execution), call("finish_build", publication)][index] ??
+      prose("Stopping."),
+    { publish: review.publish },
+  );
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    hostFailure: "publication_unavailable",
+    publicationDenial: { reason: "host_owned" },
+  });
+  expect(outcome.blocked).toBeUndefined();
+  expect(review.publications()).toBe(1);
+  // No continuation prompt follows the denial.
+  expect(f.requests.length).toBeLessThanOrEqual(3);
+});
+
+// Guardian denies the same submission again, so the host refuses it before review; a fix is
+// reviewed as usual and publishes.
+it("refuses a finish_build that changed nothing since its denial without reviewing it again", async () => {
+  const review = denyPublicationOnce({
+    outcome: "deny",
+    reason: "source_correction",
+    reviewId: "review_unchanged",
+    rationale: "Synthetic correction.",
+    findings: [finding("example_value")],
+  });
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", execution),
+        call("finish_build", publication, "denied"),
+        call("finish_build", publication, "unchanged"),
+        patch(
+          {
+            type: "update_file",
+            path: "src/tool.ts",
+            diff: "@@\n-export default {};\n+export default { corrected: true };",
+          },
+          "fix",
+        ),
+        call("finish_build", publication, "corrected"),
+      ][index] ?? prose(),
+    { publish: review.publish },
+  );
+  const outcome = await f.run();
+  expect(toolResult(f.requests[3], "unchanged")).toMatchObject({
+    status: "not_published",
+    reason: "unchanged_since_denial",
+  });
+  expect(outcome).toMatchObject({ build: "published", publicationRef: "corrected_revision" });
+  expect(review.publications()).toBe(2);
+});
+
+// What changed may lie outside the entrypoint's imports, as a flagged file does, or outside the
+// workspace, as finish_build's own metadata does: either is reviewed again.
+it.each([
+  {
+    change: "a flagged file the entrypoint does not import",
+    findingPath: "operation/src/notes.ts",
+    steps: [
+      patch({ type: "create_file", path: "src/notes.ts", diff: "+export const notes = 1;" }, "fix"),
+      call("finish_build", publication, "changed"),
+    ],
+  },
+  {
+    change: "the description alone",
+    findingPath: "operation/src/tool.ts",
+    steps: [
+      call(
+        "finish_build",
+        { ...publication, metadata: { ...publication.metadata, description: "Read public data." } },
+        "changed",
+      ),
+    ],
+  },
+])("reviews a finish_build after a denial when $change changed", async ({ findingPath, steps }) => {
+  const review = denyPublicationOnce({
+    outcome: "deny",
+    reason: "source_correction",
+    reviewId: "review_changed",
+    rationale: "Synthetic correction.",
+    findings: [{ ...finding("example_value"), path: findingPath }],
+  });
+  const f = await fixture(
+    (_request, index) =>
+      [call("execute", execution), call("finish_build", publication, "denied"), ...steps][index] ??
+      prose(),
+    { publish: review.publish },
+  );
+  expect(await f.run()).toMatchObject({ build: "published", publicationRef: "corrected_revision" });
+  expect(review.publications()).toBe(2);
+});
 
 it("ends a policy block once the owner answered no", async () => {
   const explanation = "The owner declined the only way to finish this task.";
@@ -1668,7 +1794,11 @@ it("returns execution allow and publication correction explanations to the minte
       [
         call("execute", execution),
         call("finish_build", publication, "first_publication"),
-        call("finish_build", publication, "corrected_publication"),
+        call(
+          "finish_build",
+          { ...publication, metadata: { name: "read_public", description: "Read one report page" } },
+          "corrected_publication",
+        ),
       ][index] ?? prose(),
     {
       reviewAndExecute: () =>

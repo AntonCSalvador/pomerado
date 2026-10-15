@@ -1,0 +1,16 @@
+# Marks that a review was submitted or dismissed, so approval.yml evaluates the pull request
+# again through workflow_run. This run grants nothing and decides nothing: for a fork's pull request
+# GitHub runs the fork's copy of this file, so the gate never trusts its result, only its head commit
+# as a pointer to the pull request to evaluate.
+name: Approval review
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+permissions: {}
+jobs:
+  review:
+    name: Note the review
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: echo "A review changed. The approval gate evaluates the pull request again."

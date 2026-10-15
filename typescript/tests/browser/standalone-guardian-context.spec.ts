@@ -203,6 +203,68 @@ test("a read build's reviews carry each step's own context", async () => {
   }
 });
 
+// A "By design:" input, a limited use such as a postal code that only lists nearby stores, counts
+// as applied only on the caller's answer to that input's design question. The publication review
+// hears that answer under the question's id, which binds it to its input, and no published
+// revision's inputs, since the local host keeps none.
+test("a publication review hears the caller's design answer by its question's id", async () => {
+  test.setTimeout(90_000);
+  const site = await startSite((_request, response) =>
+    html(response, "<title>Fixture</title><h1>Public fixture</h1>"),
+  );
+  const guardian = recordingGuardian();
+  const prompt = "Should the postal code set the store, or only list nearby stores?";
+  try {
+    const { built } = await mint({
+      effect: "read",
+      url: site.url,
+      guardian,
+      answer: () => ({ input_use_postal_code: "nearby_only" }),
+      turns: [
+        () => patch({
+            "src/tool.mjs": headingOperation,
+            "src/heading.mjs": "export const heading = (value) => String(value).trim();",
+          }),
+        () => [
+          call("request_input", {
+            intent: "Ask how the tool should use the postal code",
+            questions: [
+              {
+                id: "input_use_postal_code",
+                type: "choice",
+                prompt,
+                options: [
+                  { id: "set_store", label: "Set the store from it" },
+                  { id: "nearby_only", label: "Only list nearby stores" },
+                ],
+              },
+            ],
+          }),
+        ],
+        () => [call("execute", execution("example", "src/tool.mjs"), "example")],
+        (request) => [
+          call("finish_build", {
+            intent: "Return the fixture integration",
+            entrypoint: "src/tool.mjs",
+            executionId: executionIdOf(request, "example"),
+            metadata: { name: "read_fixture", description: "Read the fixture heading" },
+            coverage: "One live example",
+          }),
+        ],
+      ],
+    });
+    expect(built.build, JSON.stringify(built)).toBe("published");
+    const publication = guardian.reviews.filter((review) => review.kind === "publication");
+    expect(publication).toHaveLength(1);
+    expect(authorityOf(publication[0]!)["answeredQuestions"]).toEqual([
+      { id: "input_use_postal_code", question: prompt, answer: "Only list nearby stores" },
+    ]);
+    expect(publication[0]?.input["trusted_publication"]).not.toHaveProperty("publishedInputs");
+  } finally {
+    await site.close();
+  }
+});
+
 test("a step that starts on a reset page is shown no page, and the next step the page it left", async () => {
   test.setTimeout(90_000);
   const site = await startSite((request, response) =>
@@ -402,7 +464,7 @@ test("a later step reuses the owner's answer to its script's question", async ()
   // Guardian reviewed the later step's ask, and later reviews hold the owner's answer it reused.
   expect(guardian.reviews.filter((review) => review.kind === "question")).toHaveLength(2);
   expect(authorityOf(executions(guardian.reviews).at(-1)!)["answeredQuestions"]).toEqual([
-    { question: approvalPrompt, answer: { confirmed: true } },
+    { id: "approve", question: approvalPrompt, answer: { confirmed: true } },
   ]);
 });
 
@@ -701,7 +763,11 @@ test("a confirmed update turns a read build into a write build, and later review
         summary: "Save the note on the site instead of only reading it.",
         changes: [{ setting: "effect", effect: "write" }],
         confirmation: [
-          { question: saveQuestion.questions[0]?.prompt, answer: "Yes, save the note" },
+          {
+            id: "save",
+            question: saveQuestion.questions[0]?.prompt,
+            answer: "Yes, save the note",
+          },
         ],
       },
     ]);

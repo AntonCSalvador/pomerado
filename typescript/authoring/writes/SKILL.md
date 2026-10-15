@@ -93,8 +93,9 @@ core skill), and keep the flow's calls in a module the composed script will impo
 too. Run each step with `execute` purpose `act`, target `liveBrowser`.
 
 - The first `act` step claims the build's write. The host resets the browser to
-  the site origin page first, with fresh page state (a signed-in build
-  keeps the session saved right after sign-in), so that step starts the flow there.
+  the site origin page first, with fresh page state that keeps the browser's cookies
+  and site storage (a signed-in build keeps its session), so that step starts the flow
+  there and sets every value its input controls itself.
 - Later steps continue on the page exactly as the previous step left it. Keep steps
   small and read the actual state after each submission. On multi-step forms, a
   button named Continue, Next or Save may save a draft, persist that page, or finish
@@ -138,7 +139,8 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   output. Then read what the output promises from that response or from the page the commit
   left, match it to the caller's values, and call `verified()` with no argument just before
   returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page,
-  such as a list, a history or an account screen, only to prove the write. When a commit
+  such as a list, a history or an account screen, only to prove the write: a commit that went
+  through, with the new record's id, already proves it. When a commit
   step returned without calling `verified()` and its `stateChangingRequests` list the commit
   request with a 2xx or 3xx status, prefer confirming it in the next step from the page as
   it stands. Make no execute
@@ -163,13 +165,19 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
 - When a read-back is needed, the first one that matches confirms the write; stop there. It
   matches when it shows
   the written record after the write, found by something the write produced or entered (its
-  number, its own reference or the exact values entered), and every field the caller asked
+  number, its own reference or the values entered), and every field the caller asked
   for that the view shows agrees (the read before the commit already checked what you
-  entered). When the write changed state that already existed, the same read also checks
-  that only the requested change happened. Write each read-back step to check that match in
-  its own code and call `verified()` when it holds, so the first one that matches is the
-  confirming step. Read one confirmation, list or detail view: find the record there by that
-  identity, never by its position, such as the first or newest row. Read only that record,
+  entered). Sites reformat what they save, such as line breaks, spaces and dates in the
+  viewer's format, so compare text after the commit normalized as before it (the core skill's
+  Confirm step): pass the caller's text through `normalizeText` from `pomerado/runtime`, as
+  `visibleText` already does with the page's. Compare a chosen option's value only where the
+  view shows that value; otherwise compare the label it shows. When the write changed state
+  that already existed, the same read also checks that only the requested change happened.
+  Write each read-back step to check that match in its own code and call `verified()` when it
+  holds, so the first one that matches is the confirming step. Read one
+  confirmation, list or detail view: find the record there by that identity, never by its
+  position, such as the first or newest row, and prefer finding each value in it by a stable
+  id, its column header or a `data-` attribute over its cell's position. Read only that record,
   and the view's other rows only where the before-and-after check or another skill, such as
   the cart skill, compares them. Read another page, in that same step before `verified()`,
   only for a field the view did not show and the tool's output promises.

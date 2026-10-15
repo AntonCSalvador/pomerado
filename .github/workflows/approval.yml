@@ -1,0 +1,82 @@
+# Approval gate. It posts the `Approval` commit status on pull requests' head commits, and the
+# ruleset on main requires it. A maintainer's pull request from a branch of this repository passes
+# at once. Any other pull request passes once a code owner approves its current head commit.
+# tools/approval-gate.ts holds the rules, and typescript/tests/unit/approval-gate.test.ts tests them.
+# docs/RELEASING.md lists the known limits, including that merge_group events aren't handled.
+#
+# A pull request can't change this gate. pull_request_target, workflow_run and workflow_dispatch all
+# run this file and the script as they are on the default branch.
+# The job checks out that trusted commit only, never a pull request's code, and reads each fact from
+# GitHub's API.
+#
+# The status comes from the approval GitHub App, not the workflow token, and the ruleset requires
+# `Approval` from that App. A workflow a pull request adds runs as GitHub Actions, so a job or status
+# it names `Approval` doesn't count, even when the gate posted nothing. The App's key lives in the
+# approval-gate environment, which only this job uses and which deploys only from main.
+# docs/RELEASING.md describes the App, the environment and the ruleset.
+#
+# Reviews don't trigger pull_request_target, and a pull_request_review run uses the pull request's
+# own copy of its workflow with a read-only token for a fork. So approval-review.yml only marks
+# that a review was submitted or dismissed, and its completion starts this workflow again here.
+# A maintainer can also dispatch this workflow on main to evaluate every open pull request again,
+# for example after an API outage.
+name: Approval gate
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_run:
+    workflows: [Approval review]
+    types: [completed]
+  workflow_dispatch:
+permissions: {}
+# Runs for one head commit wait for each other, and each reads the reviews as they stand when it
+# starts, so the last status posted reflects the latest review. A dispatch covers many commits, so
+# it has a group of its own and isn't serialized with them.
+concurrency:
+  group: >-
+    approval-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha
+    || github.run_id }}
+  cancel-in-progress: false
+jobs:
+  approval:
+    name: Evaluate approval
+    if: github.repository == 'Pomerado/pomerado'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: approval-gate
+    # The workflow token only checks out the default branch. The App token does the rest.
+    permissions:
+      contents: read
+    steps:
+      - name: Check the approval app configuration
+        env:
+          APP_ID: ${{ vars.APPROVAL_APP_ID }}
+          HAS_PRIVATE_KEY: ${{ secrets.APPROVAL_APP_PRIVATE_KEY != '' }}
+        run: |
+          if [ -z "$APP_ID" ] || [ "$HAS_PRIVATE_KEY" != true ]; then
+            echo "::error::The approval-gate environment needs the APPROVAL_APP_ID variable and the APPROVAL_APP_PRIVATE_KEY secret of the approval GitHub App, which posts the Approval status. docs/RELEASING.md describes the setup."
+            exit 1
+          fi
+      # Without a ref, checkout takes the commit the event names, the default branch's head for
+      # each event this workflow handles.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          package-manager-cache: false
+      - name: Mint the approval app token
+        id: approval-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.APPROVAL_APP_ID }}
+          private-key: ${{ secrets.APPROVAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-pull-requests: read
+          permission-statuses: write
+      - name: Post the Approval status
+        env:
+          APPROVAL_APP_TOKEN: ${{ steps.approval-app.outputs.token }}
+        run: node tools/approval-gate.ts

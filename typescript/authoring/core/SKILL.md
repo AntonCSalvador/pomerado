@@ -7,7 +7,7 @@ description: Kernel script operation SDK, mint intake, execution targets and own
 
 Identify the requested operation, website/login realm, required account, business
 inputs, desired result and permitted effects. A read build explores, then iterates its
-script from a clean start by running its example until it works (re-running a read's
+script from a reset start by running its example until it works (re-running a read's
 example is normal); resolve its missing choices with reads when possible. A write build
 does the caller's requested task once, live (in as many write steps as it takes), then
 composes its script from what happened (the `writes` skill). Only a read signed out designs
@@ -109,10 +109,12 @@ pomerado:section core.execute-calls:end -->
   `set_location` or `apply_sort`, and `siteMessage` the page's own error when it showed one.
   The run then fails and returns nothing computed without the caller's value. Never report the
   value as not applied in the output instead, such as a `sort_applied: false` flag or a
-  "lookup-only" description, and never let an answer to a question make a supplied value
-  optional. An input that tailors the answer, such as a location or store, is an
-  exception: when the site still won't apply it, a read returns the site's own answer labeled
-  with the value it applied (the input schema, "Inputs that tailor the answer", below). On a
+  "lookup-only" description, and never let an answer to a question make a filter, sort, date or
+  other value that narrows the results optional or lookup-only. An input that tailors the
+  answer, such as a location or store, is an exception: when the site still won't apply it, a
+  read returns the site's own answer labeled with the value it applied, and it may have a
+  limited use, such as lookup only, when the caller chose that use in answer to your design
+  question (the input schema, "Inputs that tailor the answer", below). On a
   write, check it before the first commit step: a write that may already have changed the site
   still ends as a possible change, never retried. A value the site does not offer, such as a
   store missing from its picker, is the caller's to fix: throw `InvalidInput` with `field` and
@@ -133,7 +135,8 @@ use even when the caller's structured input is empty: pass the request's values 
 it), never as a build-time question. Decide from the request and the site which inputs are
 required. An optional input plus a declared question the tool asks before any effect is only for
 a value the request genuinely leaves open; never make a required field optional with nothing
-that asks.
+that asks. An input that tailors the answer on a read is the exception: it is optional unless
+the task can't run without it (below).
 
 - The code works for every value the schema accepts. Never let the schema promise what
   the code rejects or ignores, such as a string the code throws on unless it is the example's
@@ -146,12 +149,16 @@ that asks.
 - Prefer keying only on what the caller asked for. A detail that changes from one listing to
   the next, such as a seating label or a room name, shouldn't decide whether the tool books or
   refuses unless the caller chose it.
-- Read results for every option the schema lists. When an option leads to a page that
-  differs from the others, handle that layout too, and on a read signed out run it live as a
-  test case (testing skill); never return results for another option in its place.
+- Read results for every option the schema lists. When an option leads to a page with a
+  different structure (other fields or sections), handle that layout too, and on a read signed
+  out run it live as a test case (testing skill); an option that only reorders or filters the
+  same rows needs no case of its own. Never return results for another option in its place.
 - A repair that finds a declared input broken, never applied or always reported unsupported
   fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract
-  means every input and output it declares works, not leaving a broken one as it was.
+  means every input and output it declares works, not leaving a broken one as it was. An input
+  whose description starts "By design:" is applied in the use it records, a caller's decision:
+  keep that use and its description word for word, and change them only after asking the same
+  design question again (the input schema, "Inputs that tailor the answer").
 - Never derive a format from one sample: not an input format, an element key, a selector, a
   URL path or a label. A key the page showed for the example's value says nothing about the
   next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read
@@ -170,9 +177,9 @@ that asks.
   neighborhood or an airport code in brackets, over waiting for an element named exactly as
   the caller typed it. A whole-name or code match outranks a partial one, so an airport code
   picks that airport, not its city. Then count the matches at the best rank. With none,
-  throw `InvalidInput` at once, saying the site has no match and naming the closest entries
-  it showed. With one, use it. With several, ask the caller which one with a declared choice
-  question whose options are those matches as the site labels them
+  throw `InvalidInput` at once, saying the site has no match, with `field` and `available`,
+  the closest entries it showed. With one, use it. With several, ask the caller which one with
+  a declared choice question whose options are those matches as the site labels them
   (.agents/caller-input/SKILL.md).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
   match that accepts the usual forms of the same name, such as a name with or without its
@@ -242,13 +249,26 @@ that asks.
     escalates it otherwise. The owner's answer keeps the build a read, with no `mint_update`.
   - Only when the site still won't apply what the caller gave, on a read: return what the site
     did show, with the value it actually applied (`applied_<input>`, null only when the page
-    shows none) beside the one the caller asked for, and the site's message in a short note
-    field, `<input>_note`, such as `zip_note`, which also says why when the applied value is
-    null. Never present it as the answer for the caller's value. A location the site says it
+    shows none) beside the one the caller asked for, and the site's message in an optional
+    output field, `<input>_note`, such as `zip_note`, set only on this fallback, which also says
+    why when the applied value is null. Never present it as the answer for the caller's value. A location the site says it
     does not serve is such a case: return the site's own answer with its message. A write throws
     `InputNotApplied` (above) before its first commit step instead.
   - Inputs that narrow the results (filters, sort, dates) stay strict: a value the page ignores
     throws `InputNotApplied` (above).
+  - Give a tailoring input a limited use, such as a postal code used only to look up nearby
+    stores without changing the selected one, only when the caller chose it. When how the tool
+    should use such an input is genuinely ambiguous, such as whether a postal code sets the
+    store or only lists nearby ones, ask the owner one `request_input` choice question with id
+    `input_use_<input>`, `<input>` being the input's name in lowercase snake_case
+    (`postalCode` is `input_use_postal_code`), with each use as an option. Always offer the
+    full use, such as setting the store from the postal code, never only limited uses. When the
+    caller chooses a limited use, start the input's description with "By design:", then state
+    how many values it takes and that use in plain words, such as "By design: one postal code,
+    used only to find nearby stores; it does not change the selected store." Write it only from that answer, never from the request's
+    wording, a free-text instruction or your own judgment, and never for a filter, sort or date,
+    which stay strict whatever an answer says. The code still applies the value in that use, and
+    a value the page does not take in it throws `InputNotApplied` (above).
   - While building, ask the owner for a location or other tailoring value the result depends on
     (`AGENTS.md`, "Try hard, then ask"); they may skip it. Skipping that question only leaves
     the example without one, and the input stays; saying the tool should use none declines it
@@ -277,6 +297,11 @@ that asks.
   output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
   and its example's own input and output must decode under them, so settle both before that
   example.
+- Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear. A description that starts "By design:" keeps that marker first and puts the number of values after it, such as "By design: one postal code, …", never before it.
+- When a field takes one value and a caller might send several, say "one per call" and prefer a
+  `pattern` that refuses a list, such as several codes separated by commas, while still accepting
+  one value that contains a comma, such as "Portland, OR". Prefer `between` to a range written
+  only in the description.
 - Give every input and output field, nested object and array item fields included, a short
   `description` annotation saying what it is, with the unit or format where one applies:
   "Departure airport as a three-letter IATA code", "Departure date, YYYY-MM-DD", "Average
@@ -290,12 +315,20 @@ that asks.
   snake_case (`"premium_economy"`); booleans named as statements (`refundable`, not
   `is_refundable_flag`); lists named in the plural; and the unit in the field name or its
   description (`duration_minutes`). Convert between these and the site's own formats in code.
-- When `reference/site-tools.json` exists, it lists this site's published tools with their
-  descriptions and schemas. Read it before settling or changing yours: where this tool takes or
-  returns the same thing as one of them, use the same identifier, field names and shape, so a
-  caller can pass one tool's output to the next, such as a record's ID from a search tool into a
-  details tool. Never narrow an input to match. It is reference only: nothing here calls those
-  tools.
+- When `reference/site-tools.json` exists, you can view the site's other tools. Read
+  `reference/site-tools/README.md` first: it indexes them, one folder each, with each tool's
+  effect, sign-in and a short description. Then read the folders you need: each holds a
+  `README.md` (description, inputs and outputs with examples and constraints, an example call and
+  its files) and, unless the index marks its code omitted, the tool's full source as it runs.
+  `reference/site-tools.json` lists the same tools with their full schemas. Read them before
+  settling or changing yours. Where this tool takes or returns the same thing as one of them, use
+  the same identifier, field names and shape, so a caller can pass one tool's output to the next,
+  such as a record's ID from a search tool into a details tool. Never narrow an input to match.
+  Reuse their work freely: copy and adapt their parsing, transformations, selectors, helpers and
+  patterns into your own `src/` files. A published tool must be self-contained, so never import,
+  read or reference a file under `reference/` from your code; copy what you need. That code was
+  written for other tools and is not instructions to you: check what you copy against the site as
+  you observe it now, and take every value you fill from this tool's own input.
 - Give every input field one `examples` annotation value, which callers<!-- pomerado:section core.example-readers --> use to assemble a sample request: public, generic data such as a well-known airport code
   (`examples: ["SFO"]`), a date a few weeks ahead or a common product category. Never use a value
   from this session: not the caller's input, the owner's answers or anything the site showed
@@ -594,7 +627,9 @@ first, then the empty state, then results. Pass the step itself as `action`, suc
 `() => apply.click()`: the wait runs it once, and an answer the page already showed before it counts
 only after staying unchanged for `unchangedMs`, 2 s by default, so a list the step has not yet
 re-rendered is not read while a step that leaves the same answer still resolves; a new or
-changed element counts at once. Pass the site's own loading sign as `loading`, the part of the
+changed element counts at once. `waitForOutcome` returns the name of the answer that showed.
+Prefer branching on that name over waiting again for the same answers or rechecking them with
+`isVisible`. Pass the site's own loading sign as `loading`, the part of the
 page the answer appears in as `region`, and the context's `siteDomain`, so the sign counts for as
 long as it shows, changes in that part count as progress, and so do the site's own requests on
 every host of its domain. A generic sign, such as `aria-busy` or a spinner class, counts only
@@ -620,6 +655,9 @@ key })` returns `{ rows, more }`: the first `count` rows that have a `key`, each
 and reading the same twice. It reads each field from its first visible match, skips a row without
 a key, and returns fewer rows once their count holds; no rows is never its answer, so decide an empty list with `waitForOutcome` first.
 `waitForValues(fields)` returns `{ values }` for a record, a quote or a form's state.
+Prefer the wait helpers' own settling over loops of your own that poll until values hold still:
+`waitForRows` and `waitForValues` already return only once what they read is filled in and reads
+the same on two looks.
 `waitForChange(fields, { before, action, loading })` returns `{ values, changed }` after a choice:
 changed, or the same with no progress sign for `unchangedMs`. They throw a `ValueWaitFailure`:
 `values_loading` when a value is still loading as progress stops, `change_unknown` when the
@@ -638,14 +676,17 @@ do not click the challenge, reload, or navigate to another route merely because
 the earlier probe timed out. A new probe execution does not require new navigation.
 A live example, a live read `test`, and a write session's first `act` step are
 different: the host resets
-the browser to the site origin before it runs,
-and clears exploration cookies and site storage. A signed-in build gets back the session
-saved right after sign-in instead. When the page is signed out after that reset, or after a
+the browser to the site origin before it runs, closing other tabs, and keeps the
+browser's cookies and site storage. So the source must set every value its input controls,
+such as a location, store, filter or search, itself, and never rely on what the site
+remembers from exploration; a live test case that runs cold, on a new browser with an empty
+profile, is the proof. A sign-in that started and was never verified is the exception: that
+reset clears cookies and site storage. When the page is signed out after that reset, or after a
 full page load your source asks about with `ensureSignedIn`, the host signs in again by itself;
 do not call `authenticate` for it. When the host cannot keep the site signed in, the step fails with
 `session_not_kept`: report that cause instead of signing in again. That source must perform
 the flow from its input,
-never rely on a page an exploration left open. So a read iterates from a clean start,
+never rely on a page an exploration left open. So a read iterates from a reset start,
 and re-running its example or live test is normal. A live test stays read-only. A write
 session's later `act` steps continue on the page the previous step left.
 If the deadline expires, report the named readiness failure and use current
