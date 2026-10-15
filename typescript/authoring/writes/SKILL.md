@@ -224,11 +224,21 @@ state, and an offline check of that code.
 The composed script's own checks never run live before publishing, so check them offline.
 Keep the read-back match and the before-and-after comparison as plain functions in the module
 the script imports, and before `finish_build` run them with Node in `exec_command` over what
-the session read: its before and after reads, or their response bodies under `captures/`.
-They must pass for the write that happened, and must not flag a field the site maintains or
-the same value in another form. This quick check sends nothing to the site and is not a second
-write. A body that was not saved, or was cut short, leaves that part not checked, never passed:
-say so in `coverage`.
+the session read. They must pass for the write that happened, and must not flag a field the
+site maintains or the same value in another form. This quick check sends nothing to the site
+and is not a second write.
+
+- Check against the before and after reads your `act` steps returned first. Use response bodies
+  under `captures/` only for what those outputs lack.
+- Only a body saved whole counts. A body the capture marks pending, incomplete, omitted, withheld
+  or unavailable, a truncated step output, or a field that carries a mask or redaction note
+  leaves that part not checked, never passed: name it in `coverage`.
+- An exchange you cannot find in `captures/` is not evidence that it was not sent. Read the
+  capture index's gaps, the host's capture notices (a lost publication, a new browser) and every
+  capture session before concluding anything from its absence.
+- Pick the after body by the commit's time and the record's identity, never by its URL alone,
+  and skip a duplicate a service worker served.
+- Compare values, never serialized text: a screened body may be serialized again.
 
 ## Check the read-back
 
