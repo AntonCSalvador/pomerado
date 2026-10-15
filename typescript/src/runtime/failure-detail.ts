@@ -15,7 +15,7 @@ import {
   providerKeyPattern,
 } from "../privacy/credential-policy.js";
 import { isSecretKey } from "../privacy/secret-keys.js";
-import { urlReaches, urlSpans } from "../privacy/url-spans.js";
+import { type UrlSpan, urlReaches, urlSpanAt, urlSpans } from "../privacy/url-spans.js";
 
 /**
  * Detailed failure record shared by every host failure class. The finite fields (`subCause`,
@@ -217,12 +217,24 @@ const bounds = {
 } as const;
 export const failureDetailBounds = bounds;
 
+/** A route at the start of the text (`/v1/items?page=2`) is kept like a URL, ending as one does. */
 const diagnosticUrlSpans = (text: string) => {
   const spans = urlSpans(text);
   if (!text.startsWith("/")) return spans;
+  const route = urlSpanAt(text, 0);
+  return [route, ...spans.filter((span) => span.start >= route.end)];
+};
+
+/**
+ * What releases before URLs ended at field delimiters kept as URLs: each URL to the next space or
+ * quote, and a leading route to the first space or quote. Sorted, and never a screening exemption.
+ */
+const legacyUrlSpans = (text: string): UrlSpan[] => {
+  const reaches = urlReaches(text);
+  if (!text.startsWith("/")) return reaches;
   const separator = text.search(/[\s"'<>`]/);
   const routeEnd = separator === -1 ? text.length : separator;
-  return [{ start: 0, end: routeEnd }, ...spans.filter((span) => span.start >= routeEnd)];
+  return [{ start: 0, end: routeEnd }, ...reaches.filter((span) => span.start >= routeEnd)];
 };
 
 const withoutUrls = (text: string) => {
@@ -236,12 +248,12 @@ const withoutUrls = (text: string) => {
 };
 
 /**
- * The length of `text` outside its URLs, for the stored bounds. A URL is also measured to the next
- * space or quote, as releases before URLs ended at field delimiters measured it, so a record such a
- * release bounded still decodes.
+ * The length of `text` outside its URLs, for the stored bounds. A URL is also measured as releases
+ * before URLs ended at field delimiters measured it, so a record such a release bounded still
+ * decodes.
  */
 const lengthOutsideUrls = (text: string) => {
-  const spans = diagnosticUrlSpans(text).concat(urlReaches(text));
+  const spans = diagnosticUrlSpans(text).concat(legacyUrlSpans(text));
   spans.sort((left, right) => left.start - right.start);
   let inside = 0;
   let covered = 0;
@@ -277,8 +289,23 @@ const limitOutsideUrls = (text: string, max: number, tokenBoundary = false) => {
     omitted += plain.length - prefix.length;
     remaining = 0;
   };
+  // A URL's characters an older release would not count as URL, such as a balanced closer it
+  // trimmed, are charged to the budget, so the result still fits that release's bound.
+  const legacy = legacyUrlSpans(text);
+  let next = 0;
+  const outsideLegacy = (span: UrlSpan) => {
+    while (next < legacy.length && (legacy[next]?.end ?? 0) <= span.start) next++;
+    let inside = 0;
+    for (let index = next; index < legacy.length; index++) {
+      const range = legacy[index];
+      if (range === undefined || range.start >= span.end) break;
+      inside += Math.min(range.end, span.end) - Math.max(range.start, span.start);
+    }
+    return span.end - span.start - inside;
+  };
   for (const span of diagnosticUrlSpans(text)) {
     appendPlain(text.slice(cursor, span.start));
+    remaining = Math.max(0, remaining - outsideLegacy(span));
     if (omitted > 0 && last !== "" && !/\s/.test(last)) append(" ");
     append(text.slice(span.start, span.end));
     cursor = span.end;
@@ -299,7 +326,7 @@ const truncate = (text: string, max: number) => {
  * JSON container, whose own leaves are screened where they are.
  */
 const credentialAssignment = new RegExp(
-  String.raw`([,;\s"'{(]|^)((?:[A-Za-z0-9]+[-_])*[A-Za-z0-9]*(?:${credentialNameSource}))(\\?["']?\s*[=:]\s*)(${bracketedValueSource}|\\?"(?:\\.|[^"\\])*\\?"|\\?"(?:\\.|[^"\\\r\n])*\\?|'[^']*'|[^\s;,"')}][^\s;,"')}]*)`,
+  String.raw`([,;|\s"'{()\]]|^)((?:[A-Za-z0-9]+[-_])*[A-Za-z0-9]*(?:${credentialNameSource}))(\\?["']?\s*[=:]\s*)(${bracketedValueSource}|\\?"(?:\\.|[^"\\])*\\?"|\\?"(?:\\.|[^"\\\r\n])*\\?|'[^']*'|[^\s;,"')}][^\s;,"')}]*)`,
   "gi",
 );
 /** A Key Vault or Secrets Manager response holds the secret itself under `value`. */

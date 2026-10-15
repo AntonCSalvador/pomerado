@@ -1,4 +1,10 @@
-import { isCredentialAssignmentKey } from "./credential-policy.js";
+import {
+  awsAccessKeyIdPattern,
+  isCredentialAssignmentKey,
+  isFreeTextSchemeCredential,
+  isProviderKey,
+  providerKeyPattern,
+} from "./credential-policy.js";
 
 /**
  * URL spans that screening must leave byte-exact. By user decision every part of a URL (scheme,
@@ -17,12 +23,15 @@ import { isCredentialAssignmentKey } from "./credential-policy.js";
  * - a `|` outside the query, or in it before an empty segment;
  * - a `,`, `;` or `|` whose next field holds an `@`, a long number (9 to 19 digits), a date or a
  *   capitalized name of two or more words, or whose `key=` value does;
- * - a `,` outside the query that starts a `key=`, or a `;` outside the query that starts a
- *   credential-named `key=` (`;password=…`); other matrix parameters, such as `;v=1`, stay.
+ * - a `,`, `;` or `|` whose next field starts with a credential: a credential-named `key=`
+ *   (`,password=…`, in the query or fragment too), a bearer or basic credential, an AWS access
+ *   key ID, a provider API key or a JSON Web Token;
+ * - a `,` outside the query that starts any `key=`. Matrix parameters such as `;v=1` and lists
+ *   in the query such as `?ids=1,2,3` or `?q=x,y=2` stay.
  *
  * A URL found inside another never extends it. The rules read a bounded window at each
- * delimiter, so the scan stays linear. When a case is ambiguous the URL ends: the text after it
- * is only screened like any other text.
+ * delimiter, so the scan stays linear. They lean toward ending a URL: a delimiter followed by
+ * what looks like a new field ends it, and the text after it is screened like any other text.
  */
 export interface UrlSpan {
   readonly start: number;
@@ -99,15 +108,36 @@ const fieldAfter = (text: string, index: number) => {
   return { field, segment, key: /^([A-Za-z_][\w.-]*)=/u.exec(segment)?.[1] };
 };
 
+const sticky = (pattern: RegExp) => new RegExp(pattern.source, "uy");
+const awsKeyStart = sticky(awsAccessKeyIdPattern());
+const providerKeyStart = sticky(providerKeyPattern());
+const schemeCredentialStart = /^(bearer|basic)[ \t]+([^\s,;|]+)/iu;
+const jwtStart = /^eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/u;
+
+/** The match of a sticky `pattern` at the start of `field`. */
+const matchAtStart = (pattern: RegExp, field: string) => {
+  pattern.lastIndex = 0;
+  return pattern.exec(field)?.[0];
+};
+
+/** A field that starts with an opaque credential, by the shapes diagnostic redaction removes. */
+const startsCredential = (field: string) => {
+  const scheme = schemeCredentialStart.exec(field);
+  if (scheme !== null && isFreeTextSchemeCredential(scheme[1] ?? "", scheme[2] ?? "")) return true;
+  if (jwtStart.test(field) || matchAtStart(awsKeyStart, field) !== undefined) return true;
+  const providerKey = matchAtStart(providerKeyStart, field);
+  return providerKey !== undefined && isProviderKey(providerKey);
+};
+
 /** What follows a delimiter is a new field, not more of the URL. */
 const startsField = (text: string, index: number, delimiter: string, query: boolean) => {
   const { field, segment, key } = fieldAfter(text, index);
   if (field === "") return delimiter === "|";
   const value = key === undefined ? field : field.slice(key.length + 1);
-  if (segment.includes("@") || personalValue(value)) return true;
+  if (segment.includes("@") || personalValue(value) || startsCredential(field)) return true;
+  if (key !== undefined && isCredentialAssignmentKey(key)) return true;
   if (delimiter === "|") return !query || segment === "";
-  if (query || key === undefined) return false;
-  return delimiter === "," || isCredentialAssignmentKey(key);
+  return delimiter === "," && !query && key !== undefined;
 };
 
 /** A URL scan's state: open bracket counts, whether it is past `?` or `#`, and the trim floor. */
@@ -193,6 +223,15 @@ export const urlSpans = (text: string): UrlSpan[] => {
   scan(schemeRelativeStart, schemeRelativeHost);
   return disjointRanges(ranges);
 };
+
+/**
+ * The URL or path that starts at `start`, such as a route at the start of a message, ending by
+ * the same rules as `urlSpans`. It may be empty when `start` holds a terminator.
+ */
+export const urlSpanAt = (text: string, start: number): UrlSpan => ({
+  start,
+  end: Math.max(start, urlEnd(text, start, start + 1).end),
+});
 
 // The same starts, each read to the next space, quote or angle bracket.
 const absoluteReach =
