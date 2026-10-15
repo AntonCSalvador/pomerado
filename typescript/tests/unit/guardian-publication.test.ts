@@ -280,6 +280,38 @@ describe("a publication decision", () => {
     expect(decision.findings?.[0]?.explanation).toBe(kept);
   });
 
+  // A denial's short public reason is the caller's, apart from the private rationale; an allow
+  // has none to give.
+  it.each([
+    { outcome: "deny", reason: "privacy", kept: "The tool could not be published safely." },
+    { outcome: "allow", reason: "approved", kept: undefined },
+  ])("keeps a public reason only on a denial: $outcome", async ({ outcome, reason, kept }) => {
+    const { decision } = await Effect.runPromise(
+      makeGuardian({
+        run: () =>
+          Effect.succeed({
+            outcome,
+            reason,
+            rationale: "The source hard-codes a private value.",
+            findings:
+              outcome === "deny"
+                ? [
+                    {
+                      path: pending.entrypoint,
+                      byteStart: 0,
+                      byteEnd: 1,
+                      category: "private_literal",
+                      explanation,
+                    },
+                  ]
+                : [],
+            publicReason: " The tool could not be published safely. ",
+          }),
+      }).review(pending, sourcesOf(files)),
+    );
+    expect(decision.publicReason).toBe(kept);
+  });
+
   // Guardian's shared output format sends null for a field a kind does not use.
   it("reads a null findings list as none and an allow without a reason as approved", async () => {
     const { decision } = await Effect.runPromise(

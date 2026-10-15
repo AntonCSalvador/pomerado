@@ -52,6 +52,7 @@ import {
   MintRequest,
   MintServices,
   PublicationRequest,
+  publicReasonLimit,
   SignedInMarkerCheckRequest,
   TaskUpdateRequest,
   withOwnWords,
@@ -4287,11 +4288,25 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   liveTests: currentLiveTests(),
                 };
               }
+              // Guardian's public reason reaches the caller screened like the caller's other
+              // text: credentials and host-private values out, cut to its bound.
+              const publicReason =
+                denial?.publicReason === undefined
+                  ? undefined
+                  : cutToLimit(
+                      redactCallerText(
+                        yield* screenMintText(dependencies, denial.publicReason),
+                      ).trim(),
+                      publicReasonLimit,
+                    );
               publicationDenial =
                 publication._tag === "Left" && publication.left.code === "ReviewDenied"
                   ? {
                       ...(denial?.reason === undefined ? {} : { reason: denial.reason }),
                       ...(deniedCategory === undefined ? {} : { category: deniedCategory }),
+                      ...(publicReason === undefined || publicReason === ""
+                        ? {}
+                        : { publicReason }),
                     }
                   : undefined;
               const publicationDiagnostics =

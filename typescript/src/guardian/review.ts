@@ -104,6 +104,11 @@ export const GuardianDecision = Schema.Struct({
   reason: Schema.optional(Schema.suspend(() => PublicationReason)),
   findings: Schema.optional(Schema.Array(Schema.suspend(() => PublicationFinding))),
   /**
+   * A publication denial's one short sentence its caller may read: why the tool was not
+   * published, in plain words, apart from the private rationale. Other kinds have none.
+   */
+  publicReason: Schema.optional(Schema.String.pipe(Schema.minLength(1))),
+  /**
    * An execution review's label of what the code does on the website. Every execution allow
    * carries one; a deny or escalate may. Other kinds have none.
    */

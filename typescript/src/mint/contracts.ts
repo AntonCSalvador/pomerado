@@ -434,6 +434,11 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
     readonly reviewId?: string;
     readonly rationale: string;
     readonly findings?: readonly PublicationFinding[];
+    /**
+     * A publication review's short reason its caller may read, apart from the private rationale;
+     * the harness screens it before a build's result carries it (`PublicationDenial`).
+     */
+    readonly publicReason?: string;
   };
 }> {}
 

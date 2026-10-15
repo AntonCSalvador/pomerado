@@ -199,3 +199,54 @@ it("names a published build's ending with no stop reason", async () => {
   expect(outcome.build).toBe("published");
   expect(outcome).not.toHaveProperty("stopReason");
 });
+
+// Guardian's public reason for a denial reaches the caller screened like their other text, and the
+// private rationale never does.
+it("carries Guardian's screened public reason on a publication denial", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", {
+          purpose: "example",
+          target: "pureFiles",
+          entrypoint: "src/tool.ts",
+          fixtureRefs: [],
+          caseFilter: [],
+          maxWorkers: 1,
+          timeoutSeconds: 30,
+        }),
+        call("finish_build", {
+          entrypoint: "src/tool.ts",
+          executionId: "execution_one",
+          metadata: { name: "read_public", description: "Read public data" },
+          coverage: "One actual example.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      redactCallerText: (text) => text.replaceAll("acct-7731", "[account]"),
+      publish: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: {
+              outcome: "deny",
+              reason: "privacy",
+              reviewId: "review_denied",
+              rationale: "Private rationale: src/tool.ts hard-codes a member number.",
+              findings: [],
+              publicReason: "The tool for acct-7731 would have published private details.",
+            },
+          }),
+        ),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome.publicationDenial).toEqual({
+    reason: "privacy",
+    publicReason: "The tool for [account] would have published private details.",
+  });
+  // What a caller reads; the host's own diagnostics keep the review as it came.
+  expect(JSON.stringify([outcome.summary, outcome.publicationDenial])).not.toContain(
+    "Private rationale",
+  );
+});
