@@ -107,6 +107,13 @@ const HostName = Schema.String.pipe(
   Schema.maxLength(253),
   Schema.pattern(/^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/u),
 );
+/** An exact https origin: `new URL(value).origin === value`, so no path, user info or query. */
+const HttpsOrigin = Schema.String.pipe(
+  Schema.filter((value) => {
+    const url = URL.parse(value);
+    return url !== null && url.protocol === "https:" && url.origin === value;
+  }, { message: () => "an exact https origin" }),
+);
 const absolutePage = (page: string) => URL.parse(page) !== null;
 /**
  * A canonical pathname, which the URL parser keeps unchanged: it starts with one "/", and has no
@@ -115,19 +122,20 @@ const absolutePage = (page: string) => URL.parse(page) !== null;
 const pathOnlyPage = (page: string) => URL.parse(page, "https://h.invalid")?.pathname === page;
 /**
  * Version 4: a sign-in that may move to a per-account workspace host on the site's registrable
- * domain (`workspace`). It names no tenant: `workspace.parent` is the site's own registrable
- * domain, and a workspace step names a path only. A host checks them against the tool's site
- * origin at use, never here. A host that does not know version 4 refuses it, and a version 4
- * recipe with a key this host does not know is refused, so no host drops what a writer adds.
+ * domain (`workspace`), or to a cross-site identity provider Guardian approved (`signInOrigins`).
+ * Both name no tenant: `workspace.parent` is the site's own registrable domain, and a workspace
+ * step names a path only. A host checks them against the tool's site origin at use, never here.
+ * A host that does not know version 4 refuses it, so no host drops what it adds.
  */
 export const WorkspaceAutofillRecipe = Schema.Struct({
   ...LegacyAutofillRecipe.fields,
   version: Schema.Literal(4),
   workspace: Schema.optional(Schema.Struct({ parent: HostName })),
+  signInOrigins: Schema.optional(
+    Schema.Array(HttpsOrigin).pipe(Schema.minItems(1), Schema.maxItems(4)),
+  ),
   steps: Schema.Array(WorkspaceRecipeStep).pipe(Schema.minItems(1), Schema.maxItems(12)),
-})
-  .annotations({ parseOptions: { onExcessProperty: "error" } })
-  .pipe(
+}).pipe(
   Schema.filter(
     (recipe) =>
       recipe.steps.every((step) =>
@@ -140,6 +148,11 @@ export const WorkspaceAutofillRecipe = Schema.Struct({
       recipe.steps.every((step) => step.origin !== "workspace") ||
       "a workspace step needs the recipe's workspace",
   ),
+  Schema.filter(
+    (recipe) =>
+      new Set(recipe.signInOrigins ?? []).size === (recipe.signInOrigins ?? []).length ||
+      "sign-in origins are distinct",
+  ),
 );
 export const AutofillRecipe = Schema.Union(
   LegacyAutofillRecipe,
@@ -151,6 +164,7 @@ export type AutofillRecipeStep = typeof WorkspaceRecipeStep.Type;
 /** Where a version 4 recipe's sign-in may go besides the site's own host. */
 export interface AutofillRecipeOrigins {
   readonly workspace?: { readonly parent: string } | undefined;
+  readonly signInOrigins?: readonly string[] | undefined;
 }
 
 /** The bundle's recipe, or undefined when it has none or one this host cannot replay. */
@@ -215,17 +229,25 @@ export const recipeStep = (step: RecordedRecipeStep): AutofillRecipeStep => ({
 });
 
 /**
- * A verified sign-in's recipe: version 4 only when its sign-in may move to a workspace host
- * (`origins.workspace`, or a workspace step), else version 2 only with a popup or an approval,
- * else version 1. A security answer's question selector rides in any of them. Version 4 writes
- * `workspace` before `steps`.
+ * A verified sign-in's recipe: version 4 only when its sign-in may move to a workspace host or an
+ * approved identity provider (`origins`, or a workspace step), else version 2 only with a popup
+ * or an approval, else version 1. A security answer's question selector rides in any of them.
+ * Version 4 writes `workspace` and `signInOrigins` before `steps`.
  */
 export const autofillRecipe = <SignedIn>(
   steps: readonly RecordedRecipeStep[],
   signedIn: SignedIn,
   origins: AutofillRecipeOrigins = {},
 ) => {
-  if (origins.workspace === undefined && steps.every((step) => step.origin === undefined))
+  const signInOrigins =
+    origins.signInOrigins === undefined || origins.signInOrigins.length === 0
+      ? undefined
+      : [...new Set(origins.signInOrigins)];
+  if (
+    origins.workspace === undefined &&
+    signInOrigins === undefined &&
+    steps.every((step) => step.origin === undefined)
+  )
     return {
       version: steps.some((step) => step.popup !== undefined || step.approval !== undefined)
         ? (2 as const)
@@ -236,6 +258,7 @@ export const autofillRecipe = <SignedIn>(
   return {
     version: 4 as const,
     ...(origins.workspace === undefined ? {} : { workspace: { parent: origins.workspace.parent } }),
+    ...(signInOrigins === undefined ? {} : { signInOrigins }),
     steps: steps.map(recipeStep),
     signedIn,
   };
