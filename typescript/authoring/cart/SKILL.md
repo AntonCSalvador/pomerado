@@ -48,11 +48,20 @@ declared question (the caller-input skill). Never invent it, and never save it t
 unasked. A save option the page pre-selects is a question, as `AGENTS.md` says; in the
 tool, an unset save option means off, not the page's default.
 
+The same holds for a delivery address or payment method the account already has and the page
+pre-selects, and for a paid add-on, membership, trial or protection plan the checkout offers:
+take each from the input, or ask before the commit mark which saved address or payment to use
+and whether to accept the offer (the writes skill). Never keep the page's selection or click an
+offer's accept or decline control unasked.
+
 ## Minimums and refusals
 
 When the site refuses the order as asked, such as an order under its minimum or an empty cart
 at checkout, the tool throws `InvalidInput` with the site's reason, before its commit mark
-whenever the page shows the limit first. Never add items, raise a quantity or change the
+whenever the page shows the limit first. A checkout that takes a limit of the caller's, such as
+a maximum total, reads the final total and compares it before the mark, and refuses with
+`InvalidInput`, `field` that input and `kind: "over_price_limit"`, giving the total and the
+limit (the caller-input skill). Never add items, raise a quantity or change the
 delivery method to meet a limit. While building, ask the caller to revise or stop, as
 `AGENTS.md` says. When they stop, or their answer cannot be met either, end with
 `report_blocked` and explain the site's limit: a build that only reached the limit never

@@ -1307,7 +1307,10 @@ test("write example settles a delayed submit before its outer call expires", asy
   expect(submissions).toBe(0);
 });
 
-/** The checkout the write-session example was written against: fill, review, place, confirm. */
+/**
+ * The checkout the write-session example was written against: fill, review, place, confirm. The
+ * review prices each unit at 12.50 and shows the total.
+ */
 const checkoutSite = async (page: Page, origin: string, orders: string[]) => {
   await page.route(`${origin}/**`, async (route) => {
     const request = route.request();
@@ -1323,7 +1326,9 @@ const checkoutSite = async (page: Page, origin: string, orders: string[]) => {
     if (url.pathname === "/checkout/review")
       return route.fulfill({
         contentType: "text/html",
-        body: `<form method="post" action="/orders"><input type="hidden" name="item" value="${url.searchParams.get("item") ?? ""}"><button>Place order</button></form>`,
+        body: `<p aria-label="Item">${url.searchParams.get("item") ?? ""}</p>
+          <p aria-label="Order total">$${(Number(url.searchParams.get("quantity")) * 12.5).toFixed(2)}</p>
+          <form method="post" action="/orders"><input type="hidden" name="item" value="${url.searchParams.get("item") ?? ""}"><button>Place order</button></form>`,
       });
     // The site answers the order's own POST with its confirmation.
     if (url.pathname === "/orders" && request.method() === "POST") {
@@ -1342,7 +1347,7 @@ test("write-session example commits once across its act steps and reads the site
 }) => {
   const origin = "https://shop.example.invalid";
   const orders: string[] = [];
-  const input = { item: "lamp", quantity: 2, gift_wrap: false };
+  const input = { item: "lamp", quantity: 2, gift_wrap: false, max_total_minor: 2500 };
   await checkoutSite(page, origin, orders);
   await page.goto("about:blank");
   const filled = await runExample(page, fillStep, input, { siteOrigin: origin });
@@ -1366,6 +1371,26 @@ test("write-session example commits once across its act steps and reads the site
   const composed = await runExample(page, placeOrder, input, { siteOrigin: origin });
   expect(composed).toMatchObject({ confirmation: "readback", effect: "verified" });
   expect(orders).toEqual(["lamp", "lamp"]);
+});
+
+test("write-session example refuses a total over the caller's limit before its commit mark", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  const input = { item: "lamp", quantity: 3, gift_wrap: false, max_total_minor: 2500 };
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const refused = await runExample(page, placeOrder, input, { siteOrigin: origin });
+  expect(failure(refused.result)).toMatchObject({
+    _tag: "InvalidInput",
+    field: "max_total_minor",
+    kind: "over_price_limit",
+    message: "The order total is 3750, over max_total_minor 2500",
+  });
+  // The refusal came before the mark, so the run shows nothing sent and no order exists.
+  expect(refused.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
+  expect(orders).toEqual([]);
 });
 
 /** A write that saves an address, then places an order, each its own marked commit step. */

@@ -100,7 +100,8 @@ pomerado:section core.execute-calls:end -->
   disabled without the page saying why; a read returns such a day unavailable, as "Configure,
   then read" says. When the value is not among choices the page lists, throw
   `new errors.InvalidInput(message, { field, available })` instead, as "Configure, then read"
-  below says. `errors` exists only in the script, never in a call's `code`, so when the page
+  below says. Add `kind`, the reason as a stable lowercase token such as `out_of_stock`, when
+  a caller needs to tell refusals apart (caller-input skill). `errors` exists only in the script, never in a call's `code`, so when the page
   shows the refusal, return a marker such as `{ refused: "why", field, available }` from the
   call and throw once it returns. The run then fails as the caller's input; with `available`,
   the host ends it at once with those choices and no repair. A repair never asks the caller for

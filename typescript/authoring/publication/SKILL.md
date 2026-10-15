@@ -170,9 +170,12 @@ pomerado:section publication.saved-files:end -->.
    - the input schema: no account-specific value (a passenger, loyalty or member number, saved
      card or address, account ID) as an enum member, example or default; every input as general
      as the site's field, never narrowed to the example's value; on a write, every option the
-     session met on the path is an input, and an add-on, pre-selected paid option or saved
-     payment is explicit, never left to the page's default;
+     session met on the path is an input, and an add-on, membership or trial offer,
+     pre-selected paid option, saved payment or saved address is explicit, never left to the
+     page's default;
    - declared questions ask only what the page or the caller uniquely knows, never a login;
+   - a write runs every check that can refuse, such as a limit on its total, before its commit
+     mark, and refuses with `InvalidInput`, never as its output;
    - a composed write reproduces the session's flow and returns the confirmation or read-back it
      declares, without committing twice.
 
