@@ -295,6 +295,13 @@ const ConfirmAnswer = Schema.Struct({
   confirmed: Schema.Boolean,
   text: Schema.optional(Schema.String.pipe(Schema.maxLength(maximumAnswerLength))),
 });
+/**
+ * The owner's answer to a login request when they will not give one: they have no account on the
+ * site (`no_account`), or want only what the site shows signed out (`public_only`).
+ */
+export const LoginDecline = Schema.Literal("no_account", "public_only");
+export type LoginDecline = typeof LoginDecline.Type;
+
 export const CredentialAnswer = Schema.Struct({
   identifierKind: Schema.optional(Schema.Literal("username", "email", "phone", "account_number")),
   username: Schema.optional(

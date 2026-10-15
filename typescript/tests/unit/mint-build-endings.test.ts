@@ -1,0 +1,201 @@
+import { makeMintContinuationFixture, portableJobSession } from "../support/mint-fixtures.js";
+import { Usage } from "@openai/agents";
+import type { ModelResponse } from "@openai/agents";
+import { Effect } from "effect";
+import { afterEach, expect, it } from "vitest";
+import { MintFailure } from "../../src/mint/contracts.js";
+import { makeOpenAIMinter } from "../../src/mint/openai.js";
+
+/*
+ * How an unpublished build ends: each ending carries its own typed reason, so a host can tell the
+ * caller what stopped the build instead of reporting a missing publication. Every scenario runs
+ * the real minter loop on recorded model responses.
+ */
+
+const cleanups: (() => Promise<void>)[] = [];
+
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
+});
+
+const prose = (text = "I stopped before publication."): ModelResponse => ({
+  usage: new Usage({ requests: 1, inputTokens: 2, outputTokens: 1, totalTokens: 3 }),
+  output: [
+    {
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text }],
+    },
+  ],
+});
+
+const intentTools = new Set(["execute", "finish_build", "request_input", "report_blocked"]);
+
+const call = (name: string, input: unknown, id = name): ModelResponse => ({
+  usage: new Usage({ requests: 1, inputTokens: 2, outputTokens: 1, totalTokens: 3 }),
+  output: [
+    {
+      type: "function_call",
+      name,
+      callId: id,
+      arguments: JSON.stringify(
+        intentTools.has(name) && typeof input === "object" && input !== null && !("intent" in input)
+          ? { ...input, intent: `Synthetic ${name} purpose` }
+          : input,
+      ),
+      status: "completed",
+    },
+  ],
+});
+
+const ask = (prompt: string) => ({ questions: [{ id: "report", type: "text", prompt }] });
+
+const fixture = makeMintContinuationFixture(cleanups, portableJobSession, makeOpenAIMinter);
+
+it.each([
+  { reason: "question_unanswered", refusal: "no_question_unanswered" },
+  { reason: "owner_declined", refusal: "owner_not_declined" },
+] as const)(
+  "refuses $reason with nothing on record, then ends with it once its basis is recorded",
+  async ({ reason, refusal }) => {
+    const explanation = "The owner's answer is needed to choose the report, so this build stops.";
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("report_blocked", { reason, explanation }, "before"),
+          reason === "question_unanswered"
+            ? call("request_input", ask("Which report?"))
+            : call("request_input", {
+                questions: [{ id: "proceed", type: "confirm", prompt: "May the tool do this?" }],
+              }),
+          call("report_blocked", { reason, explanation }, "after"),
+        ][index] ?? prose("Stopping."),
+      reason === "owner_declined"
+        ? {
+            askInput: () =>
+              Effect.succeed({ proceed: { type: "confirm", value: { confirmed: false } } }),
+          }
+        : {},
+    );
+    const outcome = await f.run();
+    expect(JSON.stringify(f.requests[1]?.input)).toContain(refusal);
+    expect(outcome).toMatchObject({
+      build: "incomplete",
+      blocked: { reason, explanation },
+      stopReason: reason,
+    });
+  },
+);
+
+// Guardian's refusal stays a policy block, even when a question also went unanswered.
+it("keeps a policy block that stands on a Guardian refusal", async () => {
+  const explanation = "Guardian refused the only way to reach the requested page.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("request_input", ask("Which report?")),
+        call("execute", {
+          purpose: "example",
+          target: "pureFiles",
+          entrypoint: "src/tool.ts",
+          fixtureRefs: [],
+          caseFilter: [],
+          maxWorkers: 1,
+          timeoutSeconds: 30,
+        }),
+        call("report_blocked", { reason: "policy", explanation }),
+      ][index] ?? prose("Stopping."),
+    {
+      preflight: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: { outcome: "deny", reviewId: "review_denied", rationale: "Not allowed." },
+          }),
+        ),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "policy", explanation },
+    stopReason: "policy",
+  });
+});
+
+// A minter that stops answering with tools says why in its last answer. Its caller reads that
+// answer only after the pipeline a blocked explanation takes: host-private values removed and
+// Guardian's review of a blocked outcome allowing it.
+it("ends three tool-free answers as final_text_without_tool, with the reviewed last answer", async () => {
+  const reviewed: unknown[] = [];
+  const f = await fixture(
+    (_request, index) =>
+      index < 2
+        ? prose("Still looking.")
+        : prose("The site lists no prices for account acct-7731 without a membership."),
+    {
+      redactCallerText: (text) => text.replaceAll("acct-7731", "[account]"),
+      reviewQuestion: (candidate, context) =>
+        Effect.sync(() => {
+          reviewed.push({ candidate, blockedOutcome: context?.blockedOutcome });
+          return { outcome: "allow_business" as const, rationale: "Plain." };
+        }),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    stopReason: "final_text_without_tool",
+    stopExplanation: "The site lists no prices for account [account] without a membership.",
+  });
+  expect(JSON.stringify(reviewed)).not.toContain("acct-7731");
+  expect(reviewed).toEqual([expect.objectContaining({ blockedOutcome: true })]);
+});
+
+it("keeps no last answer Guardian did not allow", async () => {
+  const f = await fixture(() => prose("Call 555-0100 to finish this request."), {
+    reviewQuestion: () =>
+      Effect.succeed({ outcome: "reword" as const, rationale: "It passes on a phone number." }),
+  });
+  const outcome = await f.run();
+  expect(outcome.stopReason).toBe("final_text_without_tool");
+  expect(outcome).not.toHaveProperty("stopExplanation");
+  expect(JSON.stringify(outcome)).not.toContain("555-0100");
+});
+
+it("ends an attempt that spent its model calls as turn_budget_spent", async () => {
+  const f = await fixture(
+    () => call("read_source", { path: "src/tool.ts", offset: null, limit: null }),
+    {},
+    {},
+    { modelCallCapacity: 4, segmentTurns: 2 },
+  );
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({ build: "incomplete", stopReason: "turn_budget_spent" });
+  expect(outcome).not.toHaveProperty("hostFailure");
+});
+
+it("names a published build's ending with no stop reason", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", {
+          purpose: "example",
+          target: "pureFiles",
+          entrypoint: "src/tool.ts",
+          fixtureRefs: [],
+          caseFilter: [],
+          maxWorkers: 1,
+          timeoutSeconds: 30,
+        }),
+        call("finish_build", {
+          entrypoint: "src/tool.ts",
+          executionId: "execution_one",
+          metadata: { name: "read_public", description: "Read public data" },
+          coverage: "One actual example.",
+        }),
+      ][index] ?? prose(),
+  );
+  const outcome = await f.run();
+  expect(outcome.build).toBe("published");
+  expect(outcome).not.toHaveProperty("stopReason");
+});

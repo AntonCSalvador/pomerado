@@ -58,6 +58,7 @@ import {
 } from "./contracts.js";
 import { answersForReview, type AnsweredQuestion } from "../guardian/question.js";
 import {
+  cutToLimit,
   publicationRefusalUnfixable,
   type PublicationFinding,
 } from "../guardian/review-contracts.js";
@@ -83,13 +84,14 @@ import type {
   ExecutionEvidence,
   MintActions,
   MintOutcome,
+  MintStopReason,
   MintHarnessSnapshot,
   PublicationDecision,
   PublicationRecovery,
   SpentSignIn,
   WeakenedOutput,
 } from "./contracts.js";
-import { pickedOption, type ValidAnswers } from "../runtime/input-request.js";
+import { pickedOption, type LoginDecline, type ValidAnswers } from "../runtime/input-request.js";
 import {
   bufferedHistoryArchive,
   makeOutcomeReviewer,
@@ -522,12 +524,12 @@ const scriptQuestionInstruction: Readonly<
   unavailable:
     "The host could not review or deliver the script's question, so nobody was asked; nothing is wrong with the question. You may execute again once; if it fails the same way, end the attempt and say the question could not be asked.",
   unanswered:
-    "The caller was asked the script's question and gave no answer before it expired, so the script's ask failed. Decide how to go on without it: run the example again with an input that does not need the answer, narrow the tool, or end the build with report_blocked (reason policy when only the caller's answer would let it go on). No answer is never consent: it authorizes no write. Verify the site's current state before any further write. After two questions have gone unanswered, the next one left unanswered ends the build.",
+    "The caller was asked the script's question and gave no answer before it expired, so the script's ask failed. Decide how to go on without it: run the example again with an input that does not need the answer, narrow the tool, or end the build with report_blocked (reason question_unanswered when only the caller's answer would let it go on). No answer is never consent: it authorizes no write. Verify the site's current state before any further write. After two questions have gone unanswered, the next one left unanswered ends the build.",
 };
 
 /** What the minter reads when its own question expired unanswered. */
 const noAnswerInstruction =
-  "No answer was given before the question expired. Decide how to proceed without it: continue with a sensible default and list it in finish_build assumptions, narrow the tool so it does not need the answer, or end the build with report_blocked (reason policy when only the caller's answer would let it go on). No answer is never consent: it authorizes no write, sign-in or change of task, so never cite this question in confirmedBy. Ask again only when the answer is essential: after two questions have gone unanswered, the next one left unanswered ends the build.";
+  "No answer was given before the question expired. Decide how to proceed without it: continue with a sensible default and list it in finish_build assumptions, narrow the tool so it does not need the answer, or end the build with report_blocked (reason question_unanswered when only the caller's answer would let it go on). No answer is never consent: it authorizes no write, sign-in or change of task, so never cite this question in confirmedBy. Ask again only when the answer is essential: after two questions have gone unanswered, the next one left unanswered ends the build.";
 
 /**
  * How many unanswered questions go back to the minter in one build, the minter's own and its
@@ -649,6 +651,49 @@ const jsonTypeTree = (value: unknown): JsonTypeTree => {
     return { type: "object", fields };
   };
   return visit(value);
+};
+
+/** What the minter does once the owner declined to sign in, by why they declined. */
+const loginDeclinedInstruction = (decline: LoginDecline) =>
+  `The owner chose not to sign in: ${decline === "no_account" ? "they have no account on this site" : "they want only what the site shows without signing in"}. This is their answer, not an error. Never ask for a login again and never call execute purpose authenticate in this build. Build the part of the request the site shows without signing in. If that part is missing, or much less than the request asks for, ask the owner with request_input before you build: say that without signing in the site shows only what you found, name it, and offer to continue with that or stop. If they choose to stop, or the build cannot go on without signing in, end with report_blocked reason owner_declined.`;
+
+/** The answer every authenticate gets once the owner declined to sign in. */
+const loginDeclinedAnswer = (decline: LoginDecline) =>
+  JSON.stringify({
+    status: "login_declined",
+    declined: decline,
+    userInputRequired: false,
+    instruction: loginDeclinedInstruction(decline),
+  });
+
+/**
+ * The typed ending of an unpublished outcome its own fields name, or undefined: a published build,
+ * and a blocked ending with its own record (`new_mint_recommended`, `not_supported_yet`), have
+ * none. An ending the harness names when it records it (`account_locked`,
+ * `final_text_without_tool`) is set there and kept.
+ */
+const stopReasonOf = (
+  outcome: Pick<
+    MintOutcome,
+    "build" | "blocked" | "recoveryReason" | "rejectedCredential" | "hostFailure" | "stopReason"
+  >,
+  noResponse: MintOutcome["noResponse"],
+  modelFailure: MintFailure | undefined,
+): MintStopReason | undefined => {
+  if (outcome.build === "published") return undefined;
+  if (outcome.stopReason !== undefined) return outcome.stopReason;
+  const blocked = outcome.blocked?.reason;
+  if (blocked !== undefined)
+    return blocked === "new_mint_recommended" || blocked === "not_supported_yet"
+      ? undefined
+      : blocked;
+  if (noResponse !== undefined) return "question_unanswered";
+  if (outcome.recoveryReason !== undefined || outcome.rejectedCredential !== undefined)
+    return "sign_in_failed";
+  if (outcome.hostFailure === "model_quota_exhausted") return "model_quota_exhausted";
+  if (outcome.hostFailure !== undefined) return "host_unavailable";
+  if (modelFailure?.turnBudgetSpent === true) return "turn_budget_spent";
+  return undefined;
 };
 
 const loginRequestInstruction = (login: "held" | "supplied" | "inspect" | "unavailable") =>
@@ -1019,6 +1064,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * unanswered question asked after it ends the build instead of going back.
        */
       let loginHeld = recovered?.loginHeld === true;
+      /** The owner declined a login: no sign-in runs, and every authenticate hears why. */
+      let loginDeclined = recovered?.loginDeclined;
       let destinationEvidenceRefusals = recovered?.destinationEvidenceRefusals ?? 0;
       let inputFeedbackRounds = recovered?.inputFeedbackRounds ?? 0;
       /** The last input-feedback review found a tool already public, which never falls back. */
@@ -2738,23 +2785,34 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const questionOnly = effectQuestion || Boolean(dependencies.capabilityQuestion);
       let captchaChecks = recovered?.captchaChecks ?? 0;
       /**
-       * Why the agent may not end blocked now, as its tool result, or undefined. Something it can
-       * still get past is not impossible as asked, and the screened explanation keeps its bound,
-       * which screening's longer markers can break, so a takeover's checkpoint still reads it.
+       * The ending a blocked report takes, or why the agent may not end blocked now, as its tool
+       * result. Something it can still get past is not impossible as asked, and the screened
+       * explanation keeps its bound, which screening's longer markers can break, so a takeover's
+       * checkpoint still reads it.
        */
-      const blockedRefusal = (
+      const blockedEnding = (
         reason: (typeof BuildBlocked.Type)["reason"],
         screenedExplanation: string,
         now: number,
-      ) => {
-        const refused = (reason: string, instruction: string) =>
-          JSON.stringify({
+      ):
+        | { readonly reason: (typeof BuildBlocked.Type)["reason"] }
+        | { readonly refusal: string } => {
+        const refused = (reason: string, instruction: string) => ({
+          refusal: JSON.stringify({
             status: "blocked_refused",
             reason,
             userInputRequired: false,
             instruction,
-          });
-        if (unresolvedSignIn !== undefined)
+          }),
+        });
+        // A failed sign-in the agent can still get past waits for it, unless sign-in is already
+        // unavailable in this build or the owner declined to sign in: then nothing is left to
+        // resolve, and refusing the ending would leave the minter no way to stop.
+        if (
+          unresolvedSignIn !== undefined &&
+          signInUnavailable === undefined &&
+          loginDeclined === undefined
+        )
           return refused(
             "sign_in_unresolved",
             "The last sign-in failed and is unresolved. Resolve it as its result says, with authenticate once its cause is fixed, before deciding the task is impossible as asked.",
@@ -2774,28 +2832,44 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "explanation_too_long",
             "Private values in the explanation made it longer than 500 characters once screened. Shorten it, leave private values out, and call report_blocked again.",
           );
-        // A policy block stands on a refusal on record: Guardian's deny or escalation of an
-        // execution, its publication refusal no correction gets past (an escalation for missing
-        // evidence is not one), or the owner's no to a
-        // confirm question, unless the host's own guidance names the ending. The
-        // minter's reading of its own instructions is none. A question handed back unanswered
-        // also lets the minter stop: no answer is no consent, so it may end the build safely
-        // instead of going on past what it asked.
-        const ownerRefused = [...answeredQuestions.values()].some(
-          ({ answer }) => typeof answer === "object" && "confirmed" in answer && !answer.confirmed,
-        );
+        // Each ending stands on its basis on record. A policy block stands on Guardian's deny or
+        // escalation of an execution, or its publication refusal no correction gets past (an
+        // escalation for missing evidence is not one), unless the host's own guidance names the
+        // ending; the minter's reading of its own instructions is none. The owner's no to a
+        // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
+        // is `question_unanswered`: no answer is no consent, so the minter may end the build
+        // safely instead of going on past what it asked. A policy report that stands only on
+        // one of those takes its name, so neither ever ends as policy.
+        const ownerRefused =
+          loginDeclined !== undefined ||
+          [...answeredQuestions.values()].some(
+            ({ answer }) =>
+              typeof answer === "object" && "confirmed" in answer && !answer.confirmed,
+          );
+        const unanswered = noAnswerHandBacks > 0;
+        if (reason === "owner_declined" && !ownerRefused)
+          return refused(
+            "owner_not_declined",
+            "The owner declined nothing in this build: no confirm question was answered no, and no login was declined, so the build has not ended. Use owner_declined only after the owner says no to a step the build needs. Ask the owner with request_input when only they can decide.",
+          );
+        if (reason === "question_unanswered" && !unanswered)
+          return refused(
+            "no_question_unanswered",
+            "No question went unanswered in this build, so the build has not ended. Use question_unanswered only after a question you asked came back as no answer and the build cannot go on without it.",
+          );
         if (
           reason === "policy" &&
           !guardianRefused &&
-          !ownerRefused &&
-          noAnswerHandBacks === 0 &&
           dependencies.policyBlockAllowed?.(screenedExplanation) !== true
-        )
+        ) {
+          if (ownerRefused) return { reason: "owner_declined" };
+          if (unanswered) return { reason: "question_unanswered" };
           return refused(
             "policy_not_refused",
-            "Nothing in this attempt refused this: Guardian denied or escalated no execution, refused no publication for privacy or authority or for a finding no correction gets past, and the owner answered no to nothing. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no to a confirm question is a refusal. Use site_lacks_capability only when the site does not offer what the task needs.",
+            "Nothing in this attempt refused this: Guardian denied or escalated no execution, and refused no publication for privacy or authority or for a finding no correction gets past. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
           );
-        return undefined;
+        }
+        return { reason };
       };
       /**
        * Guardian's question review of a blocked explanation before any caller reads it, with the
@@ -2849,6 +2923,34 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               ),
             );
       };
+      /**
+       * The minter's last final answer as its caller may read it, when it stopped without a tool
+       * call: the pipeline a blocked explanation takes (credential screen, host-private
+       * redaction, Guardian's question review of a blocked outcome), cut to the explanation's
+       * bound, and kept only when Guardian allowed it. The model is gone, so nothing is offered
+       * back: any other outcome or failure keeps nothing.
+       */
+      const reviewedStopExplanation = (text: string | undefined) =>
+        Effect.gen(function* () {
+          const review = dependencies.reviewQuestion;
+          if (text === undefined || text.trim() === "" || review === undefined) return undefined;
+          const screened = cutToLimit(
+            redactCallerText(yield* screenMintText(dependencies, text)).trim(),
+            blockedExplanationLimit,
+          );
+          if (screened === "") return undefined;
+          const decision = yield* review(
+            { questions: [{ id: "blocked", type: "text", prompt: screened }] },
+            { blockedOutcome: true, ...(yield* publicationRefusals) },
+          );
+          return decision.outcome === "allow_business" ? screened : undefined;
+        }).pipe(
+          Effect.catchAll((error) =>
+            diagnose({ phase: "stop_explanation", code: failureCode(error) }).pipe(
+              Effect.as(undefined),
+            ),
+          ),
+        );
       /** A `mint_update` result for the agent: its status and what the host says. */
       const taskUpdateAnswer = (
         status: TaskUpdateStatus,
@@ -3691,12 +3793,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           serial.withPermits(1)(
             Effect.gen(function* () {
               if (questionOnly) return yield* new MintFailure({ code: "ScopeDenied" });
-              // Once sign-in is unavailable, another authenticate gets the same answer.
-              if (
-                signInUnavailable !== undefined &&
-                Schema.is(Schema.Struct({ purpose: Schema.Literal("authenticate") }))(input)
-              )
+              // Once sign-in is unavailable, another authenticate gets the same answer; once the
+              // owner declined to sign in, it gets theirs.
+              const authenticating = Schema.is(
+                Schema.Struct({ purpose: Schema.Literal("authenticate") }),
+              )(input);
+              if (signInUnavailable !== undefined && authenticating)
                 return signInUnavailable.answer;
+              if (loginDeclined !== undefined && authenticating)
+                return loginDeclinedAnswer(loginDeclined);
               yield* active();
               const submitted = yield* decode(ExecutionRequest, input);
               yield* Effect.try({
@@ -3854,6 +3959,19 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               Effect.catchIf(
                 (error) => error.noResponse !== undefined && !stopUnavailableHost(),
                 (error) => unanswered(error, "signing in to the website"),
+              ),
+              // The owner declined the login the sign-in asked for: their answer, not a failed
+              // sign-in, so the minter builds without signing in and nothing is left unresolved.
+              Effect.catchIf(
+                (error) => error.loginDeclined !== undefined,
+                (error) =>
+                  Effect.gen(function* () {
+                    const decline = error.loginDeclined ?? "public_only";
+                    loginDeclined = decline;
+                    unresolvedSignIn = undefined;
+                    yield* diagnose({ phase: "sign_in", reason: "login_declined", declined: decline });
+                    return loginDeclinedAnswer(decline);
+                  }),
               ),
               // The host already asked for a correction in place, and the site refused it too.
               Effect.catchIf(
@@ -4718,6 +4836,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     ? yield* dependencies.requestLogin()
                     : ("unavailable" as const);
                   if (login === "supplied" || login === "held") loginHeld = true;
+                  if (login === "no_account" || login === "public_only") {
+                    loginDeclined = login;
+                    yield* diagnose({ phase: "sign_in", reason: "login_declined", declined: login });
+                    return JSON.stringify({
+                      status: "login_request",
+                      login: "declined",
+                      declined: login,
+                      rationale,
+                      userInputRequired: false,
+                      instruction: loginDeclinedInstruction(login),
+                    });
+                  }
                   if (login === "in_use")
                     return JSON.stringify({
                       status: "login_request",
@@ -4834,16 +4964,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                           "The build ended because the host has no live execution for what it still needs. It ends as the host's failure, not as blocked; nothing more runs in this attempt.",
                       });
                     }
-                    const submitted = { ...report, reason: report.reason };
                     const explanation = redactCallerText(
-                      yield* screenMintText(dependencies, submitted.explanation),
+                      yield* screenMintText(dependencies, report.explanation),
                     );
-                    const refusal = blockedRefusal(
-                      submitted.reason,
+                    const ending = blockedEnding(
+                      report.reason,
                       explanation,
                       yield* Clock.currentTimeMillis,
                     );
-                    if (refusal !== undefined) return refusal;
+                    if ("refusal" in ending) return ending.refusal;
+                    const submitted = { ...report, reason: ending.reason };
                     const review = yield* reviewBlockedExplanation(explanation);
                     yield* active("publication");
                     if (review.outcome === "retry")
@@ -4874,10 +5004,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       reason: submitted.reason,
                       ...(shown ? { explanation } : {}),
                     };
+                    // The summary carries the explanation only where the caller may read it.
                     terminal = {
                       build: "incomplete",
                       blocked,
-                      summary: `The build is blocked (${blocked.reason}): ${explanation}`,
+                      summary: shown
+                        ? `The build is blocked (${blocked.reason}): ${explanation}`
+                        : `The build is blocked (${blocked.reason}).`,
                     };
                     yield* diagnose({
                       phase: "blocked",
@@ -5366,6 +5499,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ...(guardianRefused ? { guardianRefused: true as const } : {}),
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),
         ...(loginHeld ? { loginHeld: true as const } : {}),
+        ...(loginDeclined === undefined ? {} : { loginDeclined }),
         destinationEvidenceRefusals,
         inputFeedbackRounds,
         inputFeedbackPublicTool,
@@ -5606,12 +5740,19 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         Exit.isSuccess(modelResult) &&
         modelResult.value.stopReason === "repeated_final_without_tool"
       ) {
+        const stopExplanation = yield* reviewedStopExplanation(modelResult.value.finalText);
         terminal = {
           build: "incomplete",
+          stopReason: "final_text_without_tool",
+          ...(stopExplanation === undefined ? {} : { stopExplanation }),
           summary:
             "The minter kept answering without a tool call after the host asked it to continue, so the host ended this attempt. No build was published. Recorded effects and receipts are preserved.",
         };
-        yield* diagnose({ phase: "continuation", reason: "repeated_final_without_tool" });
+        yield* diagnose({
+          phase: "continuation",
+          reason: "repeated_final_without_tool",
+          explanationShown: stopExplanation !== undefined,
+        });
       }
       if (terminal === undefined && modelFailure?.modelOutage === "quota_exhausted")
         yield* endForSpentModelQuota(modelFailure, "model");
@@ -5636,19 +5777,22 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       finished.build = terminal?.build ?? "incomplete";
       // An unpublished build whose last publication Guardian denied says so, with its reason.
       const denied = finished.build === "incomplete" ? publicationDenial : undefined;
+      const ended = terminal ?? {
+        build: "incomplete" as const,
+        // The provider or the run's record failed, as opposed to the agent running out of
+        // calls, turns or time, or choosing to stop.
+        ...(modelFailure?.modelOutage === "unavailable"
+          ? { hostFailure: "model_unavailable" as const }
+          : {}),
+        summary:
+          denied === undefined
+            ? "Minting stopped before publication; inspect recorded execution outcomes before continuing."
+            : `Guardian's publication review denied the last publication (${[denied.reason, denied.category].filter((part) => part !== undefined).join(", ")}), and minting stopped before a corrected one was published; inspect recorded execution outcomes before continuing.`,
+      };
+      const stopReason = stopReasonOf(ended, noResponse, modelFailure);
       return {
-        ...(terminal ?? {
-          build: "incomplete" as const,
-          // The provider or the run's record failed, as opposed to the agent running out of
-          // calls, turns or time, or choosing to stop.
-          ...(modelFailure?.modelOutage === "unavailable"
-            ? { hostFailure: "model_unavailable" as const }
-            : {}),
-          summary:
-            denied === undefined
-              ? "Minting stopped before publication; inspect recorded execution outcomes before continuing."
-              : `Guardian's publication review denied the last publication (${[denied.reason, denied.category].filter((part) => part !== undefined).join(", ")}), and minting stopped before a corrected one was published; inspect recorded execution outcomes before continuing.`,
-        }),
+        ...ended,
+        ...(stopReason === undefined ? {} : { stopReason }),
         ...(denied === undefined ? {} : { publicationDenial: denied }),
         ...(noResponse === undefined ? {} : { noResponse }),
         ...(example ? { example } : {}),

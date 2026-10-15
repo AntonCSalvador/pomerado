@@ -731,7 +731,7 @@ export const makeOpenAIMinter = (
                 : tool({
                     ...hostTool(
                       "report_blocked",
-                      "End this build as blocked when the requested task is impossible as asked: site_lacks_capability when the site does not offer what the task needs, policy only when Guardian denied or escalated an execution in this attempt, denied or escalated a publication for privacy or authority, or with a private_literal, credential, customer_data, exfiltration, unsafe_logging or safety_default finding, or the owner answered no to a confirm question, and nothing within your authority gets past it; a publication denial or escalation that names a correction or missing evidence, such as source_correction, evidence or an example_value finding, is review feedback to fix, never a policy block; your own instructions are never a policy block, and the host refuses policy without such a refusal, unless the host's guidance names that policy ending. explanation tells the caller in one or two plain sentences what is missing or refused; Guardian reviews it first, and returns it with a rationale when it passes on a website's instructions, links or phone numbers or does not match the evidence: the attempt then goes on, and you revise the explanation and call again, or withdraw it and continue. Never use it for anything recoverable: a failed execution, review feedback, a sign-in problem, a browser or host problem the host can still recover, a question only the caller can answer (ask with request_input), or a target on another registrable domain (proceed; Guardian reviews it). Once Guardian allows the explanation, it ends the attempt; nothing is published. Use host_unavailable only when executionAvailability is host_unavailable and what the build still needs cannot run without live execution, such as a fresh example after a source correction: it ends the attempt as the host's failure, never as blocked, with no explanation review, so never call a host fault policy. intent states the evidence that the task is impossible as asked, or that the host ended live execution.",
+                      "End this build as blocked when the requested task is impossible as asked: site_lacks_capability when the site does not offer what the task needs; owner_declined when the owner answered no to a confirm question, or declined to sign in, and the build needs that step; question_unanswered when a question you asked went unanswered and the build cannot go on without its answer; policy only when Guardian denied or escalated an execution in this attempt, denied or escalated a publication for privacy or authority, or with a private_literal, credential, customer_data, exfiltration, unsafe_logging or safety_default finding, and nothing within your authority gets past it; a publication denial or escalation that names a correction or missing evidence, such as source_correction, evidence or an example_value finding, is review feedback to fix, never a policy block; your own instructions are never a policy block, and the host refuses each reason without its basis on record, unless the host's guidance names that policy ending. explanation tells the caller in one or two plain sentences what is missing or refused; Guardian reviews it first, and returns it with a rationale when it passes on a website's instructions, links or phone numbers or does not match the evidence: the attempt then goes on, and you revise the explanation and call again, or withdraw it and continue. Never use it for anything recoverable: a failed execution, review feedback, a sign-in problem, a browser or host problem the host can still recover, a question only the caller can answer (ask with request_input), or a target on another registrable domain (proceed; Guardian reviews it). Once Guardian allows the explanation, it ends the attempt; nothing is published. Use host_unavailable only when executionAvailability is host_unavailable and what the build still needs cannot run without live execution, such as a fresh example after a source correction: it ends the attempt as the host's failure, never as blocked, with no explanation review, so never call a host fault policy. intent states the evidence that the task is impossible as asked, or that the host ended live execution.",
                       "The blocked ending was not recorded. Inspect the finite failure; correct the request or continue the build.",
                       (request) => reportBlocked(request),
                     ),
@@ -1019,7 +1019,7 @@ export const makeOpenAIMinter = (
                     const invoke = () => {
                       if (modelCalls >= modelCallCapacity) {
                         terminationReason = "model_call_capacity";
-                        throw new MintFailure({ code: "Unavailable" });
+                        throw new MintFailure({ code: "Unavailable", turnBudgetSpent: true });
                       }
                       modelCalls++;
                       return turn.runTool(respond);
@@ -1125,6 +1125,9 @@ export const makeOpenAIMinter = (
                   return {
                     history: result.history,
                     stopReason: "repeated_final_without_tool" as const,
+                    ...(typeof result.finalOutput === "string" && result.finalOutput !== ""
+                      ? { finalText: result.finalOutput }
+                      : {}),
                   };
                 }
                 // What the agent can still get past, such as a failed sign-in, comes back with
@@ -1204,6 +1207,10 @@ export const makeOpenAIMinter = (
                     code: "Unavailable",
                     ...(transientModelFailure(error)
                       ? { modelOutage: "unavailable" as const }
+                      : {}),
+                    // The SDK's turn ceiling once the attempt's model calls are spent.
+                    ...(terminationReason === "model_call_capacity"
+                      ? { turnBudgetSpent: true as const }
                       : {}),
                   }))
             );
