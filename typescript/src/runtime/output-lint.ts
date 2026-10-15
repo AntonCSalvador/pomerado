@@ -26,7 +26,6 @@ export const outputChecks = [
   "card_text",
   "duplicate_entries",
   "duplicate_records",
-  "duplicate_ids",
   "constant_field",
   "empty_field",
 ] as const;
@@ -507,6 +506,9 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
   // skips the remaining values and reports what it found as partial.
   let stringBudget = repeatCheckBudget;
   let repeatsPartial = false;
+  // Paths where `duplicate_entries` reports a repeated item ID, which the word budget never cuts
+  // short.
+  const idPaths = new Set<string>();
 
   const lintString = (text: string, path: string, node: Json | undefined, inRow: boolean) => {
     const mediaType = schema.annotation(node, "contentMediaType");
@@ -569,7 +571,11 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
           sample ??= id;
         } else ids.add(id);
       }
-      if (repeated > 0) flag(`${path}[].${key}`, "duplicate_ids", sample, repeated);
+      // Reported as `duplicate_entries`, a check every release's records already decode.
+      if (repeated > 0) {
+        idPaths.add(`${path}[].${key}`);
+        flag(`${path}[].${key}`, "duplicate_entries", sample, repeated);
+      }
     }
     if (records.length < 3) return;
     const seen = new Set<string>();
@@ -715,7 +721,9 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
   }
   return [...found.values()].map((entry) => ({
     ...entry,
-    ...(repeatsPartial && entry.check === "duplicate_entries" ? { partial: true as const } : {}),
+    ...(repeatsPartial && entry.check === "duplicate_entries" && !idPaths.has(entry.path)
+      ? { partial: true as const }
+      : {}),
     blocking: entry.override === undefined && blockingOutputChecks.has(entry.check),
   }));
 };
@@ -758,10 +766,9 @@ export const outputCheckMeaning: Readonly<Record<OutputCheck, string>> = {
   collapsed_text:
     "ends in an ellipsis or holds the label of a control that expands text on its page, so it may have been read collapsed",
   card_text: "repeats most of its sibling fields' values, a whole card's text",
-  duplicate_entries: "repeats an entry or a run of words",
+  duplicate_entries:
+    "repeats an entry or a run of words, or, on a record's ID, SKU or link field, the same item within one list, such as a sponsored copy of an organic result",
   duplicate_records: "repeats a whole record",
-  duplicate_ids:
-    "repeats an item's ID, SKU or link within one list, so the list returns the same item twice, such as a sponsored copy of an organic result",
   constant_field: "has the same value in every record",
   empty_field:
     "is empty or null in every record checked, this run's and the tool's other tested runs', so the read may never find it",

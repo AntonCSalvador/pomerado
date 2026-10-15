@@ -337,13 +337,46 @@ describe("output checks across a list's records", () => {
     ];
     const findings = lintOutput({ results }, { samples: true });
     expect(findings).toContainEqual(
-      expect.objectContaining({ path: "results[].product_id", check: "duplicate_ids", count: 1, sample: "P-100", blocking: false }),
+      expect.objectContaining({ path: "results[].product_id", check: "duplicate_entries", count: 1, sample: "P-100", blocking: false }),
     );
-    expect(checksOf({ results })).toContain("results[].url duplicate_ids");
+    expect(checksOf({ results })).toContain("results[].url duplicate_entries");
     // Another record's ID, such as the seller's, may repeat.
-    expect(checksOf({ results })).not.toContain("results[].seller_id duplicate_ids");
-    expect(checksOf({ items: [{ sku: "A1" }, { sku: "A1" }] })).toEqual(["items[].sku duplicate_ids"]);
+    expect(checksOf({ results })).not.toContain("results[].seller_id duplicate_entries");
+    expect(checksOf({ items: [{ sku: "A1" }, { sku: "A1" }] })).toEqual(["items[].sku duplicate_entries"]);
     expect(checksOf({ items: [{ sku: "A1" }, { sku: "A2" }] })).toEqual([]);
+  });
+
+  // Live test records keep each finding's check, and a worker of an earlier release restores
+  // them from a checkpoint with its own closed list of checks. The new findings use only checks
+  // that list holds, so a mixed rollout never meets a check it cannot decode.
+  it("reports repeated IDs and fields empty across runs only under checks earlier releases decode", () => {
+    const earlierReleaseChecks = new Set([
+      "script",
+      "css",
+      "markup",
+      "template_residue",
+      "json_text",
+      "invisible_chars",
+      "untrimmed",
+      "too_long",
+      "collapsed_text",
+      "card_text",
+      "duplicate_entries",
+      "duplicate_records",
+      "constant_field",
+      "empty_field",
+    ]);
+    const output = {
+      name: "Desk lamp",
+      description: null,
+      results: [
+        { product_id: "P-100", url: "https://shop.example.com/p/100" },
+        { product_id: "P-100", url: "https://shop.example.com/p/100" },
+      ],
+    };
+    const findings = lintOutput(output, { alsoTested: [fieldFill(output)] });
+    expect(findings.length).toBeGreaterThan(0);
+    for (const finding of findings) expect(earlierReleaseChecks).toContain(finding.check);
   });
 });
 
