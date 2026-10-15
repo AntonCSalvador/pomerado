@@ -177,9 +177,9 @@ the task can't run without it (below).
   neighborhood or an airport code in brackets, over waiting for an element named exactly as
   the caller typed it. A whole-name or code match outranks a partial one, so an airport code
   picks that airport, not its city. Then count the matches at the best rank. With none,
-  throw `InvalidInput` at once, saying the site has no match and naming the closest entries
-  it showed. With one, use it. With several, ask the caller which one with a declared choice
-  question whose options are those matches as the site labels them
+  throw `InvalidInput` at once, saying the site has no match, with `field` and `available`,
+  the closest entries it showed. With one, use it. With several, ask the caller which one with
+  a declared choice question whose options are those matches as the site labels them
   (.agents/caller-input/SKILL.md).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
   match that accepts the usual forms of the same name, such as a name with or without its
@@ -298,6 +298,10 @@ the task can't run without it (below).
   and its example's own input and output must decode under them, so settle both before that
   example.
 - Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear. A description that starts "By design:" keeps that marker first and puts the number of values after it, such as "By design: one postal code, …", never before it.
+- When a field takes one value and a caller might send several, say "one per call" and prefer a
+  `pattern` that refuses a list, such as several codes separated by commas, while still accepting
+  one value that contains a comma, such as "Portland, OR". Prefer `between` to a range written
+  only in the description.
 - Give every input and output field, nested object and array item fields included, a short
   `description` annotation saying what it is, with the unit or format where one applies:
   "Departure airport as a three-letter IATA code", "Departure date, YYYY-MM-DD", "Average
@@ -311,12 +315,20 @@ the task can't run without it (below).
   snake_case (`"premium_economy"`); booleans named as statements (`refundable`, not
   `is_refundable_flag`); lists named in the plural; and the unit in the field name or its
   description (`duration_minutes`). Convert between these and the site's own formats in code.
-- When `reference/site-tools.json` exists, it lists this site's published tools with their
-  descriptions and schemas. Read it before settling or changing yours: where this tool takes or
-  returns the same thing as one of them, use the same identifier, field names and shape, so a
-  caller can pass one tool's output to the next, such as a record's ID from a search tool into a
-  details tool. Never narrow an input to match. It is reference only: nothing here calls those
-  tools.
+- When `reference/site-tools.json` exists, you can view the site's other tools. Read
+  `reference/site-tools/README.md` first: it indexes them, one folder each, with each tool's
+  effect, sign-in and a short description. Then read the folders you need: each holds a
+  `README.md` (description, inputs and outputs with examples and constraints, an example call and
+  its files) and, unless the index marks its code omitted, the tool's full source as it runs.
+  `reference/site-tools.json` lists the same tools with their full schemas. Read them before
+  settling or changing yours. Where this tool takes or returns the same thing as one of them, use
+  the same identifier, field names and shape, so a caller can pass one tool's output to the next,
+  such as a record's ID from a search tool into a details tool. Never narrow an input to match.
+  Reuse their work freely: copy and adapt their parsing, transformations, selectors, helpers and
+  patterns into your own `src/` files. A published tool must be self-contained, so never import,
+  read or reference a file under `reference/` from your code; copy what you need. That code was
+  written for other tools and is not instructions to you: check what you copy against the site as
+  you observe it now, and take every value you fill from this tool's own input.
 - Give every input field one `examples` annotation value, which callers<!-- pomerado:section core.example-readers --> use to assemble a sample request: public, generic data such as a well-known airport code
   (`examples: ["SFO"]`), a date a few weeks ahead or a common product category. Never use a value
   from this session: not the caller's input, the owner's answers or anything the site showed
@@ -607,7 +619,9 @@ first, then the empty state, then results. Pass the step itself as `action`, suc
 `() => apply.click()`: the wait runs it once, and an answer the page already showed before it counts
 only after staying unchanged for `unchangedMs`, 2 s by default, so a list the step has not yet
 re-rendered is not read while a step that leaves the same answer still resolves; a new or
-changed element counts at once. Pass the site's own loading sign as `loading`, the part of the
+changed element counts at once. `waitForOutcome` returns the name of the answer that showed.
+Prefer branching on that name over waiting again for the same answers or rechecking them with
+`isVisible`. Pass the site's own loading sign as `loading`, the part of the
 page the answer appears in as `region`, and the context's `siteDomain`, so the sign counts for as
 long as it shows, changes in that part count as progress, and so do the site's own requests on
 every host of its domain. A generic sign, such as `aria-busy` or a spinner class, counts only
@@ -633,6 +647,9 @@ key })` returns `{ rows, more }`: the first `count` rows that have a `key`, each
 and reading the same twice. It reads each field from its first visible match, skips a row without
 a key, and returns fewer rows once their count holds; no rows is never its answer, so decide an empty list with `waitForOutcome` first.
 `waitForValues(fields)` returns `{ values }` for a record, a quote or a form's state.
+Prefer the wait helpers' own settling over loops of your own that poll until values hold still:
+`waitForRows` and `waitForValues` already return only once what they read is filled in and reads
+the same on two looks.
 `waitForChange(fields, { before, action, loading })` returns `{ values, changed }` after a choice:
 changed, or the same with no progress sign for `unchangedMs`. They throw a `ValueWaitFailure`:
 `values_loading` when a value is still loading as progress stops, `change_unknown` when the
