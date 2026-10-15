@@ -367,8 +367,12 @@ the task can't run without it (below).
 page offers: a control no input covers, an input you cannot wire, a value the request needs
 that the page does not show, or a needed field you would have to make nullable. Settle each
 then: wire it, ask the owner with `request_input` when the request reads two ways, or state in
-the description why the tool lacks it. Publication review blocks on the same gaps, and finding
-them at `finish_build` costs a full fix-and-resubmit round.
+the description why the tool lacks it. When the site never shows a value the request needs, a
+field to return or a filter or option to apply, ask the owner with `request_input` as soon as you
+find it missing, before you build, whether to build without it or stop. When they need it, end
+with `report_blocked` reason `site_lacks_capability` (`AGENTS.md`, "Impossible as asked").
+Publication review blocks on the same gaps, and finding them at `finish_build` costs a full
+fix-and-resubmit round.
 
 **Never loosen a value the request needs.** The values the request needs are each value it
 names, the record's identifier as the site shows it, and the context those depend on as the page

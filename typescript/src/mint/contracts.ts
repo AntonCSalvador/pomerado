@@ -1623,13 +1623,12 @@ export interface MintHarnessSnapshot {
   /**
    * Guardian denied or escalated an execution, or refused a publication for a reason no
    * correction gets past (`publicationRefusalUnfixable`), in this attempt: the refusal a `policy`
-   * block needs unless the owner answered no. A publication denial that names a correction never
-   * sets it.
+   * block needs. A publication denial that names a correction never sets it.
    */
   readonly guardianRefused?: true;
   /**
-   * Unanswered questions handed back to the minter as no answer in this build, which a `policy`
-   * block also stands on. Optional so a rollout's old and new workers each restore the other's
+   * Unanswered questions handed back to the minter as no answer in this build, which a
+   * `question_unanswered` block stands on. Optional so a rollout's old and new workers each restore the other's
    * checkpoint.
    */
   readonly noAnswerHandBacks?: number;
@@ -2057,8 +2056,9 @@ export interface MintDependencies {
   /**
    * Whether the host's own guidance names this `policy` ending, so it needs no refusal on record,
    * such as a repair's verdict that the caller's input caused its run's failure. It gets the
-   * screened explanation. Without it, `policy` needs a Guardian deny or escalation, the owner's
-   * no to a confirm question, or a question handed back unanswered, in the attempt.
+   * screened explanation. Without it, `policy` needs a Guardian deny or escalation in the
+   * attempt; a report that stands only on the owner's no or an unanswered question takes that
+   * ending's own name.
    */
   readonly policyBlockAllowed?: (explanation: string) => boolean;
   /** Trusted registered invocation receipt, loaded from its durable recovery record. */
