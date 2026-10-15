@@ -60,7 +60,7 @@ export const providerOrigin = (siteOrigin: string, candidate: string): boolean =
  * registrable domain. Undefined otherwise, and every workspace step is then refused.
  */
 export const workspaceRelation = (
-  recipe: { readonly workspace?: WorkspaceRelation | undefined },
+  recipe: { readonly version: number; readonly workspace?: WorkspaceRelation | undefined },
   siteOrigin: string,
 ): WorkspaceRelation | undefined => {
   const parent = recipe.workspace?.parent;
@@ -69,9 +69,10 @@ export const workspaceRelation = (
 
 /** The recipe's sign-in origins that are cross-site provider origins of `siteOrigin`. */
 export const approvedSignInOrigins = (
-  recipe: { readonly signInOrigins?: readonly string[] | undefined },
+  recipe: { readonly version: number; readonly signInOrigins?: readonly string[] | undefined },
   siteOrigin: string,
-): readonly string[] => (recipe.signInOrigins ?? []).filter((origin) => providerOrigin(siteOrigin, origin));
+): readonly string[] =>
+  (recipe.signInOrigins ?? []).filter((origin) => providerOrigin(siteOrigin, origin));
 
 /** A login's pinned workspace origin when it passes `workspaceHost` under a valid relation. */
 export const pinnedWorkspaceOrigin = (
@@ -79,7 +80,9 @@ export const pinnedWorkspaceOrigin = (
   relation: WorkspaceRelation | undefined,
   pinned: string | undefined,
 ): string | undefined =>
-  relation !== undefined && pinned !== undefined && workspaceHost(siteOrigin, relation.parent, pinned)
+  relation !== undefined &&
+  pinned !== undefined &&
+  workspaceHost(siteOrigin, relation.parent, pinned)
     ? pinned
     : undefined;
 
@@ -176,7 +179,8 @@ export const admitScreenOrigin = (
   const sibling = relation !== undefined && workspaceHost(siteOrigin, relation.parent, live);
   if (step.origin !== "workspace") {
     if (live === recordedScreenOrigin(step, undefined)) return { admitted: true };
-    if (relation !== undefined && pinned !== undefined && live === pinned) return { admitted: true };
+    if (relation !== undefined && pinned !== undefined && live === pinned)
+      return { admitted: true };
     if (sibling && pinned === undefined) return refused(context, live, "workspace_unverified");
     return refused(context, live, "screen_origin_changed");
   }

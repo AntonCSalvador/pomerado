@@ -571,11 +571,14 @@ export interface SignInBrowser<E> {
   /**
    * Checks the minter's signed-in indicator on the page: `screens` are every screen the build
    * filled, `challengeScreens` the current sign-in's, whose recorded challenges count.
+   * `openOrigin`, a same-site origin such as the login's workspace origin, is where the
+   * indicator's `openPath` opens; the site origin when absent.
    */
   readonly confirm: (
     indicator: AutofillSignedIn,
     screens: AutofillScreens,
     challengeScreens: AutofillScreens,
+    openOrigin?: string,
   ) => Effect.Effect<AutofillSignedInCheck, E>;
   /** Hears each request the page sends until the returned function stops it. */
   readonly onRequest: (listener: (request: SignInRequest) => void) => () => void;

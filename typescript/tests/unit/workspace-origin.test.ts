@@ -57,16 +57,16 @@ describe("providerOrigin", () => {
 
 describe("a recipe's relations for its site", () => {
   it("keeps a workspace relation only on the site's own registrable domain", () => {
-    expect(workspaceRelation({ workspace: { parent } }, site)).toEqual({ parent });
-    expect(workspaceRelation({ workspace: { parent: "example.org" } }, site)).toBeUndefined();
-    expect(workspaceRelation({ workspace: { parent: "github.io" } }, "https://github.io")).toBeUndefined();
-    expect(workspaceRelation({}, site)).toBeUndefined();
+    expect(workspaceRelation({ version: 4, workspace: { parent } }, site)).toEqual({ parent });
+    expect(workspaceRelation({ version: 4, workspace: { parent: "example.org" } }, site)).toBeUndefined();
+    expect(workspaceRelation({ version: 4, workspace: { parent: "github.io" } }, "https://github.io")).toBeUndefined();
+    expect(workspaceRelation({ version: 1 }, site)).toBeUndefined();
   });
 
   it("keeps only cross-site sign-in origins", () => {
     expect(
       approvedSignInOrigins(
-        { signInOrigins: ["https://id.example.net", "https://auth.example.com"] },
+        { version: 4, signInOrigins: ["https://id.example.net", "https://auth.example.com"] },
         site,
       ),
     ).toEqual(["https://id.example.net"]);

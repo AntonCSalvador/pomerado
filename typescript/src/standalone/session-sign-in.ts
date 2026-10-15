@@ -29,6 +29,7 @@ import {
 } from "../runtime/sign-in-replay.js";
 import type { SignInReplayTiming } from "../runtime/sign-in-replay-steps.js";
 import { askingValueHooks } from "../runtime/sign-in-values.js";
+import { approvedSignInOrigins } from "../runtime/workspace-origin.js";
 import { localSignInLogin, makeSignInBrowser, repeatedLoginFailure } from "./authentication.js";
 import type { StandaloneSession } from "./session.js";
 
@@ -185,6 +186,14 @@ export interface RecordedSignIn {
 }
 
 /**
+ * The workspace origin a run's sign-in learned for its login, held in memory for that run only:
+ * the local host keeps no login between runs, so it pins nothing past one.
+ */
+export interface RunWorkspace {
+  origin: string | undefined;
+}
+
+/**
  * The local host's automatic sign-in on the browser an operation holds. It checks the recorded
  * marker on the current page without moving it, and only when the page reads signed out does it
  * sign in again: first a check that types nothing (the recipe's account page, then a value-free
@@ -213,6 +222,8 @@ export const makeLocalSessionSignIn = (options: {
    */
   readonly spent?: { attempt: number; scope: number };
   readonly timing?: SignInReplayTiming;
+  /** The login's workspace origin under a recipe's workspace relation; each sign-in updates it. */
+  readonly workspace?: RunWorkspace;
 }) => {
   const spent = options.spent ?? { attempt: 0, scope: 0 };
   const replayBrowser = (bound: SessionSignInBound | undefined) =>
@@ -240,7 +251,17 @@ export const makeLocalSessionSignIn = (options: {
         site: options.site,
         siteOrigin: options.siteOrigin,
         ...(options.timing === undefined ? {} : { timing: options.timing }),
-      }),
+        ...(options.workspace?.origin === undefined
+          ? {}
+          : { workspaceOrigin: options.workspace.origin }),
+      }).pipe(
+        Effect.tap((signedIn) =>
+          Effect.sync(() => {
+            if (options.workspace !== undefined && signedIn.workspaceOrigin !== undefined)
+              options.workspace.origin = signedIn.workspaceOrigin;
+          }),
+        ),
+      ),
     );
   /** The recorded marker on the current page; no recorded sign-in says nothing. */
   const sessionOn = Effect.suspend(() => {
@@ -269,7 +290,7 @@ export const makeLocalSessionSignIn = (options: {
       const { signedIn, steps } = sign.recipe;
       if (signedIn.openPath !== undefined) {
         const check = yield* options.browser
-          .confirm(signedIn, steps, steps)
+          .confirm(signedIn, steps, steps, options.workspace?.origin)
           .pipe(Effect.mapError((error) => failed("session_sign_in_failed", "check_failed", error)));
         if (check.signedIn) return true;
       }
@@ -415,7 +436,8 @@ export const mintSessionSignInFailure = (failed: SessionSignInFailed): MintFailu
  * A run's sign-in with its artifact's recorded sign-in: `before` signs in before the operation
  * runs, as every signed-in run does, and `hook` signs in again on the same browser whenever the
  * script's `ensureSignedIn` finds the page signed out, with the login `before` read. A run never
- * restores a saved session, so it saves none.
+ * restores a saved session, so it saves none. The recipe's approved sign-in origins join the
+ * run's, and `workspace` holds the workspace origin the run's sign-in learned, for this run only.
  */
 export const makeRunSignIn = (
   session: StandaloneSession,
@@ -427,11 +449,14 @@ export const makeRunSignIn = (
   // The site as the owner's questions name it: its host, without `www.`.
   const site = new URL(siteOrigin).hostname.replace(/^www\./u, "");
   const asks = makeBoundableAsk(ask);
+  const workspace: RunWorkspace = { origin: undefined };
   const signInBrowser = makeSignInBrowser({
     page: browser,
     keyboard: browser.keyboard,
     siteOrigin,
-    authenticationOrigins,
+    authenticationOrigins: [
+      ...new Set([...authenticationOrigins, ...approvedSignInOrigins(signIn.recipe, siteOrigin)]),
+    ],
     onRequest: browser.onRequest,
     typing: session.signInTyping,
   });
@@ -449,7 +474,13 @@ export const makeRunSignIn = (
     carries: secrets.carries,
     site,
     siteOrigin,
-  });
+  }).pipe(
+    Effect.tap((signedIn) =>
+      Effect.sync(() => {
+        workspace.origin = signedIn.workspaceOrigin;
+      }),
+    ),
+  );
   const again = makeLocalSessionSignIn({
     browser: signInBrowser,
     recorded: () => signIn,
@@ -461,6 +492,7 @@ export const makeRunSignIn = (
     siteOrigin,
     limits: runSessionSignIns,
     scope: "attempt",
+    workspace,
   });
-  return { before, hook: again.hook };
+  return { before, hook: again.hook, workspace };
 };

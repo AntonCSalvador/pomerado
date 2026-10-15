@@ -22,8 +22,10 @@ import { MintFailure } from "../mint/contracts.js";
 import type { CredentialRejectedField, WebsiteCredentials } from "../runtime/authentication.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { InputRequestFailure, type InputAsker } from "../runtime/input-request.js";
+import { sameSite } from "../runtime/same-site.js";
 import { trustedUrl } from "../runtime/sign-in-origins.js";
 import type { SignInReplayBrowser } from "../runtime/sign-in-replay.js";
+import { resetPageCode } from "../runtime/start-state.js";
 
 /**
  * Whether the host typed a sign-in value into the session browser's page. It lasts for the
@@ -102,7 +104,8 @@ export const makeSignInBrowser = (options: {
   readonly trusted?: () => readonly string[];
   readonly onRequest: (listener: (request: SignInRequest) => void) => () => void;
   readonly typing: SessionTyping;
-}): SignInBrowser<never> & Pick<SignInReplayBrowser<Error>, "open" | "markerVisible"> => {
+}): SignInBrowser<never> &
+  Pick<SignInReplayBrowser<Error>, "open" | "markerVisible" | "clearSiteData"> => {
   const { page, siteOrigin, typing } = options;
   const signInOrigins = () =>
     options.trusted === undefined
@@ -134,20 +137,33 @@ export const makeSignInBrowser = (options: {
   return {
     inspect: calls.inspect,
     fill: calls.fill,
-    confirm: (indicator, screens, challengeScreens) =>
-      checkAutofillSignedIn({
+    // The account page opens on `openOrigin`, the login's workspace, only when it is an exact
+    // origin on the site's registrable domain.
+    confirm: (indicator, screens, challengeScreens, openOrigin) => {
+      const opens = openOrigin === undefined ? siteOrigin : openOrigin;
+      const at = URL.parse(opens);
+      if (at === null || at.origin !== opens || !sameSite(siteOrigin, at))
+        return Effect.succeed({ signedIn: false as const, failed: "off_site" as const });
+      return checkAutofillSignedIn({
         indicator,
         page,
-        siteOrigin,
+        siteOrigin: opens,
         authenticationOrigins: signInOrigins(),
         screens,
         challengeScreens,
-      }),
+      });
+    },
     onRequest: options.onRequest,
     get authenticationOrigins() {
       return signInOrigins();
     },
     open: (url) => openAutofillLogin({ page, url }),
+    // Clears every cookie and the storage of every origin the browser visited, and leaves the tab
+    // blank for the replay to open its entry again.
+    clearSiteData: () =>
+      page
+        .execute(resetPageCode(page.targetId, siteOrigin, "clear", undefined, [], [], true), 60)
+        .pipe(Effect.asVoid),
     markerVisible: (selector, screenPage, popup) =>
       markerVisible({
         selector,
