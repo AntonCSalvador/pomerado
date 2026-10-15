@@ -1,5 +1,9 @@
-import { makeGuardianSession } from "./session.js";
-import type { GuardianSession, GuardianSessionOptions } from "./session.js";
+import { guardianCompactBeforeReviewTokens, makeGuardianSession } from "./session.js";
+import type {
+  GuardianSession,
+  GuardianSessionCompaction,
+  GuardianSessionOptions,
+} from "./session.js";
 import { QuestionDecision } from "./question.js";
 import { anchorQuotedFindings, decodePublicationDecision } from "./publication.js";
 import type { AnsweredQuestion, PendingQuestion } from "./question.js";
@@ -446,6 +450,8 @@ export interface ReviewTurn {
     readonly attempt: number;
     readonly timeoutMs: number;
   }) => Effect.Effect<void>;
+  /** A compaction of the session's conversation before this review's first call. Must not fail. */
+  readonly observeCompaction?: (compaction: GuardianSessionCompaction) => Effect.Effect<void>;
 }
 
 /** The retention failure's own detail (operation, underlying error) beneath the review's. */
@@ -641,7 +647,13 @@ export const makeGuardian = (
         Effect.catchAllCause(() => Effect.void),
         Effect.asVoid,
       ));
-  const session = continuity === undefined ? undefined : makeGuardianSession(continuity);
+  const session =
+    continuity === undefined
+      ? undefined
+      : makeGuardianSession({
+          compactBeforeReviewTokens: guardianCompactBeforeReviewTokens,
+          ...continuity,
+        });
   /**
    * Runs one review again after an outage, each time as a fresh review with its own ID, until
    * it completes or the outage outlasts the retry budget.
@@ -963,8 +975,9 @@ export const makeGuardian = (
             const retained = yield* Effect.either(retain(included.right));
             if (retained._tag === "Left") yield* gap(retained.left);
           }
+          // A review that compacts first has no earlier read in view to count as unchanged.
           const unchanged =
-            session === undefined
+            session === undefined || session.compactsBeforeReview()
               ? []
               : yield* unchangedSources(
                   sourceLedger(session.history()),
@@ -1034,6 +1047,15 @@ export const makeGuardian = (
                 { reviewId, reviewKind },
               ) ?? Effect.void,
               "guardian.model_call_retried",
+            ),
+          observeCompaction: (compaction) =>
+            bestEffort(
+              diagnostics?.emit(
+                "guardian.session_compacted",
+                { reviewId, details: compaction },
+                { reviewId, reviewKind },
+              ) ?? Effect.void,
+              "guardian.session_compacted",
             ),
           followUp: (output) => {
             // A private kind's exchange ends only at the next review request, so a correction

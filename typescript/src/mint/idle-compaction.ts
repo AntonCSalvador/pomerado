@@ -1,4 +1,5 @@
 import type { AgentInputItem, ModelRequest, ModelResponse } from "@openai/agents";
+import { compactionTrigger } from "../models/compaction-trigger.js";
 
 /**
  * Input tokens at which the minter compacts its history while it waits on a tool. Below the
@@ -6,12 +7,6 @@ import type { AgentInputItem, ModelRequest, ModelResponse } from "@openai/agents
  * lands before any request reaches it; the 40K between them is several turns of growth.
  */
 export const mintIdleCompactionTokens = 200_000;
-
-/** The Responses API compacts the context it is sent when this is the last input item. */
-const compactionTrigger: AgentInputItem = {
-  type: "unknown",
-  providerData: { type: "compaction_trigger" },
-};
 
 /** Output items that leave the model waiting on a tool result. */
 const toolCallTypes = new Set(["function_call", "shell_call", "apply_patch_call", "computer_call"]);

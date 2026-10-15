@@ -479,6 +479,7 @@ const reviewerWithPolicy = (policy: string, options: GuardianModelOptions): Revi
               runner.config.modelProvider,
               () => activeState.history,
               () => reviewSignal,
+              turn.observeCompaction,
             );
           const flushDiagnostics = async () => {
             try {
