@@ -79,7 +79,11 @@ During the session:
 - When the write changes state that already exists, such as a saved record or a cart
   (.agents/cart/SKILL.md), read that state before the committing step and again after it,
   in the session and in the composed script, and check that only the requested change
-  happened. Fail when it did not.
+  happened. Fail when it did not. Read both through the same query or view, so they have
+  the same shape: a list's row and the same record's detail view can return one value in
+  different forms. Check that each field the input sets now matches it, and that every other
+  field the caller can edit there kept its value. Compare only those fields, by value, as
+  "Check the read-back" below says; never fail on a field the site maintains itself.
 - If a step meets an option the input does not settle, stop that step before choosing
   it and ask. A `request_input` question during the session waits in place; a choice
   that exists only on the page mid-flow, such as a seat on the flight just chosen, is
@@ -212,8 +216,16 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
 Once the session has started, a live `explore` or `test` is refused, and a write
 build never runs a live `example`: read what the composed script will need, such as a lookup's
 list, in an `act` step that changes nothing. The session is the one run that proves the write:
-design no tests and build no offline test suite for it. Its HTTP version gets one offline replay of
+design no live tests and no test suite for it. Its HTTP version gets one offline replay of
 the session (http-mcp skill), and the testing skill is not for a write.
+
+The composed script's own checks never run live before publishing, so check them offline.
+Keep the read-back match and the before-and-after comparison as plain functions in the module
+the script imports, and before `finish_build` run them with Node in `exec_command` over what
+the session read: its before and after reads, or their response bodies under `captures/`.
+They must pass for the write that happened, and must not flag a field the site maintains or
+the same value in another form. This quick check sends nothing to the site and is not a second
+write. When a body it needs was not saved, say so in `coverage`.
 
 ## Check the read-back
 
@@ -238,10 +250,19 @@ the caller asked for, in the form the site saves it.
   ask the owner in the build's one bundled `request_input` question, or follow the rules above:
   never call `verified()` on a read-back that cannot tell, and publish the write `unverifiable`
   when no read-back can.
-- When the write changed state that already existed, compare values, not object identity or the
-  order of an object's keys: the same person or record returned as a new object is unchanged. A
-  field the site itself maintains on every save, such as an updated-at time, a version counter or
-  an edit history, is not an unrequested change; a field the caller can set still counts.
+- When the write changed state that already existed, compare values, not object identity,
+  serialized text or the order of an object's keys: the same person or record returned as a new
+  object is unchanged. A field the site itself maintains on every save, such as an updated-at
+  time, a version counter or an edit history, is not an unrequested change; a field the caller
+  can set still counts.
+- A write with branches, such as create when nothing matches and update when one does, runs
+  one branch in the session. Keep every branch's commit, confirmation and comparison in shared
+  code that reads back through the same calls. Check a branch the session did not run offline,
+  as above, against captured shapes: a record from the session's before read, or from a list
+  response, has the shape an update reads back. When no captured shape can stand in for it,
+  ask the owner in the build's bundled `request_input` question, before the session's first
+  commit, which branch the session should run live. Never run a second write only to try
+  another branch. Name in `coverage` the branch the session ran.
 
 ## Compose and publish
 
@@ -356,7 +377,7 @@ Perform the authorized task once through live `act` steps, preserving the shared
 
 Keep steps small and read the actual state after each submission. A button named Continue, Next or Save may save a draft, persist that page, or finish the task immediately; its label does not establish that another review or final submit follows. Mark only the step whose click saves or submits. Opening or filling an unsaved form is not a commit step. Mark every such step, including autosaves, saved form steps and payment submissions whose next screen is unknown: call `enteringCommit("place-order")` right before the execute call that can send the change and declare the names in order as `write.commits`. Use the same marked helper in the session and the composed script. If a call returns an unexpected page or fails while waiting for an assumed review, read back before another submission: the task may already be complete.
 
-Compose `src/tool.mjs` from the original reviewed steps and confirming observation. Design no tests for it, and never run the composed write live again. Call `finish_build` with its confirming `executionId`, declared entrypoint and honest coverage. It returns integration files/schemas. When a write's outcome remains uncertain, report that uncertainty and preserve the no-replay rule.
+Compose `src/tool.mjs` from the original reviewed steps and confirming observation. Design no tests for it beyond an offline check of its read-back and comparison over what the session read, and never run the composed write live again. Call `finish_build` with its confirming `executionId`, declared entrypoint and honest coverage. It returns integration files/schemas. When a write's outcome remains uncertain, report that uncertainty and preserve the no-replay rule.
 
 If the composed contract names the wrong commit marks, correct it to match the marks the session actually entered. If the completed session entered no marks, it cannot finish: changing its source or entering a mark in a later read cannot show that the earlier commit was marked. End the build and explain that the task completed but its commit steps were not marked; never repeat the write to add them.
 
