@@ -315,9 +315,9 @@ the task can't run without it (below).
   snake_case (`"premium_economy"`); booleans named as statements (`refundable`, not
   `is_refundable_flag`); lists named in the plural; and the unit in the field name or its
   description (`duration_minutes`). Convert between these and the site's own formats in code.
-- When `reference/site-tools.json` exists, you can view the other integrations made for this site.
-  Read `reference/site-tools/README.md` first: it indexes their tools, one folder each, with each
-  tool's effect, sign-in and a short description. Then read the folders you need: each holds a
+- When `reference/site-tools.json` exists, you can view the site's other tools. Read
+  `reference/site-tools/README.md` first: it indexes them, one folder each, with each tool's
+  effect, sign-in and a short description. Then read the folders you need: each holds a
   `README.md` (description, inputs and outputs with examples and constraints, an example call and
   its files) and, unless the index marks its code omitted, the tool's full source as it runs.
   `reference/site-tools.json` lists the same tools with their full schemas. Read them before
