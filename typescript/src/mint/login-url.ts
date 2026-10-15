@@ -69,8 +69,10 @@ export const oneTimeLoginUrlParameters = (loginUrl: string): readonly string[] =
   inspect(rawParameters(url.search.slice(1)));
   if (url.hash.length > 1) {
     const fragment = url.hash.slice(1);
-    const query = fragment.includes("?") ? fragment.slice(fragment.indexOf("?") + 1) : fragment;
-    inspect(rawParameters(query));
+    inspect(rawParameters(fragment));
+    // A hash route, such as `#/oauth/callback?code_challenge=…`, carries its own query after `?`.
+    const routeQuery = fragment.indexOf("?");
+    if (routeQuery >= 0) inspect(rawParameters(fragment.slice(routeQuery + 1)));
   }
   return [...names].sort();
 };

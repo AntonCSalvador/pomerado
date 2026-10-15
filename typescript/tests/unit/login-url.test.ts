@@ -23,6 +23,12 @@ it.each([
   { url: `${idp}?state=ab12+cd34/ef56gh78==`, names: ["state"] },
   { url: `${idp}?nonce=ab12%2Bcd34%2Fef56gh78%3D`, names: ["nonce"] },
   { url: `${idp}#state=ab12+cd34+ef56gh78`, names: ["state"] },
+  // A parameter-only fragment whose value holds a `?` is still read as a whole.
+  { url: `${idp}#SAMLRequest=abc?def`, names: ["SAMLRequest"] },
+  {
+    url: `${idp}#state=af0ifjsldkj81d2c9b7e&code_verifier=abc?def`,
+    names: ["code_verifier", "state"],
+  },
   // Hash-routed URLs carrying one-time parameters in their route query.
   {
     url: "https://example.com/#/oauth/callback?code_challenge=xyz123",
