@@ -2026,6 +2026,29 @@ it("runs a response's calls in the model's order around its write", async () => 
   expect(f.requests).toHaveLength(2);
 });
 
+it("returns a second execute in one response unrun, so the minter reads the first result before it", async () => {
+  let f: Awaited<ReturnType<typeof fixture>> | undefined;
+  const review = reviewingSource(() => f!.workspace.readFile!({ path: "src/tool.ts" }));
+  f = await fixture(
+    (_request, index) =>
+      [
+        together(
+          call("execute", { ...execution, purpose: "explore" }, "explore_page"),
+          call("execute", execution, "run_example"),
+        ),
+        call("execute", execution, "run_example_again"),
+        call("finish_build", publication),
+      ][index] ?? prose(),
+    { reviewAndExecute: review.reviewAndExecute },
+  );
+  expect(await f.run()).toMatchObject({ build: "published" });
+  expect(review.reviewed.map((entry) => entry.purpose)).toEqual(["explore", "example"]);
+  const unrun = (f.requests[1]?.input as AgentInputItem[]).find(
+    (item) => item.type === "function_call_result" && item.callId === "run_example",
+  );
+  expect(JSON.stringify(unrun)).toContain("not_run");
+});
+
 it("gives a host's recovery and observer each call of a response with a write once, in order", async () => {
   let f: Awaited<ReturnType<typeof fixture>> | undefined;
   const review = reviewingSource(() => f!.workspace.readFile!({ path: "src/tool.ts" }));

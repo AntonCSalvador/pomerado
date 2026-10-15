@@ -75,6 +75,17 @@ const callsAfterEdit = (output: ModelResponse["output"]): string[] => {
 };
 
 /**
+ * Each execute after the first in one response, which the model sent before it read the first's
+ * result.
+ */
+const laterExecutes = (output: ModelResponse["output"]): string[] =>
+  output
+    .flatMap((item) =>
+      item.type === "function_call" && item.name === "execute" ? [item.callId] : [],
+    )
+    .slice(1);
+
+/**
  * Whether the SDK holds this call because it cannot read its arguments as an object, which it does
  * for every tool whose approval depends on the call. Released, the call gets its parse error as
  * it did before any tool had such a policy.
@@ -475,6 +486,8 @@ export const makeOpenAIMinter = (
                   };
             /** Calls held until their response's edits land; the run loop releases them. */
             const heldForEdit = new Set<string>();
+            /** Executes returned unrun, since an earlier execute in their response ran first. */
+            const unreadExecutes = new Set<string>();
             const afterEdits = <
               T extends {
                 readonly needsApproval: (
@@ -743,16 +756,32 @@ export const makeOpenAIMinter = (
               "Execution did not succeed. Diagnose the root cause and retained evidence. Correct request/source errors within existing authority; preserve prior effects. Another example read requires explicit host repeatableRead:true; never replay a nonrepeatable example or a write that may have committed. After a failed authenticate, fix its cause and call authenticate again.",
               (request) => turn.actions.execute(request),
             );
+            /** A later execute in a response waits for the model to read the first's result. */
+            const executeOnce = {
+              ...executeTool,
+              execute: (input: unknown, context: unknown, details: ToolCallDetails) =>
+                details?.toolCall?.callId !== undefined &&
+                unreadExecutes.delete(details.toolCall.callId)
+                  ? Promise.resolve(
+                      JSON.stringify({
+                        status: "not_run",
+                        effect: "not_sent",
+                        instruction:
+                          "Not run: an earlier execute in the same response ran first. Read its result, then send this execute again if it is still the next step.",
+                      }),
+                    )
+                  : executeTool.execute(input, context, details),
+            };
             const execute = turn.autofillSignIn
               ? tool({
-                  ...executeTool,
+                  ...executeOnce,
                   // Autofill's signInStep is a union with optional fields, which strict mode
                   // cannot express; the harness decodes the request itself.
                   strict: false,
                   parameters: looseParameters(withIntent(ExecutionRequest)),
                 })
               : tool({
-                  ...executeTool,
+                  ...executeOnce,
                   parameters: parameters(withIntent(ManagedSignInExecutionRequest)),
                 });
             const retainCapture = tool({
@@ -1081,6 +1110,8 @@ export const makeOpenAIMinter = (
                     };
                     const noteCalls = (response: ModelResponse) => {
                       for (const callId of callsAfterEdit(response.output)) heldForEdit.add(callId);
+                      for (const callId of laterExecutes(response.output))
+                        unreadExecutes.add(callId);
                       return response;
                     };
                     if (recovery === undefined) return invoke().then(noteCalls);
