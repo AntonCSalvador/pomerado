@@ -81,7 +81,7 @@ During the session:
   in the session and in the composed script, and check that only the requested change
   happened. Fail when it did not.
 - If a step meets an option the input does not settle, stop that step before choosing
-  it and ask. A `request_input` question during the session waits in place; a choice
+  it and ask, in one round for the whole page once every value the input and earlier answers supply on it is filled (forms skill). A `request_input` question during the session waits in place; a choice
   that exists only on the page mid-flow, such as a seat on the flight just chosen, is
   a declared `ask` in the next `act` step's script (the caller-input skill). An
   answered question settles the option. Check the page again before continuing.
