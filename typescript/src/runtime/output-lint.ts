@@ -79,9 +79,9 @@ export interface OutputLintOptions {
   readonly samples?: boolean;
   /**
    * The `fieldFill` of each other tested run of the same tool on the same source, such as its live
-   * test cases. A field empty in this output and in all of them is flagged `empty_field`: outside
-   * a list, such as a detail record's, even in one record; in a list, once the runs hold three of
-   * its records.
+   * test cases. A field empty in this output and in all of them, at least one of which holds it,
+   * is flagged `empty_field`: outside a list, such as a detail record's, even in one record; in a
+   * list, once the runs hold three of its records. Without them, only the per-list check runs.
    */
   readonly alsoTested?: readonly FieldFill[];
 }
@@ -461,8 +461,8 @@ const endsWithExpandPhrase = (text: string) => {
  * every record. Field checks (constant, empty, duplicate records, whole-card text) need a list of
  * at least three records, so a single record is never judged on them, with two exceptions: an item
  * ID that repeats is flagged in a list of two, and a field empty in every record of this output
- * and of `alsoTested` is flagged outside a list even in one record, as a detail field read wrong
- * on every run.
+ * and of the other tested runs in `alsoTested` that hold it is flagged outside a list even in one
+ * record, as a detail field read wrong on every run.
  */
 export const lintOutput = (output: unknown, options: OutputLintOptions = {}): OutputFinding[] => {
   const schema = schemaResolver(options.outputSchema);
@@ -704,20 +704,25 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
   };
 
   visit(output, "$", schema.root, false, 0);
-  // A field empty in every record this output and the tool's other tested runs hold: outside a
-  // list, one record per run is enough; in a list, three records across the runs.
-  const fills = [fieldFill(output), ...(options.alsoTested ?? [])];
-  for (const [path, own] of Object.entries(fills[0] ?? {})) {
-    if (own.filled > 0 || listPagingFields.has(path) || found.has(`empty_field\u0000${path}`))
+  // A field empty in every record this output and the tool's other tested runs hold, judged only
+  // when another tested run holds the field too: outside a list, one record per run is enough; in
+  // a list, three records across the runs. One run alone is no evidence a read is wrong.
+  const others = options.alsoTested ?? [];
+  const own = others.length === 0 ? {} : fieldFill(output);
+  for (const [path, mine] of Object.entries(own)) {
+    if (mine.filled > 0 || listPagingFields.has(path) || found.has(`empty_field\u0000${path}`))
       continue;
-    let records = 0;
+    let records = mine.records;
     let filled = 0;
-    for (const fill of fills) {
+    let elsewhere = 0;
+    for (const fill of others) {
       const entry = Object.hasOwn(fill, path) ? fill[path] : undefined;
-      records += entry?.records ?? 0;
+      elsewhere += entry?.records ?? 0;
       filled += entry?.filled ?? 0;
     }
-    if (filled === 0 && (!path.includes("[]") || records >= 3)) flag(path, "empty_field");
+    records += elsewhere;
+    if (elsewhere > 0 && filled === 0 && (!path.includes("[]") || records >= 3))
+      flag(path, "empty_field");
   }
   return [...found.values()].map((entry) => ({
     ...entry,
@@ -771,7 +776,7 @@ export const outputCheckMeaning: Readonly<Record<OutputCheck, string>> = {
   duplicate_records: "repeats a whole record",
   constant_field: "has the same value in every record",
   empty_field:
-    "is empty or null in every record checked, this run's and the tool's other tested runs', so the read may never find it",
+    "is empty or null in every record checked, this run's and, when given, the tool's other tested runs', so the read may never find it",
 };
 
 /**
@@ -787,5 +792,5 @@ export const outputChecksNotice = (findings: readonly OutputFinding[]) =>
           meaning: outputCheckMeaning[finding.check],
         })),
         instruction:
-          "The host checked every value this run returned. Check each finding against the page. Fix a wrong value at the read in source: read rendered text with visibleText, visibleTexts or readRows, expand collapsed text before reading it and read it back, and scope rows to the main list; never clean a string afterwards. A repeated item ID is usually a sponsored copy of an organic result: return the item once (pagination skill). A field empty in every record checked was usually read from a collapsed section or a guessed key: read it from the page's embedded record data or the opened section, or remove it. A check can be wrong: when a value is correct as it is, such as code the tool is meant to return or the page's own text that only resembles code, name its path and check with the reason in finish_build's outputOverrides. A field that holds code or markup on purpose can declare its contentMediaType instead; its findings then name that type and never block. Blocking findings (script, css, markup, template_residue) refuse finish_build until fixed or overridden; the others never block. The publication reviewer reads every finding and every override with its reason.",
+          "The host checked every value this run returned. Check each finding against the page. Fix a wrong value at the read in source: read rendered text with visibleText, visibleTexts or readRows, expand collapsed text before reading it and read it back, and scope rows to the main list; never clean a string afterwards. A repeated item ID is often a sponsored copy of an organic result: first check whether the rows are variants or line items that share an ID on purpose, and return a copy once only when it is the same item (pagination skill). A field empty in every record of every tested run was usually read from a collapsed section or a guessed key: check it against a record whose page shows it, then read it from the page's embedded record data or the opened section, or remove it. A check can be wrong: when a value is correct as it is, such as code the tool is meant to return or the page's own text that only resembles code, name its path and check with the reason in finish_build's outputOverrides. A field that holds code or markup on purpose can declare its contentMediaType instead; its findings then name that type and never block. Blocking findings (script, css, markup, template_residue) refuse finish_build until fixed or overridden; the others never block. The publication reviewer reads every finding and every override with its reason.",
       };

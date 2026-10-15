@@ -166,7 +166,8 @@ const promotedDigest = (digest: string) => listDigest(`promoted\u0000${digest}`)
 /**
  * Each row's digest as a cursor remembers it, or undefined for a promoted copy, which is no row of
  * the list. A row `promoted` marks is a copy when the rows hold the same item unpromoted, an earlier
- * promoted row holds it, or a previous page returned it (`list.seen`), other than as the anchor.
+ * promoted row holds it, or a previous page returned it (`list.seen`); a promoted row that is the
+ * anchor, the last row the previous page returned, is never a copy.
  * Any other promoted row is remembered apart from the item's organic row, so an organic row a later
  * page shows after its promoted copy was returned is new, not a returned row come back.
  */
@@ -184,9 +185,11 @@ const rowDigests = <Row>(
   return plain.map((digest, index) => {
     if (!marked[index]) return digest;
     const own = promotedDigest(digest);
-    const returned =
-      list !== undefined &&
-      (list.seen.has(digest) || (list.seen.has(own) && own !== list.anchor));
+    if (list !== undefined && own === list.anchor && !shown.has(own)) {
+      shown.add(own);
+      return own;
+    }
+    const returned = list !== undefined && (list.seen.has(digest) || list.seen.has(own));
     if (organic.has(digest) || shown.has(own) || returned) return undefined;
     shown.add(own);
     return own;
@@ -527,6 +530,8 @@ export const finishList = <Row>(
      * previous page returned, such as a row returned earlier that this call read past.
      */
     readonly resumeAfter?: string;
+    /** Whether the row `resumeAfter` names is one `promoted` marks. */
+    readonly resumeAfterPromoted?: boolean;
     /**
      * Rows returned before may come back on this page or a later one, such as after the page
      * started over: `list_changed` is true on it and on every later page from its cursor.
@@ -569,7 +574,12 @@ export const finishList = <Row>(
     (digest) => digest !== undefined,
   );
   const anchor =
-    digests.at(-1) ?? (page.resumeAfter === undefined ? list.anchor : listDigest(page.resumeAfter));
+    digests.at(-1) ??
+    (page.resumeAfter === undefined
+      ? list.anchor
+      : page.resumeAfterPromoted === true
+        ? promotedDigest(listDigest(page.resumeAfter))
+        : listDigest(page.resumeAfter));
   // The last rows returned across calls, this call's last.
   const seen = [...[...list.seen].filter((digest) => !digests.includes(digest)), ...digests];
   const context = page.context === undefined ? list.context : listDigest(page.context);
@@ -635,8 +645,10 @@ export interface ListReader<Row, Segment extends ListSegment<Row>> {
   /**
    * Whether the site marks a row sponsored or promoted, such as `(row) => row.sponsored`. A
    * promoted copy of an item the list also shows unpromoted, or one an earlier page returned, is
-   * dropped and never counts as a change, so each item comes back once, at its organic place. A
-   * promoted row whose item the list shows only promoted stays in place.
+   * dropped and never counts as a change, so an item comes back at its organic place. The one
+   * repeat left: a sponsored copy returned before its organic row was read, such as one at the
+   * top of a page whose organic row sits further on, which then comes back too. A promoted row
+   * whose item the list shows only promoted stays in place.
    */
   readonly promoted?: (row: Row) => boolean;
   /**
@@ -943,6 +955,7 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
   let at = segments.length - 1;
   let offset = segments.at(-1)?.rows.length ?? 0;
   let resumeAfter: string | undefined;
+  let resumeAfterPromoted = false;
   if (!whole) {
     // With no row returned, after the last row read that the anchor or a returned row is, so
     // rows already returned that this call read past are not read again.
@@ -958,7 +971,10 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
       });
       offset = resume - before + 1;
       const row = read[resume];
-      if (lastIndex === undefined && row !== undefined) resumeAfter = reader.keyOf(row);
+      if (lastIndex === undefined && row !== undefined) {
+        resumeAfter = reader.keyOf(row);
+        resumeAfterPromoted = reader.promoted?.(row) === true;
+      }
     }
   } else {
     const last = lastIndex === undefined ? anchor : keys[lastIndex];
@@ -980,6 +996,7 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
       ...(reader.promoted === undefined ? {} : { promoted: reader.promoted }),
       next: hasMore ? positionOf(segments[at], base + at, offset) : null,
       ...(resumeAfter === undefined ? {} : { resumeAfter }),
+      ...(resumeAfterPromoted ? { resumeAfterPromoted } : {}),
       hasMore,
       totalResults,
       listChanged: picked.listChanged || steppedBack || restarted,

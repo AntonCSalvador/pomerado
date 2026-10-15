@@ -451,6 +451,29 @@ describe("finishList", () => {
     });
   });
 
+  it("anchors a later page that returned no rows on the sponsored row it resumed after", () => {
+    const later = continuing(cursorOf(pageOne()));
+    const fields = finishList(later, {
+      rows: [],
+      keyOf,
+      promoted,
+      next: { page: 1, offset: 3, href: "https://www.example.test/s?q=lamps" },
+      hasMore: true,
+      totalResults: null,
+      listChanged: false,
+      resumeAfter: "x",
+      resumeAfterPromoted: true,
+    });
+    const resumed = continuing(
+      cursorOf(sealListOutput({ results: [], ...fields }, input, scope())),
+    );
+    expect(
+      selectRows(resumed, [...rows("a", "b"), { id: "x", sponsored: true }, ...rows("c")], keyOf, {
+        promoted,
+      }),
+    ).toEqual({ rows: rows("c"), listChanged: false });
+  });
+
   it("refuses more rows than limit", () => {
     expect(() =>
       finishList(startList(hosted({ limit: 1 }), { mechanism: "append" }), {

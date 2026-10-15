@@ -76,7 +76,7 @@ return {
 
 /**
  * The listing's own ID, the same on a sponsored copy: `readList` drops a sponsored copy of a listing
- * the list also shows, so each listing comes back once, at its organic place.
+ * the rows it read show, or an earlier page returned, so a listing comes back at its organic place.
  */
 const keyOf = (row: Listing) => row.id;
 

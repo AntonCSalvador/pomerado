@@ -388,8 +388,15 @@ describe("empty fields across a detail record and the tool's tested runs", () =>
     specs: { weight: null },
   });
 
-  it("flags a detail field that is null in a single record", () => {
-    expect(checksOf(detail(null, 4.5))).toEqual(["description empty_field", "specs.weight empty_field"]);
+  it("flags a single detail record's field only when every other tested run left it empty too", () => {
+    // One run alone is no evidence the read is wrong.
+    expect(checksOf(detail(null, 4.5))).toEqual([]);
+    expect(checksOf(detail(null, 4.5), { alsoTested: [fieldFill(detail(null, null))] })).toEqual([
+      "description empty_field",
+      "specs.weight empty_field",
+    ]);
+    // A run that never returned the field, such as a failed one, is no evidence either.
+    expect(checksOf(detail(null, 4.5), { alsoTested: [fieldFill({ name: "Desk lamp" })] })).toEqual([]);
   });
 
   it("leaves a detail field another tested run filled alone", () => {
@@ -410,16 +417,15 @@ describe("empty fields across a detail record and the tool's tested runs", () =>
   });
 
   it("leaves a list's own paging fields alone", () => {
-    expect(
-      checksOf({
-        results: [{ title: "Mug" }],
-        next_cursor: null,
-        next_cursor_expires_at: null,
-        has_more: false,
-        total_results: null,
-        list_changed: false,
-      }),
-    ).toEqual([]);
+    const page = {
+      results: [{ title: "Mug" }],
+      next_cursor: null,
+      next_cursor_expires_at: null,
+      has_more: false,
+      total_results: null,
+      list_changed: false,
+    };
+    expect(checksOf(page, { alsoTested: [fieldFill(page)] })).toEqual([]);
   });
 
   it("keeps a field fill to paths and counts, never values", () => {

@@ -664,6 +664,15 @@ describe("a list that shows sponsored copies of its own rows", () => {
     expect(third.output.has_more).toBe(false);
   });
 
+  it("continues after a sponsored copy that ended the previous page, without calling it a change", async () => {
+    const call = sponsoredSite([["r1", "r2", "*r9", "r3", "r9", "r4", "r5", "r6"]]);
+    const first = await call(3);
+    expect(first.cards).toEqual(["r1", "r2", "*r9"]);
+    const second = await call(3, first.cursor);
+    expect(second.cards).toEqual(["r3", "r9", "r4"]);
+    for (const page of [first, second]) expect(page.output.list_changed).toBe(false);
+  });
+
   it("returns an item's organic row on a later page after its sponsored copy, without calling it a change", async () => {
     const call = sponsoredSite([
       ["*r8", "r1", "r2", "r3", "r4", "r5", "r6", "r7"],
