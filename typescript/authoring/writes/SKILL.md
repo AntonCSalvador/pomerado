@@ -79,11 +79,10 @@ During the session:
 - When the write changes state that already exists, such as a saved record or a cart
   (.agents/cart/SKILL.md), read that state before the committing step and again after it,
   in the session and in the composed script, and check that only the requested change
-  happened. Fail when it did not. Read both through the same query or view, so they have
-  the same shape: a list's row and the same record's detail view can return one value in
-  different forms. Check that each field the input sets now matches it, and that every other
-  field the caller can edit there kept its value. Compare only those fields, by value, as
-  "Check the read-back" below says; never fail on a field the site maintains itself.
+  happened. Fail when it did not. Read both through the same query or view, selecting the
+  same fields: two read paths, such as a list's row and the record's own detail view, can
+  return the same unchanged field in different shapes, and a comparison across them then
+  reports a change that never happened. "Check the read-back" below says how to compare.
 - If a step meets an option the input does not settle, stop that step before choosing
   it and ask. A `request_input` question during the session waits in place; a choice
   that exists only on the page mid-flow, such as a seat on the flight just chosen, is
@@ -216,8 +215,11 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
 Once the session has started, a live `explore` or `test` is refused, and a write
 build never runs a live `example`: read what the composed script will need, such as a lookup's
 list, in an `act` step that changes nothing. The session is the one run that proves the write:
-design no live tests and no test suite for it. Its HTTP version gets one offline replay of
-the session (http-mcp skill), and the testing skill is not for a write.
+never run the write again, and run no live test of it. Its HTTP version gets one offline replay of
+the session (http-mcp skill), and the testing skill is not for a write. That rule is about
+running the write, not about writing checks: a write's script is expected to check its own
+result, with a confirmation or read-back, a before-and-after comparison where it changes existing
+state, and an offline check of that code.
 
 The composed script's own checks never run live before publishing, so check them offline.
 Keep the read-back match and the before-and-after comparison as plain functions in the module
@@ -225,7 +227,8 @@ the script imports, and before `finish_build` run them with Node in `exec_comman
 the session read: its before and after reads, or their response bodies under `captures/`.
 They must pass for the write that happened, and must not flag a field the site maintains or
 the same value in another form. This quick check sends nothing to the site and is not a second
-write. When a body it needs was not saved, say so in `coverage`.
+write. A body that was not saved, or was cut short, leaves that part not checked, never passed:
+say so in `coverage`.
 
 ## Check the read-back
 
@@ -250,11 +253,20 @@ the caller asked for, in the form the site saves it.
   ask the owner in the build's one bundled `request_input` question, or follow the rules above:
   never call `verified()` on a read-back that cannot tell, and publish the write `unverifiable`
   when no read-back can.
-- When the write changed state that already existed, compare values, not object identity,
-  serialized text or the order of an object's keys: the same person or record returned as a new
-  object is unchanged. A field the site itself maintains on every save, such as an updated-at
-  time, a version counter or an edit history, is not an unrequested change; a field the caller
-  can set still counts.
+- When the write changed state that already existed, check that every field the input sets
+  now matches it. For every other field, flag only a change the session's own correct write did
+  not make too. The session read the record before and after its write: a field that changed
+  there without being asked for, such as an updated-at time, a version counter, an edit
+  history, a last editor or text the site derives from what was written, changes on every
+  correct save, so leave it out of the comparison. Compare the remaining fields by value, after
+  bringing both reads to one shape, never by object identity, serialized text or the order of
+  an object's keys: the same person or record returned as a new object is unchanged. Compare a
+  reference, such as a person or a linked record, by its stable id.
+- Once the commit is confirmed and every field the input sets reads back as asked, the write
+  applied: call `verified()` then. Run the before-and-after comparison after it, over the reads
+  the call already made, and report a difference it finds in the output, in a field the output
+  schema declares for it, never by throwing. A throw after a confirmed save reports a write that
+  landed as possibly completed and sends it to maintenance.
 - A write with branches, such as create when nothing matches and update when one does, runs
   one branch in the session. Keep every branch's commit, confirmation and comparison in shared
   code that reads back through the same calls. Check a branch the session did not run offline,

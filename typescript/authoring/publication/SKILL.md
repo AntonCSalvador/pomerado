@@ -177,8 +177,8 @@ pomerado:section publication.saved-files:end -->.
      declares, without committing twice, and its checks reject no correct write: a
      before-and-after comparison that compares whole objects or serialized text, reads through
      another query after the commit than before it, or counts a field the site maintains as a
-     change, and a branch the session did not run that confirms through its own code, are
-     findings too.
+     change, a branch the session did not run that confirms through its own code, and a throw
+     after a confirmed commit whose requested fields read back as asked, are findings too.
 
 ## Never put these in published files
 
