@@ -611,7 +611,9 @@ first, then the empty state, then results. Pass the step itself as `action`, suc
 `() => apply.click()`: the wait runs it once, and an answer the page already showed before it counts
 only after staying unchanged for `unchangedMs`, 2 s by default, so a list the step has not yet
 re-rendered is not read while a step that leaves the same answer still resolves; a new or
-changed element counts at once. Pass the site's own loading sign as `loading`, the part of the
+changed element counts at once. `waitForOutcome` returns the name of the answer that showed.
+Prefer branching on that name over waiting again for the same answers or rechecking them with
+`isVisible`. Pass the site's own loading sign as `loading`, the part of the
 page the answer appears in as `region`, and the context's `siteDomain`, so the sign counts for as
 long as it shows, changes in that part count as progress, and so do the site's own requests on
 every host of its domain. A generic sign, such as `aria-busy` or a spinner class, counts only
@@ -637,6 +639,9 @@ key })` returns `{ rows, more }`: the first `count` rows that have a `key`, each
 and reading the same twice. It reads each field from its first visible match, skips a row without
 a key, and returns fewer rows once their count holds; no rows is never its answer, so decide an empty list with `waitForOutcome` first.
 `waitForValues(fields)` returns `{ values }` for a record, a quote or a form's state.
+Prefer the wait helpers' own settling over loops of your own that poll until values hold still:
+`waitForRows` and `waitForValues` already return only once what they read is filled in and reads
+the same on two looks.
 `waitForChange(fields, { before, action, loading })` returns `{ values, changed }` after a choice:
 changed, or the same with no progress sign for `unchangedMs`. They throw a `ValueWaitFailure`:
 `values_loading` when a value is still loading as progress stops, `change_unknown` when the
