@@ -26,19 +26,20 @@ const exactHttpsOrigin = (value: string) => {
  * Whether `candidate` may be a per-account workspace origin of the site at `siteOrigin`: an exact
  * https origin with no user info or path, on the registrable domain `parent` (public suffix list,
  * private suffixes included, as `sameSite` reads it), where `parent` is the site's own registrable
- * domain, on another host than the site's, and with no explicit port. A site with no registrable domain, such as a host
- * that is itself a suffix, has no workspace host.
+ * domain, on another host than the site's and on the site's own port (a site on the default port
+ * admits no explicit port). A site with no registrable domain, such as a host that is itself a
+ * suffix, has no workspace host.
  */
 export const workspaceHost = (siteOrigin: string, parent: string, candidate: string): boolean => {
   const site = exactHttpsOrigin(siteOrigin);
   const url = exactHttpsOrigin(candidate);
   if (site === undefined || url === undefined) return false;
+  // A workspace host is named by its host alone: it runs on the site's own port.
+  if (url.port !== site.port) return false;
   const domain = siteDomain(siteOrigin);
   if (domain === undefined || domain !== parent) return false;
   if (siteDomain(candidate) !== parent) return false;
   if (url.hostname === site.hostname) return false;
-  // A workspace host is named by its host alone: a login never pins an explicit port.
-  if (url.port !== "") return false;
   // Pending maintainer confirmation: there is deliberately no rule on the shape of the host's
   // labels (such as accepting only one label below `parent`), so `a.b.example.com` passes like
   // `acme.example.com`. Add such a rule here, and only here, if it is wanted.
@@ -146,9 +147,11 @@ export type ScreenOriginAdmission =
 /**
  * Pending maintainer confirmation: an identifier-first sign-in may continue on a workspace host
  * the site sent it to once this replay submitted the login's identifier on an exact-origin screen.
- * Change this one predicate to tighten or drop the rule.
+ * A replay learns at most one host this way: a second, different one shown after it has no new
+ * identifier behind it. Change this one predicate to tighten or drop the rule.
  */
-const identifierAnchorAdmits = (context: ScreenOriginContext) => context.identifierSent;
+const identifierAnchorAdmits = (context: ScreenOriginContext) =>
+  context.identifierSent && context.candidate === undefined;
 
 const refused = (
   context: ScreenOriginContext,
@@ -164,8 +167,9 @@ const refused = (
  *
  * An exact recorded screen runs on its own origin, or on the login's pinned workspace when the
  * recipe has a relation (the shared sign-in sent this login to its own workspace). A workspace
- * host seen there without a pinned one is `workspace_unverified`: this login sent nothing that
- * explains it, so it may be leftover cookies or a link.
+ * host seen there without a pinned one, or another than the pinned one before this replay sent
+ * the login's identifier, is `workspace_unverified`: this login sent nothing that explains it, so
+ * it may be leftover cookies, a link or another workspace the site remembers.
  *
  * A workspace screen runs on the replay's workspace origin (the one it admitted, else the pinned
  * one), or on a new workspace host once the identifier anchor admits it, which this replay then
@@ -196,7 +200,8 @@ const admitExactScreen = (
   const { relation, pinned } = context;
   if (live === recordedScreenOrigin(step, undefined)) return { admitted: true };
   if (relation !== undefined && pinned !== undefined && live === pinned) return { admitted: true };
-  if (sibling && pinned === undefined) return refused(context, live, "workspace_unverified");
+  if (sibling && (pinned === undefined || !context.identifierSent))
+    return refused(context, live, "workspace_unverified");
   return refused(context, live, "screen_origin_changed");
 };
 
@@ -212,22 +217,29 @@ const admitWorkspaceScreen = (
   return refused(context, live, "screen_origin_changed");
 };
 
+/** What one replay knows when it decides where its signed-in check runs. */
+export interface SignedInCheckContext {
+  readonly siteOrigin: string;
+  readonly relation: WorkspaceRelation | undefined;
+  readonly pinned: string | undefined;
+  /** The workspace origin this replay learned through the identifier anchor, if any. */
+  readonly candidate: string | undefined;
+  /** The current page's origin, if known. */
+  readonly current: string | undefined;
+  /**
+   * Whether this replay sent the login's password or code on an exact-origin screen, one whose
+   * live origin was its recorded origin.
+   */
+  readonly credentialsSent: boolean;
+}
+
 /**
  * Where the signed-in check opens the recipe's `openPath`. Without a relation, the site origin.
  * With one: the workspace origin this replay admitted; else the current page's origin when it is a
  * workspace host and there is no pinned origin, it is the pinned one, or this replay sent the
  * login's credentials on an exact-origin screen; else the pinned origin; else the site origin.
  */
-export const signedInCheckOrigin = (input: {
-  readonly siteOrigin: string;
-  readonly relation: WorkspaceRelation | undefined;
-  readonly pinned: string | undefined;
-  readonly candidate: string | undefined;
-  /** The current page's origin, if known. */
-  readonly current: string | undefined;
-  /** Whether this replay sent the login's password or code on an exact-origin screen. */
-  readonly credentialsSent: boolean;
-}): string => {
+export const signedInCheckOrigin = (input: SignedInCheckContext): string => {
   const { siteOrigin, relation, pinned, candidate, current } = input;
   if (relation === undefined) return siteOrigin;
   if (candidate !== undefined) return candidate;
@@ -241,16 +253,53 @@ export const signedInCheckOrigin = (input: {
 };
 
 /**
- * The workspace origin a verified sign-in pins to its login: the signed-in check's origin when the
- * recipe has a valid relation and that origin is a workspace host other than the site's.
+ * The workspace origin a verified sign-in pins to its login: the signed-in check's origin
+ * (`signedInCheckOrigin`) when the recipe has a valid relation, that origin is a workspace host
+ * other than the site's, and this login's own sign-in explains it: it is the pinned one, the one
+ * this replay learned through the identifier anchor, or the site moved there after this replay
+ * sent the login's credentials on an exact-origin screen. A workspace host the session merely
+ * shows, with no pin and nothing sent, may be this run's check origin but never becomes the
+ * login's.
  */
-export const workspaceToPin = (
-  siteOrigin: string,
-  relation: WorkspaceRelation | undefined,
-  checkOrigin: string,
-): string | undefined =>
-  relation !== undefined &&
-  checkOrigin !== siteOrigin &&
-  workspaceHost(siteOrigin, relation.parent, checkOrigin)
-    ? checkOrigin
-    : undefined;
+export const workspaceToPin = (input: SignedInCheckContext): string | undefined => {
+  const { siteOrigin, relation, pinned, candidate } = input;
+  const at = signedInCheckOrigin(input);
+  if (relation === undefined || !workspaceHost(siteOrigin, relation.parent, at)) return undefined;
+  return at === candidate || at === pinned || input.credentialsSent ? at : undefined;
+};
+
+/** How many layers of percent-encoding a carried address is read through before it is refused. */
+const maxEncodingLayers = 4;
+
+/** One layer of percent-encoding read as a site reads a parameter, or undefined when malformed. */
+const decodedOnce = (text: string) => {
+  try {
+    return decodeURIComponent(text.replaceAll("+", " "));
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Whether a login URL's query or fragment names another address, as a site's redirect parameter
+ * (`?next=https://...`) does: an absolute or protocol-relative URL, a backslash, or a host on
+ * `parent`, the site's registrable domain, read through its percent-encoding as the site would.
+ * Text that fails to decode, or that is still encoded after `maxEncodingLayers` layers, counts as
+ * naming one. A recipe with a workspace relation opens no such login URL: the site could send
+ * every account's sign-in on to a host the URL chose, after the identifier.
+ */
+export const entryNamesAddress = (loginUrl: string, parent: string): boolean => {
+  const url = URL.parse(loginUrl);
+  if (url === null) return true;
+  let carried = `${url.search}${url.hash}`;
+  for (let layer = 0; ; layer++) {
+    const next = decodedOnce(carried);
+    if (next === undefined || (next !== carried && layer === maxEncodingLayers)) return true;
+    if (next === carried) break;
+    carried = next;
+  }
+  const text = carried.toLowerCase();
+  if (text.includes("//") || text.includes("\\")) return true;
+  const domain = parent.toLowerCase().replaceAll(".", "\\.");
+  return new RegExp(`(?:^|[^a-z0-9-])(?:[a-z0-9-]+\\.)*${domain}(?:$|[^a-z0-9-])`, "u").test(text);
+};

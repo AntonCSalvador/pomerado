@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   admitScreenOrigin,
   approvedSignInOrigins,
+  entryNamesAddress,
   providerOrigin,
   signedInCheckOrigin,
   workspaceHost,
@@ -30,6 +31,13 @@ describe("workspaceHost", () => {
 
   it("accepts a sibling of a site whose host is its registrable domain", () => {
     expect(workspaceHost("https://example.com", parent, "https://acme.example.com")).toBe(true);
+  });
+
+  it("accepts a sibling on the port of a site on a non-default port, and no other port", () => {
+    const portSite = "https://app.example.com:8443";
+    expect(workspaceHost(portSite, parent, "https://acme.example.com:8443")).toBe(true);
+    expect(workspaceHost(portSite, parent, "https://acme.example.com")).toBe(false);
+    expect(workspaceHost(portSite, parent, "https://acme.example.com:9443")).toBe(false);
   });
 
   it.each([
@@ -121,12 +129,23 @@ describe("admitScreenOrigin", () => {
       reason: "workspace_unverified",
       sibling: true,
     });
-    expect(
-      admitScreenOrigin(context({ pinned: "https://acme.example.com" }), shared, "https://evil.example.com"),
-    ).toEqual({ admitted: false, reason: "screen_origin_changed", sibling: true });
     expect(admitScreenOrigin(context({ relation: undefined }), shared, "https://evil.example.com")).toEqual(
       { admitted: false, reason: "screen_origin_changed", sibling: true },
     );
+  });
+
+  it("refuses another workspace than the pinned one as unverified until the identifier went out", () => {
+    // Before this login sent anything, another workspace may be one the site remembers: the run
+    // clears and replays once. After its identifier went out, the recorded screen moved.
+    const pinned = context({ pinned: "https://acme.example.com" });
+    expect(admitScreenOrigin(pinned, shared, "https://evil.example.com")).toEqual({
+      admitted: false,
+      reason: "workspace_unverified",
+      sibling: true,
+    });
+    expect(
+      admitScreenOrigin({ ...pinned, identifierSent: true }, shared, "https://evil.example.com"),
+    ).toEqual({ admitted: false, reason: "screen_origin_changed", sibling: true });
   });
 
   it("learns a workspace host only after the identifier went out on an exact screen", () => {
@@ -141,6 +160,15 @@ describe("admitScreenOrigin", () => {
     expect(
       admitScreenOrigin(context({ candidate: "https://acme.example.com" }), workspace, "https://acme.example.com"),
     ).toEqual({ admitted: true });
+  });
+
+  it("learns at most one workspace host per replay", () => {
+    const learned = context({ identifierSent: true, candidate: "https://acme.example.com" });
+    expect(admitScreenOrigin(learned, workspace, "https://globex.example.com")).toEqual({
+      admitted: false,
+      reason: "workspace_unverified",
+      sibling: true,
+    });
   });
 
   it("refuses a workspace screen without a valid relation, and off the site", () => {
@@ -182,9 +210,48 @@ describe("signedInCheckOrigin", () => {
     expect(signedInCheckOrigin(base)).toBe(site);
   });
 
-  it("pins only a workspace host other than the site's", () => {
-    expect(workspaceToPin(site, { parent }, "https://acme.example.com")).toBe("https://acme.example.com");
-    expect(workspaceToPin(site, { parent }, site)).toBeUndefined();
-    expect(workspaceToPin(site, undefined, "https://acme.example.com")).toBeUndefined();
+  it("pins only a workspace host this login's own sign-in explains", () => {
+    const acme = "https://acme.example.com";
+    const globex = "https://globex.example.com";
+    expect(workspaceToPin({ ...base, candidate: acme })).toBe(acme);
+    expect(workspaceToPin({ ...base, pinned: acme, current: acme })).toBe(acme);
+    expect(workspaceToPin({ ...base, pinned: acme, current: globex, credentialsSent: true })).toBe(globex);
+    expect(workspaceToPin({ ...base, current: acme, credentialsSent: true })).toBe(acme);
+    // A session that merely shows an unpinned workspace host runs its check there, never pins it.
+    expect(signedInCheckOrigin({ ...base, current: acme })).toBe(acme);
+    expect(workspaceToPin({ ...base, current: acme })).toBeUndefined();
+    expect(workspaceToPin({ ...base, current: site, credentialsSent: true })).toBeUndefined();
+    expect(workspaceToPin({ ...base, relation: undefined, candidate: acme })).toBeUndefined();
+  });
+});
+
+describe("entryNamesAddress", () => {
+  it.each([
+    `${site}/login`,
+    `${site}/login?lang=en&step=1`,
+    `${site}/login?next=%2Fhome`,
+    `${site}/login#password`,
+    // A host on another domain that is not an address the site could follow.
+    `${site}/login?ref=newsletter`,
+  ])("lets %s open", (url) => {
+    expect(entryNamesAddress(url, parent)).toBe(false);
+  });
+
+  it.each([
+    `${site}/login?next=https://evil.example.com/login`,
+    `${site}/login?next=//evil.example.net`,
+    `${site}/login?next=https%3A%2F%2Fevil.example.net`,
+    `${site}/login?next=https%25253A%25252F%25252Fevil.example.net`,
+    `${site}/login?next=%5Cevil.example.net`,
+    `${site}/login?tenant=evil.example.com`,
+    `${site}/login?tenant=EVIL.Example.COM`,
+    `${site}/login#next=acme.example.com`,
+    `${site}/login?next=example.com`,
+    // More layers of encoding than a host reads through, or text that does not decode.
+    `${site}/login?next=%2525252525252F`,
+    `${site}/login?next=%E0%A4%A`,
+    "not a url",
+  ])("refuses %s", (url) => {
+    expect(entryNamesAddress(url, parent)).toBe(true);
   });
 });
