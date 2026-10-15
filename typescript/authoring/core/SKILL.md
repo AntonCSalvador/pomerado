@@ -66,6 +66,19 @@ answers `{ success, result, error, stderr }`. Throw
   it a real pointer click, after the same checks Playwright makes. `force`, `position`,
   `modifiers`, `button`, `clickCount` and `delay` keep a synthetic click, so pass them only
   when the step needs them.
+- Prefer taking a role locator's name from an ARIA snapshot (the host's `*.aria.yml` capture or a
+  scoped `ariaSnapshot()`) over `textContent` or `innerText`, which include hidden labels. When the
+  snapshot shows a link with no name, prefer its `href`.
+- After a step whose answer can vary, such as a click that may navigate, a search, a filter, a date
+  pick or a submit, prefer `waitForOutcome`, the step passed as its `action`, naming every result it
+  can lead to: the next page's own control, a dialog on the same URL, an empty or sold-out message,
+  a greyed-out choice (`getByRole(role, { name, disabled: true })` or the site's own disabled
+  marker), the site's error or validation message, a pick-one list. Prefer it over `waitForURL` or
+  `waitForLoadState`: a dialog keeps the URL, and a page that changes route without loading a
+  document passes `waitForLoadState` at once. Opening a record by its identifier or URL can also
+  answer with a removed or not-found page: name it, and throw `InvalidInput` with the page's own
+  words, never a readiness timeout. The waits paragraph below shows how to paste `waitCode` and
+  call it.
 - Start a response wait in the same call as the click that causes it, with
   `Promise.all([page.waitForResponse(...), button.click()])`. Listeners do not outlive a call.
 - Do site HTTP inside the page with `page.evaluate(() => fetch(...))`. Never use
@@ -603,8 +616,7 @@ prices, never from text that changes on its own, such as a countdown, a timer, a
 or a live viewer count.
 These re-checks only observe: never repeat the click, submission or navigation that caused the
 change.
-After an action that can navigate, wait for the observed destination URL when known,
-then a specific destination control or page state before extracting. Keep the action,
+After an action that can navigate, prefer waiting with `waitForOutcome` for a control only the destination page has, beside every other answer the action can give, over waiting for the destination URL alone, then extract. Keep the action,
 readiness wait and extraction in the same Kernel execute call when possible. If a read
 reports “Execution context was destroyed,” the action may already have succeeded.
 Reacquire page/frame locators, wait for readiness and retry only the read within the
@@ -612,12 +624,6 @@ original deadline. Never repeat the click or submission as part of that recovery
 Use observed conditions, without fixed sleeps, whole-page network-idle waits or the `load` event.
 For an unknown destination, inspect after the document transition; do not invent a
 selector or repeat the action in a follow-up read.
-After a step whose answer can vary, such as a search, a filter, a date pick or a submit, name
-every way the page can answer: results, an empty or sold-out message, a greyed-out choice
-(`getByRole(role, { name, disabled: true })` or the site's own disabled marker), the site's
-error, a pick-one list. Opening a record by its identifier or URL can also answer with a
-removed or not-found page: name it, and throw `InvalidInput` with the page's own words, never
-a readiness timeout. Prefer naming every answer over waiting only for the happy result.
 Import `waitCode` from the runtime (`outcomeWaitCode` declares `waitForOutcome` alone, for code
 written before; paste one, never both), paste it once at the top of the call's code, and wait with `waitForOutcome({ refused, failed, unavailable, empty,
 results }, { action, loading, region })`, one scoped locator per answer, each an element only
