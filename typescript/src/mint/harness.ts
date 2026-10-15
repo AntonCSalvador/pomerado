@@ -3784,15 +3784,24 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       (result.cause.error.code === "ReviewDenied" ||
                         (result.cause.error.code === "ReviewUnavailable" &&
                           result.cause.error.reviewDispatch === "not_sent"));
+                    // The host stopped after the dispatch fence but before anything reached the
+                    // site, such as a sandbox copy of the source that did not match the review:
+                    // no write went out, so none is tracked, fenced or reconciled.
+                    const hostNotSent =
+                      Cause.isFailType(result.cause) &&
+                      result.cause.error.execution?.dispatch === "not_sent";
+                    const ran = crossedDispatchBoundary && !hostNotSent;
                     const lost: ExecutionEvidence = {
                       executionId: `unresolved_${randomUUID()}`,
                       status: "failed",
                       effect:
                         submitted.purpose === "example" || submitted.purpose === "act"
-                          ? crossedDispatchBoundary
+                          ? ran
                             ? "possible"
                             : "not_sent"
-                          : reviewPreventedExecution || submitted.purpose === "authenticate"
+                          : reviewPreventedExecution ||
+                              hostNotSent ||
+                              submitted.purpose === "authenticate"
                             ? "not_sent"
                             : "possible",
                       ...(submitted.purpose === "authenticate" && !reviewPreventedExecution
@@ -3815,9 +3824,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         "Execution did not produce a result. Reconcile using the host's durable execution journal.",
                     };
                     record(lost, submitted.purpose);
-                    // Only an execution that crossed its dispatch fence ran; a write whose result
-                    // was lost is exactly what the outcome reviewer settles.
-                    return crossedDispatchBoundary
+                    // Only an execution that crossed its dispatch fence and was sent ran; a write
+                    // whose result was lost is exactly what the outcome reviewer settles.
+                    return ran
                       ? observeExecution(submitted, lost, allowed, "result_lost")
                       : Effect.void;
                   }),
