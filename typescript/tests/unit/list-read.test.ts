@@ -600,3 +600,79 @@ describe("a site link with only list parameters", () => {
     expect(opened).toEqual([undefined, link]);
   });
 });
+
+describe("a list that shows sponsored copies of its own rows", () => {
+  interface Card {
+    readonly id: string;
+    readonly sponsored: boolean;
+  }
+  /** Site pages of cards keyed by the item's own ID; `*` marks a sponsored card. */
+  const sponsoredSite = (pages: readonly (readonly string[])[]) => {
+    const card = (text: string): Card => ({ id: text.replace(/^\*/u, ""), sponsored: text.startsWith("*") });
+    const sitePage = (page: number, count: number) => {
+      checkCount(count);
+      const all = pages[page - 1] ?? [];
+      return {
+        at: page,
+        rows: all.slice(0, count).map(card),
+        more: all.length > count,
+        hasNext: page < pages.length,
+        href: `${origin}/s?q=lamps&page=${page}`,
+      };
+    };
+    const reader: ListReader<Card, ListSegment<Card> & { readonly at: number }> = {
+      keyOf: (row) => row.id,
+      promoted: (row) => row.sponsored,
+      open: async (position, count) =>
+        sitePage(position?.href === undefined ? (position?.page ?? 1) : Number(new URL(position.href).searchParams.get("page")), count),
+      more: async (segment, count) => sitePage(segment.at, count),
+      next: async (segment, count) => sitePage(segment.at + 1, count),
+    };
+    return async (limit: number, cursor?: string) => {
+      const input = { query: "lamps", limit, ...(cursor === undefined ? {} : { cursor }) };
+      const admitted = admitListCursor(input, scope);
+      if (!admitted.ok) throw new Error(`refused: ${admitted.reason}`);
+      const list = startList(withListHost(input, admitted.list), { mechanism: "pages" });
+      const page = await readList(list, reader);
+      const sealed = sealListOutput({ rows: page.rows, ...page.output }, input, scope).output as {
+        readonly next_cursor: string | null;
+      };
+      return {
+        cards: page.rows.map((row) => (row.sponsored ? `*${row.id}` : row.id)),
+        output: page.output,
+        cursor: sealed.next_cursor ?? undefined,
+      };
+    };
+  };
+
+  it("returns each item once at its organic place, keeps a promoted-only row, and never calls a repeated copy a change", async () => {
+    const call = sponsoredSite([
+      ["*r7", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"],
+      ["*r3", "r10", "r11", "*p1", "r12", "r13", "r14", "*r25", "r15", "r16"],
+      ["*p1", "r17", "r18", "r19", "r20", "r21", "r22", "r23", "r24", "r25"],
+    ]);
+    const first = await call(10);
+    expect(first.cards).toEqual(ids(1, 10));
+    // A sponsored copy of a row page one returned, a promoted-only row, and a copy whose organic
+    // row this call does not read, which stays in place.
+    const second = await call(10, first.cursor);
+    expect(second.cards).toEqual(["r11", "*p1", "r12", "r13", "r14", "*r25", ...ids(15, 18)]);
+    // The promoted-only row shown again on the next site page, and the organic row of the copy.
+    const third = await call(10, second.cursor);
+    expect(third.cards).toEqual(ids(19, 25));
+    for (const page of [first, second, third]) expect(page.output.list_changed).toBe(false);
+    expect(third.output.has_more).toBe(false);
+  });
+
+  it("returns an item's organic row on a later page after its sponsored copy, without calling it a change", async () => {
+    const call = sponsoredSite([
+      ["*r8", "r1", "r2", "r3", "r4", "r5", "r6", "r7"],
+      ["r8", "r9", "r10"],
+    ]);
+    const first = await call(5);
+    expect(first.cards).toEqual(["*r8", ...ids(1, 4)]);
+    const second = await call(5, first.cursor);
+    expect(second.cards).toEqual(ids(5, 9));
+    for (const page of [first, second]) expect(page.output.list_changed).toBe(false);
+  });
+});

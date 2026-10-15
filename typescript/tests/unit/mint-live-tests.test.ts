@@ -16,6 +16,7 @@ import type { LiveTestOutcome } from "../../src/mint/live-tests.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
 import type { MintAgentSnapshot, MintRecoveryFactory } from "../../src/mint/recovery-contracts.js";
 import { Deadline } from "../../src/runtime/deadline.js";
+import type { FieldFill } from "../../src/runtime/output-lint.js";
 import { validateAnswer } from "../../src/runtime/input-request.js";
 import { makeMintContinuationFixture, readAllow } from "../support/mint-fixtures.js";
 import { portableJobSession } from "../support/portable-mint.js";
@@ -182,12 +183,13 @@ const toolSource = "export default { name: 'search_catalog' };\n";
 
 /** Publication requests and the host evidence each received. */
 const publications = () => {
-  const seen: { coverage: string; liveTests?: object }[] = [];
+  const seen: { coverage: string; liveTests?: object; testedFields?: readonly FieldFill[] }[] = [];
   const publish: MintDependencies["publish"] = (request, _evidence, hostEvidence) =>
     Effect.sync(() => {
       seen.push({
         coverage: request.coverage,
         ...(hostEvidence?.liveTests === undefined ? {} : { liveTests: hostEvidence.liveTests }),
+        ...(hostEvidence?.testedFields === undefined ? {} : { testedFields: hostEvidence.testedFields }),
       });
       return { publicationRef: "published_revision", diagnostics: [] };
     });
@@ -492,6 +494,52 @@ it("checks each case's output as it checks an example's, and the record keeps th
   ).toEqual([
     { path: "results[].name", check: "markup", count: 1, blocking: true },
   ]);
+});
+
+it("flags a field no case filled on each case, and gives publication every case's fields", async () => {
+  const output = (results: readonly object[], storeNotice: string | null) => ({
+    status: "completed" as const,
+    output: { results, has_next_page: false, next_cursor: null, store_notice: storeNotice },
+  });
+  const { host } = liveTestHost({
+    "repeat-1": output([{ name: "Lamp", note: null }, { name: "Desk lamp", note: null }], null),
+    "sort-price": output([{ name: "Floor lamp", note: null }], "Prices for the chosen store"),
+  });
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("live_tests", runAll, "run"),
+        call("execute", example, "example"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+  await f.run();
+
+  const record = published.seen[0]?.liveTests as {
+    cases: { id: string; results: { playwright: { outputChecks?: { path: string; check: string }[] } } }[];
+  };
+  const checksOf = (id: string) =>
+    (record.cases.find((testCase) => testCase.id === id)?.results.playwright.outputChecks ?? []).map(
+      ({ path, check }) => `${path} ${check}`,
+    );
+  // Three records across the cases, none with a note; the store notice one case filled.
+  expect(checksOf("repeat-1")).toEqual(["results[].note empty_field"]);
+  expect(checksOf("sort-price")).toEqual(["results[].note empty_field"]);
+  // Publication gets each case's fields as paths and counts, never a value.
+  const tested = published.seen[0]?.testedFields ?? [];
+  expect(tested).toHaveLength(cases.cases.length);
+  expect(tested).toContainEqual(expect.objectContaining({ store_notice: { records: 1, filled: 1 } }));
+  expect(JSON.stringify(tested)).not.toContain("Prices for");
 });
 
 it("keeps a failing case in the publication record after the minter deletes or changes it", async () => {

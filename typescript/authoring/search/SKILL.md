@@ -109,6 +109,14 @@ fuzzily, never with exact case-sensitive equality. A search
 that applied every input and got the site's no-results message returns an empty list, never an
 error.
 
+Retail and grocery grids often interleave sponsored copies of their organic results and put
+promoted carousels above or inside the grid. A carousel or banner with its own heading or
+scroller is not a result, even when its items are marked sponsored: leave it out. Return each
+item once, keyed by its own ID (pagination skill). Before the first example, list the grid's item
+IDs for a typical query, and check that no ID repeats and that the first rows match the query.
+Read the query the site applied from the page's embedded state, such as its search data, rather
+than from a selector scoped to one container, which another layout of the results page breaks.
+
 ## Answer quickly
 
 A search should answer in seconds. Every click and wait runs on every call, so a run does only
@@ -124,6 +132,8 @@ what its inputs need:
   already the caller's.
 - Never wait for the page's `load` event, for network idle, or for rows and content you will not
   return.
+- Fetch a per-result extra the cards lack, such as availability, in one batched request when the
+  site offers one, never one request per result.
 - Reach the results by the route the build proved (`AGENTS.md`, "Work through the page's own
   controls"), falling back to the search box once. `references/navigation.ts` shows both.
 - How many results one call returns, and the way to the next page, follow the pagination skill.
@@ -139,5 +149,7 @@ order, sponsored ones in place.
 The description briefly states the design decisions, limits and interpretations a caller needs,
 such as the site's default location, how many results one call returns and how the site pages. A
 search signed out sets every input you expose in at least one live run before publishing, as the
-testing skill says; a signed-in one proves the tool with its example. Give each input an
+testing skill says; a signed-in one proves the tool with its example. Its cases include at least
+one broad query and one query the site answers with a fallback or "no exact matches" view, whose
+expectation you write only after seeing what the site shows for it. Give each input an
 `examples` value the site offers for a typical query.

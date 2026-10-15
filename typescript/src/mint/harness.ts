@@ -129,7 +129,7 @@ import type { RuntimeRecordInput } from "../models/model-runtime-record.js";
 import { inputContractChangedInstruction, registryRefusal } from "./registry-feedback.js";
 import { publicationBlockFeedback, workspacePath } from "./publication-block.js";
 import { outputChecksRefusal } from "./output-notes.js";
-import { lintOutput } from "../runtime/output-lint.js";
+import { fieldFill, lintOutput, type FieldFill } from "../runtime/output-lint.js";
 import {
   inputFeedbackInstruction,
   maximumInputFeedbackRounds,
@@ -3165,6 +3165,24 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       /** Each case's latest screened output, by version and case id: this attempt's runs only. */
       const liveTestOutputs = new Map<string, unknown>();
       const outputKey = (entrypoint: string, id: string) => `${liveTestVersion(entrypoint)}\n${id}`;
+      /**
+       * Each case's latest output fields, by version and case id, as paths and counts with no
+       * value, and the source it ran: this attempt's runs only. A field no case on the same source
+       * filled is flagged on each, and on the example at publication.
+       */
+      const liveTestFills = new Map<
+        string,
+        { readonly sourceDigest: string; readonly fill: FieldFill }
+      >();
+      const fillsOnSource = (entrypoint: string, sourceDigest: string | undefined, except?: string) =>
+        [...liveTestFills]
+          .filter(
+            ([key, entry]) =>
+              key !== except &&
+              key.startsWith(`${liveTestVersion(entrypoint)}\n`) &&
+              entry.sourceDigest === sourceDigest,
+          )
+          .map(([, entry]) => entry.fill);
       /** Whether a passing example's receipt already carried the test plan. */
       let testPlanSent = recoveredLiveTests.length > 0;
       /**
@@ -3249,7 +3267,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             ...(shown.some((testCase) => "outputChecks" in testCase)
               ? {
                   outputChecksInstruction:
-                    "The host checked every value each case returned, as it checks the example's. Check each finding against the page. Fix a wrong value at the read in source: read rendered text with visibleText, visibleTexts or readRows, expand collapsed text before reading it and read it back, and scope rows to the main list; never clean a string afterwards. A value that is correct as it is needs no change. A case's findings never refuse publication by themselves, but a blocking one (script, css, markup, template_residue) in the example's output refuses finish_build until fixed or overridden.",
+                    "The host checked every value each case returned, as it checks the example's. Check each finding against the page. Fix a wrong value at the read in source: read rendered text with visibleText, visibleTexts or readRows, expand collapsed text before reading it and read it back, and scope rows to the main list; never clean a string afterwards. A repeated item ID is usually a sponsored copy of an organic result: return the item once. A field empty in every case's records was usually read from a collapsed section or a guessed key. A value that is correct as it is needs no change. A case's findings never refuse publication by themselves, but a blocking one (script, css, markup, template_residue) in the example's output refuses finish_build until fixed or overridden.",
                 }
               : {}),
             ...(file.notTested === undefined ? {} : { notTested: file.notTested }),
@@ -3363,10 +3381,28 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const after = yield* stepDigest(request.entrypoint);
           const sourceDigest = after === digest ? digest : "changed_while_running";
           const verdicts: Record<string, number> = {};
-          for (const run of result.cases) {
+          const judgedRuns = result.cases.flatMap((run) => {
             const testCase = selected.find((entry) => entry.id === run.id);
-            if (testCase === undefined) continue;
-            const judged = judgeCase(testCase, run, "list" in shape ? shape.list : undefined);
+            return testCase === undefined
+              ? []
+              : [
+                  {
+                    run,
+                    testCase,
+                    judged: judgeCase(testCase, run, "list" in shape ? shape.list : undefined),
+                  },
+                ];
+          });
+          // Every case's fields first, so each case's output check counts the whole batch.
+          for (const { run, judged } of judgedRuns)
+            if (judged.output === undefined)
+              liveTestFills.delete(outputKey(request.entrypoint, run.id));
+            else
+              liveTestFills.set(outputKey(request.entrypoint, run.id), {
+                sourceDigest,
+                fill: fieldFill(judged.output),
+              });
+          for (const { run, testCase, judged } of judgedRuns) {
             const screened =
               judged.output === undefined
                 ? undefined
@@ -3390,6 +3426,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 ? []
                 : lintOutput(judged.output, {
                     ...("outputSchema" in shape ? { outputSchema: shape.outputSchema } : {}),
+                    alsoTested: fillsOnSource(request.entrypoint, sourceDigest, outputAt),
                     samples: true,
                   });
             const outputChecks =
@@ -4110,7 +4147,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     ...(outputOverrides === undefined ? {} : { outputOverrides }),
                   },
                   evidence,
-                  ...(liveTests === undefined ? [] : [{ liveTests: liveTests.record }]),
+                  ...(liveTests === undefined
+                    ? []
+                    : [
+                        {
+                          liveTests: liveTests.record,
+                          testedFields: fillsOnSource(
+                            proposed.entrypoint,
+                            yield* stepDigest(proposed.entrypoint),
+                          ),
+                        },
+                      ]),
                 )
                 .pipe(Effect.either);
               const reviewId =
