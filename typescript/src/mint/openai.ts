@@ -61,29 +61,25 @@ const runtimeRecordUnavailable = (observer: ModelObserver | undefined) =>
 const finalsWithoutToolLimit = 3;
 
 /**
- * The function calls of one response that come after its first edit. The SDK runs a response's
- * function calls before its native edits, so each of these is held until the edits land, and then
- * reads and runs what they wrote.
+ * One model response's edits, in the model's order, and whether one of its host tool calls ran.
+ * The SDK runs a response's function calls before its native edits, so a function call after an
+ * edit is held until the edits land.
  */
-const callsAfterEdit = (output: ModelResponse["output"]): string[] => {
-  const edit = output.findIndex((item) => item.type === "apply_patch_call");
-  return edit < 0
-    ? []
-    : output
-        .slice(edit + 1)
-        .flatMap((item) => (item.type === "function_call" ? [item.callId] : []));
-};
+interface ResponseCalls {
+  readonly edits: readonly { readonly callId: string; readonly index: number }[];
+  hostToolRan: boolean;
+}
 
 /**
- * Each execute after the first in one response, which the model sent before it read the first's
- * result.
+ * A call the host does not run, for a host tool call after the first in its response, or a call
+ * held behind an edit that failed or that the model sent after it. Nothing was sent.
  */
-const laterExecutes = (output: ModelResponse["output"]): string[] =>
-  output
-    .flatMap((item) =>
-      item.type === "function_call" && item.name === "execute" ? [item.callId] : [],
-    )
-    .slice(1);
+const notRun = JSON.stringify({
+  status: "not_run",
+  effect: "not_sent",
+  instruction:
+    "Not run, nothing was sent. In one response the host runs only the first call to a host tool (any tool but read_source, apply_patch and exec_command), and runs a call after an edit only when every edit in the response came before it and applied. Read this response's results, then send this call again if it is still the next step. Prefer one host tool call per response, after the edits it needs.",
+});
 
 /**
  * Whether the SDK holds this call because it cannot read its arguments as an object, which it does
@@ -484,20 +480,46 @@ export const makeOpenAIMinter = (
                       );
                     },
                   };
+            /** Each function call's response and position in it, in the model's order. */
+            const placed = new Map<
+              string,
+              { readonly response: ResponseCalls; readonly index: number }
+            >();
             /** Calls held until their response's edits land; the run loop releases them. */
             const heldForEdit = new Set<string>();
-            /** Executes returned unrun, since an earlier execute in their response ran first. */
-            const unreadExecutes = new Set<string>();
-            const afterEdits = <
+            /** Whether every edit of a held call's response came before it and applied. */
+            const editsLanded = (callId: string, history: readonly AgentInputItem[]) => {
+              const call = placed.get(callId);
+              return (
+                call !== undefined &&
+                call.response.edits.every(
+                  (edit) =>
+                    edit.index < call.index &&
+                    history.some(
+                      (item) =>
+                        item.type === "apply_patch_call_output" &&
+                        item.callId === edit.callId &&
+                        item.status === "completed",
+                    ),
+                )
+              );
+            };
+            /**
+             * Holds a function call after an edit in its response. A host tool call runs only as
+             * its response's first that ran; a later one returns not run, sending nothing.
+             */
+            const inResponseOrder = <
               T extends {
                 readonly needsApproval: (
                   context: never,
                   input: never,
                   callId?: string,
                 ) => Promise<boolean>;
+                readonly invoke: FunctionTool["invoke"];
               },
             >(
               entry: T,
+              hostTool: boolean,
             ): T => {
               const own = entry.needsApproval as (
                 context: unknown,
@@ -507,7 +529,19 @@ export const makeOpenAIMinter = (
               const needsApproval = async (context: unknown, input: unknown, callId?: string) =>
                 (callId !== undefined && heldForEdit.has(callId)) ||
                 (await own(context, input, callId));
-              return { ...entry, needsApproval: needsApproval as T["needsApproval"] };
+              const invoke: FunctionTool["invoke"] = async (...args) => {
+                const response = placed.get(args[2]?.toolCall?.callId ?? "")?.response;
+                if (response !== undefined) {
+                  if (response.hostToolRan) return notRun;
+                  response.hostToolRan = true;
+                }
+                return entry.invoke(...args);
+              };
+              return {
+                ...entry,
+                needsApproval: needsApproval as T["needsApproval"],
+                ...(hostTool ? { invoke } : {}),
+              };
             };
             /**
              * Awaits the call record before dispatch and the result record before returning. A
@@ -604,28 +638,31 @@ export const makeOpenAIMinter = (
                     ? { ...entry, editor: traceEditor(entry.editor) }
                     : entry.type !== "function"
                       ? entry
-                      : afterEdits({
-                          ...entry,
-                          invoke: async (...args: Parameters<typeof entry.invoke>) => {
-                            try {
-                              return await dispatch(entry.name, args[1], args[2], undefined, () =>
-                                turn.runTool(
-                                  Effect.tryPromise({
-                                    try: () => entry.invoke(...args),
-                                    catch: (error) =>
-                                      mintFailure(error) ??
-                                      new MintFailure({ code: "Unavailable" }),
-                                  }).pipe(Effect.flatMap(turn.screen)),
-                                ),
-                              );
-                            } catch (error) {
-                              return toolFailure(
-                                error,
-                                "Tool failed; inspect the finite code and correct supported request mechanics. No successful execution is implied.",
-                              );
-                            }
+                      : inResponseOrder(
+                          {
+                            ...entry,
+                            invoke: async (...args: Parameters<typeof entry.invoke>) => {
+                              try {
+                                return await dispatch(entry.name, args[1], args[2], undefined, () =>
+                                  turn.runTool(
+                                    Effect.tryPromise({
+                                      try: () => entry.invoke(...args),
+                                      catch: (error) =>
+                                        mintFailure(error) ??
+                                        new MintFailure({ code: "Unavailable" }),
+                                    }).pipe(Effect.flatMap(turn.screen)),
+                                  ),
+                                );
+                              } catch (error) {
+                                return toolFailure(
+                                  error,
+                                  "Tool failed; inspect the finite code and correct supported request mechanics. No successful execution is implied.",
+                                );
+                              }
+                            },
                           },
-                        }),
+                          false,
+                        ),
                 )
                 .map((entry) => (entry.type === "function" ? recoverFunction(entry) : entry));
             const readFailureInstruction = (error: unknown) =>
@@ -756,32 +793,16 @@ export const makeOpenAIMinter = (
               "Execution did not succeed. Diagnose the root cause and retained evidence. Correct request/source errors within existing authority; preserve prior effects. Another example read requires explicit host repeatableRead:true; never replay a nonrepeatable example or a write that may have committed. After a failed authenticate, fix its cause and call authenticate again.",
               (request) => turn.actions.execute(request),
             );
-            /** A later execute in a response waits for the model to read the first's result. */
-            const executeOnce = {
-              ...executeTool,
-              execute: (input: unknown, context: unknown, details: ToolCallDetails) =>
-                details?.toolCall?.callId !== undefined &&
-                unreadExecutes.delete(details.toolCall.callId)
-                  ? Promise.resolve(
-                      JSON.stringify({
-                        status: "not_run",
-                        effect: "not_sent",
-                        instruction:
-                          "Not run: an earlier execute in the same response ran first. Read its result, then send this execute again if it is still the next step.",
-                      }),
-                    )
-                  : executeTool.execute(input, context, details),
-            };
             const execute = turn.autofillSignIn
               ? tool({
-                  ...executeOnce,
+                  ...executeTool,
                   // Autofill's signInStep is a union with optional fields, which strict mode
                   // cannot express; the harness decodes the request itself.
                   strict: false,
                   parameters: looseParameters(withIntent(ExecutionRequest)),
                 })
               : tool({
-                  ...executeOnce,
+                  ...executeTool,
                   parameters: parameters(withIntent(ManagedSignInExecutionRequest)),
                 });
             const retainCapture = tool({
@@ -958,7 +979,9 @@ export const makeOpenAIMinter = (
                     ...(checkSignedInMarker === undefined ? [] : [checkSignedInMarker]),
                     ...(liveTests === undefined ? [] : [liveTests]),
                   ]
-              ).map((entry) => afterEdits(recoverFunction(entry))),
+              ).map((entry) =>
+                inResponseOrder(recoverFunction(entry), entry.name !== "read_source"),
+              ),
               toolUseBehavior: () =>
                 turn.isComplete()
                   ? {
@@ -1109,9 +1132,18 @@ export const makeOpenAIMinter = (
                       return turn.runTool(respond);
                     };
                     const noteCalls = (response: ModelResponse) => {
-                      for (const callId of callsAfterEdit(response.output)) heldForEdit.add(callId);
-                      for (const callId of laterExecutes(response.output))
-                        unreadExecutes.add(callId);
+                      const calls: ResponseCalls = {
+                        edits: response.output.flatMap((item, index) =>
+                          item.type === "apply_patch_call" ? [{ callId: item.callId, index }] : [],
+                        ),
+                        hostToolRan: false,
+                      };
+                      response.output.forEach((item, index) => {
+                        if (item.type !== "function_call") return;
+                        placed.set(item.callId, { response: calls, index });
+                        if (calls.edits.some((edit) => edit.index < index))
+                          heldForEdit.add(item.callId);
+                      });
                       return response;
                     };
                     if (recovery === undefined) return invoke().then(noteCalls);
@@ -1202,9 +1234,11 @@ export const makeOpenAIMinter = (
                 }
                 const result: SegmentResult = segment.value;
                 if (result.interruptions.length > 0 && !turn.isComplete()) {
-                  // Only the host's own holds pause a run: calls behind an edit, whose edits have
-                  // now landed, and calls whose arguments the SDK could not read. Resuming the
-                  // same state runs them with no model call, and its usage is counted once, below.
+                  // Only the host's own holds pause a run: calls behind an edit, and calls whose
+                  // arguments the SDK could not read. A held call runs only when every edit of its
+                  // response came before it and applied; otherwise it returns not run. Resuming
+                  // the same state runs them with no model call, and its usage is counted once,
+                  // below.
                   const released = result.interruptions.every(
                     (item) =>
                       item.rawItem.type === "function_call" &&
@@ -1213,9 +1247,10 @@ export const makeOpenAIMinter = (
                   );
                   if (!released) throw new MintFailure({ code: "Unavailable" });
                   for (const item of result.interruptions) {
-                    if (item.rawItem.type === "function_call")
-                      heldForEdit.delete(item.rawItem.callId);
-                    result.state.approve(item);
+                    const callId = item.rawItem.type === "function_call" ? item.rawItem.callId : "";
+                    if (heldForEdit.delete(callId) && !editsLanded(callId, result.history))
+                      result.state.reject(item, { message: notRun });
+                    else result.state.approve(item);
                   }
                   input = result.state;
                   continue;

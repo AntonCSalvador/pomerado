@@ -2049,6 +2049,143 @@ it("returns a second execute in one response unrun, so the minter reads the firs
   expect(JSON.stringify(unrun)).toContain("not_run");
 });
 
+/** The model's result for one call, as its next request carries it. */
+const resultOf = (request: ModelRequest | undefined, callId: string) =>
+  JSON.stringify(
+    (Array.isArray(request?.input) ? (request.input as AgentInputItem[]) : []).find(
+      (item) => item.type === "function_call_result" && item.callId === callId,
+    ),
+  );
+
+it("runs nothing held behind an edit that did not apply", async () => {
+  let f: Awaited<ReturnType<typeof fixture>> | undefined;
+  const review = reviewingSource(() => f!.workspace.readFile!({ path: "src/tool.ts" }));
+  f = await fixture(
+    (_request, index) =>
+      [
+        together(
+          patch(
+            {
+              type: "update_file",
+              path: "src/tool.ts",
+              diff: "@@\n-export default { missing: true };\n+export default { step: 2 };",
+            },
+            "failed_edit",
+          ),
+          call("execute", execution, "run_step"),
+        ),
+        stepPatch("write_step"),
+        call("execute", execution, "run_step_again"),
+        call("finish_build", publication),
+      ][index] ?? prose(),
+    { reviewAndExecute: review.reviewAndExecute },
+  );
+  expect(await f.run()).toMatchObject({ build: "published" });
+  expect(resultOf(f.requests[1], "run_step")).toContain("not_run");
+  // Only the run after the corrected edit was reviewed, on its bytes.
+  expect(review.reviewed).toEqual([
+    { purpose: "example", source: expect.stringContaining("step: 2") },
+  ]);
+});
+
+it("runs nothing held behind an edit the model sent after it", async () => {
+  let f: Awaited<ReturnType<typeof fixture>> | undefined;
+  const review = reviewingSource(() => f!.workspace.readFile!({ path: "src/tool.ts" }));
+  f = await fixture(
+    (_request, index) =>
+      [
+        together(
+          stepPatch("write_step"),
+          call("execute", execution, "run_step"),
+          patch(
+            {
+              type: "update_file",
+              path: "src/tool.ts",
+              diff: "@@\n-export default { step: 2 };\n+export default { step: 3 };",
+            },
+            "next_step",
+          ),
+        ),
+        call("execute", execution, "run_next_step"),
+        call("finish_build", publication),
+      ][index] ?? prose(),
+    { reviewAndExecute: review.reviewAndExecute },
+  );
+  expect(await f.run()).toMatchObject({ build: "published" });
+  expect(resultOf(f.requests[1], "run_step")).toContain("not_run");
+  expect(review.reviewed).toEqual([
+    { purpose: "example", source: expect.stringContaining("step: 3") },
+  ]);
+});
+
+it.each([
+  { first: "request_input", later: "execute" },
+  { first: "execute", later: "request_input" },
+] as const)("runs only the first host action in one response: $first, then $later", async ({
+  first,
+  later,
+}) => {
+  let f: Awaited<ReturnType<typeof fixture>> | undefined;
+  const review = reviewingSource(() => f!.workspace.readFile!({ path: "src/tool.ts" }));
+  const hostCall = (name: "request_input" | "execute") =>
+    name === "execute"
+      ? call("execute", { ...execution, purpose: "explore" }, `paired_${name}`)
+      : call("request_input", ask("Which store?"), `paired_${name}`);
+  f = await fixture(
+    (_request, index) =>
+      [
+        together(hostCall(first), hostCall(later)),
+        call("execute", execution),
+        call("finish_build", publication),
+      ][index] ?? prose(),
+    { reviewAndExecute: review.reviewAndExecute },
+  );
+  expect(await f.run()).toMatchObject({ build: "published" });
+  expect(resultOf(f.requests[1], `paired_${later}`)).toContain("not_run");
+  expect(resultOf(f.requests[1], `paired_${first}`)).not.toContain("not_run");
+  expect(f.counts().asked).toBe(first === "request_input" ? 1 : 0);
+  expect(review.reviewed.map((entry) => entry.purpose)).toEqual(
+    first === "execute" ? ["explore", "example"] : ["example"],
+  );
+});
+
+it("counts only a host action that ran as the response's first", async () => {
+  let f: Awaited<ReturnType<typeof fixture>> | undefined;
+  const review = reviewingSource(() => f!.workspace.readFile!({ path: "src/tool.ts" }));
+  f = await fixture(
+    (_request, index) =>
+      [
+        together(
+          stepPatch("write_step"),
+          patch(
+            { type: "create_file", path: "src/other.ts", diff: "+export const other = 1;" },
+            "add_file",
+          ),
+          {
+            usage: new Usage(),
+            output: [
+              {
+                type: "function_call" as const,
+                name: "execute",
+                callId: "unparsed",
+                arguments: "{",
+                status: "completed" as const,
+              },
+            ],
+          },
+          call("execute", execution, "run_step"),
+        ),
+        call("finish_build", publication),
+      ][index] ?? prose(),
+    { reviewAndExecute: review.reviewAndExecute },
+  );
+  expect(await f.run()).toMatchObject({ build: "published" });
+  expect(resultOf(f.requests[1], "run_step")).not.toContain("not_run");
+  expect(review.reviewed).toEqual([
+    { purpose: "example", source: expect.stringContaining("step: 2") },
+  ]);
+});
+
 it("gives a host's recovery and observer each call of a response with a write once, in order", async () => {
   let f: Awaited<ReturnType<typeof fixture>> | undefined;
   const review = reviewingSource(() => f!.workspace.readFile!({ path: "src/tool.ts" }));
