@@ -233,6 +233,8 @@ describe("entryNamesAddress", () => {
     `${site}/login#password`,
     // A host on another domain that is not an address the site could follow.
     `${site}/login?ref=newsletter`,
+    `${site}/signin/identifier`,
+    `${site}/u/login/identifier?state=abc123`,
   ])("lets %s open", (url) => {
     expect(entryNamesAddress(url, parent)).toBe(false);
   });
@@ -247,6 +249,12 @@ describe("entryNamesAddress", () => {
     `${site}/login?tenant=EVIL.Example.COM`,
     `${site}/login#next=acme.example.com`,
     `${site}/login?next=example.com`,
+    // An address in the path, or written with another full stop.
+    `${site}/r/evil.example.com/login`,
+    `${site}/r/https%3A%2F%2Fevil.example.net/login`,
+    `${site}/login?tenant=evil\u3002example\u3002com`,
+    `${site}/login?tenant=evil\uFF0Eexample\uFF0Ecom`,
+    `${site}/login?tenant=evil\uFF61example\uFF61com`,
     // More layers of encoding than a host reads through, or text that does not decode.
     `${site}/login?next=%2525252525252F`,
     `${site}/login?next=%E0%A4%A`,
