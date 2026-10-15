@@ -255,6 +255,8 @@ describe("entryNamesAddress", () => {
     `${site}/login?tenant=evil\u3002example\u3002com`,
     `${site}/login?tenant=evil\uFF0Eexample\uFF0Ecom`,
     `${site}/login?tenant=evil\uFF61example\uFF61com`,
+    // Fullwidth letters a URL parser would read as ASCII.
+    `${site}/login?next=\uFF45\uFF56\uFF49\uFF4C\uFF0E\uFF45\uFF58\uFF41\uFF4D\uFF50\uFF4C\uFF45\uFF0E\uFF43\uFF4F\uFF4D`,
     // More layers of encoding than a host reads through, or text that does not decode.
     `${site}/login?next=%2525252525252F`,
     `${site}/login?next=%E0%A4%A`,

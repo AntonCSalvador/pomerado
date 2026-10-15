@@ -287,8 +287,9 @@ const otherFullStops = /[\u3002\uFF0E\uFF61]/gu;
  * Whether a login URL's path, query or fragment names another address, as a site's redirect
  * parameter (`?next=https://...`) or a redirect path (`/r/evil.example.com/`) does: an absolute or
  * protocol-relative URL, a backslash, or a host on `parent`, the site's registrable domain, read
- * through its percent-encoding as the site would, with any other full stop read as ".". The URL's
- * own host is never read.
+ * through its percent-encoding as the site would, with compatibility forms such as fullwidth
+ * letters read as their plain ones (NFKC) and any other full stop read as ".". The URL's own host
+ * is never read.
  * Text that fails to decode, or that is still encoded after `maxEncodingLayers` layers, counts as
  * naming one. A recipe with a workspace relation opens no such login URL: the site could send
  * every account's sign-in on to a host the URL chose, after the identifier.
@@ -303,7 +304,7 @@ export const entryNamesAddress = (loginUrl: string, parent: string): boolean => 
     if (next === carried) break;
     carried = next;
   }
-  const text = carried.replace(otherFullStops, ".").toLowerCase();
+  const text = carried.normalize("NFKC").replace(otherFullStops, ".").toLowerCase();
   if (text.includes("//") || text.includes("\\")) return true;
   const domain = parent.toLowerCase().replaceAll(".", "\\.");
   return new RegExp(`(?:^|[^a-z0-9-])(?:[a-z0-9-]+\\.)*${domain}(?:$|[^a-z0-9-])`, "u").test(text);
