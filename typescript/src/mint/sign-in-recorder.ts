@@ -696,6 +696,30 @@ export const makeSignInRecorder = <E>(input: {
         };
       });
 
+    /**
+     * The site showed the account itself locked, suspended or disabled. Only a sign-in that sent
+     * the login's identifier can be refused for its account; then no correction gets past it, and
+     * sign-in ends in the build.
+     */
+    const accountRejectedStep = () =>
+      Effect.gen(function* () {
+        if (![...sent.keys()].some(isIdentifier))
+          return refusedStep(
+            "nothing_rejected",
+            0,
+            "No identifier was sent in this sign-in, so the site cannot have refused its account. Explore read-only to see the page, then send the next signInStep.",
+          );
+        close();
+        return yield* new MintFailure({
+          code: "Unavailable",
+          authentication: {
+            phase: "credential_submit",
+            code: "AccountLocked",
+            afterSubmission: true,
+          },
+        });
+      });
+
     const signedIn = (indicator: AutofillSignedIn) =>
       Effect.gen(function* () {
         yield* tracker.settled;
@@ -756,7 +780,10 @@ export const makeSignInRecorder = <E>(input: {
           loginUrl = entryOf(given) ?? loginUrl;
           if ("fields" in step) return fill(step, beforeFill);
           if ("approval" in step) return approval(step);
-          if ("rejected" in step) return rejectedStep(step.rejected.slot);
+          if ("rejected" in step)
+            return "slot" in step.rejected
+              ? rejectedStep(step.rejected.slot)
+              : accountRejectedStep();
           return signedIn(step.signedIn);
         }),
       /**

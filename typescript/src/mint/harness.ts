@@ -2456,6 +2456,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               failure?.code === "LoginIdentityConflict"
                 ? ("login_identity_conflict" as const)
                 : ("sign_in_unavailable" as const),
+            // The site refused the account itself: only its owner can unlock it.
+            ...(failure?.code === "AccountLocked" ? { stopReason: "account_locked" as const } : {}),
             summary: signInUnavailableSummary(failure, error.spentSignIn, error.sessionLoss),
           };
           signInUnavailable = { answer, outcome };
@@ -2806,14 +2808,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             instruction,
           }),
         });
-        // A failed sign-in the agent can still get past waits for it, unless sign-in is already
-        // unavailable in this build or the owner declined to sign in: then nothing is left to
-        // resolve, and refusing the ending would leave the minter no way to stop.
-        if (
-          unresolvedSignIn !== undefined &&
-          signInUnavailable === undefined &&
-          loginDeclined === undefined
-        )
+        // A failed sign-in the agent can still get past waits for it, unless the owner declined
+        // to sign in: then nothing is left to resolve, and refusing the ending would leave the
+        // minter no way to stop. (Once sign-in is unavailable, the report ends the build with
+        // that result before it gets here.)
+        if (unresolvedSignIn !== undefined && loginDeclined === undefined)
           return refused(
             "sign_in_unresolved",
             "The last sign-in failed and is unresolved. Resolve it as its result says, with authenticate once its cause is fixed, before deciding the task is impossible as asked.",
@@ -4977,6 +4976,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         status: "host_unavailable",
                         notice:
                           "The build ended because the host has no live execution for what it still needs. It ends as the host's failure, not as blocked; nothing more runs in this attempt.",
+                      });
+                    }
+                    // Sign-in is unavailable in this build, and a retained receipt held its
+                    // ending back: the minter stops, and the build ends with the sign-in's own
+                    // result, which names the cause better than any blocked reason.
+                    if (signInUnavailable !== undefined) {
+                      terminal ??= signInUnavailable.outcome;
+                      yield* diagnose({ phase: "blocked", reason: "sign_in_unavailable" });
+                      return JSON.stringify({
+                        status: "sign_in_unavailable",
+                        notice:
+                          "Sign-in is unavailable in this build, so it ends with that result and its cause instead of a blocked reason; nothing more runs in this attempt.",
                       });
                     }
                     const explanation = redactCallerText(

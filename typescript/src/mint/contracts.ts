@@ -540,8 +540,22 @@ export const SignInStep = Schema.Union(
   ),
   Schema.Struct({ approval: AutofillApproval, popup: Schema.optional(AutofillPopup) }),
   // The site showed that the login's password or code was wrong: the host asks the owner
-  // for a correction in place and never sends the rejected value again.
-  Schema.Struct({ rejected: Schema.Struct({ slot: CredentialRejectedField }) }),
+  // for a correction in place and never sends the rejected value again. Or, once the login was
+  // sent, it showed the account itself locked, suspended or disabled (`account`), quoting the
+  // page's visible words (`marker`): no correction gets past that, and the build ends
+  // `account_locked`.
+  Schema.Struct({
+    rejected: Schema.Union(
+      Schema.Struct({ slot: CredentialRejectedField }),
+      Schema.Struct({
+        account: Schema.Literal(true),
+        marker: Schema.String.pipe(Schema.pattern(/\S/), Schema.maxLength(300)).annotations({
+          description:
+            "The page's own visible words that say the account is locked, suspended or disabled, copied as shown",
+        }),
+      }),
+    ),
+  }),
   Schema.Struct({
     signedIn: Schema.Struct({
       selector: Schema.optional(SignInSelector),
@@ -1018,7 +1032,12 @@ export type PublicationRequest = typeof PublicationRequest.Type;
  */
 export const blockedExplanationLimit = 500;
 export const BuildBlocked = Schema.Struct({
-  reason: Schema.Literal("site_lacks_capability", "policy", "owner_declined", "question_unanswered"),
+  reason: Schema.Literal(
+    "site_lacks_capability",
+    "policy",
+    "owner_declined",
+    "question_unanswered",
+  ),
   explanation: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(blockedExplanationLimit)),
 });
 /**

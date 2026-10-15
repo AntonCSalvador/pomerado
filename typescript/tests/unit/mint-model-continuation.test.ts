@@ -270,8 +270,11 @@ it("ends the build as sign_in_unavailable once a failed sign-in leaves none, nev
   expect(outcome).toMatchObject({
     build: "incomplete",
     recoveryReason: "sign_in_unavailable",
-    summary: expect.stringContaining("flow_failed") as unknown,
+    stopReason: "sign_in_failed",
   });
+  // The root cause's code stays in the diagnostics; the owner's summary is plain words.
+  expect(outcome.summary).not.toContain("flow_failed");
+  expect(outcome.diagnostics.join("\n")).toContain("flow_failed");
   // The two sign-ins, and the run ended with the second: no third call, no continuation prompt.
   expect(signIns).toBe(2);
   expect(f.requests).toHaveLength(2);
@@ -1166,8 +1169,11 @@ it("ends a build holding a retained receipt as sign_in_unavailable at the first 
   expect(outcome).toMatchObject({
     build: "incomplete",
     recoveryReason: "sign_in_unavailable",
-    summary: expect.stringContaining("flow_failed") as unknown,
+    stopReason: "sign_in_failed",
   });
+  // The root cause's code stays in the diagnostics; the owner's summary is plain words.
+  expect(outcome.summary).not.toContain("flow_failed");
+  expect(outcome.diagnostics.join("\n")).toContain("flow_failed");
   // The example, the sign-in, the final answer: no continuation prompt followed it.
   expect(f.requests).toHaveLength(3);
   expect(outcome.diagnostics.join("\n")).not.toContain("repeated_final_without_tool");

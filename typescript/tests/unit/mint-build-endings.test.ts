@@ -1,4 +1,8 @@
-import { makeMintContinuationFixture, portableJobSession } from "../support/mint-fixtures.js";
+import {
+  makeMintContinuationFixture,
+  portableJobSession,
+  readAllow,
+} from "../support/mint-fixtures.js";
 import { Usage } from "@openai/agents";
 import type { ModelResponse } from "@openai/agents";
 import { Effect } from "effect";
@@ -19,7 +23,12 @@ afterEach(async () => {
 });
 
 const prose = (text = "I stopped before publication."): ModelResponse => ({
-  usage: new Usage({ requests: 1, inputTokens: 2, outputTokens: 1, totalTokens: 3 }),
+  usage: new Usage({
+    requests: 1,
+    inputTokens: 2,
+    outputTokens: 1,
+    totalTokens: 3,
+  }),
   output: [
     {
       type: "message",
@@ -33,7 +42,12 @@ const prose = (text = "I stopped before publication."): ModelResponse => ({
 const intentTools = new Set(["execute", "finish_build", "request_input", "report_blocked"]);
 
 const call = (name: string, input: unknown, id = name): ModelResponse => ({
-  usage: new Usage({ requests: 1, inputTokens: 2, outputTokens: 1, totalTokens: 3 }),
+  usage: new Usage({
+    requests: 1,
+    inputTokens: 2,
+    outputTokens: 1,
+    totalTokens: 3,
+  }),
   output: [
     {
       type: "function_call",
@@ -49,7 +63,9 @@ const call = (name: string, input: unknown, id = name): ModelResponse => ({
   ],
 });
 
-const ask = (prompt: string) => ({ questions: [{ id: "report", type: "text", prompt }] });
+const ask = (prompt: string) => ({
+  questions: [{ id: "report", type: "text", prompt }],
+});
 
 const fixture = makeMintContinuationFixture(cleanups, portableJobSession, makeOpenAIMinter);
 
@@ -67,14 +83,22 @@ it.each([
           reason === "question_unanswered"
             ? call("request_input", ask("Which report?"))
             : call("request_input", {
-                questions: [{ id: "proceed", type: "confirm", prompt: "May the tool do this?" }],
+                questions: [
+                  {
+                    id: "proceed",
+                    type: "confirm",
+                    prompt: "May the tool do this?",
+                  },
+                ],
               }),
           call("report_blocked", { reason, explanation }, "after"),
         ][index] ?? prose("Stopping."),
       reason === "owner_declined"
         ? {
             askInput: () =>
-              Effect.succeed({ proceed: { type: "confirm", value: { confirmed: false } } }),
+              Effect.succeed({
+                proceed: { type: "confirm", value: { confirmed: false } },
+              }),
           }
         : {},
     );
@@ -111,7 +135,11 @@ it("keeps a policy block that stands on a Guardian refusal", async () => {
         Effect.fail(
           new MintFailure({
             code: "ReviewDenied",
-            review: { outcome: "deny", reviewId: "review_denied", rationale: "Not allowed." },
+            review: {
+              outcome: "deny",
+              reviewId: "review_denied",
+              rationale: "Not allowed.",
+            },
           }),
         ),
     },
@@ -154,7 +182,10 @@ it("ends three tool-free answers as final_text_without_tool, with the reviewed l
 it("keeps no last answer Guardian did not allow", async () => {
   const f = await fixture(() => prose("Call 555-0100 to finish this request."), {
     reviewQuestion: () =>
-      Effect.succeed({ outcome: "reword" as const, rationale: "It passes on a phone number." }),
+      Effect.succeed({
+        outcome: "reword" as const,
+        rationale: "It passes on a phone number.",
+      }),
   });
   const outcome = await f.run();
   expect(outcome.stopReason).toBe("final_text_without_tool");
@@ -170,7 +201,10 @@ it("ends an attempt that spent its model calls as turn_budget_spent", async () =
     { modelCallCapacity: 4, segmentTurns: 2 },
   );
   const outcome = await f.run();
-  expect(outcome).toMatchObject({ build: "incomplete", stopReason: "turn_budget_spent" });
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    stopReason: "turn_budget_spent",
+  });
   expect(outcome).not.toHaveProperty("hostFailure");
 });
 
@@ -249,4 +283,120 @@ it("carries Guardian's screened public reason on a publication denial", async ()
   expect(JSON.stringify([outcome.summary, outcome.publicationDenial])).not.toContain(
     "Private rationale",
   );
+});
+
+const authenticate = {
+  purpose: "authenticate",
+  target: "liveBrowser",
+  entrypoint: "src/tool.ts",
+  fixtureRefs: [],
+  caseFilter: [],
+  maxWorkers: 1,
+  timeoutSeconds: 30,
+};
+
+const accountLocked = new MintFailure({
+  code: "Unavailable",
+  authentication: {
+    phase: "credential_submit",
+    code: "AccountLocked",
+    afterSubmission: true,
+  },
+});
+
+// The site said the account is locked: no retry or correction gets past it, so the build ends at
+// once, typed, with words its owner can act on and no operator code.
+it("ends a sign-in the site refused for its account as account_locked", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      index === 0 ? call("execute", authenticate) : prose("The account is locked."),
+    { reviewAndExecute: () => Effect.fail(accountLocked) },
+  );
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    recoveryReason: "sign_in_unavailable",
+    stopReason: "account_locked",
+  });
+  expect(outcome.summary).toContain("locked, suspended or disabled");
+  expect(outcome.summary).not.toMatch(/AccountLocked|credential_submit|receipts/u);
+  // The build ends with the failed sign-in itself, with no further model call.
+  expect(f.requests).toHaveLength(1);
+});
+
+// A sign-in that failed for good while an earlier receipt might still publish used to leave the
+// minter no ending: report_blocked was refused as an unresolved sign-in. It now ends the build
+// with the sign-in's own result.
+it("lets the minter end the build once sign-in is unavailable and a receipt was held back", async () => {
+  let executions = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", {
+          purpose: "example",
+          target: "pureFiles",
+          entrypoint: "src/tool.ts",
+          fixtureRefs: [],
+          caseFilter: [],
+          maxWorkers: 1,
+          timeoutSeconds: 30,
+        }),
+        call("execute", authenticate, "sign_in"),
+        call("report_blocked", {
+          reason: "site_lacks_capability",
+          explanation: "The account page cannot be reached without signing in.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: (_submitted, beforeDispatch = () => Effect.void) =>
+        executions++ === 0
+          ? beforeDispatch(readAllow).pipe(
+              Effect.as({
+                executionId: "execution_one",
+                status: "completed" as const,
+                effect: "verified" as const,
+                resultRef: "protected_result",
+                observations: { value: "public" },
+              }),
+            )
+          : Effect.fail(accountLocked),
+    },
+  );
+  const outcome = await f.run();
+  // report_blocked ended the build at once: no refusal went back for another model call.
+  expect(f.requests).toHaveLength(3);
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    recoveryReason: "sign_in_unavailable",
+    stopReason: "account_locked",
+  });
+  expect(outcome).not.toHaveProperty("blocked");
+});
+
+// The owner's summary of a failed sign-in is plain words: never the root cause's code or phase.
+it("words a failed sign-in's summary without operator codes", async () => {
+  const f = await fixture(
+    (_request, index) => (index === 0 ? call("execute", authenticate) : prose("Stopping.")),
+    {
+      reviewAndExecute: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "Unavailable",
+            authentication: {
+              phase: "credential_submit",
+              code: "AuthenticationFailed",
+              afterSubmission: true,
+            },
+            spentSignIn: "relogin_spent",
+          }),
+        ),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({
+    recoveryReason: "sign_in_unavailable",
+    stopReason: "sign_in_failed",
+  });
+  expect(outcome.summary).toContain("could not be signed in");
+  expect(outcome.summary).not.toMatch(/AuthenticationFailed|credential_submit|receipts/u);
 });

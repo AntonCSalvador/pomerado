@@ -981,6 +981,31 @@ it("accepts a rejected value only once it was sent, and corrects a password once
   );
 });
 
+// A page that says the account is locked is no field the owner can correct: once the login's
+// identifier went out, the sign-in ends as an account-level rejection, and nothing is asked.
+it("ends the sign-in as AccountLocked once the site refused the account the login named", async () => {
+  const host = harness({ corrections: [account] });
+  const locked: SignInStep = {
+    rejected: { account: true, marker: "This account has been locked." },
+  };
+  const exit = await host.run((recorder) =>
+    Effect.gen(function* () {
+      const early = yield* recorder.step(locked, undefined, Effect.void);
+      expect(early.result).toMatchObject({ step: { reason: "nothing_rejected" } });
+      yield* recorder.step(identifierAndPassword, undefined, Effect.void);
+      return yield* Effect.exit(recorder.step(locked, undefined, Effect.void));
+    }),
+  );
+  expect(exit).toEqual(
+    Exit.fail(
+      expect.objectContaining({
+        authentication: expect.objectContaining({ code: "AccountLocked" }),
+      }),
+    ),
+  );
+  expect(host.logins).toEqual(["missing_credentials"]);
+});
+
 it("ends the build when the correction repeats the rejected password", async () => {
   const host = harness({ corrections: [account] });
   const exit = await host.run((recorder) =>

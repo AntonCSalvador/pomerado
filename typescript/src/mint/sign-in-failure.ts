@@ -179,6 +179,7 @@ export const signInFailureFeedback = (failure: SignInDiagnostic, spent?: SpentSi
 
 /** Failures whose own feedback already says sign-in is unavailable. */
 const ownUnavailable: ReadonlySet<SignInDiagnostic["code"]> = new Set([
+  "AccountLocked",
   "LoginIdentityConflict",
   "SignInsSpent",
 ]);
@@ -203,7 +204,11 @@ const spentFailureFeedback = (failure: SignInDiagnostic, spent: SpentSignIn) => 
 /** A failed sign-in while the attempt may still sign in again. */
 const recoverableFailureFeedback = (failure: SignInDiagnostic) => {
   const sent = sentFields(failure);
-  if (failure.code === "LoginIdentityConflict" || failure.code === "SignInsSpent")
+  if (
+    failure.code === "LoginIdentityConflict" ||
+    failure.code === "SignInsSpent" ||
+    failure.code === "AccountLocked"
+  )
     return {
       signInOutcome: "signed_out" as const,
       nextStep: "report_sign_in_unavailable" as const,
@@ -211,7 +216,9 @@ const recoverableFailureFeedback = (failure: SignInDiagnostic) => {
       notice:
         failure.code === "LoginIdentityConflict"
           ? `This login conflicts with the Personal login locked to this site (${cause(failure)}). Report that the build needs the site's locked login.`
-          : `No further sign-in can run in this attempt (${cause(failure)}). Report that the site could not be signed in.`,
+          : failure.code === "AccountLocked"
+            ? `The site says this account is locked, suspended or disabled (${cause(failure)}). No correction of the login gets past that, so ${unavailableInBuild.charAt(0).toLowerCase()}${unavailableInBuild.slice(1)} Only the account's owner can unlock it on the site.`
+            : `No further sign-in can run in this attempt (${cause(failure)}). Report that the site could not be signed in.`,
     };
   // An unconfirmed cleanup may have left the site signed in, so its own advice below wins.
   if (failure.hostRefusal !== undefined && failure.cleanupCode === undefined)
@@ -318,33 +325,40 @@ export const signInAnswer = (
 });
 
 /**
- * The build's result once sign-in is unavailable, as its owner reads it: the root cause's code
- * and phase, whether the login reached the site, what spent the attempt's sign-ins, and a session
- * the site did not keep. It holds no provider or site text.
+ * The build's result once sign-in is unavailable, as its owner reads it: what happened in plain
+ * words, whether the login reached the site, what spent the attempt's sign-ins, and a session the
+ * site did not keep. It holds no provider or site text, and no operator code or phase: the
+ * build's diagnostics keep those.
  */
 export const signInUnavailableSummary = (
   failure: SignInDiagnostic | undefined,
   spent: SpentSignIn | undefined,
   sessionLoss?: SessionLoss,
 ) => {
-  const why =
-    spent !== undefined
-      ? `no further sign-in could run in this attempt, since ${spentReason[spent]}`
-      : failure?.code === "SignInsSpent"
-        ? "the attempt's sign-in allowance was spent"
-        : sessionLoss !== undefined
-          ? "the site did not keep its signed-in session, and the host could not sign in again"
-          : "no further sign-in could run in this attempt";
+  const stopped =
+    "The build stopped without publishing because the website could not be signed in.";
+  if (failure?.code === "AccountLocked")
+    return `${stopped} After the login was sent, the website said the account is locked, suspended or disabled. Unlock the account on the website, then build again.`;
   if (failure?.code === "LoginIdentityConflict")
-    return "Sign-in was unavailable, so the build stopped without publishing. This login conflicts with the one the owner's Personal account has locked this site to, so it can never sign in here. Nothing was sent. Recorded effects and receipts are preserved.";
+    return `${stopped} This login conflicts with the one the owner's Personal account has locked this site to, so it can never sign in here. Nothing was sent.`;
   // Every sign-in verified: the login was never the problem, the session's survival was.
   if (failure === undefined && sessionLoss !== undefined)
-    return `Sign-in was unavailable, so the build stopped without publishing. The site accepted the login each time, but the signed-in session did not survive the page load${spent === undefined ? "" : `, and ${spentReason[spent]}`}. The host sent nothing again. Recorded effects and receipts are preserved.`;
-  const failed =
+    return `${stopped} The website accepted the login each time, but the signed-in session did not survive the page load${spent === undefined ? "" : `, and ${spentReason[spent]}`}. Nothing was sent again.`;
+  const why =
+    spent !== undefined
+      ? `No further sign-in could run, since ${spentReason[spent]}.`
+      : failure?.code === "SignInsSpent"
+        ? "The attempt's sign-in allowance was spent."
+        : sessionLoss !== undefined
+          ? "The website did not keep its signed-in session, and signing in again did not work."
+          : "No further sign-in could run.";
+  const sent =
     failure === undefined || failure.code === "SignInsSpent"
-      ? "The site could not be signed in"
-      : `The sign-in failed with ${signInRootCode(failure)} during ${failure.phase} ${failure.nothingSubmitted === true ? "before anything reached the site" : "after the login was sent to the site"}`;
-  return `Sign-in was unavailable, so the build stopped without publishing. ${failed}, and ${why}. The host sent nothing again. Recorded effects and receipts are preserved.`;
+      ? ""
+      : failure.nothingSubmitted === true
+        ? " The sign-in failed before anything reached the website."
+        : " The login was sent to the website, but the sign-in did not complete.";
+  return `${stopped}${sent} ${why} Nothing was sent again.`;
 };
 
 /**
