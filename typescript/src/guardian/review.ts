@@ -654,7 +654,9 @@ export const makeGuardian = (
     if (retry === undefined) return attempt({ ordinal: 1, started: () => undefined });
     const budgetMs = Duration.toMillis(retry.budget);
     return Effect.gen(function* () {
-      const startedMs = yield* Clock.currentTimeMillis;
+      // The budget counts the outage, from the first failure on, not the review before it, which
+      // has no deadline and may run long.
+      let outageStartedMs: number | undefined;
       for (let retries = 0; ; retries++) {
         // The failed attempt's review, so its retry interval is tied to it.
         let correlation: Parameters<ReviewAttempt["started"]>[0] | undefined;
@@ -671,7 +673,9 @@ export const makeGuardian = (
         const waitMs = Duration.toMillis(
           retry.delays[Math.min(retries, retry.delays.length - 1)] ?? retry.delays[0],
         );
-        const outageMs = (yield* Clock.currentTimeMillis) - startedMs;
+        const failedMs = yield* Clock.currentTimeMillis;
+        outageStartedMs ??= failedMs;
+        const outageMs = failedMs - outageStartedMs;
         if (!retriableOutage(failure) || outageMs + waitMs > budgetMs) return yield* failure;
         const startOffsetMs = performance.now();
         yield* bestEffort(

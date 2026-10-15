@@ -315,4 +315,27 @@ describe("a provider outage", () => {
       details: { code: "Unavailable", waitMs: 2_000 },
     });
   });
+
+  it("is retried however long the review ran before it, since the budget counts only the outage", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+    // 300 s of healthy reading, past the outage retry's 5-minute budget, and then a 503.
+    const outage = Object.assign(new Error("Synthetic service unavailable"), { status: 503 });
+    const reads = [toolPath, "publication/definition.json", "captures/page/dom.html"];
+    const model = scripted((call) =>
+      call <= reads.length
+        ? { ms: 100_000, output: [read(reads[call - 1] ?? "", `read_${call}`)] }
+        : call === reads.length + 1
+          ? { error: outage }
+          : { output: [message(allowPublication)] },
+    );
+    const { events, diagnostics } = recordingDiagnostics();
+    const result = await settle(
+      makeGuardian(reviewer(), diagnostics, {}).review(publication, readSource),
+    );
+    expect(result).toMatchObject({ _tag: "Right", right: { decision: { outcome: "allow" } } });
+    expect(model.requests).toHaveLength(5);
+    expect(events.find((event) => event.name === "guardian.review_retried")).toMatchObject({
+      details: { code: "Unavailable", waitMs: 2_000, outageMs: 0 },
+    });
+  });
 });
