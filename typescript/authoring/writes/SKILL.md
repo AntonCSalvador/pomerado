@@ -210,8 +210,9 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   A step that never calls `verified` does not end a session.
 
 Once the session has started, a live `explore` or `test` is refused, and a write
-build never runs a live `example`. The session is the one run that proves the write: design
-no tests and build no offline test suite for it. Its HTTP version gets one offline replay of
+build never runs a live `example`: read what the composed script will need, such as a lookup's
+list, in an `act` step that changes nothing. The session is the one run that proves the write:
+design no tests and build no offline test suite for it. Its HTTP version gets one offline replay of
 the session (http-mcp skill), and the testing skill is not for a write.
 
 ## Check the read-back
@@ -223,6 +224,11 @@ the caller asked for, in the form the site saves it.
   the referenced record's ID while the page shows its label. Take the caller's label or ID as the
   input. Before the commit, look the ID up through the site's own list: the picker's options, the
   member list or the linked table's rows, which a read of the same site often already returns.
+  Since nothing runs live after the session, prove the lookup in it: read the list in an `act`
+  step that changes nothing, before the commit step, or from the response of the site's own
+  lookup request in the session's captures. When a `not_published` asks for a lookup the session
+  did not run, prove it in an `act` step that only reads, while the session is open (below),
+  never by committing again.
   When no entry matches, throw `InvalidInput` with `field` and `available`; when several match
   equally, ask the caller (core skill, the input schema). Write that ID or pick that entry, and
   compare the read-back by ID, never a label against an ID. Return the reference as

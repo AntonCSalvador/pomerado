@@ -342,8 +342,8 @@ the task can't run without it (below).
 page offers: a control no input covers, an input you cannot wire, a value the request needs
 that the page does not show, or a needed field you would have to make nullable. Settle each
 then: wire it, ask the owner with `request_input` when the request reads two ways or you are
-unsure how to solve it, or, only for a part that is hard and optional to the request, state in
-the description why the tool lacks it (`AGENTS.md`, "Solve before you narrow"). Publication
+unsure how to solve it, or, only for a part the site does not offer or the owner chose to leave
+out, state in the description why the tool lacks it (`AGENTS.md`, "Solve before you narrow"). Publication
 review blocks on the same gaps, and finding them at `finish_build` costs a full fix-and-resubmit
 round.
 
