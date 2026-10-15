@@ -1,8 +1,8 @@
 import { sameSite, siteDomain } from "./same-site.js";
 
 // Where a sign-in may move off the site's own host: a per-account workspace host on the site's
-// registrable domain, or a cross-site identity provider Guardian approved when the tool was built.
-// Every rule here is deterministic host code; a Guardian review may narrow it, never widen it.
+// registrable domain. Every rule here is deterministic host code; a Guardian review may narrow
+// it, never widen it.
 
 /** A recipe's workspace relation: its sign-in may move to a per-account host on `parent`. */
 export interface WorkspaceRelation {
@@ -47,18 +47,6 @@ export const workspaceHost = (siteOrigin: string, parent: string, candidate: str
 };
 
 /**
- * Whether `candidate` may be a cross-site sign-in origin (an identity provider) of the site at
- * `siteOrigin`: an exact https origin with no user info or path, not on the site's registrable
- * domain.
- */
-export const providerOrigin = (siteOrigin: string, candidate: string): boolean => {
-  const url = exactHttpsOrigin(candidate);
-  return (
-    exactHttpsOrigin(siteOrigin) !== undefined && url !== undefined && !sameSite(siteOrigin, url)
-  );
-};
-
-/**
  * The recipe's workspace relation when it is valid for `siteOrigin`: its `parent` is the site's
  * registrable domain. Undefined otherwise, and every workspace step is then refused.
  */
@@ -69,13 +57,6 @@ export const workspaceRelation = (
   const parent = recipe.workspace?.parent;
   return parent !== undefined && parent === siteDomain(siteOrigin) ? { parent } : undefined;
 };
-
-/** The recipe's sign-in origins that are cross-site provider origins of `siteOrigin`. */
-export const approvedSignInOrigins = (
-  recipe: { readonly version: number; readonly signInOrigins?: readonly string[] | undefined },
-  siteOrigin: string,
-): readonly string[] =>
-  (recipe.signInOrigins ?? []).filter((origin) => providerOrigin(siteOrigin, origin));
 
 /** A login's pinned workspace origin when it passes `workspaceHost` under a valid relation. */
 export const pinnedWorkspaceOrigin = (
@@ -126,7 +107,7 @@ export interface ScreenOriginContext {
   readonly candidate: string | undefined;
   /**
    * Whether this replay already submitted the login's identifier on an exact-origin screen (the
-   * shared host or a provider), after which only the site navigated.
+   * shared host or a configured sign-in origin), after which only the site navigated.
    */
   readonly identifierSent: boolean;
 }

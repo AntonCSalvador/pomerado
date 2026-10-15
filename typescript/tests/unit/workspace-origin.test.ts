@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   admitScreenOrigin,
-  approvedSignInOrigins,
   entryNamesAddress,
-  providerOrigin,
   signedInCheckOrigin,
   workspaceHost,
   workspaceRelation,
@@ -62,44 +60,12 @@ describe("workspaceHost", () => {
   });
 });
 
-describe("providerOrigin", () => {
-  it("accepts an exact cross-site https origin", () => {
-    expect(providerOrigin(site, "https://id.example.net")).toBe(true);
-  });
-
-  it("accepts another user's page on a private suffix, which is another site", () => {
-    expect(providerOrigin("https://a.github.io", "https://b.github.io")).toBe(true);
-  });
-
-  it.each([
-    "https://id.example.com",
-    "http://id.example.net",
-    "https://user@id.example.net",
-    "https://id.example.net/signin",
-    "not an origin",
-    // Same-site hosts are never providers, on another port or written with a trailing dot.
-    "https://app.example.com:8443",
-    "https://example.com.",
-  ])("refuses %s", (candidate) => {
-    expect(providerOrigin(site, candidate)).toBe(false);
-  });
-});
-
-describe("a recipe's relations for its site", () => {
+describe("a recipe's workspace relation for its site", () => {
   it("keeps a workspace relation only on the site's own registrable domain", () => {
     expect(workspaceRelation({ version: 4, workspace: { parent } }, site)).toEqual({ parent });
     expect(workspaceRelation({ version: 4, workspace: { parent: "example.org" } }, site)).toBeUndefined();
     expect(workspaceRelation({ version: 4, workspace: { parent: "github.io" } }, "https://github.io")).toBeUndefined();
     expect(workspaceRelation({ version: 1 }, site)).toBeUndefined();
-  });
-
-  it("keeps only cross-site sign-in origins", () => {
-    expect(
-      approvedSignInOrigins(
-        { version: 4, signInOrigins: ["https://id.example.net", "https://auth.example.com"] },
-        site,
-      ),
-    ).toEqual(["https://id.example.net"]);
   });
 });
 
