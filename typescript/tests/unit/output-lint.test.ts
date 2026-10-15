@@ -565,6 +565,63 @@ describe("advisory checks of the declared schemas", () => {
     expect(schemaChecks(input, output)).toEqual([]);
   });
 
+  it("walks a schema that refers to itself once per definition, quickly and without repeats", () => {
+    const tree = {
+      type: "object",
+      required: ["root"],
+      properties: { root: { $ref: "#/$defs/Node" } },
+      $defs: {
+        Node: {
+          type: "object",
+          required: ["name", "left", "right"],
+          properties: {
+            name: { type: "string" },
+            left: { anyOf: [{ $ref: "#/$defs/Node" }, { type: "null" }] },
+            right: { $ref: "#/$defs/Node" },
+          },
+        },
+      },
+    };
+    const started = performance.now();
+    const findings = schemaChecks(tree, tree);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    // The same schema on both sides is no looser than itself.
+    expect(findings).toEqual(["root.name loose_text"]);
+
+    interface Comment {
+      readonly text: string;
+      readonly replies: readonly Comment[];
+    }
+    const Comment: Schema.Schema<Comment> = Schema.Struct({
+      text: Schema.String,
+      replies: Schema.Array(Schema.suspend((): Schema.Schema<Comment> => Comment)),
+    }).annotations({ identifier: "Comment" });
+    const thread = lintSchemas(undefined, contractJsonSchema(Schema.Struct({ root: Comment })));
+    expect(thread.map(({ path, check }) => `${path} ${check}`)).toEqual(["root.text loose_text"]);
+  });
+
+  it("reads whitespace alone as blank, and a null-only branch as nullable", () => {
+    const output = {
+      type: "object",
+      required: ["spaced", "maybe"],
+      properties: {
+        spaced: { type: "string", minLength: 1, pattern: "^[\\w\\t]+$|^\\n$" },
+        maybe: { anyOf: [{ type: "string" }, { const: null }] },
+      },
+    };
+    expect(schemaChecks(undefined, output).sort()).toEqual(["maybe loose_text", "spaced loose_text"]);
+  });
+
+  it("carries over only an input pattern that holds a format, never one for free text", () => {
+    const input = contractJsonSchema(
+      Schema.Struct({ query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)), code: date }),
+    );
+    const output = contractJsonSchema(
+      Schema.Struct({ query: Schema.NonEmptyTrimmedString, code: Schema.NonEmptyTrimmedString }),
+    );
+    expect(schemaChecks(input, output)).toEqual(["code looser_than_input"]);
+  });
+
   it("never blocks, and reaches the publication notes beside the value checks", () => {
     const inputSchema = contractJsonSchema(Schema.Struct({ cabin: Schema.Literal("economy") }));
     const outputSchema = contractJsonSchema(

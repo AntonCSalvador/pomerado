@@ -9,7 +9,7 @@ import type { KernelOperationContext } from "../../src/browser/index.js";
 // unasked. An account-specific value (a passenger, saved card or address) would be a free-form
 // input, never an enum member, example or default.
 export const OrderInput = Schema.Struct({
-  item: Schema.NonEmptyTrimmedString.annotations({ description: "Item to order, as the site names it" }),
+  item: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({ description: "Item to order, as the site names it" }),
   quantity: Schema.Int.pipe(Schema.between(1, 99)).annotations({
     description: "How many to order, 1 to 99",
   }),

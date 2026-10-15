@@ -311,9 +311,9 @@ the task can't run without it (below).
   and its example's own input and output must decode under them, so settle both before that
   example.
 - Make each input as strict as the site's field: required text is non-empty and not whitespace
-  alone (`Schema.NonEmptyTrimmedString`); a date, time or code keeps its `pattern`; a fixed set is
-  a `Literal` enum. Make an input optional only when the site accepts the field blank and the
-  tool works without it.
+  alone (`Schema.NonEmptyString.pipe(Schema.pattern(/\S/u))`, which still takes a caller's stray
+  space); a date, time or code keeps its `pattern`; a fixed set is a `Literal` enum. Make an input
+  optional only when the site accepts the field blank and the tool works without it.
 - Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear. A description that starts "By design:" keeps that marker first and puts the number of values after it, such as "By design: one postal code, …", never before it.
 - When a field takes one value and a caller might send several, say "one per call" and prefer a
   `pattern` that refuses a list, such as several codes separated by commas, while still accepting

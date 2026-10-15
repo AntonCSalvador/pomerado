@@ -14,8 +14,8 @@ export default defineOperation(
   {
     name: "select_catalog_item",
     input: Schema.Struct({
-      query: Schema.NonEmptyTrimmedString.annotations({ description: "Text to search the catalog for" }),
-      key: Schema.NonEmptyTrimmedString.annotations({
+      query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({ description: "Text to search the catalog for" }),
+      key: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({
         description: "Catalog key of the item to select, as its option is named",
       }),
     }),

@@ -87,7 +87,7 @@ export default defineOperation(
   {
     name: "search_listings",
     input: Schema.Struct({
-      query: Schema.NonEmptyTrimmedString.annotations({ description: "What to search the listings for" }),
+      query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({ description: "What to search the listings for" }),
       ...listInputFields,
     }),
     output: Schema.Struct({

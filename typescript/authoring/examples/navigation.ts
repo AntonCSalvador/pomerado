@@ -246,7 +246,7 @@ export const searchThenRead = defineOperation(
   {
     name: "search_rooms",
     input: Schema.Struct({
-      query: Schema.NonEmptyTrimmedString.annotations({
+      query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({
         description: "Text to search rooms for",
         examples: ["room"],
       }),

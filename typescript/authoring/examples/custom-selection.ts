@@ -12,7 +12,7 @@ export default defineOperation(
       code: AirportCode.annotations({
         description: "Code of the airport to choose, one to four capital letters",
       }),
-      query: Schema.NonEmptyTrimmedString.annotations({
+      query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({
         description: "Text to type into the airport search, such as a city name",
       }),
     }),

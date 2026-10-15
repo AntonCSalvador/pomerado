@@ -652,6 +652,8 @@ interface SchemaShape {
 
 /** The most alternatives one node expands to, so a schema of many unions costs a bounded time. */
 const shapeLimit = 32;
+/** The most fields one schema's walk records, so a very large schema costs a bounded time. */
+const fieldLimit = 2_000;
 
 const ownShape = (node: Json): SchemaShape => {
   const type = node["type"];
@@ -762,36 +764,59 @@ interface DeclaredField {
  */
 const declaredFields = (root: unknown): DeclaredField[] => {
   const schema = schemaResolver(root);
-  const expand = (node: unknown, depth: number): SchemaShape[] => {
-    if (!isRecord(node) || depth > 16) return [ownShape({})];
+  /** The local `$ref` names a node or its unions and intersections use, not its properties'. */
+  const referencesOf = (node: unknown, depth = 0): string[] =>
+    !isRecord(node) || depth > 16
+      ? []
+      : [
+          ...(typeof node["$ref"] === "string" ? [node["$ref"]] : []),
+          ...[node["allOf"], node["anyOf"], node["oneOf"]]
+            .filter(Array.isArray)
+            .flatMap((branches: unknown[]) =>
+              branches.flatMap((branch) => referencesOf(branch, depth + 1)),
+            ),
+        ];
+  /** `seen` holds the references being expanded, so a definition that refers to itself stops. */
+  const expand = (node: unknown, seen: ReadonlySet<string>): SchemaShape[] => {
+    if (!isRecord(node) || seen.size > 16) return [ownShape({})];
     let shapes = [ownShape(node)];
     const combine = (alternatives: readonly SchemaShape[]) => {
       shapes = shapes
         .flatMap((shape) => alternatives.map((alternative) => bothShapes(shape, alternative)))
         .slice(0, shapeLimit);
     };
+    const reference = node["$ref"];
     const target = schema.reference(node);
-    if (target !== undefined) combine(expand(target, depth + 1));
+    if (target !== undefined && typeof reference === "string" && !seen.has(reference))
+      combine(expand(target, new Set([...seen, reference])));
     if (Array.isArray(node["allOf"]))
-      for (const branch of node["allOf"]) combine(expand(branch, depth + 1));
+      for (const branch of node["allOf"]) combine(expand(branch, seen));
     const union = [node["anyOf"], node["oneOf"]].find(Array.isArray);
-    if (union !== undefined) combine(union.flatMap((branch: unknown) => expand(branch, depth + 1)));
+    if (union !== undefined) combine(union.flatMap((branch: unknown) => expand(branch, seen)));
     return shapes;
   };
   const fields: DeclaredField[] = [];
+  /**
+   * `references` holds the definitions on the path from the root. A field whose schema names one
+   * of them again is recorded but not entered, so a recursive schema is walked once.
+   */
   const visit = (
     nodes: readonly unknown[],
     path: string,
     key: string | undefined,
     required: boolean,
     depth: number,
+    references: ReadonlySet<string>,
   ) => {
-    if (depth > 32) return;
-    const all = expand({ allOf: nodes }, 0);
+    if (depth > 32 || fields.length >= fieldLimit) return;
+    const own = nodes.flatMap((node) => referencesOf(node));
+    const repeats = own.some((reference) => references.has(reference));
+    const all = expand({ allOf: nodes }, new Set());
     const nullable = all.some(
       (shape) => shape.types?.has("null") === true || shape.enum?.includes(null) === true,
     );
-    // Null is recorded once, as `nullable`; the shapes keep the other types and values.
+    // Null is recorded once, as `nullable`; the shapes keep the other types and values, and a
+    // shape that allowed only null is gone.
     const shapes = all
       .filter((shape) => !isNullShape(shape))
       .map((shape) => ({
@@ -801,8 +826,11 @@ const declaredFields = (root: unknown): DeclaredField[] => {
             ? undefined
             : new Set([...shape.types].filter((type) => type !== "null")),
         enum: shape.enum?.filter((value) => value !== null),
-      }));
+      }))
+      .filter((shape) => shape.enum === undefined || shape.enum.length > 0);
     fields.push({ path, key, required, nullable, shapes });
+    if (repeats) return;
+    const inner = new Set([...references, ...own]);
     const children = new Map<string, { nodes: unknown[]; required: boolean }>();
     for (const shape of shapes)
       for (const [name, childNodes] of shape.properties) {
@@ -815,13 +843,25 @@ const declaredFields = (root: unknown): DeclaredField[] => {
         }
       }
     for (const [name, child] of children)
-      visit(child.nodes, path === "$" ? name : `${path}.${name}`, name, child.required, depth + 1);
+      visit(
+        child.nodes,
+        path === "$" ? name : `${path}.${name}`,
+        name,
+        child.required,
+        depth + 1,
+        inner,
+      );
     const items = shapes.flatMap((shape) => shape.items);
-    if (items.length > 0) visit(items, `${path}[]`, undefined, true, depth + 1);
+    if (items.length > 0) visit(items, `${path}[]`, undefined, true, depth + 1, inner);
   };
-  if (isRecord(root)) visit([root], "$", undefined, true, 0);
+  if (isRecord(root)) visit([root], "$", undefined, true, 0, new Set());
   return fields;
 };
+
+/** Plain words, which a free-text pattern accepts and a format's pattern does not. */
+const freeText = "plain words";
+/** Text a person would read as nothing: empty, or whitespace alone. */
+const blankTexts = ["", " ", "\t", "\n"];
 
 /** Whether every shape is a string, so the text checks apply. */
 const textField = (field: DeclaredField) =>
@@ -831,8 +871,8 @@ const textField = (field: DeclaredField) =>
 const looserThan = (output: DeclaredField, input: DeclaredField) => {
   if (input.required && !input.nullable && (!output.required || output.nullable)) return true;
   if (!textField(input) || !textField(output)) return false;
-  // An enum is held when the output's values are all the input's; a pattern when the output
-  // repeats it or takes an enum instead. A pattern written another way is a lead to check.
+  // An enum is held when the output's values are all the input's; a format's pattern when the
+  // output repeats it or takes an enum instead. A pattern written another way is a lead to check.
   const inputValues = input.shapes.every((shape) => shape.enum !== undefined)
     ? new Set(input.shapes.flatMap((shape) => shape.enum ?? []))
     : undefined;
@@ -842,7 +882,11 @@ const looserThan = (output: DeclaredField, input: DeclaredField) => {
     !(outputEnum && output.shapes.every((shape) => shape.enum?.every((value) => inputValues.has(value))))
   )
     return true;
-  const inputPatterns = input.shapes.map((shape) => shape.patterns);
+  // Only a pattern that holds a format, such as a date or a code, must carry over: one that
+  // takes plain words, such as one refusing whitespace alone, leaves the field free text.
+  const inputPatterns = input.shapes.map((shape) =>
+    shape.patterns.filter((pattern) => compiledPattern(pattern)?.test(freeText) === false),
+  );
   if (
     inputValues === undefined &&
     inputPatterns.every((patterns) => patterns.length > 0) &&
@@ -860,10 +904,11 @@ const looserThan = (output: DeclaredField, input: DeclaredField) => {
 /**
  * Advisory checks of a tool's declared JSON Schemas, never of its values, apart from `lintOutput`
  * so a run's output checks and telemetry are unchanged. `loose_text`: a required output string
- * whose schema accepts an empty string or a lone space, such as one with no minLength and no
+ * whose schema accepts an empty string or whitespace alone, such as one with no minLength and no
  * pattern. `looser_than_input`: an output field looser than the input field of the same name,
  * found by property name at any depth when only one input field has it: an enum dropped or
- * widened, a pattern neither repeated nor replaced by an enum, a smaller minLength, or optional
+ * widened, a format's pattern (one that refuses plain words) neither repeated nor replaced by an
+ * enum, a smaller minLength, or optional
  * or nullable where the input is required. Neither blocks: whether a field holds a needed value
  * is the publication review's judgment.
  */
@@ -872,19 +917,21 @@ export const lintSchemas = (inputSchema: unknown, outputSchema: unknown): Output
   for (const field of declaredFields(inputSchema))
     if (field.key !== undefined)
       inputs.set(field.key, inputs.has(field.key) ? undefined : field);
-  const findings: OutputFinding[] = [];
+  // One finding per path and check, however often a schema reaches the field.
+  const findings = new Map<string, OutputFinding>();
+  const flag = (path: string, check: OutputCheck) =>
+    findings.set(`${check}\u0000${path}`, { path, check, count: 1, blocking: false });
   for (const field of declaredFields(outputSchema)) {
     if (
       field.required &&
       textField(field) &&
-      field.shapes.some((shape) => acceptsText(shape, "") || acceptsText(shape, " "))
+      field.shapes.some((shape) => blankTexts.some((text) => acceptsText(shape, text)))
     )
-      findings.push({ path: field.path, check: "loose_text", count: 1, blocking: false });
+      flag(field.path, "loose_text");
     const input = field.key === undefined ? undefined : inputs.get(field.key);
-    if (input !== undefined && looserThan(field, input))
-      findings.push({ path: field.path, check: "looser_than_input", count: 1, blocking: false });
+    if (input !== undefined && looserThan(field, input)) flag(field.path, "looser_than_input");
   }
-  return findings;
+  return [...findings.values()];
 };
 
 /** A finding as the reviewer reads it: with the minter's reason when it overrode it. */

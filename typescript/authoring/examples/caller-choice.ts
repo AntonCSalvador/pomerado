@@ -22,7 +22,7 @@ export default defineOperation(
   {
     name: "book_flight_seat",
     input: Schema.Struct({
-      flight: Schema.NonEmptyTrimmedString.annotations({
+      flight: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({
         description: "Flight to book, as its Choose button names it",
       }),
     }),

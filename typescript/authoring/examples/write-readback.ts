@@ -16,8 +16,8 @@ export default defineOperation(
   {
     name: "create_task",
     input: Schema.Struct({
-      title: Schema.NonEmptyTrimmedString.annotations({ description: "Title of the new task" }),
-      assignee: Schema.NonEmptyTrimmedString.annotations({
+      title: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({ description: "Title of the new task" }),
+      assignee: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({
         description: "Who the task is assigned to, as the form's Assignee field takes it",
       }),
     }),

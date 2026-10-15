@@ -7,7 +7,7 @@ import { defineHttpOperation, operationErrors, readJson } from "../../src/browse
 const contract = {
   name: "search_products",
   input: Schema.Struct({
-    query: Schema.NonEmptyTrimmedString.annotations({ description: "Text to search products for" }),
+    query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({ description: "Text to search products for" }),
     sort: Schema.optional(
       Schema.String.annotations({ description: "How the site orders results, as it names it" }),
     ),

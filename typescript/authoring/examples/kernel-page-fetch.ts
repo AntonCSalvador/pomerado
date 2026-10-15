@@ -23,7 +23,7 @@ export default defineOperation(
   {
     name: "search_records",
     input: Schema.Struct({
-      query: Schema.NonEmptyTrimmedString.annotations({ description: "Text to search records for" }),
+      query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({ description: "Text to search records for" }),
     }),
     output: Results,
   },
