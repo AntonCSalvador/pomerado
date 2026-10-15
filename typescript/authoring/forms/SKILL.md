@@ -5,6 +5,17 @@ description: Guarded native/custom selection, dynamic choices and consequential 
 
 # Author the site's behavior
 
+Prefer one question round per form page. Before the first `act` step, read what is already
+visible on the page, and read the page's own scripts or<!-- pomerado:section forms.step-rules --> responses that describe the form
+(field lists, validation rules, step definitions) to anticipate what later steps ask, then ask
+up front, in one `request_input`, for every field you can see or anticipate that the input does
+not settle. On each later page, first fill every value the request, the input and earlier
+answers supply, including the choices that reveal follow-up fields, then read the page and ask
+everything still open on it in one `request_input`, rather than a question per field. A field
+that appears only after an answer is asked in place, with `request_input` during the session,
+or as a declared `ask` in the next step's script for a choice that exists only on that page.
+Check the page again after the answer.
+
 Use Playwright locators and frame chains inside the call. Check unique target identity
 separately from visibility/readiness and semantic completion. Arm relevant event
 waiters before triggers, in the same call. Native dialogs go to the host through
@@ -191,15 +202,6 @@ before entering a name, email or phone (core skill, "Inputs that tailor the answ
 - Walk every step for real, in the session, with the caller's values. Never infer a
   later step's fields, options or wording in place of reaching it; the page after
   "Continue" is evidence only once you are on it.
-- Before the first `act` step, read what is already visible on the page, and read the
-  page's own scripts or<!-- pomerado:section forms.step-rules --> responses that describe the form (field lists,
-  validation rules, step definitions) to anticipate what later steps ask. Use that to
-  ask for the values up front, in one `request_input`, for every field you can see or
-  anticipate that the input does not settle.
-- A step that asks for something you could not anticipate is asked in place when you
-  reach it, with `request_input` during the session, or as a declared `ask` in the
-  next step's script for a choice that exists only on that page. Check the page again
-  after the answer.
 - A step the site saved stays saved. If a step fails, read the page before running it
   again; redo it only when it did not finish.
 
