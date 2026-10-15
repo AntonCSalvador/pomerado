@@ -661,6 +661,10 @@ const jsonTypeTree = (value: unknown): JsonTypeTree => {
 const loginDeclinedInstruction = (decline: LoginDecline) =>
   `The owner chose not to sign in: ${decline === "no_account" ? "they have no account on this site" : "they want only what the site shows without signing in"}. This is their answer, not an error. Never ask for a login again and never call execute purpose authenticate in this build. Build the part of the request the site shows without signing in. If that part is missing, or much less than the request asks for, ask the owner with request_input before you build: say that without signing in the site shows only what you found, name it, and offer to continue with that or stop. If they choose to stop, or the build cannot go on without signing in, end with report_blocked reason owner_declined.`;
 
+/** What the minter hears about signing in once the build gave it up. */
+const signInAbandonedInstruction =
+  "This build gave up signing in and runs signed out: no sign-in runs and no login is asked for. Never call execute purpose authenticate again. Explore, run the example and live tests, and publish from the part of the request the site shows signed out; when that part is missing or much less than asked, ask the owner with request_input whether to continue with it or stop.";
+
 /** The answer every authenticate gets once the owner declined to sign in. */
 const loginDeclinedAnswer = (decline: LoginDecline) =>
   JSON.stringify({
@@ -692,6 +696,8 @@ const stopReasonOf = (
       ? undefined
       : blocked;
   if (noResponse !== undefined) return "question_unanswered";
+  // A login check the host could not run is the host's, not the sign-in's.
+  if (outcome.recoveryReason === "login_check_unavailable") return "host_unavailable";
   if (outcome.recoveryReason !== undefined || outcome.rejectedCredential !== undefined)
     return "sign_in_failed";
   if (outcome.hostFailure === "model_quota_exhausted") return "model_quota_exhausted";
@@ -1070,6 +1076,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       let loginHeld = recovered?.loginHeld === true;
       /** The owner declined a login: no sign-in runs, and every authenticate hears why. */
       let loginDeclined = recovered?.loginDeclined;
+      /** The build gave up signing in; see `MintHarnessSnapshot.signInAbandoned`. */
+      let signInAbandoned = recovered?.signInAbandoned === true;
       let destinationEvidenceRefusals = recovered?.destinationEvidenceRefusals ?? 0;
       let inputFeedbackRounds = recovered?.inputFeedbackRounds ?? 0;
       /** The last input-feedback review found a tool already public, which never falls back. */
@@ -2815,7 +2823,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // to sign in: then nothing is left to resolve, and refusing the ending would leave the
         // minter no way to stop. (Once sign-in is unavailable, the report ends the build with
         // that result before it gets here.)
-        if (unresolvedSignIn !== undefined && loginDeclined === undefined)
+        if (unresolvedSignIn !== undefined && loginDeclined === undefined && !signInAbandoned)
           return refused(
             "sign_in_unresolved",
             "The last sign-in failed and is unresolved. Resolve it as its result says, with authenticate once its cause is fixed, before deciding the task is impossible as asked.",
@@ -2945,6 +2953,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const decision = yield* review(
             { questions: [{ id: "blocked", type: "text", prompt: screened }] },
             { blockedOutcome: true, ...(yield* publicationRefusals) },
+          ).pipe(
+            Effect.timeoutFail({
+              duration: dependencies.stopExplanationReviewMs ?? 60_000,
+              onTimeout: () => new MintFailure({ code: "ReviewUnavailable" }),
+            }),
           );
           return decision.outcome === "allow_business" ? screened : undefined;
         }).pipe(
@@ -3217,13 +3230,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const effectChanged = next.effect === "write" && buildEffect !== "write";
           const siteChanged = next.siteOrigin !== taskState.siteOrigin;
           taskState = next;
-          // The task now runs signed out: a failed sign-in no longer holds anything back.
-          if (
-            accepted.changes.some(
-              (change) => change.setting === "login" && change.change === "signed_out",
-            )
-          )
-            unresolvedSignIn = undefined;
+          // The task now runs signed out: a failed sign-in no longer holds anything back, and no
+          // sign-in runs until a later update asks for one, which the owner then confirmed.
+          for (const change of accepted.changes)
+            if (change.setting === "login") {
+              if (change.change === "signed_out") {
+                signInAbandoned = true;
+                unresolvedSignIn = undefined;
+              } else {
+                signInAbandoned = false;
+                loginDeclined = undefined;
+              }
+            }
           // An applied update changes the remaining work, which may settle an unresolved write.
           yield* reviewer.taskUpdated(
             `The caller confirmed a task update (revision ${next.revision}): ${accepted.summary}`,
@@ -3825,6 +3843,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 return signInUnavailable.answer;
               if (loginDeclined !== undefined && authenticating)
                 return loginDeclinedAnswer(loginDeclined);
+              if (signInAbandoned && authenticating)
+                return JSON.stringify({
+                  status: "sign_in_abandoned",
+                  userInputRequired: false,
+                  instruction: signInAbandonedInstruction,
+                });
               yield* active();
               const submitted = yield* decode(ExecutionRequest, input);
               yield* Effect.try({
@@ -3904,6 +3928,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     if (
                       (!effectful && submitted.purpose !== "authenticate") ||
                       Exit.isSuccess(result)
+                    )
+                      return Effect.void;
+                    // The owner declined the login before anything was sent: no sign-in ran.
+                    if (
+                      Cause.isFailType(result.cause) &&
+                      result.cause.error.loginDeclined !== undefined
                     )
                       return Effect.void;
                     // A defect or interruption can occur after dispatch just like a typed failure.
@@ -4874,6 +4904,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 const rationale = yield* screenMintText(dependencies, review.rationale);
                 // A read-or-write choice never asks for a login, so a login verdict means reword it.
                 if (review.outcome === "authentication" && !effectQuestion) {
+                  // The build gave up signing in: nobody is asked for a login.
+                  if (signInAbandoned)
+                    return JSON.stringify({
+                      status: "login_request",
+                      login: "abandoned",
+                      rationale,
+                      userInputRequired: false,
+                      instruction: signInAbandonedInstruction,
+                    });
                   // The owner already declined to sign in: they are not asked again.
                   const login =
                     loginDeclined ??
@@ -4883,6 +4922,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   if (login === "supplied" || login === "held") loginHeld = true;
                   if (login === "no_account" || login === "public_only") {
                     loginDeclined = login;
+                    // An earlier failed sign-in is no longer the minter's to resolve, so its
+                    // guidance never contradicts the owner's answer.
+                    unresolvedSignIn = undefined;
                     yield* diagnose({
                       phase: "sign_in",
                       reason: "login_declined",
@@ -5276,11 +5318,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                           "The host did not let this build give up signing in, so nothing changed. Resolve the sign-in as its last result says, or end the build if nothing can.",
                       });
                     unresolvedSignIn = undefined;
+                    signInAbandoned = true;
                     return JSON.stringify({
                       status: "sign_in_abandoned",
                       userInputRequired: false,
-                      instruction:
-                        "The build gave up signing in and goes on signed out. Never call execute purpose authenticate again. Explore, run the example and live tests, and publish from the part of the request the site shows signed out; when that part is missing or much less than asked, ask the owner with request_input whether to continue with it or stop.",
+                      instruction: signInAbandonedInstruction,
                     });
                   }),
                 ),
@@ -5602,6 +5644,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),
         ...(loginHeld ? { loginHeld: true as const } : {}),
         ...(loginDeclined === undefined ? {} : { loginDeclined }),
+        ...(signInAbandoned ? { signInAbandoned: true as const } : {}),
         destinationEvidenceRefusals,
         inputFeedbackRounds,
         inputFeedbackPublicTool,

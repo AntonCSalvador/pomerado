@@ -10,6 +10,7 @@ import { Deferred, Effect, Fiber } from "effect";
 import { afterEach, expect, it } from "vitest";
 import { MintFailure } from "../../src/mint/contracts.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
+import { portableMintProjection } from "../support/portable-mint.js";
 
 /*
  * How an unpublished build ends: each ending carries its own typed reason, so a host can tell the
@@ -625,4 +626,245 @@ it("never gives up a sign-in while an execution is in flight", async () => {
   const release = Effect.runSync(Deferred.make<void>());
   await f.run();
   expect(order).toEqual(["sign_in_released", "abandoned"]);
+});
+
+// Once a build gave up signing in, it stays signed out: another authenticate runs nothing and no
+// login is asked for, so the given-up sign-in never comes back unresolved.
+it.each(["tool", "update"] as const)(
+  "keeps a build signed out once it gave up signing in through the %s",
+  async (path) => {
+    let signIns = 0;
+    let loginRequests = 0;
+    const giveUp =
+      path === "tool"
+        ? [call("abandon_sign_in", { intent: "The sign-in cannot be resolved." })]
+        : [
+            call(
+              "request_input",
+              {
+                questions: [
+                  {
+                    id: "public",
+                    type: "confirm",
+                    prompt: "Should the tool read only what the site shows without signing in?",
+                  },
+                ],
+              },
+              "confirm",
+            ),
+            call(
+              "mint_update",
+              {
+                summary: "Read only what the site shows without signing in.",
+                changes: [
+                  {
+                    setting: "login",
+                    change: "signed_out",
+                    text: "Read only what the site shows signed out.",
+                  },
+                ],
+                confirmedBy: ["public"],
+                recommend: "update",
+                intent: "The owner confirmed reading signed out.",
+              },
+              "update",
+            ),
+          ];
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("execute", authenticate, "first"),
+          ...giveUp,
+          call("execute", authenticate, "again"),
+          call(
+            "request_input",
+            { questions: [{ id: "report", type: "text", prompt: "What is your password?" }] },
+            "login",
+          ),
+          call("report_blocked", lacksPublicPart),
+        ][index] ?? prose("Stopping."),
+      {
+        reviewAndExecute: () =>
+          Effect.suspend(() => {
+            signIns++;
+            return Effect.fail(failedSignIn);
+          }),
+        abandonSignIn: () => Effect.succeed({ outcome: "abandoned" as const }),
+        askInput: () => Effect.succeed({ public: { type: "confirm", value: { confirmed: true } } }),
+        reviewQuestion: (candidate) =>
+          Effect.succeed(
+            candidate.questions[0]?.id === "report"
+              ? { outcome: "authentication" as const, rationale: "Asks for a login." }
+              : { outcome: "allow_business" as const, rationale: "Plain." },
+          ),
+        requestLogin: () =>
+          Effect.sync(() => {
+            loginRequests++;
+            return "supplied" as const;
+          }),
+        reviewTaskUpdate: () =>
+          Effect.succeed({ outcome: "allow" as const, rationale: "Confirmed.", reviewId: "r1" }),
+        applyTaskUpdate: () => Effect.succeed({ outcome: "applied" as const }),
+      },
+    );
+    const outcome = await f.run();
+    expect(signIns).toBe(1);
+    expect(loginRequests).toBe(0);
+    const again = 1 + giveUp.length + 1;
+    expect(JSON.stringify(f.requests[again]?.input)).toContain("sign_in_abandoned");
+    expect(JSON.stringify(f.requests[again + 1]?.input)).toContain('\\"login\\":\\"abandoned\\"');
+    expect(outcome.blocked).toMatchObject({ reason: "site_lacks_capability" });
+  },
+);
+
+// A login the owner declined after an earlier sign-in failed leaves nothing to resolve: the
+// failed sign-in's guidance never comes back to contradict the owner's answer.
+it("gives no failed sign-in's guidance once the owner declined a login request", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate),
+        call(
+          "request_input",
+          { questions: [{ id: "report", type: "text", prompt: "What is your password?" }] },
+          "login",
+        ),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: () => Effect.fail(failedSignIn),
+      reviewQuestion: (candidate) =>
+        Effect.succeed(
+          candidate.questions[0]?.id === "report"
+            ? { outcome: "authentication" as const, rationale: "Asks for a login." }
+            : { outcome: "allow_business" as const, rationale: "Plain." },
+        ),
+      requestLogin: () => Effect.succeed("public_only" as const),
+    },
+  );
+  await f.run();
+  for (const request of f.requests.slice(2))
+    expect(JSON.stringify(request.input)).not.toContain("The last sign-in failed and nothing");
+});
+
+it("records no sign-in execution for a login the owner declined", async () => {
+  const f = await fixture(
+    (_request, index) => (index === 0 ? call("execute", authenticate) : prose("Stopping.")),
+    {
+      reviewAndExecute: () =>
+        Effect.fail(new MintFailure({ code: "Unavailable", loginDeclined: "public_only" })),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome.executions).toEqual([]);
+});
+
+// A public reason the host cannot screen never reaches the caller unscreened; the denial stands.
+it("drops a public reason whose screen failed and keeps the denial", async () => {
+  const projection = portableMintProjection();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", {
+          purpose: "example",
+          target: "pureFiles",
+          entrypoint: "src/tool.ts",
+          fixtureRefs: [],
+          caseFilter: [],
+          maxWorkers: 1,
+          timeoutSeconds: 30,
+        }),
+        call("finish_build", {
+          entrypoint: "src/tool.ts",
+          executionId: "execution_one",
+          metadata: { name: "read_public", description: "Read public data" },
+          coverage: "One actual example.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      projection: {
+        ...projection,
+        text: (value, area) =>
+          value.includes("unscreenable")
+            ? Effect.fail(new MintFailure({ code: "Unavailable" }))
+            : projection.text(value, area),
+      },
+      publish: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: {
+              outcome: "deny",
+              reason: "privacy",
+              reviewId: "review_denied",
+              rationale: "Synthetic refusal.",
+              findings: [],
+              publicReason: "An unscreenable sentence.",
+            },
+          }),
+        ),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome.publicationDenial).toEqual({ reason: "privacy" });
+});
+
+// The review of the minter's last answer never changes how the build ended: a failure, a defect
+// or a review that outlasts its bound keeps no explanation.
+it.each([
+  {
+    name: "failure",
+    review: () => Effect.fail(new MintFailure({ code: "ReviewUnavailable" })),
+  },
+  { name: "defect", review: () => Effect.die(new Error("Synthetic reviewer defect")) },
+  { name: "timeout", review: () => Effect.never },
+] as const)("keeps no last answer when its review ends in a $name", async ({ review }) => {
+  const f = await fixture(() => prose("The site lists no prices without a membership."), {
+    reviewQuestion: review,
+    stopExplanationReviewMs: 20,
+  });
+  const outcome = await f.run();
+  expect(outcome.stopReason).toBe("final_text_without_tool");
+  expect(outcome).not.toHaveProperty("stopExplanation");
+});
+
+// A login check the host could not run is the host's ending, not a failed sign-in.
+it("names a restored login-check ending host_unavailable", async () => {
+  const f = await harnessFixture(() => Effect.void, {
+    agentRecovery: {
+      initial: {
+        agent: {
+          version: 1,
+          sdkVersion: "0.18.0",
+          sdkState: "",
+          modelCalls: 0,
+          finalsWithoutTool: 0,
+          tools: [],
+        },
+        harness: {
+          executions: [],
+          purposes: [],
+          diagnostics: [],
+          exampleClaimed: false,
+          writeSession: "none",
+          unavailableOutputRefusals: 0,
+          unavailableCauseRecorded: false,
+          reviewUnavailableRetries: { execution: 0, publication: 0, question: 0 },
+          destinationEvidenceRefusals: 0,
+          inputFeedbackRounds: 0,
+          inputFeedbackPublicTool: false,
+          inputFeedbackCoverage: "",
+          providerUnavailableRetries: 0,
+          executionClosed: false,
+          captchaChecks: 0,
+          terminal: {
+            build: "incomplete",
+            recoveryReason: "login_check_unavailable",
+            summary: "The login could not be checked.",
+          },
+        },
+      },
+      save: () => Effect.void,
+    },
+  });
+  expect((await f.run()).stopReason).toBe("host_unavailable");
 });

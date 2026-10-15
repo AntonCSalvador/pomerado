@@ -1044,7 +1044,9 @@ export const BuildBlocked = Schema.Struct({
  * What the minter sends `report_blocked`: a blocked ending's reason, or `host_unavailable` when the
  * host has ended live execution and what the build still needs, such as a fresh example a review
  * asked for, cannot run without it. That one ends the attempt as the host's failure, never as a
- * block: nothing about the task is impossible, so the caller never reads it as one.
+ * block: nothing about the task is impossible, so the caller never reads it as one. Once sign-in
+ * is unavailable in the build, any report, `policy` included, ends the build with the sign-in's
+ * own result instead of the reason it names.
  */
 export const BlockedReport = Schema.Struct({
   reason: Schema.Literal(
@@ -1656,6 +1658,12 @@ export interface MintHarnessSnapshot {
    * `owner_declined` block may stand on it. Optional for the same reason.
    */
   readonly loginDeclined?: LoginDecline;
+  /**
+   * The build gave up signing in (`abandon_sign_in`, or an applied `login` `signed_out` update):
+   * no sign-in runs and no login is asked for until an accepted `login` `sign_in` or
+   * `different_login` update. Optional for the same reason.
+   */
+  readonly signInAbandoned?: true;
   readonly destinationEvidenceRefusals: number;
   readonly inputFeedbackRounds: number;
   readonly inputFeedbackPublicTool: boolean;
@@ -1758,9 +1766,11 @@ const HarnessTerminal = Schema.Struct({
   ),
   hostFailure: Schema.optionalWith(Schema.Literal(...mintHostFailures), { exact: true }),
   // Optional, and dropped as an excess field by an older worker's decode, so a rollout's old and
-  // new workers each restore the other's checkpoint.
+  // new workers each restore the other's checkpoint, except a terminal whose blocked reason is
+  // one an older worker does not know (`owner_declined`, `question_unanswered`): that one does
+  // not decode there.
   blocked: Schema.optionalWith(BuildBlockedOutcome, { exact: true }),
-  // Optional for the same reason.
+  // Optional, and dropped by an older worker's decode.
   stopReason: Schema.optionalWith(MintStopReason, { exact: true }),
   stopExplanation: Schema.optionalWith(Schema.String, { exact: true }),
 });
@@ -1801,6 +1811,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   noAnswerHandBacks: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
   loginHeld: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   loginDeclined: Schema.optionalWith(LoginDecline, { exact: true }),
+  signInAbandoned: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   destinationEvidenceRefusals: Schema.NonNegativeInt,
   inputFeedbackRounds: Schema.NonNegativeInt,
   inputFeedbackPublicTool: Schema.Boolean,
@@ -2064,6 +2075,11 @@ export interface MintDependencies {
   readonly deadline?: Deadline;
   /** How long reviews may stay unavailable before the attempt ends; 15 minutes by default. */
   readonly reviewOutageBudgetMs?: number;
+  /**
+   * How long Guardian's review of the minter's last answer (`stopExplanation`) may take before
+   * the build ends without it; one minute by default.
+   */
+  readonly stopExplanationReviewMs?: number;
   readonly exampleClaimed?: boolean;
   /** Host-bound accepted/registered read authority; source still requires Guardian approval. */
   readonly repeatableRead?: boolean;
