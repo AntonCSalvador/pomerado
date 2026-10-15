@@ -274,7 +274,7 @@ or one the input or an earlier answer already settles, is no choice: never ask a
 add-on toggle, a pre-selected checkbox or a lone saved payment method is still a yes-or-no choice
 to ask about. A safety default (core skill) is neither: never ask about it, and the script turns it off. Read the path's options with read-only exploration where you can and settle them before
 the first act step where possible; a question during the session waits in place. Take a site default only for a choice that is not a
-credential, not a write and easy to reverse, and list it in `finish_build` `assumptions`. A full
+credential, not a write and easy to reverse, and list it in `finish_build` `assumptions`. On a write, prefer keeping the value the page already shows in an optional field that adds no cost over asking the caller to confirm or correct it: list it in `assumptions`, and it stays an optional input. Add-ons, pre-selected paid options and saved payment are still asked, as above. A full
 new login goes through execute purpose `authenticate`: an SMS, email or authenticator code that
 is part of signing in is a `code` field of its `signInStep`, which the host fills or asks the
 caller for, so never ask for it with `request_input`. The standalone code path, a
