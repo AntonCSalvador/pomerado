@@ -19,7 +19,7 @@ import { providerQuotaExhausted } from "../models/provider-quota.js";
 import { modelUsageCounts } from "../models/model-usage.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { Agent, AgentsError, MaxTurnsExceededError, Runner, tool, Usage } from "@openai/agents";
-import { Effect, Exit, Schema } from "effect";
+import { Effect, Exit, identity, Schema } from "effect";
 import { reviewFollowUpRounds, ReviewFailure } from "./review.js";
 import { withTenantPolicy } from "./upstream-policy.js";
 import type { GuardianUsage, Reviewer, ReviewTurn } from "./review.js";
@@ -384,7 +384,9 @@ const reviewerWithPolicy = (policy: string, options: GuardianModelOptions): Revi
                 Effect.runPromise(
                   args.match === undefined || args.match === null || args.match.trim() === ""
                     ? turn.readSource(args.path, args.offset)
-                    : sourceMatches(turn.searchSource ?? turn.readSource, args.path, args.match),
+                    : (turn.uncountedReads ?? identity)(
+                        sourceMatches(turn.readSource, args.path, args.match),
+                      ),
                   { signal: reviewSignal },
                 );
               const observation = diagnostics

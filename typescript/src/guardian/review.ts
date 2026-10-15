@@ -436,11 +436,12 @@ export interface ReviewTurn {
   readonly sources?: ReviewSources;
   readonly readSource: (path: string, offset: number) => Effect.Effect<string, ReviewFailure>;
   /**
-   * The reader a `read_source` search uses: the same reads as `readSource`, except that a file
-   * Guardian only searched does not count as read whole for a later publication round. Defaults
-   * to `readSource`.
+   * Runs a `read_source` search, whose reads still go through `readSource`, so that a file
+   * Guardian only searched does not count as read whole for a later publication round. A host
+   * that wraps `readSource` keeps seeing every read, searches included. Absent, a search runs as
+   * is.
    */
-  readonly searchSource?: (path: string, offset: number) => Effect.Effect<string, ReviewFailure>;
+  readonly uncountedReads?: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
   /**
    * The follow-up the reviewer sends, in the same review, when the host cannot take its output
    * yet: once for an outcome the review's kind does not return (never for a private host kind),
@@ -986,13 +987,14 @@ export const makeGuardian = (
           ...failureDetailOf(error),
         });
         /**
-         * Guardian's own reads, through its tool: tracked for required evidence. A search reads the
-         * whole file too, but shows Guardian only slices around each match, so it never counts as
-         * reading the file whole for a later publication round.
+         * Searches in progress. A search reads the whole file through `read` too, but shows Guardian
+         * only slices around each match, so what it reads never counts as reading a file whole for a
+         * later publication round. A plain read that runs alongside a search goes uncounted too,
+         * which only leaves that file to be judged again.
          */
-        const guardianRead =
-          (whole: boolean): ReviewTurn["readSource"] =>
-          (requested, offset) => {
+        let searching = 0;
+        /** Guardian's own reads, through its tool: tracked for required evidence. */
+        const read: ReviewTurn["readSource"] = (requested, offset) => {
           const path = sourcePath(requested);
           const timed = timedRead(path, offset);
           return timed.effect.pipe(
@@ -1027,7 +1029,7 @@ export const makeGuardian = (
             Effect.tap((observation) =>
               Effect.sync(() => {
                 const chunk =
-                  roundFiles === undefined || !whole ? undefined : sourceChunkOf(observation);
+                  roundFiles === undefined || searching > 0 ? undefined : sourceChunkOf(observation);
                 if (chunk !== undefined) {
                   const chunks = served.get(chunk.path) ?? new Map();
                   chunks.set(chunk.byteOffset, {
@@ -1042,8 +1044,6 @@ export const makeGuardian = (
             ),
           );
         };
-        const read = guardianRead(true);
-        const search = guardianRead(false);
         let sources: ReviewSources | undefined;
         if (requireEntrypoint) {
           // The entrypoint goes into the request itself, so a typical review needs one call. This
@@ -1154,7 +1154,12 @@ export const makeGuardian = (
             return `The host did not accept this allow: an allow needs the submitted entrypoint ${entrypoint} in view in this review, and it is not, because the host could not include it or the conversation was compacted since. Read ${entrypoint} from offset 0 with read_source, then decide again.`;
           },
           readSource: read,
-          searchSource: search,
+          uncountedReads: (effect) =>
+            Effect.acquireUseRelease(
+              Effect.sync(() => searching++),
+              () => effect,
+              () => Effect.sync(() => searching--),
+            ),
         });
         const unavailableSource = unavailableSources.values().next().value;
         if (unavailableSource !== undefined) return yield* unavailableSource;

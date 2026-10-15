@@ -278,6 +278,27 @@ describe("a publication reviewed again in the same build", () => {
     expect(fileIn(deltaOf(requests[2]), definitionPath).status).toBe("changed");
   });
 
+  it("still sends a search's reads through a host's own readSource wrapper", async () => {
+    recorded([[searchCall(helperPath, "export")], [message(deny)]]);
+    const wrapped: string[] = [];
+    const base = reviewer();
+    const hostReviewer = {
+      ...base,
+      run: (turn: Parameters<typeof base.run>[0]) =>
+        base.run({
+          ...turn,
+          readSource: (path: string, offset: number) => {
+            wrapped.push(path);
+            return turn.readSource(path, offset);
+          },
+        }),
+    };
+    await Effect.runPromise(
+      makeGuardian(hostReviewer, undefined, {}).review(pendingFor(roundOne), reader(roundOne)),
+    );
+    expect(wrapped).toContain(helperPath);
+  });
+
   it("sends the prior decision and only what changed, and a first round as before", async () => {
     const requests = recorded([
       [readCall(toolPath), readCall(helperPath), readCall(definitionPath)],
