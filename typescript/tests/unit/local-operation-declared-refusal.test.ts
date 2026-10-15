@@ -57,7 +57,8 @@ const failureOf = (settled: Either.Either<unknown, RunOutcomeFailure>) => {
   return settled.left;
 };
 
-describe("a write that refuses in its output", () => {
+// Each case starts a local operation child, which takes seconds on a loaded host.
+describe("a write that refuses in its output", { timeout: 30_000 }, () => {
   it("returns a declared refusal made before any commit step as its result", async () => {
     expect(await run(checkout(declaredRefusal, "before_commit"), 100)).toEqual(
       Either.right({ status: "refused", reason: "over_price_limit", total: 120, limit: 100 }),

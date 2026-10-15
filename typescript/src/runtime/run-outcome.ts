@@ -154,6 +154,21 @@ const refusalBranchReasons = (branch: unknown): readonly string[] | undefined =>
 };
 
 /**
+ * Whether a branch that is not a refusal could still match an object whose `status` is `refused`:
+ * any object branch, unless its `status` lists only other strings, or it has no `status` property
+ * and admits no property it does not list.
+ */
+const admitsRefused = (branch: unknown): boolean => {
+  if (!isJsonRecord(branch)) return branch !== false;
+  const type = branch["type"];
+  if (typeof type === "string" && type !== "object") return false;
+  const properties = branch["properties"];
+  const status = isJsonRecord(properties) ? properties["status"] : undefined;
+  if (status === undefined) return branch["additionalProperties"] !== false;
+  return listedStrings(status)?.includes(refusedStatus) ?? true;
+};
+
+/**
  * The refusal reasons a tool's output JSON Schema declares, as it publishes it. A write declares
  * a refusal as a branch of its output, the root schema or one of the root's `anyOf` or `oneOf`
  * branches, with local `$ref`s resolved: an object that requires `status`, admitting only
@@ -164,7 +179,9 @@ const refusalBranchReasons = (branch: unknown): readonly string[] | undefined =>
  * Schema.Literal("over_price_limit"), total: Schema.String, limit: Schema.String }))`
  *
  * Empty when the schema declares no refusal, as every schema published before the convention
- * existed that has no such branch does.
+ * existed that has no such branch does, and when another branch could also match a `refused`
+ * status, such as one whose `status` is free text, since a matching output would not show which
+ * branch it is.
  */
 export const declaredRefusalReasons = (outputSchema: unknown): ReadonlySet<string> => {
   if (!isJsonRecord(outputSchema)) return new Set();
@@ -176,8 +193,12 @@ export const declaredRefusalReasons = (outputSchema: unknown): ReadonlySet<strin
     throw error;
   }
   const union = root["anyOf"] ?? root["oneOf"];
-  const branches = [root, ...(Array.isArray(union) ? union : [])];
-  return new Set(branches.flatMap((branch) => refusalBranchReasons(branch) ?? []));
+  const branches: readonly unknown[] = Array.isArray(union) ? union : [root];
+  const refusals = branches.map(refusalBranchReasons);
+  // An output proves itself a refusal only when no other branch could have matched it.
+  if (branches.some((branch, index) => refusals[index] === undefined && admitsRefused(branch)))
+    return new Set();
+  return new Set(refusals.flatMap((reasons) => reasons ?? []));
 };
 
 /** A refusal a write returned as its output: the reason code its output schema declares. */
@@ -208,6 +229,14 @@ export const declaredRefusalOf = (
  * entered none (`not_entered`), and recorded no confirmation (`runnerEffect` is not `verified`).
  * A refusal returned after a commit step was entered, by a write that declares no commit steps,
  * or with a missing or unreadable report may have changed the website, so it stays unconfirmed.
+ *
+ * Two cautions for a host that passes `commits`:
+ * - The evidence must cover every channel the run could send the write through. A request a host
+ *   relays for the script, such as an HTTP transport that sends on its behalf, never enters a
+ *   mark, so a host whose relay may have sent anything other than a read must not call this.
+ * - A journal made with `makeEffectJournalWith({ settledCommits })` reports the settled marks as
+ *   `not_sent`, although an earlier run sent them. A maintenance or continuation run that uses one
+ *   must never be judged by its marks here.
  */
 export const returnedRefusal = (returned: {
   readonly outputSchema: unknown;

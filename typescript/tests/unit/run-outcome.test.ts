@@ -454,6 +454,43 @@ describe("a refusal a write declares in its output", () => {
         }),
       ),
     },
+    // Another branch that admits a "refused" status could be the one the output matched, so no
+    // output of the schema proves itself a refusal.
+    {
+      case: "another branch whose free-text status admits refused",
+      schema: schemaOf(
+        Schema.Union(
+          Schema.Struct({
+            status: Schema.String,
+            reason: Schema.String,
+            orderNumber: Schema.String,
+          }),
+          overLimit,
+        ),
+      ),
+    },
+    {
+      case: "another branch whose listed status includes refused",
+      schema: schemaOf(
+        Schema.Union(
+          Schema.Struct({ status: Schema.Literal("placed", "refused"), orderNumber: Schema.String }),
+          overLimit,
+        ),
+      ),
+    },
+    {
+      case: "another branch that allows any extra property",
+      schema: {
+        anyOf: [
+          {
+            type: "object",
+            required: ["orderNumber"],
+            properties: { orderNumber: { type: "string" } },
+          },
+          schemaOf(overLimit),
+        ],
+      },
+    },
     { case: "a reference that does not resolve", schema: { $ref: "#/$defs/Missing" } },
     { case: "no schema", schema: undefined },
   ])("declares none with $case", ({ schema }) => {
