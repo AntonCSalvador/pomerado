@@ -118,6 +118,22 @@ first:
   that run did not exercise as untested without testing it; the review judges that run alone.
 - **Errors.** A thrown message states the cause the code observed, such as a status or a missing
   element, never a guessed one.
+- **Edge cases.** Review misses these most often, so check each before every `finish_build`; the
+  name in brackets is the rule a miss comes back under:
+  - a search or filter with no results returns the empty result, never a throw ("Wrong
+    failure");
+  - every applied filter or option is read back from the page as the value the site applied,
+    such as the chosen option's label, never `true` ("Applied without readback");
+  - a requested value the site does not offer throws `InvalidInput` with the site's choices, and
+    one the page ignored throws `InputNotApplied` unless it tailors the answer (core skill); with
+    no results a sort has nothing to apply, so return the empty result ("Unapplied supplied
+    input");
+  - a free-text place, name or venue that matches several of the site's options lists them for
+    the caller instead of picking one (core skill, the input schema);
+  - in a read signed out, each declared input is used, or changed from its default, by a passing
+    case, and a case whose expectation you changed because the site itself gave another answer
+    for that input names the capture of that answer, such as the site's no-results page for that
+    search, in its `purpose` and in `coverage` (testing skill).
 - **Write options.** Each option on the path is an input even when the caller left the choice to
   you; the script never takes the first, the alphabetically first or a hard-wired value.
 - **Login URL.** A signed-in tool publishes the `loginUrl` you signed in from, and every run opens
@@ -142,7 +158,8 @@ pomerado:section publication.host-owned:end --> the
   host's; you cannot edit them. `publication/definition.json` changes only through your source
   schemas and `finish_build` metadata<!-- pomerado:section publication.host-bundle-files -->. For a finding in any other of them, fix the source that caused it (a read's
   example evidence changes only with a fresh example the host allows); otherwise report it, and
-  never call `finish_build` again with nothing changed. A rejection with `reason` `host_owned`
+  never call `finish_build` again with nothing changed. A finding in `publication/tests.json` is
+  about your cases: fix the cases, the source or `coverage`. A rejection with `reason` `host_owned`
   means every finding is in such a file, a host defect no source edit fixes: the host ends the
   attempt as its own failure, so never edit a host file or call `finish_build` again for it. A
   separate finding that names an editable source or metadata cause can be corrected on the same

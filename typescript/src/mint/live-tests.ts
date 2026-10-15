@@ -739,6 +739,8 @@ const retiredViews = (
     .map((testCase) => ({
       id: testCase.id,
       runs: runs(testCase.input, testCase.expect, testCase.next_page === true),
+      input: canonical([testCase.input, testCase.next_page === true]),
+      expect: testCase.expect,
     }));
   /**
    * A failure on earlier source that a case passing on the published source runs again with the
@@ -748,6 +750,17 @@ const retiredViews = (
     if (record.sourceDigest === sourceDigest || record.input === undefined) return undefined;
     const ran = runs(record.input, record.expect, record.nextPage === true);
     return passing.find((entry) => entry.runs === ran)?.id;
+  };
+  /**
+   * A failure that a case passing on the published source runs again with the same input and
+   * another expectation, on any source. It is a lead, never an excuse by itself: the publication
+   * review excuses the failure only when the captures show the site's own answer for that input
+   * matching the new expectation.
+   */
+  const changedExpectationBy = (record: LiveTestRecord) => {
+    if (record.input === undefined || record.expect === undefined) return undefined;
+    const input = canonical([record.input, record.nextPage === true]);
+    return passing.find((entry) => entry.input === input && entry.expect !== record.expect)?.id;
   };
   return [
     ...deleted.map((record) => [record, "deleted from the cases file"] as const),
@@ -764,11 +777,14 @@ const retiredViews = (
     ),
   ].map(([record, because]) => {
     const excuse = record.verdict === "fail" ? excusedBy(record) : undefined;
+    const changed =
+      record.verdict === "fail" && excuse === undefined ? changedExpectationBy(record) : undefined;
     return {
       id: record.id,
       retiredBecause: because,
       ...(record.flaky === true ? { flaky: true } : {}),
       ...(excuse === undefined ? {} : { excusedBy: excuse }),
+      ...(changed === undefined ? {} : { changedExpectationBy: changed }),
       ...(record.purpose === undefined ? {} : { purpose: record.purpose }),
       ...(record.expect === undefined ? {} : { expect: record.expect }),
       ...(record.input === undefined ? {} : { input: record.input }),
@@ -915,7 +931,7 @@ export const liveTestsEvidence = (options: {
       kind: "host_live_tests",
       note: nothing
         ? "Written by the host, never by the minter. The minter designed and ran no live test case, so beyond the example nothing was tested live."
-        : "Written by the host from its own runs, never by the minter. The same cases run on each version of the tool: playwright, the Kernel script, and http, the HTTP version, for each version that ships: a version that does not ship, such as an HTTP version the minter ruled out, is not listed. versions names each version's entrypoint, the source digest its results are judged against, and its counts. Each case's results hold its result on each version, from that version's own batches: one version's run never counts for the other. Each case ran in a fresh script process on a page reset to the site's origin, after one Guardian review of its batch; purpose is the minter's account of what the case establishes. A result's start says how its browser started: cold, first on a new browser with an empty profile, as a caller the site remembers nothing about meets it; warm, on a browser that kept the site data earlier steps left. versions counts each version's coldPasses, the cases that passed cold; a host with one browser runs no case cold. status is against that version's source being published: stale means the source or the case changed after the case ran, and not_run means no batch ran it on that version. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists, by version, cases the minter deleted, failures it replaced by changing the case, and failures that did not repeat when the unchanged case ran again on the same source (flaky), with their last result; excusedBy names a case that passes the same input with the same expectation on that version's published source after the source changed.",
+        : "Written by the host from its own runs, never by the minter. The same cases run on each version of the tool: playwright, the Kernel script, and http, the HTTP version, for each version that ships: a version that does not ship, such as an HTTP version the minter ruled out, is not listed. versions names each version's entrypoint, the source digest its results are judged against, and its counts. Each case's results hold its result on each version, from that version's own batches: one version's run never counts for the other. Each case ran in a fresh script process on a page reset to the site's origin, after one Guardian review of its batch; purpose is the minter's account of what the case establishes. A result's start says how its browser started: cold, first on a new browser with an empty profile, as a caller the site remembers nothing about meets it; warm, on a browser that kept the site data earlier steps left. versions counts each version's coldPasses, the cases that passed cold; a host with one browser runs no case cold. status is against that version's source being published: stale means the source or the case changed after the case ran, and not_run means no batch ran it on that version. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists, by version, cases the minter deleted, failures it replaced by changing the case, and failures that did not repeat when the unchanged case ran again on the same source (flaky), with their last result; excusedBy names a case that passes the same input with the same expectation on that version's published source after the source changed; changedExpectationBy names a case that passes the same input with another expectation on that version's published source, which excuses nothing by itself.",
       ...(outOfTime ? { outOfTime: true } : {}),
       ...(options.fileProblem === undefined ? {} : { casesFileProblem: options.fileProblem }),
       versions: versionViews,
