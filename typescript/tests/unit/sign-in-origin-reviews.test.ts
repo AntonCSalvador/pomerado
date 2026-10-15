@@ -16,6 +16,8 @@ it.each([
   [{ outcome: "allow", label: "something_else" }, "deny"],
   [{ outcome: "deny" }, "deny"],
   [{ outcome: "deny", label: "workspace" }, "deny"],
+  [{ outcome: "deny", label: "unrecognized" }, "deny"],
+  [{ outcome: "allow", label: "unrecognized" }, "deny"],
 ] as const)("a workspace_origin decision %o is %s", (decision, expected) => {
   expect(workspaceOriginDecision({ rationale, ...decision })).toBe(expected);
 });
@@ -41,7 +43,7 @@ it("asks only for the outcomes and labels each kind decides, privately", () => {
   expect(workspace).toMatchObject({
     kind: "workspace_origin",
     outcomes: ["allow", "deny"],
-    labels: ["workspace", "shared_host"],
+    labels: ["workspace", "shared_host", "unrecognized"],
     private: true,
   });
   const provider = signInOriginReview({
