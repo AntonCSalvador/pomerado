@@ -4846,9 +4846,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 const rationale = yield* screenMintText(dependencies, review.rationale);
                 // A read-or-write choice never asks for a login, so a login verdict means reword it.
                 if (review.outcome === "authentication" && !effectQuestion) {
-                  const login = dependencies.requestLogin
-                    ? yield* dependencies.requestLogin()
-                    : ("unavailable" as const);
+                  // The owner already declined to sign in: they are not asked again.
+                  const login =
+                    loginDeclined ??
+                    (dependencies.requestLogin
+                      ? yield* dependencies.requestLogin()
+                      : ("unavailable" as const));
                   if (login === "supplied" || login === "held") loginHeld = true;
                   if (login === "no_account" || login === "public_only") {
                     loginDeclined = login;

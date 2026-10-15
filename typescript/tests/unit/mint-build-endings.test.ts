@@ -400,3 +400,82 @@ it("words a failed sign-in's summary without operator codes", async () => {
   expect(outcome.summary).toContain("could not be signed in");
   expect(outcome.summary).not.toMatch(/AuthenticationFailed|credential_submit|receipts/u);
 });
+
+// The owner chose not to sign in: their answer comes back as a result, not a failed sign-in, the
+// host never signs in again, and the build may end as the owner's choice.
+it("hands a declined login back as a result and ends as owner_declined when the minter stops", async () => {
+  let signIns = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate, "first"),
+        call("execute", authenticate, "again"),
+        call("report_blocked", {
+          reason: "policy",
+          explanation: "Without signing in, the site shows no order history.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: () =>
+        Effect.suspend(() => {
+          signIns++;
+          return Effect.fail(new MintFailure({ code: "Unavailable", loginDeclined: "no_account" }));
+        }),
+    },
+  );
+  const outcome = await f.run();
+  const declined = JSON.stringify(f.requests[1]?.input);
+  expect(declined).toContain('\\"status\\":\\"login_declined\\"');
+  expect(declined).toContain('\\"declined\\":\\"no_account\\"');
+  expect(declined).not.toContain("authentication_unavailable");
+  // The second authenticate hears the same answer and runs nothing.
+  expect(signIns).toBe(1);
+  expect(JSON.stringify(f.requests[2]?.input)).toContain("login_declined");
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    blocked: { reason: "owner_declined" },
+    stopReason: "owner_declined",
+  });
+  expect(outcome).not.toHaveProperty("recoveryReason");
+});
+
+// A login request Guardian routed a question to may be declined too: the minter hears it and
+// builds the public part, and the host raises no further login request.
+it("hands a declined login request back with the public-only guidance", async () => {
+  let loginRequests = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("request_input", ask("What is your password?")),
+        call("request_input", ask("What is your password, please?"), "again"),
+        call("report_blocked", {
+          reason: "owner_declined",
+          explanation: "The owner chose not to sign in, and the site shows nothing signed out.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      // Guardian routes each password question to the host's login request, and allows the
+      // blocked explanation.
+      reviewQuestion: (candidate) =>
+        Effect.succeed(
+          candidate.questions[0]?.id === "blocked"
+            ? { outcome: "allow_business" as const, rationale: "Plain." }
+            : { outcome: "authentication" as const, rationale: "Asks for a login." },
+        ),
+      requestLogin: () =>
+        Effect.sync(() => {
+          loginRequests++;
+          return "public_only" as const;
+        }),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
+  const outcome = await f.run();
+  const answer = JSON.stringify(f.requests[1]?.input);
+  expect(answer).toContain('\\"declined\\":\\"public_only\\"');
+  expect(answer).toContain("without signing in");
+  expect(outcome).toMatchObject({ blocked: { reason: "owner_declined" } });
+  // The second login question hears the owner's answer again; nobody is asked twice.
+  expect(JSON.stringify(f.requests[2]?.input)).toContain("without signing in");
+  expect(loginRequests).toBe(1);
+});
