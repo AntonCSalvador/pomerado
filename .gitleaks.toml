@@ -16,4 +16,5 @@ regexes = [
   '''^SEKRETzZ9xQ2wL7vN4kP1r$''',
   '''^sk_live_FAKEabcdefghijkl$''',
   '''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJmYWtlIn0\.ZmFrZXNpZ25hdHVyZQ$''',
+  '''^SyntheticTok0123456789$''',
 ]
