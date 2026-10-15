@@ -171,6 +171,8 @@ describe("URL boundaries", () => {
     ["a scheme-relative URL", "//cdn.example/lib.js?v=1,2"],
     ["a key with a colon after a comma", "https://shop.example/a?f=x,date:2026-02-07"],
     ["a schemeless host", "www.shop.example/a?ids=4,5"],
+    ["an escaped apostrophe", "https://wiki.example/wiki/Ender&#39;s_Game"],
+    ["an escaped apostrophe in hex", "https://wiki.example/wiki/Ender&#x27;s_Game"],
   ])("keeps a real URL whole: %s", (_label, url) => {
     const text = `failed at ${url}. Retry later`;
     expect(spanTexts(text)).toEqual([url]);
@@ -180,7 +182,11 @@ describe("URL boundaries", () => {
   it.each([
     ["a host past a closer", "see //x)//AKIAFAKEFAKEFAKE1234.example/a end"],
     ["a port with trailing punctuation", "see //AKIAFAKEFAKEFAKE1234:1: end"],
-  ])("checks a scheme-relative host as written: %s", (_label, text) => {
+    ["a period past its end", "see //AKIAFAKEFAKEFAKE1234. end"],
+    ["a period past a closer", "see (//AKIAFAKEFAKEFAKE1234). end"],
+    ["an at sign past a closer", "see //AKIAFAKEFAKEFAKE1234)@x end"],
+    ["a dotted credential field past its end", "see //AKIAFAKEFAKEFAKE1234,password=a.b end"],
+  ])("checks a scheme-relative host as written and as ended: %s", (_label, text) => {
     expect(redactDiagnosticText(text)).not.toContain("AKIAFAKEFAKEFAKE1234");
   });
 

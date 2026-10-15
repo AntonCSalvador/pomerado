@@ -75,7 +75,7 @@ const closers = ")]}";
 
 /**
  * The `;` at `index` ends a character reference such as `&amp;`, `&#38;` or `&#x26;`, or one
- * escaped again for markup, such as `&amp;amp;`, `&amp;#x26;` or `&amp;lt;`.
+ * escaped again for markup, such as `&amp;amp;`, `&amp;#x26;` or `&amp;nbsp;`.
  */
 const endsEntity = (text: string, index: number) =>
   /&(?:amp;){0,3}(?:amp|nbsp|#\d{1,6}|#x[0-9a-f]{1,6})$/iu.test(
@@ -142,11 +142,14 @@ const bracketEnds = (scan: Scan, character: string, index: number) => {
 const isDelimiter = (text: string, index: number, character: string) =>
   character === "," || character === "|" || (character === ";" && !endsEntity(text, index));
 
-/** The URL ends at `index`, by the rules above. */
-/** A reference to a quote or an angle bracket, which end a URL, escaped again up to 3 times. */
+/**
+ * A reference to a double quote or an angle bracket, which end a URL, escaped again up to 3
+ * times. An apostrophe is a URL character, so its references (`&#39;`) don't end one.
+ */
 const terminatorReference =
-  /&(?:amp;){0,3}(?:lt|gt|quot|apos|#0{0,4}(?:60|62|34|39)|#x0{0,4}(?:3c|3e|22|27));/iuy;
+  /&(?:amp;){0,3}(?:lt|gt|quot|#0{0,4}(?:60|62|34)|#x0{0,4}(?:3c|3e|22));/iuy;
 
+/** The URL ends at `index`, by the rules above. */
 const endsAt = (text: string, index: number, scan: Scan) => {
   const character = text[index] ?? "";
   if (terminator.test(character)) return true;
@@ -193,23 +196,29 @@ const disjointRanges = (ranges: UrlSpan[]): UrlSpan[] => {
 export const urlSpans = (text: string): UrlSpan[] => {
   if (!text.includes("/") && !/www\./iu.test(text)) return [];
   const ranges: UrlSpan[] = [];
-  const scan = (pattern: RegExp, admit: (start: number) => boolean) => {
+  const scan = (pattern: RegExp, admit: (start: number, end: number) => boolean) => {
     const starts = new RegExp(pattern);
     for (let match = starts.exec(text); match !== null; match = starts.exec(text)) {
-      if (!admit(match.index)) {
+      const { end, stop } = urlEnd(text, match.index, match.index + match[0].length);
+      if (!admit(match.index, end)) {
         // Like a URL read to the next space, a candidate that is none hides no URL in itself.
         reach.lastIndex = match.index;
         reach.exec(text);
         starts.lastIndex = Math.max(reach.lastIndex, match.index + 1);
         continue;
       }
-      const { end, stop } = urlEnd(text, match.index, match.index + match[0].length);
       if (end > match.index) ranges.push({ start: match.index, end });
       starts.lastIndex = Math.max(stop, match.index + 1);
     }
   };
   scan(absoluteStart, () => true);
-  scan(schemeRelativeStart, (start) => writtenSchemeRelativeHost(text, start));
+  // Both the authority as written and the URL's own must name a host: text past the URL's end
+  // (`//token.`) can't make a candidate a URL, nor a shortening hide one (`//x)//host`).
+  scan(
+    schemeRelativeStart,
+    (start, end) =>
+      writtenSchemeRelativeHost(text, start) && schemeRelativeHost(text.slice(start, end)),
+  );
   return disjointRanges(ranges);
 };
 
