@@ -19,10 +19,12 @@ import {
  * - an unbalanced `)`, `]` or `}` (balanced ones, as in `/wiki/Foo_(bar)`, stay, trimming
  *   included);
  * - a backslash escape other than `\/`, `\u` or `\x`;
- * - a `,`, `;` or `|` whose next field starts with a credential: a credential-named `key=`
- *   (`,password=…`), a bearer or basic credential, an AWS access key ID, a provider API key or a
- *   JSON Web Token, in the path, query or fragment alike. A `;` that closes a character
- *   reference, such as `&amp;` or the chained `&amp;amp;`, is no delimiter.
+ * - a character reference to a quote or an angle bracket, such as `&lt;`, `&quot;` or `&#x22;`,
+ *   or one escaped again for markup, such as `&amp;lt;`: what it stands for ends a URL;
+ * - a `,`, `;` or `|` whose next field starts with a credential: a credential-named `key=` or
+ *   `key:` (`,password=…`), a bearer or basic credential, an AWS access key ID, a provider API key
+ *   or a JSON Web Token, in the path, query or fragment alike. A `;` that closes any other
+ *   character reference, such as `&amp;`, `&nbsp;` or the chained `&amp;amp;`, is no delimiter.
  *
  * Every other field stays part of the URL, so lists of dates, numbers, addresses or names in a
  * path or query (`?dates=2026-01-31,2026-02-07&otp=…`), matrix parameters (`;v=1`) and a URL in a
@@ -49,6 +51,18 @@ const schemeRelativeHost = (candidate: string) => {
   return authority.includes(".") || authority.includes("@") || /:\d+$/u.test(authority);
 };
 
+const writtenAuthority = /[^/?#\\\s"'`<>]*/uy;
+const reach = /[^\s"'`<>]*/uy;
+
+/**
+ * Whether the scheme-relative candidate at `start` names a host, read from its authority as
+ * written, before any boundary rule or trimming shortens it, as `//host)` or `//host:1:` is.
+ */
+const writtenSchemeRelativeHost = (text: string, start: number) => {
+  writtenAuthority.lastIndex = start + 2;
+  return schemeRelativeHost(`//${writtenAuthority.exec(text)?.[0] ?? ""}`);
+};
+
 // Where each kind of URL starts; `urlEnd` finds where it ends. Scheme URLs (JSON-escaped
 // `https:\/\/` included) and schemeless `www.` hosts. The scheme is bounded, so each position
 // costs a fixed amount and the scan is linear.
@@ -64,7 +78,7 @@ const closers = ")]}";
  * escaped again for markup, such as `&amp;amp;`, `&amp;#x26;` or `&amp;lt;`.
  */
 const endsEntity = (text: string, index: number) =>
-  /&(?:amp;){0,3}(?:amp|lt|gt|quot|apos|nbsp|#\d{1,6}|#x[0-9a-f]{1,6})$/iu.test(
+  /&(?:amp;){0,3}(?:amp|nbsp|#\d{1,6}|#x[0-9a-f]{1,6})$/iu.test(
     text.slice(Math.max(0, index - 24), index),
   );
 
@@ -72,18 +86,18 @@ const nextField = /[^\r\n,;|"'`<>]{0,64}/uy;
 
 /**
  * The field after the delimiter at `index`, to the next delimiter or line end and at most 64
- * characters, and the key of the `key=` that starts it.
+ * characters, and the key of the `key=` or `key:` that starts it.
  */
 const fieldAfter = (text: string, index: number) => {
   nextField.lastIndex = index + 1;
   const field = nextField.exec(text)?.[0] ?? "";
-  return { field, key: /^([A-Za-z_][\w.-]*)=/u.exec(field)?.[1] };
+  return { field, key: /^([A-Za-z_][\w.-]*)\s*[=:]/u.exec(field)?.[1] };
 };
 
 const sticky = (pattern: RegExp) => new RegExp(pattern.source, "uy");
 const awsKeyStart = sticky(awsAccessKeyIdPattern());
 const providerKeyStart = sticky(providerKeyPattern());
-const schemeCredentialStart = /^(bearer|basic)[ \t]+([^\s,;|]+)/iu;
+const schemeCredentialStart = /^(bearer|basic)[ \t]+([A-Za-z0-9._~+/=-]+)/iu;
 const jwtStart = /^eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/u;
 
 /** The match of a sticky `pattern` at the start of `field`. */
@@ -129,12 +143,20 @@ const isDelimiter = (text: string, index: number, character: string) =>
   character === "," || character === "|" || (character === ";" && !endsEntity(text, index));
 
 /** The URL ends at `index`, by the rules above. */
+/** A reference to a quote or an angle bracket, which end a URL, escaped again up to 3 times. */
+const terminatorReference =
+  /&(?:amp;){0,3}(?:lt|gt|quot|apos|#0{0,4}(?:60|62|34|39)|#x0{0,4}(?:3c|3e|22|27));/iuy;
+
 const endsAt = (text: string, index: number, scan: Scan) => {
   const character = text[index] ?? "";
   if (terminator.test(character)) return true;
   // A backslash escape other than JSON's `\/` (or a script's `&` and `\x26`) is a line
   // break, a tab or a quote written in a string: the URL ends before it.
   if (character === "\\" && !"/ux".includes(text[index + 1] ?? " ")) return true;
+  if (character === "&") {
+    terminatorReference.lastIndex = index;
+    if (terminatorReference.test(text)) return true;
+  }
   if (bracketEnds(scan, character, index)) return true;
   return isDelimiter(text, index, character) && startsCredentialField(text, index);
 };
@@ -171,17 +193,23 @@ const disjointRanges = (ranges: UrlSpan[]): UrlSpan[] => {
 export const urlSpans = (text: string): UrlSpan[] => {
   if (!text.includes("/") && !/www\./iu.test(text)) return [];
   const ranges: UrlSpan[] = [];
-  const scan = (pattern: RegExp, accept: (url: string) => boolean) => {
+  const scan = (pattern: RegExp, admit: (start: number) => boolean) => {
     const starts = new RegExp(pattern);
     for (let match = starts.exec(text); match !== null; match = starts.exec(text)) {
+      if (!admit(match.index)) {
+        // Like a URL read to the next space, a candidate that is none hides no URL in itself.
+        reach.lastIndex = match.index;
+        reach.exec(text);
+        starts.lastIndex = Math.max(reach.lastIndex, match.index + 1);
+        continue;
+      }
       const { end, stop } = urlEnd(text, match.index, match.index + match[0].length);
-      if (end > match.index && accept(text.slice(match.index, end)))
-        ranges.push({ start: match.index, end });
+      if (end > match.index) ranges.push({ start: match.index, end });
       starts.lastIndex = Math.max(stop, match.index + 1);
     }
   };
   scan(absoluteStart, () => true);
-  scan(schemeRelativeStart, schemeRelativeHost);
+  scan(schemeRelativeStart, (start) => writtenSchemeRelativeHost(text, start));
   return disjointRanges(ranges);
 };
 
