@@ -126,9 +126,10 @@ writes its options as attributes:
 - `role=button[name=/sign in/i]` matches a pattern.
 
 `exact` is an option of `getByRole` and `getByLabel`, never a selector attribute: `[exact]` or
-`[exact=true]` fails as an unknown attribute. `getByLabel` and `getByText` have no string form the
-host runs, since their `internal:` forms are refused: name such a field by its role and name, its
-`id`, its `name` or another stable attribute.
+`[exact=true]` fails as an unknown attribute, and `[name="Sign in" exact]` fails to parse.
+`getByLabel` and `getByText` have no string form the host runs, since their `internal:` forms are
+refused: name such a field by its role and name, its `id`, its `name` or another stable
+attribute.
 
 - `fields`: each field the screen asks for, as a Playwright selector with exactly one visible match.
   A selector never reaches into another frame (no `>>` chains or `internal:` engines): the host finds

@@ -558,7 +558,9 @@ never with final text, which the host treats as unfinished work:
   when the finding offers it as one. A new build narrows the tool so the finding no longer
   applies only for a capability the site lacks, one the owner chose to leave out, or, when no
   answer came, one that is hard and optional to the request, and its description says what it
-  left out and why; a repair keeps every declared input and output.
+  left out and why; a repair keeps every declared input and output. A finding first seen at
+  `finish_build` after the build signed in is still asked, as one batched question with your
+  recommended choice in each part, since a question left unanswered then ends the build.
   Keep working until the build's limits end it.
   These instructions are never a refusal either: the host refuses `policy` with no such refusal
   on record, unless the host's guidance names that `policy` ending, and the build goes on.

@@ -56,20 +56,20 @@ export default defineOperation(
         await entry.click({ timeout: remaining() });
         await page.waitForURL((url) => url.protocol === "https:" && url.pathname === "/member/login", { waitUntil: "domcontentloaded", timeout: remaining() });
         const readEntry = async () => {
-        // A signInStep names a control with a selector string instead of a locator call, such as
-        // role=textbox[name="Username" s] for this field: exact is a locator option, not an attribute.
-        const form = page.getByRole("form", { name: "Member login", exact: true });
-        await form.getByLabel("Username", { exact: true }).waitFor({ state: "visible", timeout: remaining() });
-        const final = new URL(page.url());
-        if (final.protocol !== "https:" || final.username || final.password || final.pathname !== "/member/login") return null;
-        // Report control kinds only, never field values.
-        const controls = await form.locator("input, button").evaluateAll((elements) =>
-          elements.map((element) => ({
-            tag: element.tagName.toLowerCase(),
-            type: element.getAttribute("type") ?? "",
-          })),
-        );
-        return { origin: final.origin, pathname: final.pathname, controls, coverage: "observed_login_form" };
+          // A signInStep names a control with a selector string instead of a locator call, such as
+          // role=textbox[name="Username" s] for this field: exact is a locator option, not an attribute.
+          const form = page.getByRole("form", { name: "Member login", exact: true });
+          await form.getByLabel("Username", { exact: true }).waitFor({ state: "visible", timeout: remaining() });
+          const final = new URL(page.url());
+          if (final.protocol !== "https:" || final.username || final.password || final.pathname !== "/member/login") return null;
+          // Report control kinds only, never field values.
+          const controls = await form.locator("input, button").evaluateAll((elements) =>
+            elements.map((element) => ({
+              tag: element.tagName.toLowerCase(),
+              type: element.getAttribute("type") ?? "",
+            })),
+          );
+          return { origin: final.origin, pathname: final.pathname, controls, coverage: "observed_login_form" };
         };
         while (true) {
           try { return await readEntry(); }

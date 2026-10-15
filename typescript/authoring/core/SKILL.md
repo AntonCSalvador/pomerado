@@ -341,11 +341,12 @@ the task can't run without it (below).
 **Find contract gaps before your first example.** Compare the schema you plan with what the
 page offers: a control no input covers, an input you cannot wire, a value the request needs
 that the page does not show, or a needed field you would have to make nullable. Settle each
-then: wire it, ask the owner with `request_input` when the request reads two ways or you are
-unsure how to solve it, or, only for a part the site does not offer or the owner chose to leave
-out, state in the description why the tool lacks it (`AGENTS.md`, "Solve before you narrow"). Publication
-review blocks on the same gaps, and finding them at `finish_build` costs a full fix-and-resubmit
-round.
+then: wire it, ask the owner with `request_input` when the request reads two ways, when you are
+unsure how to solve it, or before leaving out a part the site offers (`AGENTS.md`, "Try hard,
+then ask", item 7), or state in the description why the tool lacks it, only for a part the site
+does not offer, one the owner chose to leave out or, when no answer came, one that is hard and
+optional to the request (`AGENTS.md`, "Solve before you narrow"). Publication review blocks on
+the same gaps, and finding them at `finish_build` costs a full fix-and-resubmit round.
 
 **Never loosen a value the request needs.** The values the request needs are each value it
 names, the record's identifier as the site shows it, and the context those depend on as the page

@@ -109,10 +109,10 @@ its label. A value a caller cannot write, such as a formula's result, is `writab
 ## Fields that are hard to read
 
 A field type the tool cannot read cleanly, such as a formula, a rich document or an attachment,
-returns the text the site displays for it when that is useful, and `schema` gives its type. Leave
-a field type out only when it is genuinely hard and optional to the request, and say in the
-description which types the tool leaves out and why; when unsure, ask the owner (`AGENTS.md`,
-"Solve before you narrow"). Never leave out a field the request names.
+returns the text the site displays for it when that is useful, and `schema` gives its type.
+Before leaving out a field type the site offers, ask the owner as `AGENTS.md` says ("Try hard,
+then ask", item 7, and "Solve before you narrow"), and say in the description which types the
+tool leaves out and why. Never leave out a field the request names.
 
 ## Describe it
 

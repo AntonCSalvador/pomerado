@@ -268,10 +268,14 @@ refuses literal tokens.
   host refuses an act step or residual whose entrypoint is `*-http.mjs`. Write the HTTP
   version from the session's state-changing requests and captures, and never run a
   second write to compare. When the captures show a commit request's body unavailable, have the
-  `act` step that waits on its response return that request's method, path and body
-  (`response.request().postDataJSON()`, or `postData()` for a body that is not JSON), so the
-  HTTP version has evidence; never for a step that typed a credential, a secret handle or a
-  card. Check it once, against the session: replay it offline with target
+  `act` step that waits on its response return that request's method, path and the shape of its
+  body: each field's name and value type, read with `response.request().postDataJSON()` (or
+  `postData()` for a body that is not JSON), so the HTTP version has evidence, or the body with
+  every field that holds a personal value left out. Never read a body that can carry a
+  credential, a secret handle, a one-time code, a card or other payment data, even one typed in
+  an earlier step: no sign-in, recovery or payment submit, and no step after the caller's card
+  was asked for (caller-input skill). Check it once, against the session: replay it offline with
+  target
   `savedHTTP`, selecting the session's capture (`capture.json`) or its response bodies as
   `fixtureRefs`, and `SiteHttp` replays the recorded exchanges. Fix and replay again until it
   passes; design no other tests. A passing replay is the only evidence a write's HTTP version
