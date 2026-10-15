@@ -26,7 +26,7 @@ const exactHttpsOrigin = (value: string) => {
  * Whether `candidate` may be a per-account workspace origin of the site at `siteOrigin`: an exact
  * https origin with no user info or path, on the registrable domain `parent` (public suffix list,
  * private suffixes included, as `sameSite` reads it), where `parent` is the site's own registrable
- * domain, and on another host than the site's. A site with no registrable domain, such as a host
+ * domain, on another host than the site's, and with no explicit port. A site with no registrable domain, such as a host
  * that is itself a suffix, has no workspace host.
  */
 export const workspaceHost = (siteOrigin: string, parent: string, candidate: string): boolean => {
@@ -37,6 +37,8 @@ export const workspaceHost = (siteOrigin: string, parent: string, candidate: str
   if (domain === undefined || domain !== parent) return false;
   if (siteDomain(candidate) !== parent) return false;
   if (url.hostname === site.hostname) return false;
+  // A workspace host is named by its host alone: a login never pins an explicit port.
+  if (url.port !== "") return false;
   // Pending maintainer confirmation: there is deliberately no rule on the shape of the host's
   // labels (such as accepting only one label below `parent`), so `a.b.example.com` passes like
   // `acme.example.com`. Add such a rule here, and only here, if it is wanted.

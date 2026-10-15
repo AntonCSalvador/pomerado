@@ -148,6 +148,21 @@ describe("decodeSignInRecipe", () => {
         signedIn,
       }),
     ],
+    ...[
+      ["a backslash", "/\\evil.example.com/login"],
+      ["a query", "/login?tenant=acme"],
+      ["a fragment", "/login#password"],
+      ["a dot segment", "/org/../login"],
+      ["an empty segment that opens with //", "//login"],
+    ].map(([name, page]) => [
+      `a version 4 workspace step whose page has ${String(name)}`,
+      JSON.stringify({
+        version: 4,
+        workspace: { parent: "example.com" },
+        steps: [{ origin: "workspace", page, fields: [] }],
+        signedIn,
+      }),
+    ]),
     [
       "a version 4 workspace step without the recipe's workspace",
       JSON.stringify({

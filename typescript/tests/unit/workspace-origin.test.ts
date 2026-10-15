@@ -14,12 +14,23 @@ const site = "https://app.example.com";
 const parent = "example.com";
 
 describe("workspaceHost", () => {
-  it.each(["https://acme.example.com", "https://globex.example.com", "https://a.b.example.com"])(
-    "accepts the same-site sibling %s",
-    (candidate) => {
-      expect(workspaceHost(site, parent, candidate)).toBe(true);
-    },
-  );
+  it.each([
+    "https://acme.example.com",
+    "https://globex.example.com",
+    "https://a.b.example.com",
+    // An internationalized host in its canonical punycode form.
+    "https://xn--bcher-kva.example.com",
+    // The URL parser keeps a trailing dot, and the public suffix list reads the same domain.
+    "https://acme.example.com.",
+    // The apex is another host on the site's registrable domain.
+    "https://example.com",
+  ])("accepts the same-site sibling %s", (candidate) => {
+    expect(workspaceHost(site, parent, candidate)).toBe(true);
+  });
+
+  it("accepts a sibling of a site whose host is its registrable domain", () => {
+    expect(workspaceHost("https://example.com", parent, "https://acme.example.com")).toBe(true);
+  });
 
   it.each([
     ["the site's own host", site, site, parent],
@@ -34,6 +45,10 @@ describe("workspaceHost", () => {
     ["a parent that is not the site's", site, "https://acme.example.com", "example.org"],
     ["a parent that is a suffix of the site's", site, "https://acme.example.com", "com"],
     ["text that is not an origin", site, "acme.example.com", parent],
+    // The parser writes a unicode host as punycode, so the text is not its exact origin.
+    ["a raw unicode host", site, "https://bücher.example.com", parent],
+    ["the site's own host on another port", site, "https://app.example.com:8443", parent],
+    ["a sibling with an explicit port", site, "https://acme.example.com:8443", parent],
   ])("refuses %s", (_case, siteOrigin, candidate, relationParent) => {
     expect(workspaceHost(siteOrigin, relationParent, candidate)).toBe(false);
   });
@@ -44,12 +59,19 @@ describe("providerOrigin", () => {
     expect(providerOrigin(site, "https://id.example.net")).toBe(true);
   });
 
+  it("accepts another user's page on a private suffix, which is another site", () => {
+    expect(providerOrigin("https://a.github.io", "https://b.github.io")).toBe(true);
+  });
+
   it.each([
     "https://id.example.com",
     "http://id.example.net",
     "https://user@id.example.net",
     "https://id.example.net/signin",
     "not an origin",
+    // Same-site hosts are never providers, on another port or written with a trailing dot.
+    "https://app.example.com:8443",
+    "https://example.com.",
   ])("refuses %s", (candidate) => {
     expect(providerOrigin(site, candidate)).toBe(false);
   });

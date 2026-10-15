@@ -115,7 +115,11 @@ const HttpsOrigin = Schema.String.pipe(
   }, { message: () => "an exact https origin" }),
 );
 const absolutePage = (page: string) => URL.parse(page) !== null;
-const pathOnlyPage = (page: string) => page.startsWith("/") && !page.startsWith("//");
+/**
+ * A canonical pathname, which the URL parser keeps unchanged: it starts with one "/", and has no
+ * host, backslash, query, fragment, dot segment or character the parser rewrites.
+ */
+const pathOnlyPage = (page: string) => URL.parse(page, "https://h.invalid")?.pathname === page;
 /**
  * Version 4: a sign-in that may move to a per-account workspace host on the site's registrable
  * domain (`workspace`), or to a cross-site identity provider Guardian approved (`signInOrigins`).
