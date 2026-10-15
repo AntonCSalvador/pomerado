@@ -2,10 +2,10 @@ import { Schema } from "effect";
 import { defineOperation, timeoutDefaults } from "../../src/browser/index.js";
 
 const SavedTask = Schema.Struct({
-  id: Schema.NonEmptyString.annotations({ description: "ID the site gave the saved task" }),
+  id: Schema.NonEmptyTrimmedString.annotations({ description: "ID the site gave the saved task" }),
 });
 const Outcome = Schema.Union(
-  Schema.Struct({ id: Schema.NonEmptyString }),
+  Schema.Struct({ id: Schema.NonEmptyTrimmedString }),
   Schema.Struct({ failure: Schema.Literal("form_changed", "not_submitted", "not_saved") }),
 );
 
@@ -16,8 +16,8 @@ export default defineOperation(
   {
     name: "create_task",
     input: Schema.Struct({
-      title: Schema.NonEmptyString.annotations({ description: "Title of the new task" }),
-      assignee: Schema.NonEmptyString.annotations({
+      title: Schema.NonEmptyTrimmedString.annotations({ description: "Title of the new task" }),
+      assignee: Schema.NonEmptyTrimmedString.annotations({
         description: "Who the task is assigned to, as the form's Assignee field takes it",
       }),
     }),

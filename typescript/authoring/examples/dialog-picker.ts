@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import { defineOperation, waitCode } from "../../src/browser/index.js";
 
 const Picked = Schema.Union(
-  Schema.Struct({ selected_key: Schema.NonEmptyString }),
+  Schema.Struct({ selected_key: Schema.NonEmptyTrimmedString }),
   Schema.Struct({
     failure: Schema.Literal("query_mismatch", "option_identity_mismatch", "committed_key_mismatch"),
   }),
@@ -14,13 +14,13 @@ export default defineOperation(
   {
     name: "select_catalog_item",
     input: Schema.Struct({
-      query: Schema.NonEmptyString.annotations({ description: "Text to search the catalog for" }),
-      key: Schema.NonEmptyString.annotations({
+      query: Schema.NonEmptyTrimmedString.annotations({ description: "Text to search the catalog for" }),
+      key: Schema.NonEmptyTrimmedString.annotations({
         description: "Catalog key of the item to select, as its option is named",
       }),
     }),
     output: Schema.Struct({
-      selected_key: Schema.NonEmptyString.annotations({
+      selected_key: Schema.NonEmptyTrimmedString.annotations({
         description: "Catalog key the page now shows as selected",
       }),
     }),

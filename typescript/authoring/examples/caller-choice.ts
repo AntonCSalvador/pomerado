@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { defineOperation, timeoutDefaults, waitCode } from "../../src/browser/index.js";
 
-const PageOption = Schema.Struct({ value: Schema.NonEmptyString, label: Schema.NonEmptyString });
+const PageOption = Schema.Struct({ value: Schema.NonEmptyTrimmedString, label: Schema.NonEmptyTrimmedString });
 const Offer = Schema.Union(
   Schema.Struct({
     seats: Schema.Array(PageOption),
@@ -10,7 +10,7 @@ const Offer = Schema.Union(
   Schema.Struct({ failure: Schema.Literal("unexpected_page") }),
 );
 const Booked = Schema.Union(
-  Schema.Struct({ reference: Schema.NonEmptyString }),
+  Schema.Struct({ reference: Schema.NonEmptyTrimmedString }),
   Schema.Struct({ failure: Schema.Literal("choice_gone", "not_confirmed") }),
 );
 
@@ -22,15 +22,15 @@ export default defineOperation(
   {
     name: "book_flight_seat",
     input: Schema.Struct({
-      flight: Schema.NonEmptyString.annotations({
+      flight: Schema.NonEmptyTrimmedString.annotations({
         description: "Flight to book, as its Choose button names it",
       }),
     }),
     output: Schema.Struct({
-      reference: Schema.NonEmptyString.annotations({
+      reference: Schema.NonEmptyTrimmedString.annotations({
         description: "Booking reference from the site's confirmation",
       }),
-      seat: Schema.NonEmptyString.annotations({ description: "Seat the caller chose" }),
+      seat: Schema.NonEmptyTrimmedString.annotations({ description: "Seat the caller chose" }),
     }),
     // Every question a run may ask, with its type and reviewed prompt. A choice's options come
     // from the page when the run asks.

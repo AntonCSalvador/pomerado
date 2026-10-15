@@ -3,8 +3,8 @@ import { defineOperation, waitCode } from "../../src/browser/index.js";
 
 const RecordId = Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9_-]{1,100}$/));
 const Detail = Schema.Union(
-  Schema.Struct({ title: Schema.NonEmptyString }),
-  Schema.Struct({ refused: Schema.NonEmptyString }),
+  Schema.Struct({ title: Schema.NonEmptyTrimmedString }),
+  Schema.Struct({ refused: Schema.NonEmptyTrimmedString }),
   Schema.Struct({
     failure: Schema.Literal(
       "search_unavailable",
@@ -43,7 +43,7 @@ export const detailNavigation = defineOperation(
     }),
     output: Schema.Struct({
       record_id: RecordId.annotations({ description: "ID of the record read" }),
-      title: Schema.NonEmptyString.annotations({ description: "The record's title" }),
+      title: Schema.NonEmptyTrimmedString.annotations({ description: "The record's title" }),
     }),
   },
   async ({ kernel, sessionId, siteOrigin, siteDomain, input, errors }) => {
@@ -150,7 +150,7 @@ export const detailFromUrl = defineOperation(
     }),
     output: Schema.Struct({
       record_id: RecordId.annotations({ description: "ID of the record the page shows" }),
-      title: Schema.NonEmptyString.annotations({ description: "The record's title" }),
+      title: Schema.NonEmptyTrimmedString.annotations({ description: "The record's title" }),
     }),
   },
   async ({ kernel, sessionId, siteOrigin, siteDomain, input, errors }) => {
@@ -225,7 +225,7 @@ const resultsRoute = { path: "/search", params: { q: "query" } } as const;
 
 const Found = Schema.Union(
   Schema.Struct({
-    rows: Schema.Array(Schema.Struct({ key: Schema.NonEmptyString, name: Schema.NonEmptyString })),
+    rows: Schema.Array(Schema.Struct({ key: Schema.NonEmptyTrimmedString, name: Schema.NonEmptyTrimmedString })),
     more: Schema.Boolean,
   }),
   Schema.Struct({
@@ -246,7 +246,7 @@ export const searchThenRead = defineOperation(
   {
     name: "search_rooms",
     input: Schema.Struct({
-      query: Schema.NonEmptyString.annotations({
+      query: Schema.NonEmptyTrimmedString.annotations({
         description: "Text to search rooms for",
         examples: ["room"],
       }),
@@ -257,8 +257,8 @@ export const searchThenRead = defineOperation(
     output: Schema.Struct({
       rooms: Schema.Array(
         Schema.Struct({
-          id: Schema.NonEmptyString.annotations({ description: "The room's ID on the site" }),
-          name: Schema.NonEmptyString.annotations({ description: "The room's name" }),
+          id: Schema.NonEmptyTrimmedString.annotations({ description: "The room's ID on the site" }),
+          name: Schema.NonEmptyTrimmedString.annotations({ description: "The room's name" }),
         }),
       ),
       more: Schema.Boolean.annotations({ description: "Whether the site lists more rooms" }),
@@ -342,7 +342,7 @@ export default defineOperation(
     name: "read_catalog_heading",
     input: Schema.Struct({}),
     output: Schema.Struct({
-      heading: Schema.NonEmptyString.annotations({ description: "The catalog page's heading" }),
+      heading: Schema.NonEmptyTrimmedString.annotations({ description: "The catalog page's heading" }),
     }),
   },
   async ({ kernel, sessionId, siteOrigin, siteDomain, errors, waitPastChallenge }) => {
@@ -395,7 +395,7 @@ export default defineOperation(
     }
     const result = Schema.decodeUnknownSync(
       Schema.Union(
-        Schema.Struct({ heading: Schema.NonEmptyString }),
+        Schema.Struct({ heading: Schema.NonEmptyTrimmedString }),
         Schema.Struct({ failure: Schema.Literal("unsupported_page") }),
       ),
     )(answer);
