@@ -212,7 +212,14 @@ const reviewRequest = (request: ModelRequest | undefined): Record<string, unknow
 
 const DeltaFile = Schema.Struct({
   path: Schema.String,
-  status: Schema.Literal("unchanged", "changed", "added", "removed", "not_compared"),
+  status: Schema.Literal(
+    "unchanged",
+    "unchanged_unread",
+    "changed",
+    "added",
+    "removed",
+    "not_compared",
+  ),
   digest: Schema.optional(Schema.String),
   previousDigest: Schema.optional(Schema.String),
   byteLength: Schema.optional(Schema.Number),
@@ -294,7 +301,8 @@ describe("a publication reviewed again in the same build", () => {
     expect(helper.digest).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(helper.diff).toBeUndefined();
     expect(helper.content).toBeUndefined();
-    expect(fileIn(delta, outputPath).status).toBe("unchanged");
+    // No review read the example output, so the delta does not let Guardian leave it alone.
+    expect(fileIn(delta, outputPath).status).toBe("unchanged_unread");
     const secondRequest = (requests[2]?.input ?? []) as readonly unknown[];
     expect(JSON.stringify(secondRequest.at(-1))).not.toContain("unique-helper-body");
     // The reviewer may still read any file it needs.
@@ -351,7 +359,7 @@ describe("a publication reviewed again in the same build", () => {
   });
 
   it("keeps the prior round across a takeover that resumes the saved conversation", async () => {
-    const requests = recorded([[message(deny)], [message(allow)]]);
+    const requests = recorded([[readCall(helperPath)], [message(deny)], [message(allow)]]);
     const first = makeGuardian(reviewer(), undefined, {});
     await Effect.runPromise(first.review(pendingFor(roundOne), reader(roundOne)));
     const replacement = makeGuardian(reviewer(), undefined, {
@@ -360,7 +368,7 @@ describe("a publication reviewed again in the same build", () => {
       ),
     });
     await Effect.runPromise(replacement.review(pendingFor(roundTwo), reader(roundTwo)));
-    const delta = deltaOf(requests[1]);
+    const delta = deltaOf(requests[2]);
     expect(delta.priorReview.outcome).toBe("deny");
     expect(fileIn(delta, helperPath).status).toBe("unchanged");
     expect(fileIn(delta, toolPath).status).toBe("changed");
@@ -371,18 +379,24 @@ describe("a publication reviewed again in the same build", () => {
       ...roundTwo,
       [helperPath, helperSource.replace("text.trim()", "text.trim().replace(/\\s+/gu, ' ')")],
     ]);
-    const requests = recorded([[message(deny)], [message(deny)], [message(allow)]]);
+    const requests = recorded([
+      [readCall(helperPath), readCall(toolPath)],
+      [message(deny)],
+      [readCall(toolPath, "read_tool_again")],
+      [message(deny)],
+      [message(allow)],
+    ]);
     const guardian = makeGuardian(reviewer(), undefined, {});
     await Effect.runPromise(guardian.review(pendingFor(roundOne), reader(roundOne)));
     await Effect.runPromise(guardian.review(pendingFor(roundTwo), reader(roundTwo)));
     await Effect.runPromise(guardian.review(pendingFor(roundThree), reader(roundThree)));
-    expect(fileIn(deltaOf(requests[1]), helperPath).status).toBe("unchanged");
-    const third = deltaOf(requests[2]);
+    expect(fileIn(deltaOf(requests[2]), helperPath).status).toBe("unchanged");
+    const third = deltaOf(requests[4]);
     expect(fileIn(third, helperPath).status).toBe("changed");
     expect(fileIn(third, helperPath).diff).toContain(
       "+export const money = (text) => text.trim().replace(",
     );
-    // The tool did not change since the second round.
+    // The tool did not change since the second round, which read it.
     expect(fileIn(third, toolPath).status).toBe("unchanged");
   });
 
@@ -418,7 +432,7 @@ describe("a publication reviewed again in the same build", () => {
     });
     expect(fileIn(delta, helperPath)).toMatchObject({ status: "removed" });
     expect(fileIn(delta, outputPath)).toMatchObject({
-      status: "unchanged",
+      status: "unchanged_unread",
       index: { current: { from: true, to: false } },
     });
     expect(delta.changedContext).toEqual(["trusted_authority.answeredQuestions"]);
@@ -453,5 +467,126 @@ describe("a publication reviewed again in the same build", () => {
     expect(tests.diff).toBeUndefined();
     expect(tests.content).toBeUndefined();
     expect(JSON.stringify(reviewRequest(requests[1]))).not.toContain("after-3999");
+  });
+});
+
+describe("what a later round may leave alone", () => {
+  it("names unchanged files no review read, and carries a read forward only while the file is unchanged", async () => {
+    const requests = recorded([
+      [readCall(definitionPath)],
+      [message(deny)],
+      [readCall(helperPath)],
+      [message(deny)],
+      [message(deny)],
+      [message(allow)],
+    ]);
+    const guardian = makeGuardian(reviewer(), undefined, {});
+    await Effect.runPromise(guardian.review(pendingFor(roundOne), reader(roundOne)));
+    await Effect.runPromise(guardian.review(pendingFor(roundTwo), reader(roundTwo)));
+    await Effect.runPromise(guardian.review(pendingFor(roundTwo), reader(roundTwo)));
+    await Effect.runPromise(guardian.review(pendingFor(roundTwo), reader(roundTwo)));
+    const second = deltaOf(requests[2]);
+    expect(fileIn(second, helperPath).status).toBe("unchanged_unread");
+    expect(fileIn(second, outputPath).status).toBe("unchanged_unread");
+    const third = deltaOf(requests[4]);
+    // Read in the second round and unchanged since.
+    expect(fileIn(third, helperPath).status).toBe("unchanged");
+    // Read in the first round, changed in the second and not read since.
+    expect(fileIn(third, definitionPath).status).toBe("unchanged_unread");
+    expect(fileIn(third, toolPath).status).toBe("unchanged_unread");
+    // A read stays credited across rounds that read nothing, while the file stays unchanged.
+    expect(fileIn(deltaOf(requests[5]), helperPath).status).toBe("unchanged");
+  });
+
+  it("does not compare a file too large to read whole, even when only its tail changed", async () => {
+    const largePath = "captures/results/dom.html";
+    const body = "x".repeat(5 * 1024 * 1024);
+    const before: Files = new Map([...roundOne, [largePath, `${body}tail-before`]]);
+    const after: Files = new Map([...roundOne, [largePath, `${body}tail-after!`]]);
+    // Encodes each text once, so the many chunk reads stay fast.
+    const cachedReader = (files: Files) => {
+      const bytes = new Map(
+        [...files].map(([path, text]) => [path, new TextEncoder().encode(text)]),
+      );
+      return makeSourceInspector(
+        (path) => {
+          const found = bytes.get(path);
+          return found === undefined
+            ? Effect.fail(new ReviewFailure({ code: "SourceUnavailable" }))
+            : Effect.succeed(found);
+        },
+        (_path, read) => Effect.succeed(new TextDecoder().decode(read)),
+      );
+    };
+    const requests = recorded([[message(deny)], [message(allow)]]);
+    const guardian = makeGuardian(reviewer(), undefined, {});
+    await Effect.runPromise(guardian.review(pendingFor(before), cachedReader(before)));
+    await Effect.runPromise(guardian.review(pendingFor(after), cachedReader(after)));
+    expect(fileIn(deltaOf(requests[1]), largePath).status).toBe("not_compared");
+  });
+
+  it("restores a snapshot whose round a later release wrote, and reviews the next round as a first one", async () => {
+    const requests = recorded([[message(deny)], [message(allow)]]);
+    const first = makeGuardian(reviewer(), undefined, {});
+    await Effect.runPromise(first.review(pendingFor(roundOne), reader(roundOne)));
+    const saved = JSON.parse(JSON.stringify(first.session?.snapshot())) as {
+      publicationRound: { decision: { findings: { category: string }[] } };
+    };
+    const finding = saved.publicationRound.decision.findings[0];
+    if (finding === undefined) throw new Error("No finding kept");
+    finding.category = "a_category_from_a_later_release";
+    const restored = Schema.decodeUnknownSync(GuardianSessionSnapshot)(saved);
+    const replacement = makeGuardian(reviewer(), undefined, { initial: restored });
+    await Effect.runPromise(replacement.review(pendingFor(roundTwo), reader(roundTwo)));
+    expect(reviewRequest(requests[1])).not.toHaveProperty("publication_delta");
+  });
+
+  it.each([
+    ["the completion could not be saved", "save" as const],
+    ["the decision did not decode", "decode" as const],
+  ])("keeps the previous round when a review fails because %s", async (_name, failure) => {
+    let failSave = false;
+    const requests = recorded([
+      [message(deny)],
+      [message(failure === "decode" ? { outcome: "allow" } : allow)],
+      [message(allow)],
+    ]);
+    const guardian = makeGuardian(reviewer(), undefined, {
+      save: (snapshot) =>
+        failSave && !snapshot.incomplete
+          ? Effect.fail(new Error("Synthetic save failure"))
+          : Effect.void,
+    });
+    await Effect.runPromise(guardian.review(pendingFor(roundOne), reader(roundOne)));
+    failSave = failure === "save";
+    const failed = await Effect.runPromise(
+      Effect.either(guardian.review(pendingFor(roundTwo), reader(roundTwo))),
+    );
+    expect(failed._tag).toBe("Left");
+    failSave = false;
+    await Effect.runPromise(guardian.review(pendingFor(roundTwo), reader(roundTwo)));
+    // The third round is compared with the first, the last one that completed.
+    const delta = deltaOf(requests[2]);
+    expect(delta.priorReview.outcome).toBe("deny");
+    expect(fileIn(delta, toolPath).status).toBe("changed");
+  });
+
+  it("names step results and the entrypoint among the context that changed", async () => {
+    const requests = recorded([[message(deny)], [message(allow)]]);
+    const guardian = makeGuardian(reviewer(), undefined, {});
+    await Effect.runPromise(guardian.review(pendingFor(roundOne), reader(roundOne)));
+    await Effect.runPromise(
+      guardian.review(
+        pendingFor(roundTwo, {
+          entrypoint: helperPath,
+          stepResults: [{ executionId: "execution_two", result: "{}" }],
+        }),
+        reader(roundTwo),
+      ),
+    );
+    expect(deltaOf(requests[1]).changedContext).toEqual([
+      "submitted_call.entrypoint",
+      "untrusted_step_results",
+    ]);
   });
 });

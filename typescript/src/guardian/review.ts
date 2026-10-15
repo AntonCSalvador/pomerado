@@ -15,7 +15,7 @@ import type {
 } from "./publication-delta.js";
 import type { AnsweredQuestion, PendingQuestion } from "./question.js";
 import { TaskUpdateDecision } from "./task-update.js";
-import { wholeSource } from "./source.js";
+import { completeSource, wholeSource } from "./source.js";
 import type { PendingTaskUpdate, ReviewedTaskUpdate } from "./task-update.js";
 import {
   failureDetail,
@@ -659,13 +659,16 @@ export const makeGuardian = (
   let ownPublicationRound: PublicationRound | undefined;
   const priorPublicationRound = () =>
     session === undefined ? ownPublicationRound : session.publicationRound();
-  const keepPublicationRound = (round: PublicationRound) => {
-    if (session === undefined) ownPublicationRound = round;
-    else session.keepPublicationRound(round);
-  };
+  const keepPublicationRound = (round: PublicationRound) =>
+    session === undefined
+      ? Effect.sync(() => {
+          ownPublicationRound = round;
+        })
+      : session.keepPublicationRound(round);
   /**
    * Every indexed file's screened text as Guardian would read it, through the host's own reader
-   * so no read counts as Guardian's. A file the host cannot read has no text and is not compared.
+   * so no read counts as Guardian's. A file the host cannot read, or cannot read whole within
+   * 4 MiB, has no text and is not compared: a prefix never stands for the file.
    */
   const publicationFiles = (
     scope: PublicationScope,
@@ -675,14 +678,17 @@ export const makeGuardian = (
       scope.files,
       (file) =>
         // error-reporting-allow: typed-recovery a file the host cannot read is left for Guardian to read, as in a first round
-        Effect.option(wholeSource(readSource, file.path)).pipe(
-          Effect.map((text): PublicationRoundFile => ({
-            path: file.path,
-            published: file.published,
-            current: file.current,
-            owner: file.owner,
-            ...Option.match(text, { onNone: () => ({}), onSome: (value) => ({ text: value }) }),
-          })),
+        Effect.option(completeSource(readSource, file.path)).pipe(
+          Effect.map((read): PublicationRoundFile => {
+            const text = Option.getOrUndefined(read);
+            return {
+              path: file.path,
+              published: file.published,
+              current: file.current,
+              owner: file.owner,
+              ...(text === undefined ? {} : { text }),
+            };
+          }),
         ),
       { concurrency: 4 },
     );
@@ -838,6 +844,23 @@ export const makeGuardian = (
         roundFiles === undefined || priorRound === undefined
           ? undefined
           : publicationDelta(priorRound, roundFiles, roundContext);
+      /** The chunks Guardian's own reads served in this review, by path and offset. */
+      const served = new Map<string, Map<number, { nextOffset: number; hasMore: boolean }>>();
+      /** The paths Guardian read whole in this review: every chunk from offset 0 to the end. */
+      const readWhole = () =>
+        new Set(
+          [...served].flatMap(([path, chunks]) => {
+            let offset = 0;
+            for (let index = 0; index <= chunks.size; index++) {
+              const chunk = chunks.get(offset);
+              if (chunk === undefined) return [];
+              if (!chunk.hasMore) return [path];
+              if (chunk.nextOffset <= offset) return [];
+              offset = chunk.nextOffset;
+            }
+            return [];
+          }),
+        );
       const observeModelTrace = diagnostics?.observeModelTrace;
       // Follow-up rounds for a refused outcome or a skipped entrypoint read, within this attempt.
       let followUpRounds = 0;
@@ -989,8 +1012,17 @@ export const makeGuardian = (
                   unavailableSources.set(JSON.stringify([path, offset]), error);
               }),
             ),
-            Effect.tap(() =>
+            Effect.tap((observation) =>
               Effect.sync(() => {
+                const chunk = roundFiles === undefined ? undefined : sourceChunkOf(observation);
+                if (chunk !== undefined) {
+                  const chunks = served.get(chunk.path) ?? new Map();
+                  chunks.set(chunk.byteOffset, {
+                    nextOffset: chunk.nextOffset,
+                    hasMore: chunk.hasMore,
+                  });
+                  served.set(chunk.path, chunks);
+                }
                 unavailableSources.delete(JSON.stringify([path, offset]));
                 if (path === entrypoint && offset === 0) entrypointReadAt = epoch();
               }),
@@ -1117,12 +1149,6 @@ export const makeGuardian = (
           );
         // Output that is not a decision at all fails to decode as InvalidDecision.
         const decision = yield* decode(decisionForKind(pending, raw));
-        // The decided round is what the next one is reviewed against; the completion saves it.
-        const round =
-          roundFiles === undefined
-            ? undefined
-            : publicationRound(roundFiles, roundContext, decision);
-        if (round !== undefined) keepPublicationRound(round);
         if (requireEntrypoint && decision.outcome === "allow" && entrypointReadAt !== epoch())
           return yield* new ReviewFailure({ code: "EntrypointNotRead" });
         yield* emit(
@@ -1134,6 +1160,14 @@ export const makeGuardian = (
               : { mode: "publication", ...decision, timing: endTiming() },
         );
         yield* completeSession(session);
+        // Only a completed round is what the next one is reviewed against. Saving it is best
+        // effort: an unsaved round leaves a takeover to review the next round as a first one.
+        const round =
+          roundFiles === undefined
+            ? undefined
+            : publicationRound(roundFiles, roundContext, decision, readWhole(), priorRound);
+        if (round !== undefined)
+          yield* bestEffort(keepPublicationRound(round), "guardian.publication_round");
         return { reviewId, decision };
       }).pipe(
         Effect.onExit((exit) =>

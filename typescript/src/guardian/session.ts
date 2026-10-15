@@ -2,7 +2,7 @@ import type { AgentInputItem, ModelProvider, ModelRequest } from "@openai/agents
 import { protocol } from "@openai/agents";
 import { compaction, StaticCompactionPolicy } from "@openai/agents/sandbox";
 import { Effect, Schema } from "effect";
-import { PublicationRound } from "./publication-delta.js";
+import { decodePublicationRound, PublicationRound } from "./publication-delta.js";
 import { leadingPrivateAfter } from "./review-layout.js";
 
 /** Private continuation state; complete original exchanges remain in protected model records. */
@@ -22,8 +22,10 @@ export const GuardianSessionSnapshot = Schema.Struct({
   /**
    * The mint's latest publication round: its decision and the files it judged, which the next
    * round's request is a delta against. Kept apart from the history, so no compaction drops it.
+   * Stored loosely and decoded when used, so a round this release cannot read, such as one with
+   * a finding category a later release added, is dropped rather than failing the restore.
    */
-  publicationRound: Schema.optional(PublicationRound),
+  publicationRound: Schema.optional(Schema.Unknown),
 });
 export type GuardianSessionSnapshot = typeof GuardianSessionSnapshot.Type;
 interface GuardianReasoningReport {
@@ -216,12 +218,14 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
     leadingPrivate: () => current.leadingPrivate === true,
     /** The conversation since its last compaction, as the next request continues it. */
     history,
-    /** The mint's latest publication round, which the next one is reviewed against. */
-    publicationRound: () => current.publicationRound,
-    /** Keeps a decided publication round; the review's completion saves it with the history. */
-    keepPublicationRound: (round: PublicationRound) => {
-      current = { ...current, publicationRound: round };
-    },
+    /** The mint's latest publication round, which the next one is reviewed against, if readable. */
+    publicationRound: () => decodePublicationRound(current.publicationRound),
+    /** Keeps a completed publication round and saves it with the conversation. */
+    keepPublicationRound: (round: PublicationRound) =>
+      Effect.suspend(() => {
+        current = { ...current, publicationRound: Schema.encodeSync(PublicationRound)(round) };
+        return options.save?.(current) ?? Effect.void;
+      }),
     /** Changes whenever a compaction replaces the context, including in the middle of a review. */
     compactions: () => compactions,
     exclusive: <A, E, R>(work: Effect.Effect<A, E, R>) => permit.withPermits(1)(work),

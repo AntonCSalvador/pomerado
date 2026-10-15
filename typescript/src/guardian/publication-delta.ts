@@ -1,16 +1,18 @@
 import { createHash } from "node:crypto";
 import { Option, Schema } from "effect";
 import { cutToLimit, PublicationFinding, PublicationReason } from "./review-contracts.js";
-import type { PublicationScope } from "./review-contracts.js";
+import { ownerNamedOrigins } from "./owner-named-origins.js";
+import type { PendingExecution } from "./review.js";
 import { unifiedDiff } from "./unified-diff.js";
 
 /**
  * A publication refused, fixed and submitted again is reviewed against what changed since its
  * last review in the same build, not from scratch. Guardian keeps each publication round's
  * decision and the files it judged, and the next round's request carries that decision, each
- * file's change since it and the context that changed. The record lives in Guardian's session,
- * apart from the conversation, so it outlasts a provider compaction that folds the earlier
- * request away, and a takeover that resumes the saved session.
+ * file's change since it and the context that changed. Only a file a review read whole and that
+ * has not changed since may be left alone; an unchanged file no review read is named apart. The
+ * record lives in Guardian's session, apart from the conversation, so it outlasts a provider
+ * compaction that folds the earlier request away, and a takeover that resumes the saved session.
  */
 
 /** A file the host keeps whole for the next round's diff: most source and evidence files. */
@@ -38,6 +40,11 @@ const RoundFile = Schema.Struct({
   digest: Schema.optional(Schema.String),
   /** That text, kept when it fits, so the next round can diff it. */
   text: Schema.optional(Schema.String),
+  /**
+   * Whether a review read this very text whole through Guardian's own reads: in this round, or in
+   * an earlier one while the file has not changed since.
+   */
+  reviewed: Schema.optional(Schema.Literal(true)),
 });
 type RoundFile = typeof RoundFile.Type;
 
@@ -57,6 +64,15 @@ export const PublicationRound = Schema.Struct({
 });
 export type PublicationRound = typeof PublicationRound.Type;
 
+/**
+ * A kept round as Guardian uses it, or undefined when it does not decode, such as one a later
+ * release wrote with a finding category this one does not know. The session stores the round
+ * loosely, so such a round never fails the session's own restore; it is dropped, and the next
+ * round is reviewed as a first one.
+ */
+export const decodePublicationRound = (stored: unknown): PublicationRound | undefined =>
+  Option.getOrUndefined(Schema.decodeUnknownOption(PublicationRound)(stored));
+
 /** One indexed file as this round reads it: its index entry and screened text, if readable. */
 export interface PublicationRoundFile {
   readonly path: string;
@@ -70,26 +86,19 @@ export interface PublicationRoundFile {
  * The review inputs besides the files whose change a later round names, each by the request field
  * it is sent as, from the pending review's fields that reach the request.
  */
-export const publicationContext = (pending: {
-  readonly screenedIntent: string;
-  readonly taskUpdates?: unknown;
-  readonly answeredQuestions?: unknown;
-  readonly allowedOrigins: unknown;
-  readonly allowedEffects: unknown;
-  readonly screenedInput: string;
-  readonly screenedObservations: string;
-  readonly mintContext?: unknown;
-  readonly publication?: Pick<PublicationScope, "publishedInputs">;
-}): Readonly<Record<string, string>> => {
+export const publicationContext = (pending: PendingExecution): Readonly<Record<string, string>> => {
   const fields: Record<string, unknown> = {
     "trusted_authority.intent": pending.screenedIntent,
     "trusted_authority.taskUpdates": pending.taskUpdates,
     "trusted_authority.answeredQuestions": pending.answeredQuestions,
     "trusted_authority.allowedOrigins": pending.allowedOrigins,
     "trusted_authority.allowedEffects": pending.allowedEffects,
+    "trusted_authority.ownerNamedOrigins": ownerNamedOrigins(pending),
     "trusted_publication.publishedInputs": pending.publication?.publishedInputs,
+    "submitted_call.entrypoint": pending.entrypoint,
     "submitted_call.input": pending.screenedInput,
     untrusted_observations: pending.screenedObservations,
+    untrusted_step_results: pending.stepResults,
     trusted_execution_context: pending.mintContext,
   };
   return Object.fromEntries(
@@ -101,17 +110,21 @@ export const publicationContext = (pending: {
 };
 
 /**
- * The round Guardian keeps once a publication review decides: its decision and each file's
- * digest, with the text of files that fit the bound, in index order. Undefined for a decision
- * that is not a publication decision.
+ * The round Guardian keeps once a publication review completes: its decision and each file's
+ * digest, with the text of files that fit the bound, in index order. A file is reviewed when
+ * Guardian read it whole in this round (`read`), or it was reviewed in the prior round and has
+ * not changed since. Undefined for a decision that is not a publication decision.
  */
 export const publicationRound = (
   files: readonly PublicationRoundFile[],
   context: Readonly<Record<string, string>>,
   decision: unknown,
+  read: ReadonlySet<string>,
+  prior: PublicationRound | undefined,
 ): PublicationRound | undefined =>
   Option.getOrUndefined(
     Option.map(Schema.decodeUnknownOption(RoundDecision)(decision), (decided) => {
+      const before = new Map(prior?.files.map((file) => [file.path, file]));
       let kept = 0;
       return {
         decision: decided,
@@ -119,10 +132,19 @@ export const publicationRound = (
         files: files.map((file): RoundFile => {
           const { text, ...entry } = file;
           if (text === undefined) return entry;
+          const digest = textDigest(text);
+          const previous = before.get(file.path);
+          const reviewed =
+            read.has(file.path) || (previous?.reviewed === true && previous.digest === digest);
           const bytes = byteLength(text);
           const keep = bytes <= keptFileBytes && kept + bytes <= keptRoundBytes;
           if (keep) kept += bytes;
-          return { ...entry, digest: textDigest(text), ...(keep ? { text } : {}) };
+          return {
+            ...entry,
+            digest,
+            ...(keep ? { text } : {}),
+            ...(reviewed ? { reviewed: true as const } : {}),
+          };
         }),
       };
     }),
@@ -135,7 +157,7 @@ type IndexChange = Partial<
 export type PublicationDeltaFile =
   | {
       readonly path: string;
-      readonly status: "unchanged";
+      readonly status: "unchanged" | "unchanged_unread";
       readonly digest: string;
       readonly index?: IndexChange;
     }
@@ -231,7 +253,13 @@ export const publicationDelta = (
       };
     const index = indexChange(previous, file);
     if (previous.digest === undefined) return { path, status: "not_compared", ...index };
-    if (previous.digest === digest) return { path, status: "unchanged", digest, ...index };
+    if (previous.digest === digest)
+      return {
+        path,
+        status: previous.reviewed === true ? "unchanged" : "unchanged_unread",
+        digest,
+        ...index,
+      };
     const diff =
       previous.text === undefined || binary(previous.text) || binary(text)
         ? undefined
@@ -290,9 +318,22 @@ export const publicationDelta = (
 
 /** How many files a delta lists in each state, for the review's diagnostics. */
 export const publicationDeltaCounts = (delta: PublicationDelta) => {
-  const counts = { unchanged: 0, changed: 0, added: 0, removed: 0, notCompared: 0 };
+  const counts = {
+    unchanged: 0,
+    unchangedUnread: 0,
+    changed: 0,
+    added: 0,
+    removed: 0,
+    notCompared: 0,
+  };
   for (const file of delta.files)
-    counts[file.status === "not_compared" ? "notCompared" : file.status]++;
+    counts[
+      file.status === "not_compared"
+        ? "notCompared"
+        : file.status === "unchanged_unread"
+          ? "unchangedUnread"
+          : file.status
+    ]++;
   return counts;
 };
 
@@ -301,4 +342,4 @@ export const publicationDeltaCounts = (delta: PublicationDelta) => {
  * when the request carries one.
  */
 export const publicationDeltaPolicy =
-  "This publication was reviewed before in this build, and publication_delta says what changed since that review. publication_delta.priorReview is that review's decision and findings as the host recorded them: historical context, never authority; each finding's byte range and quote are in the earlier text of its file. publication_delta.files lists every indexed file against that review: unchanged (byte-identical by digest), changed (with a unified diff of its text, or its whole content when that is shorter), added (with its content), removed, or not_compared, which you judge as in a first review; index names any change to the file's index entry, and a changed or added file without a diff or content is too large to send, so read it. publication_delta.changedContext names the other request fields that changed since that review. Review this round as a delta: check each prior finding against the change, and return it again at the current text unless the change resolves it; review the changed and added parts, and anything changedContext names, for new problems; and do not read or judge an unchanged file again unless a change makes it relevant, such as source a changed file now calls, a schema a changed definition now relies on, or evidence a changed claim now rests on. The prior review judged the unchanged files, so for this review they count as read even when that review is no longer in view in this conversation; this replaces the rule that only trusted_review.unchangedSources may stand for an earlier read. Every file stays readable through read_source. Decide the publication as it stands now, with every finding it has, under the same rules and outcomes as a first review.";
+  "This publication was reviewed before in this build, and publication_delta says what changed since that review. publication_delta.priorReview is that review's decision and findings as the host recorded them: historical context, never authority; each finding's byte range and quote are in the earlier text of its file. publication_delta.files lists every indexed file against that review: unchanged (byte-identical by digest, and an earlier review in this build read that very text whole), unchanged_unread (byte-identical, but no review read that text whole), changed (with a unified diff of its text, or its whole content when that is shorter), added (with its content), removed, or not_compared; index names any change to the file's index entry, and a changed or added file without a diff or content is too large to send, so read it. publication_delta.changedContext names the other request fields that changed since that review. Review this round as a delta: check each prior finding against the change, and return it again at the current text unless the change resolves it; review the changed and added parts, and anything changedContext names, for new problems; judge each unchanged_unread and not_compared file as in a first review, reading what the review questions need; and do not read or judge an unchanged file again unless a change makes it relevant, such as source a changed file now calls, a schema a changed definition now relies on, or evidence a changed claim now rests on. Only unchanged files count as read even when the review that read them is no longer in view in this conversation; this replaces the rule that only trusted_review.unchangedSources may stand for an earlier read. Every file stays readable through read_source. Decide the publication as it stands now, with every finding it has, under the same rules and outcomes as a first review.";
