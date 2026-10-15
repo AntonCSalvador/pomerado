@@ -177,9 +177,9 @@ the task can't run without it (below).
   neighborhood or an airport code in brackets, over waiting for an element named exactly as
   the caller typed it. A whole-name or code match outranks a partial one, so an airport code
   picks that airport, not its city. Then count the matches at the best rank. With none,
-  throw `InvalidInput` at once, saying the site has no match and naming the closest entries
-  it showed. With one, use it. With several, ask the caller which one with a declared choice
-  question whose options are those matches as the site labels them
+  throw `InvalidInput` at once, saying the site has no match, with `field` and `available`,
+  the closest entries it showed. With one, use it. With several, ask the caller which one with
+  a declared choice question whose options are those matches as the site labels them
   (.agents/caller-input/SKILL.md).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
   match that accepts the usual forms of the same name, such as a name with or without its
