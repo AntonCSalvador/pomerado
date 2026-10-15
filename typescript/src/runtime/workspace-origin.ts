@@ -1,0 +1,231 @@
+import { sameSite, siteDomain } from "./same-site.js";
+
+// Where a sign-in may move off the site's own host: a per-account workspace host on the site's
+// registrable domain, or a cross-site identity provider Guardian approved when the tool was built.
+// Every rule here is deterministic host code; a Guardian review may narrow it, never widen it.
+
+/** A recipe's workspace relation: its sign-in may move to a per-account host on `parent`. */
+export interface WorkspaceRelation {
+  /** The registrable domain of the tool's site origin. */
+  readonly parent: string;
+}
+
+/** An exact https origin with no user name, password or path: `new URL(value).origin === value`. */
+const exactHttpsOrigin = (value: string) => {
+  const url = URL.parse(value);
+  return url !== null &&
+    url.protocol === "https:" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.origin === value
+    ? url
+    : undefined;
+};
+
+/**
+ * Whether `candidate` may be a per-account workspace origin of the site at `siteOrigin`: an exact
+ * https origin with no user info or path, on the registrable domain `parent` (public suffix list,
+ * private suffixes included, as `sameSite` reads it), where `parent` is the site's own registrable
+ * domain, and on another host than the site's. A site with no registrable domain, such as a host
+ * that is itself a suffix, has no workspace host.
+ */
+export const workspaceHost = (siteOrigin: string, parent: string, candidate: string): boolean => {
+  const site = exactHttpsOrigin(siteOrigin);
+  const url = exactHttpsOrigin(candidate);
+  if (site === undefined || url === undefined) return false;
+  const domain = siteDomain(siteOrigin);
+  if (domain === undefined || domain !== parent) return false;
+  if (siteDomain(candidate) !== parent) return false;
+  if (url.hostname === site.hostname) return false;
+  // Pending maintainer confirmation: there is deliberately no rule on the shape of the host's
+  // labels (such as accepting only one label below `parent`), so `a.b.example.com` passes like
+  // `acme.example.com`. Add such a rule here, and only here, if it is wanted.
+  return true;
+};
+
+/**
+ * Whether `candidate` may be a cross-site sign-in origin (an identity provider) of the site at
+ * `siteOrigin`: an exact https origin with no user info or path, not on the site's registrable
+ * domain.
+ */
+export const providerOrigin = (siteOrigin: string, candidate: string): boolean => {
+  const url = exactHttpsOrigin(candidate);
+  return (
+    exactHttpsOrigin(siteOrigin) !== undefined && url !== undefined && !sameSite(siteOrigin, url)
+  );
+};
+
+/**
+ * The recipe's workspace relation when it is valid for `siteOrigin`: its `parent` is the site's
+ * registrable domain. Undefined otherwise, and every workspace step is then refused.
+ */
+export const workspaceRelation = (
+  recipe: { readonly workspace?: WorkspaceRelation | undefined },
+  siteOrigin: string,
+): WorkspaceRelation | undefined => {
+  const parent = recipe.workspace?.parent;
+  return parent !== undefined && parent === siteDomain(siteOrigin) ? { parent } : undefined;
+};
+
+/** The recipe's sign-in origins that are cross-site provider origins of `siteOrigin`. */
+export const approvedSignInOrigins = (
+  recipe: { readonly signInOrigins?: readonly string[] | undefined },
+  siteOrigin: string,
+): readonly string[] => (recipe.signInOrigins ?? []).filter((origin) => providerOrigin(siteOrigin, origin));
+
+/** A login's pinned workspace origin when it passes `workspaceHost` under a valid relation. */
+export const pinnedWorkspaceOrigin = (
+  siteOrigin: string,
+  relation: WorkspaceRelation | undefined,
+  pinned: string | undefined,
+): string | undefined =>
+  relation !== undefined && pinned !== undefined && workspaceHost(siteOrigin, relation.parent, pinned)
+    ? pinned
+    : undefined;
+
+/** A recorded screen: an exact page, or a workspace screen's path. */
+export interface RecordedScreen {
+  readonly origin?: "workspace" | undefined;
+  readonly page: string;
+}
+
+/**
+ * The origin a recorded screen runs on: an exact page's own origin, or for a workspace screen the
+ * replay's workspace origin, undefined while it has none.
+ */
+export const recordedScreenOrigin = (
+  step: RecordedScreen,
+  workspaceOrigin: string | undefined,
+): string | undefined =>
+  step.origin === "workspace" ? workspaceOrigin : (URL.parse(step.page)?.origin ?? undefined);
+
+/**
+ * A recorded screen's page as a live page is compared with it, origin and path: a workspace
+ * screen's path on the replay's workspace origin, or the path alone while it has none, which
+ * matches no live page.
+ */
+export const recordedScreenPage = (step: RecordedScreen, workspaceOrigin: string | undefined) =>
+  step.origin === "workspace" && workspaceOrigin !== undefined
+    ? `${workspaceOrigin}${step.page}`
+    : step.page;
+
+/** What one replay knows when it judges a live screen's origin. */
+export interface ScreenOriginContext {
+  readonly siteOrigin: string;
+  /** The recipe's relation, valid for the site (`workspaceRelation`). */
+  readonly relation: WorkspaceRelation | undefined;
+  /** The login's pinned workspace origin, valid for the site (`pinnedWorkspaceOrigin`). */
+  readonly pinned: string | undefined;
+  /** The workspace origin this replay already admitted, if any. */
+  readonly candidate: string | undefined;
+  /**
+   * Whether this replay already submitted the login's identifier on an exact-origin screen (the
+   * shared host or a provider), after which only the site navigated.
+   */
+  readonly identifierSent: boolean;
+}
+
+/** Why a live screen's origin was refused. */
+export type ScreenOriginRefusal = "workspace_unverified" | "screen_origin_changed";
+
+/**
+ * A live screen's origin admitted for a recorded screen, with the workspace origin it taught this
+ * replay when it is a new one, or refused. `sibling` marks a refused origin on the site's own
+ * registrable domain, which a host reports by the public role `unrecognized_sibling` and keeps the
+ * origin itself private.
+ */
+export type ScreenOriginAdmission =
+  | { readonly admitted: true; readonly learned?: string }
+  | { readonly admitted: false; readonly reason: ScreenOriginRefusal; readonly sibling: boolean };
+
+/**
+ * Pending maintainer confirmation: an identifier-first sign-in may continue on a workspace host
+ * the site sent it to once this replay submitted the login's identifier on an exact-origin screen.
+ * Change this one predicate to tighten or drop the rule.
+ */
+const identifierAnchorAdmits = (context: ScreenOriginContext) => context.identifierSent;
+
+const refused = (
+  context: ScreenOriginContext,
+  live: string,
+  reason: ScreenOriginRefusal,
+): ScreenOriginAdmission => {
+  const url = URL.parse(live);
+  return { admitted: false, reason, sibling: url !== null && sameSite(context.siteOrigin, url) };
+};
+
+/**
+ * Whether a live screen on `live` (an origin) may run the recorded screen `step`.
+ *
+ * An exact recorded screen runs on its own origin, or on the login's pinned workspace when the
+ * recipe has a relation (the shared sign-in sent this login to its own workspace). A workspace
+ * host seen there without a pinned one is `workspace_unverified`: this login sent nothing that
+ * explains it, so it may be leftover cookies or a link.
+ *
+ * A workspace screen runs on the replay's workspace origin (the one it admitted, else the pinned
+ * one), or on a new workspace host once the identifier anchor admits it, which this replay then
+ * learns. Any other workspace host is `workspace_unverified`. Everything else is
+ * `screen_origin_changed`.
+ */
+export const admitScreenOrigin = (
+  context: ScreenOriginContext,
+  step: RecordedScreen,
+  live: string,
+): ScreenOriginAdmission => {
+  const { relation, pinned, candidate, siteOrigin } = context;
+  const sibling = relation !== undefined && workspaceHost(siteOrigin, relation.parent, live);
+  if (step.origin !== "workspace") {
+    if (live === recordedScreenOrigin(step, undefined)) return { admitted: true };
+    if (relation !== undefined && pinned !== undefined && live === pinned) return { admitted: true };
+    if (sibling && pinned === undefined) return refused(context, live, "workspace_unverified");
+    return refused(context, live, "screen_origin_changed");
+  }
+  if (relation === undefined) return refused(context, live, "screen_origin_changed");
+  if (live === (candidate ?? pinned)) return { admitted: true };
+  if (sibling && identifierAnchorAdmits(context)) return { admitted: true, learned: live };
+  if (sibling) return refused(context, live, "workspace_unverified");
+  return refused(context, live, "screen_origin_changed");
+};
+
+/**
+ * Where the signed-in check opens the recipe's `openPath`. Without a relation, the site origin.
+ * With one: the workspace origin this replay admitted; else the current page's origin when it is a
+ * workspace host and there is no pinned origin, it is the pinned one, or this replay sent the
+ * login's credentials on an exact-origin screen; else the pinned origin; else the site origin.
+ */
+export const signedInCheckOrigin = (input: {
+  readonly siteOrigin: string;
+  readonly relation: WorkspaceRelation | undefined;
+  readonly pinned: string | undefined;
+  readonly candidate: string | undefined;
+  /** The current page's origin, if known. */
+  readonly current: string | undefined;
+  /** Whether this replay sent the login's password or code on an exact-origin screen. */
+  readonly credentialsSent: boolean;
+}): string => {
+  const { siteOrigin, relation, pinned, candidate, current } = input;
+  if (relation === undefined) return siteOrigin;
+  if (candidate !== undefined) return candidate;
+  if (
+    current !== undefined &&
+    workspaceHost(siteOrigin, relation.parent, current) &&
+    (pinned === undefined || current === pinned || input.credentialsSent)
+  )
+    return current;
+  return pinned ?? siteOrigin;
+};
+
+/**
+ * The workspace origin a verified sign-in pins to its login: the signed-in check's origin when the
+ * recipe has a valid relation and that origin is a workspace host other than the site's.
+ */
+export const workspaceToPin = (
+  siteOrigin: string,
+  relation: WorkspaceRelation | undefined,
+  checkOrigin: string,
+): string | undefined =>
+  relation !== undefined &&
+  checkOrigin !== siteOrigin &&
+  workspaceHost(siteOrigin, relation.parent, checkOrigin)
+    ? checkOrigin
+    : undefined;

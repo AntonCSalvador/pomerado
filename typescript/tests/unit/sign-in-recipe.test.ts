@@ -9,6 +9,7 @@ import {
   openSignInRecord,
   recordStep,
   signInRecipe,
+  signInRecipeText,
   type SignInRequest,
 } from "../../src/destinations/sign-in-recipe.js";
 
@@ -87,12 +88,26 @@ describe("decodeSignInRecipe", () => {
         signedIn,
       },
     ],
+    [
+      "version 4 with a workspace step and an approved identity provider",
+      {
+        version: 4,
+        workspace: { parent: "example.com" },
+        signInOrigins: ["https://id.example.net"],
+        steps: [
+          { ...steps[0], page: "https://app.example.com/login" },
+          { origin: "workspace", ...steps[1], page: "/login/password" },
+          { page: "https://id.example.net/signin", fields: [], submit: "#continue" },
+        ],
+        signedIn: { selector: "#account-menu", openPath: "/settings" },
+      },
+    ],
   ])("reads %s", (_name, recipe) => {
     expect(decodeSignInRecipe(JSON.stringify(recipe))).toEqual(recipe);
   });
 
   it("refuses a version it does not know, so a run never drops what that version adds", () => {
-    expect(decodeSignInRecipe(JSON.stringify({ version: 4, steps, signedIn }))).toBe(
+    expect(decodeSignInRecipe(JSON.stringify({ version: 5, steps, signedIn }))).toBe(
       "unknown_version",
     );
   });
@@ -115,6 +130,52 @@ describe("decodeSignInRecipe", () => {
         signedIn,
       }),
     ],
+    [
+      "a version 4 workspace step whose page names a host",
+      JSON.stringify({
+        version: 4,
+        workspace: { parent: "example.com" },
+        steps: [{ origin: "workspace", page: "https://acme.example.com/login", fields: [] }],
+        signedIn,
+      }),
+    ],
+    [
+      "a version 4 workspace step whose page is protocol-relative",
+      JSON.stringify({
+        version: 4,
+        workspace: { parent: "example.com" },
+        steps: [{ origin: "workspace", page: "//acme.example.com/login", fields: [] }],
+        signedIn,
+      }),
+    ],
+    [
+      "a version 4 workspace step without the recipe's workspace",
+      JSON.stringify({
+        version: 4,
+        signInOrigins: ["https://id.example.net"],
+        steps: [{ origin: "workspace", page: "/login", fields: [] }],
+        signedIn,
+      }),
+    ],
+    [
+      "a version 4 exact step whose page is a path",
+      JSON.stringify({ version: 4, workspace: { parent: "example.com" }, steps: [{ page: "/login", fields: [] }], signedIn }),
+    ],
+    [
+      "a version 4 parent that is not a lower-case host name",
+      JSON.stringify({ version: 4, workspace: { parent: "Example.com" }, steps, signedIn }),
+    ],
+    ...[
+      ["a sign-in origin with a path", ["https://id.example.net/signin"]],
+      ["an http sign-in origin", ["http://id.example.net"]],
+      ["a sign-in origin with user info", ["https://user@id.example.net"]],
+      ["a repeated sign-in origin", ["https://id.example.net", "https://id.example.net"]],
+      ["no sign-in origin in the list", []],
+      ["five sign-in origins", [1, 2, 3, 4, 5].map((n) => `https://id${n}.example.net`)],
+    ].map(([name, signInOrigins]) => [
+      `a version 4 recipe with ${String(name)}`,
+      JSON.stringify({ version: 4, signInOrigins, steps, signedIn }),
+    ]),
   ])("refuses %s as invalid", (_name, text) => {
     expect(decodeSignInRecipe(text)).toBe("invalid");
   });
@@ -185,6 +246,36 @@ describe("signInRecipe", () => {
         signedIn,
       ).version,
     ).toBe(1);
+  });
+
+  it("writes version 4 only for a workspace step, a workspace relation or a sign-in origin", () => {
+    const shared = { ...recorded, page: "https://app.example.com/login" };
+    const workspace = {
+      origin: "workspace" as const,
+      page: "/login/password",
+      fields: [{ selector: "#password", slot: "password" as const }],
+      submit: "#sign-in",
+    };
+    const relation = { workspace: { parent: "example.com" } };
+    expect(signInRecipe([shared], signedIn, {}).version).toBe(1);
+    expect(signInRecipe([shared], signedIn, { signInOrigins: [] }).version).toBe(1);
+    expect(signInRecipe([shared, workspace], signedIn, relation).version).toBe(4);
+    expect(signInRecipe([shared], signedIn, { signInOrigins: ["https://id.example.net"] }).version).toBe(4);
+    const recipe = signInRecipe([shared, workspace], signedIn, {
+      ...relation,
+      signInOrigins: ["https://id.example.net"],
+    });
+    const text = signInRecipeText(recipe);
+    expect(decodeSignInRecipe(text)).toEqual(recipe);
+    // The relation names the site's registrable domain and a path, never a workspace host.
+    expect(Object.keys(JSON.parse(text) as object)).toEqual([
+      "version",
+      "workspace",
+      "signInOrigins",
+      "steps",
+      "signedIn",
+    ]);
+    expect(Object.keys((JSON.parse(text) as { steps: object[] }).steps[1] ?? {})[0]).toBe("origin");
   });
 
   it("holds no value, question text, label or after-submit control", () => {
