@@ -134,6 +134,13 @@ const readCall = (path: string, callId = `read_${path}`): ModelResponse["output"
   status: "completed",
   arguments: JSON.stringify({ path, offset: 0, match: null }),
 });
+const searchCall = (path: string, match: string): ModelResponse["output"][number] => ({
+  type: "function_call",
+  callId: `search_${path}`,
+  name: "read_source",
+  status: "completed",
+  arguments: JSON.stringify({ path, offset: 0, match }),
+});
 const compaction: ModelResponse["output"][number] = {
   type: "compaction",
   id: "cmp_publication",
@@ -255,6 +262,22 @@ const fileIn = (delta: typeof Delta.Type, path: string) => {
 };
 
 describe("a publication reviewed again in the same build", () => {
+  it("does not count a file Guardian only searched as read in a later round", async () => {
+    const requests = recorded([
+      [readCall(toolPath), searchCall(helperPath, "export"), readCall(definitionPath)],
+      [message(deny)],
+      [readCall(toolPath, "read_tool_again")],
+      [message(allow)],
+    ]);
+    const guardian = makeGuardian(reviewer(), undefined, {});
+    await Effect.runPromise(guardian.review(pendingFor(roundOne), reader(roundOne)));
+    await Effect.runPromise(guardian.review(pendingFor(roundTwo), reader(roundTwo)));
+    // The search showed only slices around each match, so the helper is judged as in a first
+    // review; the definition Guardian read whole changed, and is diffed as before.
+    expect(fileIn(deltaOf(requests[2]), helperPath).status).toBe("unchanged_unread");
+    expect(fileIn(deltaOf(requests[2]), definitionPath).status).toBe("changed");
+  });
+
   it("sends the prior decision and only what changed, and a first round as before", async () => {
     const requests = recorded([
       [readCall(toolPath), readCall(helperPath), readCall(definitionPath)],

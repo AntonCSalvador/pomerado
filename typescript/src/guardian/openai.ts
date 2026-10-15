@@ -384,7 +384,7 @@ const reviewerWithPolicy = (policy: string, options: GuardianModelOptions): Revi
                 Effect.runPromise(
                   args.match === undefined || args.match === null || args.match.trim() === ""
                     ? turn.readSource(args.path, args.offset)
-                    : sourceMatches(turn.readSource, args.path, args.match),
+                    : sourceMatches(turn.searchSource ?? turn.readSource, args.path, args.match),
                   { signal: reviewSignal },
                 );
               const observation = diagnostics
