@@ -30,8 +30,8 @@ export default defineOperation(
       timeout_sec: 60,
       code: `
         ${waitCode}
-        const query = ${JSON.stringify(input.query)};
-        const key = ${JSON.stringify(input.key)};
+        const query = ${JSON.stringify(input.query.trim())};
+        const key = ${JSON.stringify(input.key.trim())};
         // Locators are strict: two matching dialogs, inputs or options throw instead of guessing.
         // A dialog that never opens fails once the page stops progressing, not after a fixed wait.
         const dialog = page.getByRole("dialog", { name: "Catalog item picker", exact: true });

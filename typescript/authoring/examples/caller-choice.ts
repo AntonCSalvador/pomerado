@@ -59,7 +59,7 @@ export default defineOperation(
     const read = await kernel.browsers.playwright.execute(sessionId, {
       timeout_sec: 60,
       code: `
-        const flight = ${JSON.stringify(input.flight)};
+        const flight = ${JSON.stringify(input.flight.trim())};
         // On the site: any https host on the host's site domain, else the site origin alone.
         const siteDomain = ${JSON.stringify(siteDomain ?? null)};
         const onSite = (url) => siteDomain === null ? url.origin === ${JSON.stringify(siteOrigin)}

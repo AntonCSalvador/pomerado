@@ -129,7 +129,7 @@ ${readPageCode(count)}`,
     const search = (count: number) =>
       run(
         `${navigate(siteOrigin)}
-await page.locator("#q").fill(${JSON.stringify(input.query)}, { timeout: waitLimits.action });`,
+await page.locator("#q").fill(${JSON.stringify(input.query.trim())}, { timeout: waitLimits.action });`,
         `() => page.locator("#go").click({ timeout: waitLimits.action })`,
         count,
       );

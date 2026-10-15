@@ -858,7 +858,11 @@ const declaredFields = (root: unknown): DeclaredField[] => {
   return fields;
 };
 
-/** Plain words, which a free-text pattern accepts and a format's pattern does not. */
+/**
+ * Plain words, which a free-text pattern accepts and a format's pattern does not. The test misses
+ * a limited-charset pattern that still accepts plain words, such as letters and spaces only; that
+ * is acceptable, since the check is advisory.
+ */
 const freeText = "plain words";
 /** Text a person would read as nothing: empty, or whitespace alone. */
 const blankTexts = ["", " ", "\t", "\n"];

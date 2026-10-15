@@ -58,8 +58,8 @@ export default defineOperation(
         const siteDomain = ${JSON.stringify(siteDomain ?? null)};
         const onSite = (url) => siteDomain === null ? url.origin === ${JSON.stringify(siteOrigin)}
           : url.protocol === "https:" && (url.hostname === siteDomain || url.hostname.endsWith("." + siteDomain));
-        const title = ${JSON.stringify(input.title)};
-        const assignee = ${JSON.stringify(input.assignee)};
+        const title = ${JSON.stringify(input.title.trim())};
+        const assignee = ${JSON.stringify(input.assignee.trim())};
         const callDeadline = Date.now() + ${timeoutSec * 1_000 - callReserveMs};
         const timeLeft = () => Math.floor(callDeadline - Date.now());
         const actionTimeout = (maximum) => {
