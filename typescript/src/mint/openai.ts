@@ -60,6 +60,34 @@ const runtimeRecordUnavailable = (observer: ModelObserver | undefined) =>
  * a row another continuation prompt only spends the attempt's budget. */
 const finalsWithoutToolLimit = 3;
 
+/**
+ * The function calls of one response that come after its first edit. The SDK runs a response's
+ * function calls before its native edits, so each of these is held until the edits land, and then
+ * reads and runs what they wrote.
+ */
+const callsAfterEdit = (output: ModelResponse["output"]): string[] => {
+  const edit = output.findIndex((item) => item.type === "apply_patch_call");
+  return edit < 0
+    ? []
+    : output
+        .slice(edit + 1)
+        .flatMap((item) => (item.type === "function_call" ? [item.callId] : []));
+};
+
+/**
+ * Whether the SDK holds this call because it cannot read its arguments as an object, which it does
+ * for every tool whose approval depends on the call. Released, the call gets its parse error as
+ * it did before any tool had such a policy.
+ */
+const unreadableArguments = (text: string) => {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed !== "object" || parsed === null || Array.isArray(parsed);
+  } catch {
+    return true;
+  }
+};
+
 const continuationInstruction = `The host has neither published this build nor recorded a blocking outcome. Your final text did not complete the task. Continue from this same history and workspace. If the latest execute receipt is review_unavailable with retryable:true and reviewDispatch not_sent, resubmit the same execution for fresh review without changing source. If the latest finish_build, request_input or mint_update response is review_unavailable with retryable:true, submit that same call again. Otherwise diagnose actionable source or semantic errors, repair current source, and use finish_build only against a retained execution receipt that supports the requested outcome. Ask with request_input only as the instructions' try-hard-then-ask rule allows. Preserve all prior effects and claims. Another purposeful bounded example read requires explicit host repeatableRead:true and fresh Guardian review within the same input/account after confirmed prior executor stop. Otherwise never rerun a claimed example. Never replay a possibly committed write; a write session's next act step continues its claim and is not a replay. A failed authenticate is retried with authenticate once its cause is fixed, as its result says. If the task is impossible as asked, because the site does not offer it, or Guardian or the owner refused it in this attempt with no way past, end with report_blocked instead of final text. A publication denial that names a correction or missing evidence is feedback to fix, never a refusal. Final text with no tool call ${finalsWithoutToolLimit} times in a row ends this attempt without publication. This message grants no new authority.`;
 
 /** The continuation prompt, with how close the repeated-final cap is. */
@@ -445,6 +473,29 @@ export const makeOpenAIMinter = (
                       );
                     },
                   };
+            /** Calls held until their response's edits land; the run loop releases them. */
+            const heldForEdit = new Set<string>();
+            const afterEdits = <
+              T extends {
+                readonly needsApproval: (
+                  context: never,
+                  input: never,
+                  callId?: string,
+                ) => Promise<boolean>;
+              },
+            >(
+              entry: T,
+            ): T => {
+              const own = entry.needsApproval as (
+                context: unknown,
+                input: unknown,
+                callId?: string,
+              ) => Promise<boolean>;
+              const needsApproval = async (context: unknown, input: unknown, callId?: string) =>
+                (callId !== undefined && heldForEdit.has(callId)) ||
+                (await own(context, input, callId));
+              return { ...entry, needsApproval: needsApproval as T["needsApproval"] };
+            };
             /**
              * Awaits the call record before dispatch and the result record before returning. A
              * file read names the path it reads; one file of a several-file call also names its
@@ -540,7 +591,7 @@ export const makeOpenAIMinter = (
                     ? { ...entry, editor: traceEditor(entry.editor) }
                     : entry.type !== "function"
                       ? entry
-                      : {
+                      : afterEdits({
                           ...entry,
                           invoke: async (...args: Parameters<typeof entry.invoke>) => {
                             try {
@@ -561,7 +612,7 @@ export const makeOpenAIMinter = (
                               );
                             }
                           },
-                        },
+                        }),
                 )
                 .map((entry) => (entry.type === "function" ? recoverFunction(entry) : entry));
             const readFailureInstruction = (error: unknown) =>
@@ -688,7 +739,7 @@ export const makeOpenAIMinter = (
               : "trusted host credentials";
             const executeTool = hostTool(
               "execute",
-              `Review then run authored code using host-bound input and the selected execution/test scaffold. For authenticated work, use explore/liveBrowser to discover the public login controls, then authenticate/liveBrowser for ${signInDescription} (when this invocation has no login yet, the host signs in with the saved login for the site, asking the caller which one when several could, or asks the caller for a login, in the same call); business work waits for a successful sign-in. fixtureRefs contains host-published capture paths: savedHTTP response bodies or a session capture.json to replay through SiteHttp, or savedDOM first a DOM snapshot then selected asset response bodies; never an input or operation reference; consult the workspace README's reference sections for available facilities. Reads explore, then run one example; when the host-bound input is empty ({}), pass the tool's input you wrote from the request and the owner's answers as exampleInput (JSON text), and the example runs it. ${liveTestsSentence} It tests src/tool-http.mjs on the same inputs too. A signed-in read runs no test on an input you choose: its example proves the tool, and it checks src/tool-http.mjs once with the caller's input. Run the example last, after your last edit. Writes perform the action once as act steps after sign-in, the first of which claims the write; when the host-bound input is empty, an act step passes exampleInput the same way, and each act step that passes it runs it. A write's act session is its one run; a write build runs no tests beyond it, except one savedHTTP replay of the session for its HTTP version. intent states what this execution should establish; it never authorizes the execution.`,
+              `Review then run authored code using host-bound input and the selected execution/test scaffold. For authenticated work, use explore/liveBrowser to discover the public login controls, then authenticate/liveBrowser for ${signInDescription} (when this invocation has no login yet, the host signs in with the saved login for the site, asking the caller which one when several could, or asks the caller for a login, in the same call); business work waits for a successful sign-in. fixtureRefs contains host-published capture paths: savedHTTP response bodies or a session capture.json to replay through SiteHttp, or savedDOM first a DOM snapshot then selected asset response bodies; never an input or operation reference; consult the workspace README's reference sections for available facilities. Reads explore, then run one example; when the host-bound input is empty ({}), pass the tool's input you wrote from the request and the owner's answers as exampleInput (JSON text), and the example runs it. ${liveTestsSentence} It tests src/tool-http.mjs on the same inputs too. A signed-in read runs no test on an input you choose: its example proves the tool, and it checks src/tool-http.mjs once with the caller's input. Run the example last, after your last edit. Writes perform the action once as act steps after sign-in, the first of which claims the write; when the host-bound input is empty, an act step passes exampleInput the same way, and each act step that passes it runs it. A write's act session is its one run; a write build runs no tests beyond it, except one savedHTTP replay of the session for its HTTP version. intent states what this execution should establish; it never authorizes the execution. Prefer sending a step's apply_patch and the execute that runs it in one response: the host applies the edit before it reviews and runs the step.`,
               "Execution did not succeed. Diagnose the root cause and retained evidence. Correct request/source errors within existing authority; preserve prior effects. Another example read requires explicit host repeatableRead:true; never replay a nonrepeatable example or a write that may have committed. After a failed authenticate, fix its cause and call authenticate again.",
               (request) => turn.actions.execute(request),
             );
@@ -847,8 +898,10 @@ export const makeOpenAIMinter = (
               // summary is recorded per response. Reasoning from earlier turns stays rendered
               // after a continuation or host notice, so the cached prompt is never rewritten
               // from the first earlier reasoning item; the applied context is recorded per call.
+              // A build turn may send a step's edit and the execute that runs it in one response;
+              // the effect question turn asks one question.
               modelSettings: withReasoningContinuity({
-                parallelToolCalls: false,
+                parallelToolCalls: !turn.effectQuestion,
                 reasoning: { effort: reasoningEffort, context: "all_turns" },
               }),
               // The effect question turn gets no filesystem, shell or skill tools. Its only
@@ -876,7 +929,7 @@ export const makeOpenAIMinter = (
                     ...(checkSignedInMarker === undefined ? [] : [checkSignedInMarker]),
                     ...(liveTests === undefined ? [] : [liveTests]),
                   ]
-              ).map((entry) => recoverFunction(entry)),
+              ).map((entry) => afterEdits(recoverFunction(entry))),
               toolUseBehavior: () =>
                 turn.isComplete()
                   ? {
@@ -889,6 +942,8 @@ export const makeOpenAIMinter = (
             const runner = new Runner({
               tracingDisabled: true,
               traceIncludeSensitiveData: false,
+              // A response's function calls run one at a time, in the model's order.
+              toolExecution: { maxFunctionToolConcurrency: 1 },
               ...(modelProvider ? { modelProvider } : {}),
             });
             let modelCalls = turn.recovery?.initial?.modelCalls ?? 0;
@@ -1024,7 +1079,11 @@ export const makeOpenAIMinter = (
                       modelCalls++;
                       return turn.runTool(respond);
                     };
-                    if (recovery === undefined) return invoke();
+                    const noteCalls = (response: ModelResponse) => {
+                      for (const callId of callsAfterEdit(response.output)) heldForEdit.add(callId);
+                      return response;
+                    };
+                    if (recovery === undefined) return invoke().then(noteCalls);
                     return turn.runTool(
                       recovery.model(
                         () => {
@@ -1042,7 +1101,7 @@ export const makeOpenAIMinter = (
                           catch: sdkFailure,
                         }),
                       ),
-                    );
+                    ).then(noteCalls);
                   },
                 };
               },
@@ -1111,12 +1170,30 @@ export const makeOpenAIMinter = (
                   continue;
                 }
                 const result: SegmentResult = segment.value;
+                if (result.interruptions.length > 0 && !turn.isComplete()) {
+                  // Only the host's own holds pause a run: calls behind an edit, whose edits have
+                  // now landed, and calls whose arguments the SDK could not read. Resuming the
+                  // same state runs them with no model call, and its usage is counted once, below.
+                  const released = result.interruptions.every(
+                    (item) =>
+                      item.rawItem.type === "function_call" &&
+                      (heldForEdit.has(item.rawItem.callId) ||
+                        unreadableArguments(item.rawItem.arguments)),
+                  );
+                  if (!released) throw new MintFailure({ code: "Unavailable" });
+                  for (const item of result.interruptions) {
+                    if (item.rawItem.type === "function_call")
+                      heldForEdit.delete(item.rawItem.callId);
+                    result.state.approve(item);
+                  }
+                  input = result.state;
+                  continue;
+                }
                 totalUsage.add(result.runContext.usage);
                 if (turn.isComplete()) {
                   diagnostics?.completed(result.history, totalUsage);
                   return { history: result.history };
                 }
-                if (result.interruptions.length > 0) throw new MintFailure({ code: "Unavailable" });
                 finalsWithoutTool = result.newItems.some((item) => item.type === "tool_call_item")
                   ? 0
                   : finalsWithoutTool + 1;
