@@ -99,7 +99,7 @@ export const returnedRun = (declared: DeclaredEffect, result: LocalOperationOutp
     effect,
     output: "valid",
     tool_effect: revision.effect,
-    ...(refusal === undefined ? {} : { declared_refusal: refusal.reason }),
+    ...(refusal === undefined ? {} : { declared_refusal: true }),
   };
   const outcome = classifyRun(evidence);
   if (outcome === undefined) return Effect.succeed(result.output);

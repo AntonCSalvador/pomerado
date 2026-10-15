@@ -245,10 +245,10 @@ export interface RunEvidence {
   /** The run's own judgement that a step may have changed the website. */
   readonly possible_commit?: boolean | undefined;
   /**
-   * The reason code of a refusal the write returned as its output before committing, as
-   * `returnedRefusal` found it; its effect is then `rejected`.
+   * The write returned, before committing, a refusal its output schema declares, as
+   * `returnedRefusal` found it; its effect is then `rejected`, and its output says why.
    */
-  readonly declared_refusal?: string | undefined;
+  readonly declared_refusal?: boolean | undefined;
   /** The tool's or the site's own words, for a refused input or an input the page did not apply. */
   readonly refusal_reason?: string | undefined;
   /** The input a refusal named, when the tool named it. */
@@ -336,7 +336,7 @@ export const confirmedRun = (view: RunEvidence) =>
   (view.status === "completed" || view.status === "cleanup_pending") &&
   (view.effect === "verified" ||
     view.effect === "not_started" ||
-    (view.effect === "rejected" && view.declared_refusal !== undefined));
+    (view.effect === "rejected" && view.declared_refusal === true));
 
 /**
  * Whether a step may already have changed the website: the job says so, its effect is unsettled,

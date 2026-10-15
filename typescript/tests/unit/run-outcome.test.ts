@@ -491,7 +491,7 @@ describe("a refusal a write declares in its output", () => {
     const refusedRun = evidence({
       effect: "rejected",
       output: "valid",
-      declared_refusal: "over_price_limit",
+      declared_refusal: true,
     });
     expect(classifyRun(refusedRun)).toBeUndefined();
     expect(writeStatusOf(refusedRun)).toBe("not_applied");
