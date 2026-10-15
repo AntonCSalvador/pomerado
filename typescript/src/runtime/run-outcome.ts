@@ -155,8 +155,8 @@ const refusalBranchReasons = (branch: unknown): readonly string[] | undefined =>
 
 /**
  * Whether a branch that is not a refusal could still match an object whose `status` is `refused`:
- * any object branch, unless its `status` lists only other strings, or it has no `status` property
- * and admits no property it does not list.
+ * any object branch, unless its `status` lists only other strings, or it has no `status` property,
+ * no pattern properties, and admits no property it does not list.
  */
 const admitsRefused = (branch: unknown): boolean => {
   if (!isJsonRecord(branch)) return branch !== false;
@@ -164,7 +164,8 @@ const admitsRefused = (branch: unknown): boolean => {
   if (typeof type === "string" && type !== "object") return false;
   const properties = branch["properties"];
   const status = isJsonRecord(properties) ? properties["status"] : undefined;
-  if (status === undefined) return branch["additionalProperties"] !== false;
+  if (status === undefined)
+    return branch["additionalProperties"] !== false || branch["patternProperties"] !== undefined;
   return listedStrings(status)?.includes(refusedStatus) ?? true;
 };
 

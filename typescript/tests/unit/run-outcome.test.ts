@@ -491,6 +491,20 @@ describe("a refusal a write declares in its output", () => {
         ],
       },
     },
+    {
+      case: "another branch whose pattern properties admit a status",
+      schema: {
+        anyOf: [
+          {
+            type: "object",
+            properties: { orderNumber: { type: "string" } },
+            patternProperties: { ".*": { type: "string" } },
+            additionalProperties: false,
+          },
+          schemaOf(overLimit),
+        ],
+      },
+    },
     { case: "a reference that does not resolve", schema: { $ref: "#/$defs/Missing" } },
     { case: "no schema", schema: undefined },
   ])("declares none with $case", ({ schema }) => {
