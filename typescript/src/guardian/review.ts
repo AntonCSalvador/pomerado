@@ -27,6 +27,7 @@ import { randomUUID } from "node:crypto";
 import { Cause, Clock, Data, Duration, Effect, Option, Schema } from "effect";
 import type { ModelDiagnosticTiming } from "../models/model-diagnostic-timing.js";
 import type { RuntimeRecordInput } from "../models/model-runtime-record.js";
+import type { GuardianReasoningEffort } from "./model.js";
 import {
   cutToLimit,
   GuardianAction,
@@ -417,6 +418,8 @@ export interface GuardianUsage {
   readonly cacheWriteTokens: number;
   readonly outputTokens: number;
   readonly reasoningTokens: number;
+  /** The reasoning effort the review ran at; a host's own reviewer may leave it out. */
+  readonly reasoningEffort?: GuardianReasoningEffort;
 }
 
 /** What the host puts in view before the reviewer runs. */
