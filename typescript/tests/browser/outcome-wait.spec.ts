@@ -302,7 +302,7 @@ test("a filter whose slow answer ends while a look reads the old list returns th
 }) => {
   // The site answers after the 2 s window and redraws the list 50 ms later. The answer is held
   // until a look after the window has read the list from before the filter, and released as that
-  // look's last read ends, so the request ends while the look runs, before it is judged. The
+  // look's read of the list ends, so the request ends while the look runs, before it is judged. The
   // returning look's own changed count shows whether it returned the old list, whatever the page
   // shows by the time the rooms are read.
   const origin = "https://rooms.example.test";
@@ -336,7 +336,7 @@ test("a filter whose slow answer ends while a look reads the old list returns th
       const list = answer.getByRole("list", { name: "Rooms", exact: true });
       let clicked = Infinity;
       let changed;
-      // The list as the wait reads it, whose changed-text read comes last in each look.
+      // The list as the wait reads it, whose changed-text read is the list's last read in each look.
       const results = {
         count: () => list.count(),
         filter: (options) => {
@@ -464,6 +464,15 @@ const prerenderedBody = (options: string) => `
     results: answer.getByRole("list", { name: "Rooms", exact: true }),
   }, { action: () => page.getByRole("button", { name: "Pets allowed" }).click(), ${options} });
 `;
+
+test("an error hidden before the action and shown beside re-rendered results wins", async ({
+  page,
+}) => {
+  await prerendered(page, "error");
+  expect(await call(page, prerenderedBody("timeout: 3000, unchangedMs: 5000"))).toEqual({
+    result: "failed",
+  });
+});
 
 test("an empty state hidden before the action and shown by it answers at once", async ({
   page,
