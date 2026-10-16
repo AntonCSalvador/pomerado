@@ -79,30 +79,34 @@ export const quoteRange = (text: string, quote: string) => {
 const segments = (path: string) => sourcePath(path).split("/");
 
 /**
- * The indexed file a quoted finding's path names. A path may carry a fragment, such as a JSON
- * pointer into the file, or miss or add a leading directory: it names the non-empty indexed file
- * that shares the most trailing path segments with it, the file name at least, a current file
- * before a historical one. Undefined when no file shares even its name.
+ * The indexed file a quoted finding's path names. A path the index holds exactly, an empty file's
+ * included, names that file, and so does one whose part before a `#` it holds exactly, such as a
+ * file followed by a JSON pointer into it. Otherwise the path may miss or add a leading directory:
+ * it names the indexed file that shares the most trailing path segments with it, the file name at
+ * least, a current file before a historical one. Undefined when no file shares even its name, or
+ * when more than one shares as many, so the decision fails to decode and the review is told the
+ * exact paths.
  */
 const indexedPath = (scope: PublicationScope, written: string): string | undefined => {
-  const path = sourcePath(written.split("#")[0] ?? written);
-  const files = scope.files.filter((file) => file.byteLength > 0);
-  if (files.some((file) => file.path === path)) return path;
+  const exact = (path: string) =>
+    scope.files.find((file) => file.path === path || file.path === sourcePath(path))?.path;
+  const path = written.split("#")[0] ?? written;
+  const named = exact(written) ?? exact(path);
+  if (named !== undefined) return named;
   const wanted = segments(path).reverse();
-  let best: { path: string; shared: number; current: boolean } | undefined;
-  for (const file of files) {
-    const indexed = segments(file.path).reverse();
-    let shared = 0;
-    while (shared < wanted.length && wanted[shared] === indexed[shared]) shared++;
-    if (shared === 0) continue;
-    if (
-      best === undefined ||
-      shared > best.shared ||
-      (shared === best.shared && file.current && !best.current)
-    )
-      best = { path: file.path, shared, current: file.current };
-  }
-  return best?.path;
+  const shared = (indexed: string) => {
+    const reversed = segments(indexed).reverse();
+    let count = 0;
+    while (count < wanted.length && wanted[count] === reversed[count]) count++;
+    return count;
+  };
+  const scored = scope.files.map((file) => ({ file, shared: shared(file.path) }));
+  const most = Math.max(0, ...scored.map((entry) => entry.shared));
+  if (most === 0) return undefined;
+  const closest = scored.filter((entry) => entry.shared === most).map((entry) => entry.file);
+  const current = closest.filter((file) => file.current);
+  const candidates = current.length > 0 ? current : closest;
+  return candidates.length === 1 ? candidates[0]?.path : undefined;
 };
 
 /**

@@ -11,7 +11,9 @@ import {
   type PendingExecution,
   type ReviewRetry,
 } from "../../src/guardian/review.js";
+import { decodePublicationDecision } from "../../src/guardian/publication.js";
 import { makeSourceInspector } from "../../src/guardian/source.js";
+import { failureDetail } from "../../src/runtime/failure-detail.js";
 
 afterEach(() => {
   setDefaultModelProvider(new OpenAIProvider());
@@ -72,16 +74,18 @@ const pending: PendingExecution = {
     })),
   },
 };
-const sources = makeSourceInspector(
-  (path) =>
-    Effect.suspend(() => {
-      const text = files.get(path);
-      return text === undefined
-        ? Effect.fail(new ReviewFailure({ code: "SourceUnavailable" }))
-        : Effect.succeed(new TextEncoder().encode(text));
-    }),
-  (_path, bytes) => Effect.succeed(new TextDecoder().decode(bytes)),
-);
+const inspector = (texts: ReadonlyMap<string, string>) =>
+  makeSourceInspector(
+    (path) =>
+      Effect.suspend(() => {
+        const text = texts.get(path);
+        return text === undefined
+          ? Effect.fail(new ReviewFailure({ code: "SourceUnavailable" }))
+          : Effect.succeed(new TextEncoder().encode(text));
+      }),
+    (_path, bytes) => Effect.succeed(new TextDecoder().decode(bytes)),
+  );
+const sources = inspector(files);
 
 const message = (value: unknown): ModelResponse["output"][number] => ({
   type: "message",
@@ -197,6 +201,75 @@ describe("a publication finding whose path is not exactly an indexed one", () =>
   });
 });
 
+describe("a quoted finding's path that names no one indexed file", () => {
+  /** The host's own messages to the model in a request, after the review's first. */
+  const followUps = (request: ModelRequest | undefined) => {
+    const input = request?.input;
+    return (typeof input === "string" ? [] : (input ?? []))
+      .flatMap((item) =>
+        typeof item === "object" && "role" in item && item.role === "user"
+          ? [typeof item.content === "string" ? item.content : JSON.stringify(item.content)]
+          : [],
+      )
+      .slice(1);
+  };
+  const reviewIn = (texts: Readonly<Record<string, string>>, written: string, exact: string) => {
+    const indexed = new Map([[toolPath, toolSource], ...Object.entries(texts)]);
+    const scoped: PendingExecution = {
+      ...pending,
+      publication: {
+        files: [...indexed].map(([path, text]) => ({
+          path,
+          byteLength: Buffer.byteLength(text),
+          published: true,
+          current: !path.startsWith("executed/"),
+          owner: "minter" as const,
+        })),
+      },
+    };
+    const requests = recorded([
+      { output: [message(deny("export", written))] },
+      { output: [message(deny("export", exact))] },
+    ]);
+    const result = Effect.runPromise(makeGuardian(reviewer()).review(scoped, inspector(indexed)));
+    return { requests, result };
+  };
+
+  // Two files share as many trailing segments with the path, a file shares not even its name, and
+  // an empty indexed file is named exactly beside a historical file of the same name.
+  it.each([
+    {
+      texts: {
+        "operation/a/index.js": "export const a = 1;",
+        "operation/b/index.js": "export {};",
+      },
+      written: "index.js#/x",
+      exact: "operation/b/index.js",
+    },
+    { texts: {}, written: "operation/src/unrelated.mjs", exact: toolPath },
+    {
+      texts: { "operation/src/empty.mjs": "", "executed/src/empty.mjs": "export const e = 1;" },
+      written: "operation/src/empty.mjs",
+      exact: "executed/src/empty.mjs",
+    },
+  ])("gets the follow-up naming it, never a guessed file: $written", async (scenario) => {
+    const { requests, result } = reviewIn(scenario.texts, scenario.written, scenario.exact);
+    const { decision } = await result;
+    expect(decision).toMatchObject({ findings: [{ path: scenario.exact }] });
+    expect(requests).toHaveLength(2);
+    expect(followUps(requests[1])[0]).toContain(scenario.written);
+  });
+
+  it("matches an indexed file whose name holds a #", async () => {
+    const path = "operation/src/a#b.mjs";
+    const text = "// Synthetic\nexport const b = 2;";
+    const { requests, result } = reviewIn({ [path]: text }, path, toolPath);
+    const { decision } = await result;
+    expect(decision).toMatchObject({ findings: [{ path, ...byteRange(text, "export") }] });
+    expect(requests).toHaveLength(1);
+  });
+});
+
 describe("a publication decision that does not decode", () => {
   const quickRetry: ReviewRetry = { delays: ["1 millis"], budget: "1 minute" };
   const unknownPath = "operation/src/missing.mjs";
@@ -239,6 +312,38 @@ describe("a publication decision that does not decode", () => {
     for (const path of files.keys()) expect(followUp).toContain(path);
     expect(names.filter((name) => name === "guardian.started")).toHaveLength(1);
     expect(names).not.toContain("guardian.review_retried");
+  });
+
+  it("gets the follow-up for a host's own decoder's refusal too", async () => {
+    const refusal = "Synthetic host check: the rationale names no host marker.";
+    const requests = recorded([
+      { output: [message(deny(".catch(() => null)"))] },
+      { output: [message({ ...deny(".catch(() => null)"), rationale: "host-marker" })] },
+    ]);
+    const guardian = makeGuardian(
+      reviewer(),
+      undefined,
+      {},
+      {
+        decodePublication: (scope, raw) =>
+          decodePublicationDecision(scope, raw).pipe(
+            Effect.filterOrFail(
+              (decision) => decision.rationale === "host-marker",
+              () =>
+                new ReviewFailure({
+                  code: "InvalidDecision",
+                  failureDetail: failureDetail("guardian_dependency_failed", {
+                    error: new Error(refusal),
+                  }),
+                }),
+            ),
+          ),
+      },
+    );
+    const { decision } = await Effect.runPromise(guardian.review(pending, sources));
+    expect(decision).toMatchObject({ rationale: "host-marker" });
+    expect(requests).toHaveLength(2);
+    expect(followUps(requests[1])[0]).toContain(refusal);
   });
 
   it("ends the review when the answer to the follow-up does not decode either", async () => {

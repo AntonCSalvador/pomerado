@@ -93,7 +93,10 @@ export interface GuardianDiagnostics {
 export interface GuardianReviewOptions {
   /**
    * Decodes a publication decision in place of `decodePublicationDecision`, for a host that runs
-   * its own publication review.
+   * its own publication review. It must be pure and may run more than once per model output: the
+   * review also runs it, with no source reads, to decide whether an output needs the decode
+   * follow-up. Only an `InvalidDecision` it returns at once gets that follow-up; another code, or
+   * a decode that needs asynchronous work, gets none.
    */
   readonly decodePublication?: (
     scope: PublicationScope,
@@ -136,8 +139,10 @@ export class ReviewFailure extends Data.TaggedError("ReviewFailure")<{
   readonly code:
     | "Unavailable"
     /**
-     * The review's decision does not decode, still after the in-review correction that named the
-     * error. Reviewing the same input again repeats it, so it is never retried as an outage.
+     * The review's decision does not decode. After the in-review correction that named the error,
+     * it is never retried as an outage, since the model already saw why. A review that could get
+     * no correction, as a private host kind's or one whose reviewer sends no follow-up, is
+     * reviewed once more, since a fresh sample may decode.
      */
     | "InvalidDecision"
     /**
@@ -525,8 +530,9 @@ export interface ReviewRetry {
 
 /**
  * Production retry for Guardian outages: provider errors and a required source read that failed.
- * A review that ran out of turns, whose model call stalled or whose decision did not decode is not
- * an outage, and is not started again.
+ * A review that ran out of turns or whose model call stalled is not an outage, and is not started
+ * again. A decision that did not decode is reviewed once more only when its review got no
+ * correction.
  */
 export const guardianOutageRetry: ReviewRetry = {
   delays: ["2 seconds", "5 seconds", "15 seconds", "30 seconds", "60 seconds"],
@@ -542,6 +548,9 @@ const retriableOutage = (failure: ReviewFailure): boolean =>
   failure.reviewPhase !== "diagnostic_retention" &&
   failure.diagnosticRetentionReason === undefined &&
   (failure.code === "Unavailable" || failure.code === "SourceUnavailable");
+
+/** The most fresh reviews a run of undecodable decisions without a correction gets. */
+const uncorrectedDecodeRetries = 1;
 
 export interface Reviewer {
   readonly run: (turn: ReviewTurn) => Effect.Effect<unknown, ReviewFailure>;
@@ -701,6 +710,8 @@ export const makeGuardian = (
         Effect.asVoid,
       ));
   const session = continuity === undefined ? undefined : makeGuardianSession(continuity);
+  /** Decode failures whose review sent the decode follow-up: never reviewed again. */
+  const correctedDecodes = new WeakSet<ReviewFailure>();
   /** The latest publication round of a Guardian without a session, which keeps it here instead. */
   let ownPublicationRound: PublicationRound | undefined;
   const priorPublicationRound = () =>
@@ -753,6 +764,7 @@ export const makeGuardian = (
       // The budget counts the outage, from the first failure on, not the review before it, which
       // has no deadline and may run long.
       let outageStartedMs: number | undefined;
+      let decodeRetries = 0;
       for (let retries = 0; ; retries++) {
         // The failed attempt's review, so its retry interval is tied to it.
         let correlation: Parameters<ReviewAttempt["started"]>[0] | undefined;
@@ -772,7 +784,13 @@ export const makeGuardian = (
         const failedMs = yield* Clock.currentTimeMillis;
         outageStartedMs ??= failedMs;
         const outageMs = failedMs - outageStartedMs;
-        if (!retriableOutage(failure) || outageMs + waitMs > budgetMs) return yield* failure;
+        const decodeRetry =
+          failure.code === "InvalidDecision" &&
+          !correctedDecodes.has(failure) &&
+          decodeRetries < uncorrectedDecodeRetries;
+        if (!(retriableOutage(failure) || decodeRetry) || outageMs + waitMs > budgetMs)
+          return yield* failure;
+        if (decodeRetry) decodeRetries++;
         const startOffsetMs = performance.now();
         yield* bestEffort(
           diagnostics?.emit(
@@ -1227,7 +1245,13 @@ export const makeGuardian = (
             "InvalidOutcome",
           );
         // Output that is not a decision at all fails to decode as InvalidDecision.
-        const decision = yield* decode(decisionForKind(pending, raw));
+        const decision = yield* decode(decisionForKind(pending, raw)).pipe(
+          Effect.tapError((failure) =>
+            Effect.sync(() => {
+              if (decodeCorrected) correctedDecodes.add(failure);
+            }),
+          ),
+        );
         if (requireEntrypoint && decision.outcome === "allow" && entrypointReadAt !== epoch())
           return yield* new ReviewFailure({ code: "EntrypointNotRead" });
         yield* emit(

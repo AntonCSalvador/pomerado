@@ -109,11 +109,9 @@ it.each([
         diagnosticRetentionReason: "storage",
       }),
   ],
-  // Running out of turns, a model call that keeps stalling or a decision that does not decode
-  // (whose review already had its follow-up) is no outage: reviewing again would repeat the
-  // whole review's work.
+  // Running out of turns or a model call that keeps stalling is no outage: reviewing again would
+  // repeat the whole review's work.
   ["a turn limit", () => new ReviewFailure({ code: "TurnLimitExceeded" })],
-  ["a decision that does not decode", () => new ReviewFailure({ code: "InvalidDecision" })],
   [
     "a stalled model call",
     () => new ReviewFailure({ code: "ModelCallStalled", reviewPhase: "review_computation" }),
@@ -126,6 +124,27 @@ it.each([
   expect(result).toMatchObject({ _tag: "Left", left: { code: failure().code } });
   expect(f.runs()).toBe(1);
 });
+
+// A reviewer that sends no follow-up gets one fresh review for a decision that does not decode,
+// since a fresh sample may decode, and no more.
+it.each([
+  [1, "Right"],
+  [2, "Left"],
+] as const)(
+  "reviews once more after %i undecodable decisions from a reviewer that sends no follow-up",
+  async (outages, tag) => {
+    const f = flaky(() => ({ outcome: "allow", rationale: "" }), outages, quickRetry);
+    const result = await Effect.runPromise(
+      Effect.either(makeGuardian(f.reviewer).review(pending, readSource)),
+    );
+    expect(result).toMatchObject(
+      tag === "Right"
+        ? { _tag: "Right", right: { decision: { outcome: "allow" } } }
+        : { _tag: "Left", left: { code: "InvalidDecision" } },
+    );
+    expect(f.runs()).toBe(2);
+  },
+);
 
 it("times each review attempt and ties the retry to the attempt that failed", async () => {
   let now = 100;
