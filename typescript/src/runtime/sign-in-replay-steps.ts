@@ -91,8 +91,9 @@ export interface SignInReplayBrowser<E> extends SignInBrowser<E> {
 
 /**
  * How a replay ended: `signed_in` once the host checked the recipe's marker after this run's
- * values went out, or `alreadySignedIn` when the session showed it signed in before any value was
- * sent; `unsent` when nothing reached the site; `unclear` when something may have reached it.
+ * values went out, or found the page it ended on can't tell (`markerCantTell`), or
+ * `alreadySignedIn` when the session showed the marker before any value was sent; `unsent` when
+ * nothing reached the site; `unclear` when something may have reached it.
  */
 export type SignInReplayOutcome =
   | { readonly outcome: "signed_in"; readonly alreadySignedIn: boolean }
@@ -140,6 +141,12 @@ export interface SignInReplayInput<E> {
   readonly site: string;
   readonly retry: ReplayRetryState;
   readonly timing: SignInReplayTiming;
+  /**
+   * Whether the sign-in may end signed in on a page that can't tell, as a read's may. Off by
+   * default: a write's, or one whose effect is unknown, counts only once its marker shows, since
+   * nothing checks the session again before a write commits.
+   */
+  readonly allowCantTell?: boolean;
 }
 
 /** The recipe's screens, as every version holds them. */

@@ -361,6 +361,11 @@ export type AutofillSignedInCheck =
         | "off_site"
         | "page_unavailable";
       readonly url?: string;
+      /**
+       * A password field of the sign-in's own screens shows too, on a page that failed for the
+       * marker first (`indicator_not_visible` or `path_mismatch`).
+       */
+      readonly passwordFieldVisible?: true;
       readonly failureDetail?: FailureDetail;
     };
 
@@ -659,10 +664,11 @@ export const checkAutofillSignedIn = (input: {
     const parsed = URL.parse(url);
     if (parsed === null || !sameSite(input.siteOrigin, parsed))
       return { signedIn: false as const, failed: "off_site" as const, url };
+    const form = passwordVisible ? { passwordFieldVisible: true as const } : {};
     if (visible === false)
-      return { signedIn: false as const, failed: "indicator_not_visible" as const, url };
+      return { signedIn: false as const, failed: "indicator_not_visible" as const, url, ...form };
     if (indicator.urlPath !== undefined && parsed.pathname !== indicator.urlPath)
-      return { signedIn: false as const, failed: "path_mismatch" as const, url };
+      return { signedIn: false as const, failed: "path_mismatch" as const, url, ...form };
     if (passwordVisible)
       return { signedIn: false as const, failed: "password_field_visible" as const, url };
     if (challengeFormVisible)

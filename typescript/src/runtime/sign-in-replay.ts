@@ -21,6 +21,7 @@ import {
   type SignInValueHooks,
 } from "../destinations/sign-in-recipe.js";
 import type { CredentialRejectedField, WebsiteCredentials } from "./authentication.js";
+import { markerCantTell } from "./session-sign-in.js";
 import { trustedUrl } from "./sign-in-origins.js";
 import {
   askOne,
@@ -165,11 +166,10 @@ const screenRejection = <E>(
   });
 
 /**
- * The sign-in check after this run's values went out: every identifier and password or code
- * field the replay filled was carried by a request the page sent, no rejection marker shows, and
- * the recipe's check passes.
+ * Whether this run's values went out cleanly: every identifier and password or code field the
+ * replay filled was carried by a request the page sent, and no rejection marker shows.
  */
-const verifySignIn = <E>(session: ReplaySession<E>) => (indicator: AutofillSignedIn) =>
+const sentCleanly = <E>(session: ReplaySession<E>) =>
   Effect.gen(function* () {
     yield* session.sent.settled;
     const required = session.progress.ran
@@ -177,8 +177,29 @@ const verifySignIn = <E>(session: ReplaySession<E>) => (indicator: AutofillSigne
       .filter((field) => isIdentifier(field.slot) || provesLogin(field.slot));
     if (required.some((field) => !session.record.submittedSlots.has(field.slot))) return false;
     const rejected = yield* session.observeRejections;
-    if (rejected === "unavailable" || rejected.length > 0) return false;
+    return rejected !== "unavailable" && rejected.length === 0;
+  });
+
+/** The sign-in check after this run's values went out cleanly: the recipe's check passes. */
+const verifySignIn = <E>(session: ReplaySession<E>) => (indicator: AutofillSignedIn) =>
+  Effect.gen(function* () {
+    if (!(yield* sentCleanly(session))) return false;
     return (yield* session.input.browser.confirm(indicator, session.steps, session.steps)).signedIn;
+  });
+
+/**
+ * Whether the replay, its values sent cleanly and no security question shown again, ended on a
+ * page that can't tell (`markerCantTell`), such as an account picker the site shows before the
+ * marker: it counts as signed in.
+ */
+const endedCantTell = <E>(session: ReplaySession<E>) =>
+  Effect.gen(function* () {
+    if (!(yield* sentCleanly(session))) return false;
+    const answers = new Set(["private_answer"] as const);
+    const ran = session.progress.ran;
+    if ((yield* shownAgain(session.input.browser, ran, answers, "private_answer")) !== undefined)
+      return false;
+    return markerCantTell(yield* session.checkHere, session.input.recipe);
   });
 
 const makeReplay = <E>(input: SignInReplayInput<E>) => {
@@ -202,6 +223,7 @@ const makeReplay = <E>(input: SignInReplayInput<E>) => {
     ),
     runStep: run,
     verify: verifySignIn(session),
+    endedCantTell: endedCantTell(session),
     correctExtras: extras,
     resolve,
     shownAgain: (slot: SecretSlot) =>
@@ -459,7 +481,8 @@ const alreadySignedIn = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
  * in: `private_answer_rejected` when the security question's screen shows again after its answer
  * went out, `password_rejected` when a request carried the password and the site showed its field
  * again, and the recipe's own failure for a password screen after a submit that may not have sent
- * it (`password_screen_again`) or any other failed check.
+ * it (`password_screen_again`) or any other failed check. A page that can't tell, with no
+ * password screen again, signs in when the sign-in allows it (`allowCantTell`, a read's).
  */
 const lastCheck = <E>(input: SignInReplayInput<E>, replay: Replay<E>, opened: boolean) =>
   Effect.gen(function* () {
@@ -469,7 +492,9 @@ const lastCheck = <E>(input: SignInReplayInput<E>, replay: Replay<E>, opened: bo
     if ((yield* replay.shownAgain("private_answer")) !== undefined)
       return session.outcome("private_answer_rejected");
     if ((yield* replay.shownAgain("password")) === undefined)
-      return session.outcome("sign_in_check_failed");
+      return input.allowCantTell === true && (yield* replay.endedCantTell)
+        ? ({ outcome: "signed_in", alreadySignedIn: false } as const)
+        : session.outcome("sign_in_check_failed");
     yield* session.sent.settled;
     const submitted = session.sent.seenSent("password");
     if (submitted) session.recordRejected(["password"]);
@@ -592,6 +617,8 @@ export const signInForRun = <E>(input: {
   /** The site the run is authorized for, which the entry page must be on. */
   readonly siteOrigin: string;
   readonly timing?: SignInReplayTiming;
+  /** Whether a page that can't tell signs it in, as a read's may (see `replaySignInRecipe`). */
+  readonly allowCantTell?: boolean;
 }): Effect.Effect<{ readonly alreadySignedIn: boolean }, E | SignInRunFailed> =>
   Effect.gen(function* () {
     const recipe = decodeSignInRecipe(JSON.stringify(input.recipe) ?? "");
@@ -622,6 +649,7 @@ export const signInForRun = <E>(input: {
           site: input.site,
           retry,
           timing: input.timing ?? defaultReplayTiming,
+          ...(input.allowCantTell === true ? { allowCantTell: true } : {}),
         }),
       );
       if (replayed.outcome === "signed_in") return { alreadySignedIn: replayed.alreadySignedIn };

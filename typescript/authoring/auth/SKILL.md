@@ -350,8 +350,7 @@ shows.
   showed the sign-in form, the site keeps its session only in page memory or session storage, and
   the host signs in automatically at each operation start; the marker must still be site-wide.
 
-The published tool records the check with its screens, and each run decides whether its sign-in
-worked by that check alone: a run whose check fails requests sign-in repair before its operation.
+The published tool records the check with its screens.
 
 ## A sign-in refusal found by operation code
 

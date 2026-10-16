@@ -58,6 +58,16 @@ interface SiteOptions {
   readonly usernameMarker?: boolean;
   /** The entry page fails to load. */
   readonly entryFails?: boolean;
+  /**
+   * Where the last screen lands: the account page (by default); a chooser the site shows before
+   * any page with the marker, as an account picker; the account page without a session, as a
+   * sign-in that failed quietly; or the code screen again with its field gone.
+   */
+  readonly landing?: "account" | "chooser" | "account_signed_out" | "code_spent";
+  /** The chooser's origin, the site's own by default. */
+  readonly chooserOrigin?: string;
+  /** The code screen's origin, the site's own by default. */
+  readonly codeOrigin?: string;
 }
 
 const pages = {
@@ -66,6 +76,7 @@ const pages = {
   code: ["#code", "#verify"],
   question: ["#question", "#answer", "#continue"],
   account: [] as string[],
+  chooser: ["#pick"],
 } as const;
 type Page = keyof typeof pages;
 
@@ -79,15 +90,34 @@ const fakeSite = (options: SiteOptions = {}) => {
     codeError: false,
     question: options.questions?.[0] ?? question,
     loads: 0,
+    codeSpent: false,
   };
   const fills: { readonly page: Page; readonly values: readonly string[] }[] = [];
   const opened: string[] = [];
   const listeners = new Set<(request: SignInRequest) => void>();
-  const pageOrigin = (page: Page) => (page === "login" ? (options.loginOrigin ?? origin) : origin);
-  const shows = (selector: string) => (pages[state.page] as readonly string[]).includes(selector);
+  const pageOrigin = (page: Page) =>
+    page === "login"
+      ? (options.loginOrigin ?? origin)
+      : page === "chooser"
+        ? (options.chooserOrigin ?? origin)
+        : page === "code"
+          ? (options.codeOrigin ?? origin)
+          : origin;
+  const shows = (selector: string) =>
+    !(state.page === "code" && state.codeSpent) &&
+    (pages[state.page] as readonly string[]).includes(selector);
   const navigate = (page: Page) => {
     state.page = page;
     state.question = options.questions?.[state.loads++] ?? state.question;
+  };
+  /** The sign-in's last screen went through. */
+  const land = () => {
+    if (options.landing === "code_spent") {
+      state.codeSpent = true;
+      return navigate("code");
+    }
+    state.signedIn = options.landing !== "account_signed_out";
+    navigate(options.landing === "chooser" ? "chooser" : "account");
   };
   const afterLogin = (): Page =>
     options.method ? "method" : options.code ? "code" : options.question ? "question" : "account";
@@ -152,19 +182,14 @@ const fakeSite = (options: SiteOptions = {}) => {
           const right = values[0] === account.username && values[1] === account.password;
           state.loginError = !right && options.marker === true;
           state.usernameError = values[0] !== account.username && options.usernameMarker === true;
-          if (right) navigate(afterLogin());
-          if (right && afterLogin() === "account") state.signedIn = true;
+          if (right && afterLogin() === "account") land();
+          else if (right) navigate(afterLogin());
         } else if (page === "method") navigate("code");
         else if (page === "code") {
           state.codeError = values[0] !== code;
-          if (!state.codeError) {
-            state.signedIn = true;
-            navigate("account");
-          }
-        } else if (page === "question" && values[0] === answer) {
-          state.signedIn = true;
-          navigate("account");
-        } else navigate(page);
+          if (!state.codeError) land();
+        } else if (page === "question" && values[0] === answer) land();
+        else navigate(page);
         return {
           outcome: "filled" as const,
           fields: step.fields.map((field) => ({ slot: field.slot, status: "filled" as const })),
@@ -175,10 +200,11 @@ const fakeSite = (options: SiteOptions = {}) => {
     confirm: (indicator) =>
       Effect.sync((): AutofillSignedInCheck => {
         if (indicator.openPath !== undefined) navigate("account");
-        const url = `${pageOrigin(state.page)}/${state.page}`;
-        return state.signedIn && state.page === "account"
-          ? { signedIn: true, url }
-          : { signedIn: false, failed: "indicator_not_visible", url };
+        const at = pageOrigin(state.page);
+        const url = `${at}/${state.page}`;
+        if (state.signedIn && state.page === "account") return { signedIn: true, url };
+        const onSite = new URL(at).hostname.endsWith(site);
+        return { signedIn: false, failed: onSite ? "indicator_not_visible" : "off_site", url };
       }),
     onRequest: (listener) => {
       listeners.add(listener);
@@ -253,6 +279,7 @@ const signIn = (
   fake: ReturnType<typeof fakeSite>,
   ask: ReturnType<typeof owner>["ask"],
   entryUrl = `${origin}/login`,
+  allowCantTell = true,
 ) => {
   const secrets = makeRunSecrets();
   return Effect.runPromise(
@@ -267,6 +294,7 @@ const signIn = (
         site,
         siteOrigin: origin,
         timing: { stepWaitMs: 60, pollMs: 2 },
+        ...(allowCantTell ? { allowCantTell } : {}),
       }),
     ),
   );
@@ -366,6 +394,82 @@ it("asks a recipe's method choice and clicks the recorded control of the method 
       { id: "option_1", label: "Authenticator app" },
     ],
   });
+});
+
+/** A code screen, on the site's own origin unless `at` says otherwise. */
+const codeScreenAt = (at = origin) => ({
+  page: `${at}/code`,
+  fields: [{ selector: "#code", slot: "code" as const }],
+  submit: "#verify",
+});
+
+it("signs in when the code lands on a chooser the site shows before any page with the marker", async () => {
+  const fake = fakeSite({ code: true, landing: "chooser" });
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(codeScreenAt()), fake, ask)).toEqual(
+    Either.right({ alreadySignedIn: false }),
+  );
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  // The sign-in types nothing on the chooser: the operation makes the pick.
+  expect(fake.fills.map(({ page }) => page)).toEqual(["login", "code"]);
+  expect(fake.state.page).toBe("chooser");
+});
+
+it("fails the sign-in check on a chooser unless the sign-in allows a page that can't tell, as only a read's does", async () => {
+  const fake = fakeSite({ code: true, landing: "chooser" });
+  expect(
+    await signIn(recipeOf(codeScreenAt()), fake, owner().ask, `${origin}/login`, false),
+  ).toEqual(Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "sign_in_check_failed" })));
+  expect(fake.state.page).toBe("chooser");
+});
+
+it("asks for a corrected password when the login screen shows again, then signs in on the chooser", async () => {
+  const fake = fakeSite({ code: true, landing: "chooser" });
+  const wrong = { ...account, password: "synthetic-wrong" };
+  const { ask, asked } = owner({ logins: [wrong, account] });
+  expect(await signIn(recipeOf(codeScreenAt()), fake, ask)).toEqual(
+    Either.right({ alreadySignedIn: false }),
+  );
+  expect(kinds(asked)).toEqual([
+    "credential:missing_credentials",
+    "credential:invalid_credentials",
+    "code",
+  ]);
+  expect(fake.fills.map(({ page }) => page)).toEqual(["login", "login", "code"]);
+});
+
+it("reads a marker that names a path as signed out on that path only", async () => {
+  const recipe: SignInRecipe = {
+    ...recipeOf(codeScreenAt()),
+    signedIn: { selector: "#account", urlPath: "/account" },
+  };
+  // Off its path, a chooser can't tell, and the sign-in goes on.
+  expect(await signIn(recipe, fakeSite({ code: true, landing: "chooser" }), owner().ask)).toEqual(
+    Either.right({ alreadySignedIn: false }),
+  );
+  // On its path, a missing marker is a sign-in that did not work.
+  expect(
+    await signIn(recipe, fakeSite({ code: true, landing: "account_signed_out" }), owner().ask),
+  ).toEqual(Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "sign_in_check_failed" })));
+});
+
+it("signs in on a chooser off the site, and fails where a recorded sign-in screen off the site shows again", async () => {
+  expect(
+    await signIn(
+      recipeOf(codeScreenAt()),
+      fakeSite({ code: true, landing: "chooser", chooserOrigin: "https://pick.example.org" }),
+      owner().ask,
+    ),
+  ).toEqual(Either.right({ alreadySignedIn: false }));
+  // The code screen sits on a sign-in origin off the site, and comes back without its field.
+  const identity = "https://id.example.org";
+  expect(
+    await signIn(
+      recipeOf(codeScreenAt(identity)),
+      fakeSite({ code: true, codeOrigin: identity, landing: "code_spent" }),
+      owner().ask,
+    ),
+  ).toEqual(Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "sign_in_check_failed" })));
 });
 
 const questionStep = {
