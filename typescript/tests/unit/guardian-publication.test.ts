@@ -435,6 +435,57 @@ describe("a publication decision", () => {
     );
   });
 
+  // The live test record is the host's copy of the minter's cases and their results on its
+  // source: the minter fixes a finding there through its cases or source, so it goes back as a
+  // correction, never as a host fault that ends the build.
+  it("decides a finding in the live test record as the minter's, never host_owned", async () => {
+    const record = JSON.stringify({ kind: "host_live_tests", cases: [], retired: [] });
+    const withRecord = new Map([...files, ["publication/tests.json", record]]);
+    const recordPending: PendingExecution = {
+      ...pending,
+      publication: {
+        files: [
+          ...(pending.publication?.files ?? []),
+          {
+            path: "publication/tests.json",
+            byteLength: Buffer.byteLength(record),
+            published: false,
+            current: true,
+            owner: "host",
+          },
+        ],
+      },
+    };
+    const findings = [
+      {
+        path: "publication/tests.json",
+        byteStart: 0,
+        byteEnd: 1,
+        category: "unsupported_claim",
+        explanation,
+      },
+    ];
+    const decideOnRecord = (reason: string) =>
+      Effect.runPromise(
+        Effect.either(
+          makeGuardian({
+            run: (turn) =>
+              inspectAll(turn).pipe(
+                Effect.as({ outcome: "deny", reason, rationale: "No case tests it", findings }),
+              ),
+          }).review(recordPending, sourcesOf(withRecord)),
+        ),
+      );
+    expect(await decideOnRecord("host_owned")).toMatchObject({
+      _tag: "Left",
+      left: { code: "InvalidDecision" },
+    });
+    expect(await decideOnRecord("evidence")).toMatchObject({
+      _tag: "Right",
+      right: { decision: { reason: "evidence", findings } },
+    });
+  });
+
   it("accepts a confirmation finding as a source correction", async () => {
     const findings = [definitionFinding("confirmation")];
     expect(await decide({ outcome: "deny", reason: "source_correction", findings })).toMatchObject({

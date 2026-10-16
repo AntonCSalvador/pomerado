@@ -7,7 +7,7 @@ import { defineHttpOperation, operationErrors, readJson } from "../../src/browse
 const contract = {
   name: "search_products",
   input: Schema.Struct({
-    query: Schema.NonEmptyString.annotations({ description: "Text to search products for" }),
+    query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({ description: "Text to search products for" }),
     sort: Schema.optional(
       Schema.String.annotations({ description: "How the site orders results, as it names it" }),
     ),
@@ -15,8 +15,8 @@ const contract = {
   output: Schema.Struct({
     products: Schema.Array(
       Schema.Struct({
-        id: Schema.NonEmptyString.annotations({ description: "The site's product ID" }),
-        title: Schema.String.annotations({ description: "Product name as the site lists it" }),
+        id: Schema.NonEmptyTrimmedString.annotations({ description: "The site's product ID" }),
+        title: Schema.NonEmptyTrimmedString.annotations({ description: "Product name as the site lists it" }),
         price_minor: Schema.Int.annotations({
           description: "Price in the currency's minor unit, such as cents",
         }),
@@ -31,7 +31,7 @@ const SearchResponse = Schema.Struct({
   data: Schema.Struct({
     items: Schema.Array(
       Schema.Struct({
-        product_id: Schema.NonEmptyString,
+        product_id: Schema.NonEmptyTrimmedString,
         name: Schema.String,
         price_cents: Schema.Int,
       }),
