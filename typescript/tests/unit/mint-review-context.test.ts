@@ -338,13 +338,13 @@ describe("observations", () => {
 describe("reviewFailureOf", () => {
   it("preserves finite review phase before any browser or executor dispatch", () => {
     const failure = reviewFailureOf(
-      new ReviewFailure({ code: "Unavailable", reviewPhase: "review_deadline" }),
+      new ReviewFailure({ code: "Unavailable", reviewPhase: "review_computation" }),
       "not_sent",
     );
     expect(failure).toMatchObject({
       code: "ReviewUnavailable",
       reviewFailure: "Unavailable",
-      reviewPhase: "review_deadline",
+      reviewPhase: "review_computation",
       reviewDispatch: "not_sent",
     });
     expect(failure).not.toHaveProperty("modelOutage");
