@@ -1019,6 +1019,8 @@ export type PublicationRequest = typeof PublicationRequest.Type;
 /**
  * How the minter ends a build its task makes impossible as asked:
  * - `site_lacks_capability`: the site does not offer what the task needs.
+ * - `site_declined`: the site offers what the task needs but declines this example's own facts,
+ *   such as an applicant it will not quote; the explanation names the reason the site gave.
  * - `policy`: Guardian denied or escalated an execution, or refused a publication for a reason no
  *   correction gets past (`publicationRefusalUnfixable`), in this attempt, and nothing within
  *   authority gets past it.
@@ -1034,6 +1036,7 @@ export const blockedExplanationLimit = 500;
 export const BuildBlocked = Schema.Struct({
   reason: Schema.Literal(
     "site_lacks_capability",
+    "site_declined",
     "policy",
     "owner_declined",
     "question_unanswered",
@@ -1051,6 +1054,7 @@ export const BuildBlocked = Schema.Struct({
 export const BlockedReport = Schema.Struct({
   reason: Schema.Literal(
     "site_lacks_capability",
+    "site_declined",
     "policy",
     "owner_declined",
     "question_unanswered",
@@ -1261,7 +1265,8 @@ export type PublicationDenial = typeof PublicationDenial.Type;
  * - `account_locked`: the site said the account is locked, suspended or disabled.
  * - `question_unanswered`: a question the build needed went unanswered.
  * - `owner_declined`: the owner said no to a step the build needs.
- * - `site_lacks_capability`, `policy`: the minter's blocked ending of the same name.
+ * - `site_lacks_capability`, `site_declined`, `policy`: the minter's blocked ending of the same
+ *   name.
  * - `host_unavailable`: the host, not the task, ended the build.
  */
 export const mintStopReasons = [
@@ -1273,6 +1278,7 @@ export const mintStopReasons = [
   "question_unanswered",
   "owner_declined",
   "site_lacks_capability",
+  "site_declined",
   "policy",
   "host_unavailable",
 ] as const;
@@ -1767,8 +1773,8 @@ const HarnessTerminal = Schema.Struct({
   hostFailure: Schema.optionalWith(Schema.Literal(...mintHostFailures), { exact: true }),
   // Optional, and dropped as an excess field by an older worker's decode, so a rollout's old and
   // new workers each restore the other's checkpoint, except a terminal whose blocked reason is
-  // one an older worker does not know (`owner_declined`, `question_unanswered`): that one does
-  // not decode there.
+  // one an older worker does not know (`owner_declined`, `question_unanswered`, `site_declined`):
+  // that one does not decode there.
   blocked: Schema.optionalWith(BuildBlockedOutcome, { exact: true }),
   // Optional, and dropped by an older worker's decode.
   stopReason: Schema.optionalWith(MintStopReason, { exact: true }),
