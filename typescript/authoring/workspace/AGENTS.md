@@ -520,6 +520,8 @@ never with final text, which the host treats as unfinished work:
   requested field, use it; when they do not, ask the user one focused question with
   `request_input`. Report absence only when the evidence shows the site lacks it, and never
   invent a value or substitute a different field.
+- `site_declined`: the site offers what the task needs but declines this example's own facts,
+  such as an applicant it will not quote. Name the reason the site gave in `explanation`.
 - `owner_declined`: the owner answered no to a `confirm` question, or declined to sign in, and
   the build needs that step.
 - `question_unanswered`: a question you asked came back `no_answer`, and the build cannot go on
