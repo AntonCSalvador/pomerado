@@ -280,7 +280,7 @@ test("a request the filter started that never ends delays the unchanged list, ne
 
 test("an already-settled page adds no extra delay", async ({ page }) => {
   const answeredAt = await filterOverNetwork(page, 1500, "same");
-  // With no action, the answer on the page counts at its confirming look, well inside the 2 s
+  // With no action, the answer on the page counts at its first look, well inside the 2 s
   // unchanged window.
   const settled = await call(
     page,
