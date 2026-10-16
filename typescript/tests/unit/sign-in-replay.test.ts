@@ -279,6 +279,7 @@ const signIn = (
   fake: ReturnType<typeof fakeSite>,
   ask: ReturnType<typeof owner>["ask"],
   entryUrl = `${origin}/login`,
+  markerRequired = false,
 ) => {
   const secrets = makeRunSecrets();
   return Effect.runPromise(
@@ -293,6 +294,7 @@ const signIn = (
         site,
         siteOrigin: origin,
         timing: { stepWaitMs: 60, pollMs: 2 },
+        ...(markerRequired ? { markerRequired } : {}),
       }),
     ),
   );
@@ -410,6 +412,14 @@ it("signs in when the code lands on a chooser the site shows before any page wit
   expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
   // The sign-in types nothing on the chooser: the operation makes the pick.
   expect(fake.fills.map(({ page }) => page)).toEqual(["login", "code"]);
+  expect(fake.state.page).toBe("chooser");
+});
+
+it("fails the sign-in check on a chooser when the sign-in needs its marker, as a write's does", async () => {
+  const fake = fakeSite({ code: true, landing: "chooser" });
+  expect(
+    await signIn(recipeOf(codeScreenAt()), fake, owner().ask, `${origin}/login`, true),
+  ).toEqual(Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "sign_in_check_failed" })));
   expect(fake.state.page).toBe("chooser");
 });
 

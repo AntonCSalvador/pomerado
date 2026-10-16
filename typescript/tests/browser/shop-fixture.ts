@@ -30,9 +30,9 @@ export const identityHost = "accounts.identity.test";
  * identifier screen's email to, as a marketing tag does. A browser maps it to the shop's server.
  */
 export const analyticsHost = "collect.analytics.test";
-/** An account the shop has locked: it answers 423 whatever the password. */
 /** The workspaces the account belongs to, which `workspaceChooser` offers after the sign-in. */
 export const shopWorkspaces = ["North Street", "Harbor"] as const;
+/** An account the shop has locked: it answers 423 whatever the password. */
 export const lockedShopAccount = {
   username: "grace@example.test",
   password: "locked-horse-battery-7",
@@ -87,7 +87,8 @@ interface ShopState extends StoreState {
   loginCode: boolean;
   /**
    * What the one-screen sign-in shows a signed-in session: `form` its form, as any session sees
-   * it, `account` a redirect to the account page, as many sites answer a signed-in visit.
+   * it, `account` a redirect to the account page, as many sites answer a signed-in visit (to the
+   * workspace picker while `workspaceChooser` is on).
    */
   signedInLogin: "form" | "account";
   /**
@@ -96,6 +97,11 @@ interface ShopState extends StoreState {
    * account nor a sign-in form, as an account or workspace picker does.
    */
   workspaceChooser: boolean;
+  /**
+   * Whether a signed-out visit to the orders or statements shows the sign-in form there, or only
+   * a "Please sign in" notice, which shows neither the marker nor a form.
+   */
+  signedOutShowsForm: boolean;
   /**
    * A path whose next load by a signed-in browser signs it out, as a site that keeps its session
    * in the page does on a full load: that load expires the session cookie and shows the signed-out
@@ -242,7 +248,8 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
   const loginPage: Route = (request, response) => {
     state.loginPageLoads += 1;
     if (state.signedInLogin === "account" && cookieOf(request, "shop_session") === signedIn) {
-      response.writeHead(303, { location: "/account" });
+      // With the workspace picker on, a signed-in visit lands on the picker, as the sign-in does.
+      response.writeHead(303, { location: state.workspaceChooser ? "/choose-workspace" : "/account" });
       return void response.end();
     }
     return html(
@@ -345,7 +352,7 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
   // A signed-out visit to a page behind the session shows the one-screen sign-in's form there,
   // which is how a host tells the page signed out rather than one without the marker.
   const signedOutNotice = (title: string) =>
-    `<title>${title}</title><p id='signed-out'>Please sign in</p><form action="/login"><input name="username"><input name="password" type="password"><button>Sign in</button></form>`;
+    `<title>${title}</title><p id='signed-out'>Please sign in</p>${state.signedOutShowsForm ? `<form action="/login"><input name="username"><input name="password" type="password"><button>Sign in</button></form>` : ""}`;
   // The account's orders, behind the same session as its account page.
   const orders: Route = (request, response) =>
     html(
@@ -625,6 +632,7 @@ export const startShop = async (directory: string): Promise<Shop> => {
     loginCode: false,
     signedInLogin: "form",
     workspaceChooser: false,
+    signedOutShowsForm: true,
     signOutOn: undefined,
     statements: Array.from({ length: 45 }, (_, index) => `S${index + 1}`),
     statementLoads: [],

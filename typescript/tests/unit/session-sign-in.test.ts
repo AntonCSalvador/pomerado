@@ -136,6 +136,35 @@ it("counts a sign-in that ends where the page can't tell as signed in, and never
   expect(markerCantTell({ signedIn: true, url: "https://example.test/" }, recipe)).toBe(false);
 });
 
+it("reads a sign-in that ends on its own screens or form as no can't tell, whatever path the marker names", () => {
+  const recipe = {
+    steps: [
+      { page: "https://example.test/login" },
+      { page: "https://example.test/login/password" },
+      { page: "https://example.test/login/security-question" },
+    ],
+    signedIn: { urlPath: "/account" },
+  };
+  const missing = (url: string) => ({ signedIn: false, url, failed: "indicator_not_visible" }) as const;
+  // Off the marker's path, a page that is none of the screens can't tell.
+  expect(markerCantTell(missing("https://example.test/choose-account"), recipe)).toBe(true);
+  // The recorded identifier and security-question screens did not get past the sign-in.
+  expect(markerCantTell(missing("https://example.test/login"), recipe)).toBe(false);
+  expect(markerCantTell(missing("https://example.test/login/security-question"), recipe)).toBe(
+    false,
+  );
+  // Nor did a page that shows the sign-in's own password field.
+  expect(
+    markerCantTell(
+      { ...missing("https://example.test/session-ended"), passwordFieldVisible: true },
+      recipe,
+    ),
+  ).toBe(false);
+  // A reset's check still reads those pages as before: a marker that names a path says nothing
+  // off it.
+  expect(sessionOnPage(missing("https://example.test/login"), recipe)).toBe("unknown");
+});
+
 it("fills a login into an execution's browser only while that execution waits in its own sign-in", () => {
   const browser = { id: "attached" };
   const other = { id: "other" };

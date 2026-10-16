@@ -112,14 +112,17 @@ export const sessionOnPage = (
 /**
  * Whether the page a sign-in ended on can't tell, once the sign-in sent every value it filled and
  * no rejection showed: the check read the page, found the marker missing or the page off the site,
- * and `sessionOnPage` does not read it signed out. Such a sign-in counts as signed in, and the
- * operation that runs next proves it.
+ * and `sessionOnPage` does not read it signed out. A sign-in that ends on one of its own recorded
+ * screens, or where its password field shows, did not get past them, whatever path the marker
+ * names. A sign-in that can't tell counts as signed in, and the operation that runs next proves it.
  */
 export const markerCantTell = (check: AutofillSignedInCheck, recipe: SessionCheckRecipe) =>
   !check.signedIn &&
   (check.failed === "indicator_not_visible" ||
     check.failed === "path_mismatch" ||
     check.failed === "off_site") &&
+  check.passwordFieldVisible !== true &&
+  !onSignInScreen(check.url, recipe.steps) &&
   sessionOnPage(check, recipe) === "unknown";
 
 /**

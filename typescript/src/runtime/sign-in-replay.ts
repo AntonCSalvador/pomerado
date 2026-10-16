@@ -477,7 +477,7 @@ const alreadySignedIn = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
  * went out, `password_rejected` when a request carried the password and the site showed its field
  * again, and the recipe's own failure for a password screen after a submit that may not have sent
  * it (`password_screen_again`) or any other failed check. A page that can't tell, with no
- * password screen again, signs in.
+ * password screen again, signs in, unless the sign-in needs its marker (`markerRequired`).
  */
 const lastCheck = <E>(input: SignInReplayInput<E>, replay: Replay<E>, opened: boolean) =>
   Effect.gen(function* () {
@@ -487,7 +487,7 @@ const lastCheck = <E>(input: SignInReplayInput<E>, replay: Replay<E>, opened: bo
     if ((yield* replay.shownAgain("private_answer")) !== undefined)
       return session.outcome("private_answer_rejected");
     if ((yield* replay.shownAgain("password")) === undefined)
-      return (yield* replay.endedCantTell)
+      return input.markerRequired !== true && (yield* replay.endedCantTell)
         ? ({ outcome: "signed_in", alreadySignedIn: false } as const)
         : session.outcome("sign_in_check_failed");
     yield* session.sent.settled;
@@ -612,6 +612,8 @@ export const signInForRun = <E>(input: {
   /** The site the run is authorized for, which the entry page must be on. */
   readonly siteOrigin: string;
   readonly timing?: SignInReplayTiming;
+  /** Whether only the marker signs it in, as a write run's sign-in needs (see `replaySignInRecipe`). */
+  readonly markerRequired?: boolean;
 }): Effect.Effect<{ readonly alreadySignedIn: boolean }, E | SignInRunFailed> =>
   Effect.gen(function* () {
     const recipe = decodeSignInRecipe(JSON.stringify(input.recipe) ?? "");
@@ -642,6 +644,7 @@ export const signInForRun = <E>(input: {
           site: input.site,
           retry,
           timing: input.timing ?? defaultReplayTiming,
+          ...(input.markerRequired === true ? { markerRequired: true } : {}),
         }),
       );
       if (replayed.outcome === "signed_in") return { alreadySignedIn: replayed.alreadySignedIn };
