@@ -679,6 +679,49 @@ it("ends as the host's failure when the minter reports the host gone", async () 
   expect(questionReviews).toBe(0);
 });
 
+// The blocked explanation's decision ledger stays bounded however many denials the attempt had:
+// the latest ones, each rationale capped, and a count of the rest.
+it("bounds the decision ledger a blocked explanation's review reads", async () => {
+  const ledgers: unknown[] = [];
+  let denials = 0;
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        for (let index = 0; index < 15; index++)
+          yield* turn.actions.execute({ ...execution, purpose: "explore" });
+        const reportBlocked = turn.actions.reportBlocked;
+        if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+        yield* reportBlocked({ reason: "policy", explanation: "Guardian refused every attempt." });
+      }),
+    {
+      reviewAndExecute: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: { outcome: "deny", rationale: `Denial ${++denials}. ${"x".repeat(2_000)}` },
+          }),
+        ),
+      reviewQuestion: (_request, options) =>
+        Effect.sync(() => {
+          ledgers.push(options?.decisionLedger);
+          return { outcome: "allow_business" as const, rationale: "Consistent." };
+        }),
+    },
+  );
+  await f.run();
+  const ledger = ledgers[0] as {
+    denials: { rationale: string }[];
+    omittedDenials?: number;
+  };
+  expect(ledger.omittedDenials).toBe(3);
+  expect(ledger.denials).toHaveLength(12);
+  expect(ledger.denials[0]?.rationale.startsWith("Denial 4.")).toBe(true);
+  expect(ledger.denials.at(-1)?.rationale.startsWith("Denial 15.")).toBe(true);
+  expect(Math.max(...ledger.denials.map(({ rationale }) => rationale.length))).toBeLessThanOrEqual(
+    800,
+  );
+});
+
 // A takeover in the middle of a blocked explanation's review outage keeps it resubmittable, so the
 // build can still end blocked instead of looping on the refusal until it runs out of calls.
 it("ends blocked after a takeover during a blocked explanation's review outage", async () => {

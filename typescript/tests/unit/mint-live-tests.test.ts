@@ -1374,3 +1374,112 @@ it("never restores the HTTP version's results as the Playwright version's after 
     Object.fromEntries(ids.map((id) => [id, "not_run"])),
   );
 });
+
+// Guardian's review of a blocked report read only the latest publication refusals' codes. The
+// earlier denials it had to check the report against lived only in its own compacted
+// conversation, so it rejected a true report as not established by the evidence.
+it("shows the blocked-explanation review the build's denials and failing cases", async () => {
+  const { host } = liveTestHost({
+    "sort-price": {
+      status: "failed",
+      errorClass: "SiteRefusal",
+      message: "The site answered: session state missing",
+      frame: "src/tool.ts:12",
+    },
+    nothing: { status: "completed", output: { results: [], has_next_page: false, next_cursor: null } },
+  });
+  const explore = { ...example, purpose: "explore" };
+  const executionRationale = "The submitted call creates server-side session state, so it is a write.";
+  const publicationRationale = "The source reads a field the captures never show.";
+  const findingExplanation = "The price field is read from a selector absent from every capture.";
+  const reviewed: Parameters<NonNullable<MintDependencies["reviewQuestion"]>>[1][] = [];
+  let root = "";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", explore, "explore"),
+        call("execute", example, "example"),
+        call("live_tests", runAll, "run"),
+        call("finish_build", finish, "finish"),
+        call("report_blocked", {
+          reason: "policy",
+          explanation: "Guardian refused the call that creates the session state the site requires.",
+        }),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: (input, beforeDispatch) =>
+        input.purpose === "explore"
+          ? Effect.fail(
+              new MintFailure({
+                code: "ReviewDenied",
+                review: { outcome: "deny", reviewId: "review_explore", rationale: executionRationale },
+              }),
+            )
+          : completedExample(input, beforeDispatch),
+      publish: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: {
+              outcome: "deny",
+              reason: "source_correction",
+              reviewId: "review_publication",
+              rationale: publicationRationale,
+              findings: [
+                {
+                  path: "src/tool.ts",
+                  byteStart: 0,
+                  byteEnd: 10,
+                  category: "schema_mismatch",
+                  explanation: findingExplanation,
+                },
+              ],
+            },
+          }),
+        ),
+      reviewQuestion: (_request, options) =>
+        Effect.sync(() => {
+          reviewed.push(options);
+          return { outcome: "allow_business" as const, rationale: "Consistent with the ledger." };
+        }),
+    },
+    read,
+  );
+  root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+  const outcome = await f.run();
+  expect(outcome.blocked).toMatchObject({ reason: "policy" });
+  expect(reviewed).toHaveLength(1);
+  expect(reviewed[0]).toMatchObject({
+    blockedOutcome: true,
+    decisionLedger: {
+      denials: [
+        {
+          review: "execution",
+          outcome: "deny",
+          reviewId: "review_explore",
+          rationale: executionRationale,
+        },
+        {
+          review: "publication",
+          outcome: "deny",
+          reason: "source_correction",
+          reviewId: "review_publication",
+          rationale: publicationRationale,
+          findings: [findingExplanation],
+        },
+      ],
+      testCounts: { pass: 3, fail: 1, inconclusive: 0 },
+      testFailures: [
+        {
+          caseId: "sort-price",
+          verdict: "fail",
+          errorClass: "SiteRefusal",
+          message: "The site answered: session state missing",
+        },
+      ],
+    },
+  });
+});

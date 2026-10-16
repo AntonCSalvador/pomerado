@@ -84,6 +84,8 @@ import type {
   MintActions,
   MintOutcome,
   MintHarnessSnapshot,
+  DecisionLedger,
+  LedgerDenial,
   PublicationDecision,
   PublicationRecovery,
   SpentSignIn,
@@ -343,6 +345,20 @@ const runnerResultNotice = (runner: RunnerResultDefect) =>
 
 /** How many of the latest publication refusals a question or blocked-explanation review reads. */
 const reviewedPublicationRefusals = 8;
+/**
+ * The bounds of a blocked explanation review's decision ledger: the latest denials, each one's
+ * rationale and finding explanations capped, and the latest failing live test cases.
+ */
+const ledgerBounds = {
+  denials: 12,
+  rationaleChars: 800,
+  findings: 4,
+  findingChars: 300,
+  testFailures: 20,
+  messageChars: 300,
+} as const;
+const capped = (text: string, chars: number) =>
+  text.length <= chars ? text : `${text.slice(0, chars - 1)}…`;
 /** The HTTP version's file, whose live tests the publication record shows beside the Playwright version's. */
 const httpVersionPath = "src/tool-http.mjs";
 /** Refusals of a write the session did not demonstrate as its build declares it. */
@@ -1012,6 +1028,32 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * correction gets past, in this attempt. A publication denial that names a correction is not one.
        */
       let guardianRefused = recovered?.guardianRefused === true;
+      /**
+       * This attempt's Guardian denials as the minter read them, the latest first to go past the
+       * bound, for the blocked explanation's review. Memory only: a takeover starts without them.
+       */
+      const ledgerDenials: LedgerDenial[] = [];
+      let omittedLedgerDenials = 0;
+      const recordDenial = (denial: Omit<LedgerDenial, "decidedAt">) =>
+        Effect.gen(function* () {
+          ledgerDenials.push({
+            ...denial,
+            decidedAt: yield* Clock.currentTimeMillis,
+            rationale: capped(denial.rationale, ledgerBounds.rationaleChars),
+            ...(denial.findings === undefined || denial.findings.length === 0
+              ? {}
+              : {
+                  findings: denial.findings
+                    .slice(0, ledgerBounds.findings)
+                    .map((finding) => capped(finding, ledgerBounds.findingChars)),
+                }),
+          });
+          const over = ledgerDenials.length - ledgerBounds.denials;
+          if (over > 0) {
+            ledgerDenials.splice(0, over);
+            omittedLedgerDenials += over;
+          }
+        });
       /** Unanswered questions handed back to the minter in this build, up to the limit. */
       let noAnswerHandBacks = recovered?.noAnswerHandBacks ?? 0;
       /**
@@ -1901,6 +1943,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const rationale = error.review
             ? yield* screenMintText(dependencies, error.review.rationale)
             : "Guardian rejected this submission; rationale unavailable.";
+          yield* recordDenial({
+            review: "execution",
+            ...(error.review === undefined
+              ? {}
+              : {
+                  outcome: error.review.outcome,
+                  ...(error.review.reviewId === undefined
+                    ? {}
+                    : { reviewId: error.review.reviewId }),
+                }),
+            rationale,
+          });
           return JSON.stringify({
             status: "review_rejected",
             code: "ReviewDenied",
@@ -2799,10 +2853,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       };
       /**
        * Guardian's question review of a blocked explanation before any caller reads it, with the
-       * host's publication refusals. `allow_business` shows it; an unavailable review is offered
-       * back for resubmission under the review outage budget (`retry`), and past it, or for any
-       * other failure, leaves the reason's fixed sentence alone, never the agent's words; any
-       * other outcome goes back to the agent with its rationale.
+       * host's publication refusals and the attempt's decision ledger. `allow_business` shows it;
+       * an unavailable review is offered back for resubmission under the review outage budget
+       * (`retry`), and past it, or for any other failure, leaves the reason's fixed sentence alone,
+       * never the agent's words; any other outcome goes back to the agent with its rationale.
        */
       const reviewBlockedExplanation = (explanation: string) => {
         const review = dependencies.reviewQuestion;
@@ -2810,10 +2864,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           ? Effect.succeed({ outcome: "unavailable" as const })
           : publicationRefusals.pipe(
               Effect.flatMap((publicationDecisions) =>
-                review(
-                  { questions: [{ id: "blocked", type: "text", prompt: explanation }] },
-                  { blockedOutcome: true, ...publicationDecisions },
-                ),
+                Effect.suspend(() => {
+                  const ledger = decisionLedger();
+                  return review(
+                    { questions: [{ id: "blocked", type: "text", prompt: explanation }] },
+                    {
+                      blockedOutcome: true,
+                      ...publicationDecisions,
+                      ...(ledger === undefined ? {} : { decisionLedger: ledger }),
+                    },
+                  );
+                }),
               ),
               Effect.tap(() => reviewCompleted),
               Effect.catchAll((error) =>
@@ -3157,6 +3218,50 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         (record) => record.retired === true,
       );
       /**
+       * The blocked explanation review's decision ledger: this attempt's denials, each case's
+       * latest verdict counted, and the latest cases that did not pass, a replaced failure
+       * included. Undefined when there is nothing to record.
+       */
+      const decisionLedger = (): DecisionLedger | undefined => {
+        const latest = [...liveTestRecords.playwright.values(), ...liveTestRecords.http.values()];
+        const failing = [...liveTestReplaced, ...latest].filter(
+          (record) => record.verdict !== "pass",
+        );
+        if (ledgerDenials.length === 0 && latest.length === 0 && liveTestReplaced.length === 0)
+          return undefined;
+        const shown = failing.slice(-ledgerBounds.testFailures);
+        const count = (verdict: LiveTestRecord["verdict"]) =>
+          latest.filter((record) => record.verdict === verdict).length;
+        return {
+          denials: [...ledgerDenials],
+          ...(omittedLedgerDenials === 0 ? {} : { omittedDenials: omittedLedgerDenials }),
+          ...(latest.length === 0
+            ? {}
+            : {
+                testCounts: {
+                  pass: count("pass"),
+                  fail: count("fail"),
+                  inconclusive: count("inconclusive"),
+                },
+              }),
+          testFailures: shown.map((record) => ({
+            caseId: record.id,
+            ...(record.entrypoint === undefined ? {} : { entrypoint: record.entrypoint }),
+            verdict: record.verdict === "fail" ? "fail" : "inconclusive",
+            got: record.got,
+            ...(record.errorClass === undefined ? {} : { errorClass: record.errorClass }),
+            // Screened when the batch recorded it.
+            ...(record.message === undefined
+              ? {}
+              : { message: capped(record.message, ledgerBounds.messageChars) }),
+            ...(record.retired === true ? { retired: true as const } : {}),
+          })),
+          ...(failing.length > shown.length
+            ? { omittedTestFailures: failing.length - shown.length }
+            : {}),
+        };
+      };
+      /**
        * Whether the attempt ran out of time for live tests: a batch refused for time, or a case
        * stopped by a batch deadline the attempt's own end set. A batch's ten-minute cap never
        * counts, so the size of a batch cannot set it.
@@ -3368,15 +3473,22 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             workers,
             deadlineAt,
           });
-          if (result.status === "review_denied")
+          if (result.status === "review_denied") {
+            const rationale = yield* screenRationale(result.rationale);
+            yield* recordDenial({
+              review: "live_tests",
+              ...(result.reviewId === undefined ? {} : { reviewId: result.reviewId }),
+              rationale,
+            });
             return JSON.stringify({
               kind: "host_live_tests",
               status: "review_denied",
               ...(result.reviewId === undefined ? {} : { reviewId: result.reviewId }),
-              rationale: yield* screenRationale(result.rationale),
+              rationale,
               instruction:
                 "Guardian denied this batch, so nothing ran. Fix what the rationale names (often an input that names or guesses a private value, or a case that would change the site), then run again.",
             });
+          }
           // The source the batch ran: a change while it ran leaves its results stale.
           const after = yield* stepDigest(request.entrypoint);
           const sourceDigest = after === digest ? digest : "changed_while_running";
@@ -4261,6 +4373,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 // The review as the minter reads it, screened once for every reply below.
                 const review =
                   error.review === undefined ? undefined : yield* minterReview(error.review);
+                if (review !== undefined)
+                  yield* recordDenial({
+                    review: "publication",
+                    outcome: review.outcome,
+                    ...(review.reason === undefined ? {} : { reason: review.reason }),
+                    ...(review.reviewId === undefined ? {} : { reviewId: review.reviewId }),
+                    rationale: review.rationale,
+                    ...(review.findings === undefined
+                      ? {}
+                      : { findings: review.findings.map(({ explanation }) => explanation) }),
+                  });
                 // Screening serializes through JSON, which leaves out undefined fields.
                 const diagnostic = yield* screenMintText(dependencies, {
                   phase: "publication",

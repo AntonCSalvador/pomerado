@@ -293,6 +293,50 @@ it("gives the question review the host's publication refusals as trusted evidenc
   expect(input.question_review.publicationDecisions).toEqual([refusal]);
 });
 
+// A blocked report that cited an earlier denial was judged without it: the denial survived only in
+// Guardian's own compacted conversation.
+it("gives the blocked-explanation review the host's decision ledger as trusted evidence", async () => {
+  const ledger = {
+    denials: [
+      {
+        review: "execution",
+        decidedAt: 1_000,
+        outcome: "deny",
+        reviewId: "review_one",
+        rationale: "The call creates server-side state, so it is a write.",
+      },
+    ],
+    testCounts: { pass: 0, fail: 2, inconclusive: 0 },
+    testFailures: [
+      { caseId: "case-1", verdict: "fail", got: "SiteRefusal", errorClass: "SiteRefusal" },
+      { caseId: "case-2", verdict: "fail", got: "SiteRefusal", errorClass: "SiteRefusal" },
+    ],
+  } as const;
+  const requests = scripted([[message({ outcome: "allow_business", rationale: "Allowed." })]]);
+  const candidate = await Effect.runPromise(
+    questionForReview(
+      {
+        questions: [
+          { id: "blocked", type: "text", prompt: "Guardian refused the call the site requires." },
+        ],
+      },
+      { credentialsAvailable: false, blockedOutcome: true, decisionLedger: ledger },
+      (text) => Effect.succeed(text),
+    ),
+  );
+  await Effect.runPromise(
+    makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).reviewQuestion(
+      pending,
+      candidate,
+      unreadable,
+    ),
+  );
+  const input = JSON.parse(userText(requests[0])) as {
+    question_review: { decisionLedger?: unknown };
+  };
+  expect(input.question_review.decisionLedger).toEqual(ledger);
+});
+
 it("rejects a question candidate smuggled into an execution review", async () => {
   const { reviewer, seen } = decisions(["allow"]);
   const result = await Effect.runPromise(

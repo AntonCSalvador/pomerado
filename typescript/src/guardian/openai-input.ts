@@ -80,6 +80,9 @@ export const guardianReviewInput = (
             ...(turn.pending.questionCandidate.publicationDecisions === undefined
               ? {}
               : { publicationDecisions: turn.pending.questionCandidate.publicationDecisions }),
+            ...(turn.pending.questionCandidate.decisionLedger === undefined
+              ? {}
+              : { decisionLedger: turn.pending.questionCandidate.decisionLedger }),
             ...(turn.pending.questionCandidate.scriptAsk === true ? { scriptAsk: true } : {}),
           },
         }),

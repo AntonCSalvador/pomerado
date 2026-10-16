@@ -1774,6 +1774,55 @@ export interface PublicationDecisionLog {
   readonly list: Effect.Effect<readonly PublicationDecision[], MintFailure>;
 }
 
+/**
+ * One Guardian denial or escalation in this attempt, as the minter read it: which review decided
+ * it, its outcome and reason, and its rationale and finding explanations, screened as they were
+ * shown and capped.
+ */
+export interface LedgerDenial {
+  readonly review: "execution" | "live_tests" | "publication";
+  /** When the harness received it, in epoch milliseconds. */
+  readonly decidedAt: number;
+  readonly outcome?: "deny" | "escalate";
+  /** A publication review's finite reason. */
+  readonly reason?: string;
+  readonly reviewId?: string;
+  readonly rationale: string;
+  readonly findings?: readonly string[];
+}
+
+/** A live test case whose latest result did not pass: its finite outcome and screened message. */
+export interface LedgerTestFailure {
+  readonly caseId: string;
+  /** The entrypoint the case ran, which names its version. */
+  readonly entrypoint?: string;
+  readonly verdict: "fail" | "inconclusive";
+  readonly got: string;
+  readonly errorClass?: string;
+  readonly message?: string;
+  /** A failure the minter replaced by changing the case, or that passed when run again. */
+  readonly retired?: true;
+}
+
+/**
+ * The harness's own record of what this attempt's reviews decided and its live tests showed, for
+ * the review of a blocked explanation. The harness writes it, never the agent, so the review does
+ * not depend on what Guardian's conversation still holds. Bounded: the latest denials and failing
+ * cases, with counts of what the bound left out.
+ */
+export interface DecisionLedger {
+  readonly denials: readonly LedgerDenial[];
+  readonly omittedDenials?: number;
+  /** Each case's latest verdict, counted over both versions. */
+  readonly testCounts?: {
+    readonly pass: number;
+    readonly fail: number;
+    readonly inconclusive: number;
+  };
+  readonly testFailures: readonly LedgerTestFailure[];
+  readonly omittedTestFailures?: number;
+}
+
 export interface MintDependencies {
   readonly agentRecovery?: {
     readonly initial?: { readonly agent: MintAgentSnapshot; readonly harness: MintHarnessSnapshot };
@@ -1861,6 +1910,12 @@ export interface MintDependencies {
        * what the host refused instead of the agent's account of it. Absent when there are none.
        */
       readonly publicationDecisions?: readonly PublicationDecision[];
+      /**
+       * A blocked explanation's review only: the attempt's Guardian denials and failing live test
+       * cases, already screened. A host that forwards it lets the review judge the report against
+       * them; an older host leaves it out.
+       */
+      readonly decisionLedger?: DecisionLedger;
     },
   ) => Effect.Effect<QuestionDecision & { readonly reviewId?: string }, MintFailure>;
   /**
