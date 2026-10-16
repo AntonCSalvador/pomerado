@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Usage } from "@openai/agents";
 import type { ModelProvider, ModelRequest, ModelResponse } from "@openai/agents";
@@ -1221,6 +1221,51 @@ it("leaves a ruled-out HTTP version's results out of the publication record", as
     true,
   );
   expect(record.cases.every((testCase) => testCase.results["playwright"]?.status === "pass")).toBe(true);
+  expect(published.seen[0]?.coverage).not.toContain("HTTP version");
+});
+
+// An HTTP version the minter deleted after its batch failed does not ship either, so the record
+// leaves it out as it does a ruled-out one: a version listed without its file would draw coverage
+// findings no test can clear.
+it("leaves a deleted HTTP version's results out of the publication record", async () => {
+  const { host } = liveTestHost((batch) =>
+    batch === 0
+      ? { nothing: emptyResults }
+      : { "repeat-1": httpFailure, "sort-price": httpFailure, nothing: httpFailure, "page-2": httpFailure },
+  );
+  const published = publications();
+  let root = "";
+  const f = await fixture(
+    async (_request, index) => {
+      // The agent deletes the HTTP version after its batch failed, then publishes.
+      if (index === 3) await rm(join(root, "src/tool-http.mjs"));
+      return (
+        [
+          call("execute", example, "example"),
+          call("live_tests", runAll, "run_playwright"),
+          call("live_tests", runHttp, "run_http"),
+          call("finish_build", finish, "finish"),
+        ][index] ?? prose()
+      );
+    },
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/tool-http.mjs": httpSource,
+    "test/cases.json": JSON.stringify(cases),
+  });
+  const outcome = await f.run();
+  expect(outcome.build).toBe("published");
+  const record = published.seen[0]?.liveTests as { versions: { version: string }[] };
+  expect(record.versions.map((entry) => entry.version)).toEqual(["playwright"]);
   expect(published.seen[0]?.coverage).not.toContain("HTTP version");
 });
 
