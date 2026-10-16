@@ -31,8 +31,12 @@ them for you in parallel. Testing is your job, not the caller's: never wait to b
 Design the tests yourself. You saw the site: its controls, the values it offers and the ways its
 pages differ. Choose the cases that would show the tool works for callers other than this one,
 not mechanical variations of the example's input. Start as soon as you know the page and its
-inputs, and refine the cases once the example passes. Consider each of these where the site has
-it; none is required, and one case may serve several:
+inputs, and refine the cases once the example passes; run no batch before then. Plan up front the
+cases builds most often add late: no results, one broad query, page two, and one case per
+selectable variant the schema offers, such as a second store or seller. Run a no-results query
+once and see what the site shows before you write its expectation: some sites answer it with a
+fallback grid or a "no exact matches" view rather than an empty list. Consider each of these
+where the site has it; none is required, and one case may serve several:
 - every input, alone and together with the others. Each input needs a case that uses it, or
   changes it from its default, and that case covers it: its other values, such as each order a
   sort offers, need no case or `notTested` entry of their own unless one opens a page with a
@@ -137,6 +141,7 @@ add any case that catches a real risk. A tool that returns a list runs page two 
 cursor page one returned, and reaches a last page (pagination skill).
 
 Results count only for the version, the source and the case as they ran: an edit makes them stale.
+After an edit, rerun only the cases it can affect, never the whole suite after each small change.
 Finish in this order: make your last edit, run every case once more (`cases` null) on each
 version you ship, run the example last, then call `finish_build`. Publication review reads the
 host's record of your cases (`publication/tests.json`), not your account of them, and judges

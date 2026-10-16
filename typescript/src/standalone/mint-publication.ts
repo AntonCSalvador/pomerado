@@ -309,6 +309,9 @@ export const mintPublication =
                 ...(publication.outputOverrides === undefined
                   ? {}
                   : { overrides: publication.outputOverrides }),
+                ...(hostEvidence?.testedFields === undefined
+                  ? {}
+                  : { alsoTested: hostEvidence.testedFields }),
               });
               if (notes.blocking.length > 0)
                 return yield* new MintFailure({

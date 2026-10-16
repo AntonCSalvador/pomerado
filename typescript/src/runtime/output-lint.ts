@@ -7,7 +7,7 @@
  * Some checks block publication (`blockingOutputChecks`): code, styles, markup and template
  * leftovers in a string are never what a page shows a person. The rest are flags for the reviewer:
  * a value read while collapsed or cut short, a field that never varies or is always empty,
- * repeated entries or records, very long strings, and one field that restates its siblings (a
+ * repeated entries, records or item IDs, very long strings, and one field restating its siblings (a
  * whole card's text). Every finding is a lead, never a verdict: when a flagged value is correct as
  * returned, such as code on a tool that returns code or page text that only resembles code, the
  * minter names its path and check with the reason as an override, and the reviewer sees both.
@@ -83,11 +83,73 @@ export interface OutputLintOptions {
   readonly controlLabels?: readonly string[];
   /** Adds one short sample per finding. Off for telemetry, which never carries page text. */
   readonly samples?: boolean;
+  /**
+   * The `fieldFill` of each other tested run of the same tool on the same source, such as its live
+   * test cases. A field empty in this output and in all of them, at least one of which holds it,
+   * is flagged `empty_field`: outside a list, such as a detail record's, even in one record; in a
+   * list, once the runs hold three of its records. Without them, only the per-list check runs.
+   */
+  readonly alsoTested?: readonly FieldFill[];
 }
+
+/**
+ * For each field of an output, by the path `lintOutput` names it, how many records held its key
+ * and how many of those held a value that is not empty. It carries no value, so a host can keep
+ * one for each tested run.
+ */
+export type FieldFill = Readonly<
+  Record<string, { readonly records: number; readonly filled: number }>
+>;
 
 type Json = Readonly<Record<string, unknown>>;
 const isRecord = (value: unknown): value is Json =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+const isEmpty = (value: unknown) =>
+  value === undefined ||
+  value === null ||
+  (typeof value === "string" && value.trim() === "") ||
+  (Array.isArray(value) && value.length === 0);
+
+/** A path for a record's field, `$` being the whole output. */
+const fieldPath = (path: string, key: string) => (path === "$" ? key : `${path}.${key}`);
+
+/** An output's `FieldFill`: its records' fields at any depth, array positions as `[]`. */
+export const fieldFill = (output: unknown): FieldFill => {
+  const fill = new Map<string, { records: number; filled: number }>();
+  const visit = (value: unknown, path: string, depth: number) => {
+    if (depth > 32) return;
+    if (Array.isArray(value)) for (const item of value) visit(item, `${path}[]`, depth + 1);
+    else if (isRecord(value))
+      for (const [key, child] of Object.entries(value)) {
+        const at = fieldPath(path, key);
+        const entry = fill.get(at) ?? { records: 0, filled: 0 };
+        entry.records++;
+        if (!isEmpty(child)) entry.filled++;
+        fill.set(at, entry);
+        visit(child, at, depth + 1);
+      }
+  };
+  visit(output, "$", 0);
+  return Object.fromEntries(fill);
+};
+
+/** The paging fields every list tool returns (`listOutputFields`), null by design on a last page. */
+const listPagingFields = new Set([
+  "next_cursor",
+  "next_cursor_expires_at",
+  "has_more",
+  "total_results",
+  "list_changed",
+  "next_cursor_unavailable",
+]);
+
+/**
+ * A record's own key: its ID, SKU, product code or link, as `id`, `sku`, `url`, `product_id` or
+ * `listingUrl`. A related record's ID, such as a seller's, and an image's link are not.
+ */
+const itemKey =
+  /^(?:id|sku|upc|gtin|ean|isbn|mpn|url|link|href|permalink|(?:item|product|listing|offer|result)(?:id|sku|url|link|href|number|code))$/u;
+const isItemKey = (key: string) => itemKey.test(key.toLowerCase().replace(/[\s_-]/gu, ""));
 
 const sampleLength = 80;
 /** Sibling comparisons the whole-card check makes in one output, about a tenth of a second. */
@@ -406,7 +468,10 @@ const endsWithExpandPhrase = (text: string) => {
 /**
  * Every finding in `output`. Paths fold array positions to `[]`, so one finding covers a field in
  * every record. Field checks (constant, empty, duplicate records, whole-card text) need a list of
- * at least three records, so a single record is never judged on them.
+ * at least three records, so a single record is never judged on them, with two exceptions: an item
+ * ID that repeats is flagged in a list of two, and a field empty in every record of this output
+ * and of the other tested runs in `alsoTested` that hold it is flagged outside a list even in one
+ * record, as a detail field read wrong on every run.
  */
 export const lintOutput = (output: unknown, options: OutputLintOptions = {}): OutputFinding[] => {
   const schema = schemaResolver(options.outputSchema);
@@ -450,6 +515,9 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
   // skips the remaining values and reports what it found as partial.
   let stringBudget = repeatCheckBudget;
   let repeatsPartial = false;
+  // Paths where `duplicate_entries` reports a repeated item ID, which the word budget never cuts
+  // short.
+  const idPaths = new Set<string>();
 
   const lintString = (text: string, path: string, node: Json | undefined, inRow: boolean) => {
     const mediaType = schema.annotation(node, "contentMediaType");
@@ -495,6 +563,29 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
   };
 
   const lintRecords = (records: readonly Json[], path: string, node: Json | undefined) => {
+    if (records.length < 2) return;
+    // The same item twice in one list, such as a sponsored copy of an organic result.
+    for (const key of new Set(records.flatMap((record) => Object.keys(record)))) {
+      if (!isItemKey(key)) continue;
+      const ids = new Set<string>();
+      let repeated = 0;
+      let sample: string | undefined;
+      for (const record of records) {
+        const value = record[key];
+        if (typeof value !== "string" && typeof value !== "number") continue;
+        const id = String(value).trim();
+        if (id === "") continue;
+        if (ids.has(id)) {
+          repeated++;
+          sample ??= id;
+        } else ids.add(id);
+      }
+      // Reported as `duplicate_entries`, a check every release's records already decode.
+      if (repeated > 0) {
+        idPaths.add(`${path}[].${key}`);
+        flag(`${path}[].${key}`, "duplicate_entries", sample, repeated);
+      }
+    }
     if (records.length < 3) return;
     const seen = new Set<string>();
     let repeated = 0;
@@ -508,14 +599,9 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
     const itemNode = schema.items(node);
     for (const key of keys) {
       const values = records.map((record) => record[key]);
-      const fieldPath = `${path}[].${key}`;
-      const empty = (value: unknown) =>
-        value === undefined ||
-        value === null ||
-        (typeof value === "string" && value.trim() === "") ||
-        (Array.isArray(value) && value.length === 0);
-      if (values.every(empty)) {
-        flag(fieldPath, "empty_field");
+      const rowField = `${path}[].${key}`;
+      if (values.every(isEmpty)) {
+        flag(rowField, "empty_field");
         continue;
       }
       const declared = schema.property(itemNode, key);
@@ -526,7 +612,7 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
         (value) => typeof value === "string" || typeof value === "number",
       );
       if (scalar && !closedSet && new Set(values).size === 1)
-        flag(fieldPath, "constant_field", String(values[0]));
+        flag(rowField, "constant_field", String(values[0]));
     }
     // One string field that holds the values of three or more of its siblings, and most of them,
     // is the record's whole text beside its typed fields. Links and paths are not compared. Each
@@ -619,7 +705,7 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
       for (const [key, child] of Object.entries(value))
         visit(
           child,
-          path === "$" ? key : `${path}.${key}`,
+          fieldPath(path, key),
           schema.property(node, key),
           inRow,
           depth + 1,
@@ -627,9 +713,31 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
   };
 
   visit(output, "$", schema.root, false, 0);
+  // A field empty in every record this output and the tool's other tested runs hold, judged only
+  // when another tested run holds the field too: outside a list, one record per run is enough; in
+  // a list, three records across the runs. One run alone is no evidence a read is wrong.
+  const others = options.alsoTested ?? [];
+  const own = others.length === 0 ? {} : fieldFill(output);
+  for (const [path, mine] of Object.entries(own)) {
+    if (mine.filled > 0 || listPagingFields.has(path) || found.has(`empty_field\u0000${path}`))
+      continue;
+    let records = mine.records;
+    let filled = 0;
+    let elsewhere = 0;
+    for (const fill of others) {
+      const entry = Object.hasOwn(fill, path) ? fill[path] : undefined;
+      elsewhere += entry?.records ?? 0;
+      filled += entry?.filled ?? 0;
+    }
+    records += elsewhere;
+    if (elsewhere > 0 && filled === 0 && (!path.includes("[]") || records >= 3))
+      flag(path, "empty_field");
+  }
   return [...found.values()].map((entry) => ({
     ...entry,
-    ...(repeatsPartial && entry.check === "duplicate_entries" ? { partial: true as const } : {}),
+    ...(repeatsPartial && entry.check === "duplicate_entries" && !idPaths.has(entry.path)
+      ? { partial: true as const }
+      : {}),
     blocking: entry.override === undefined && blockingOutputChecks.has(entry.check),
   }));
 };
@@ -976,14 +1084,16 @@ export const outputCheckMeaning: Readonly<Record<OutputCheck, string>> = {
   collapsed_text:
     "ends in an ellipsis or holds the label of a control that expands text on its page, so it may have been read collapsed",
   card_text: "repeats most of its sibling fields' values, a whole card's text",
-  duplicate_entries: "repeats an entry or a run of words",
+  duplicate_entries:
+    "repeats an entry or a run of words, or, on a record's ID, SKU or link field, the same item within one list, such as a sponsored copy of an organic result",
   duplicate_records: "repeats a whole record",
   constant_field: "has the same value in every record",
-  empty_field: "is empty or null in every record",
+  empty_field:
+    "is empty or null in every record checked, this run's and, when given, the tool's other tested runs', so the read may never find it",
   loose_text:
     "is a required string whose declared schema accepts an empty string or whitespace alone",
   looser_than_input:
-    "is declared looser than the input field of the same name: its enum or pattern dropped, a smaller minLength, or optional or nullable where the input is required",
+    "is declared looser than the input field of the same name: its enum or format pattern dropped, a smaller minLength, or optional or nullable where the input is required",
 };
 
 /**
@@ -999,5 +1109,5 @@ export const outputChecksNotice = (findings: readonly OutputFinding[]) =>
           meaning: outputCheckMeaning[finding.check],
         })),
         instruction:
-          "The host checked every value this run returned. Check each finding against the page. Fix a wrong value at the read in source: read rendered text with visibleText, visibleTexts or readRows, expand collapsed text before reading it and read it back, and scope rows to the main list; never clean a string afterwards. A check can be wrong: when a value is correct as it is, such as code the tool is meant to return or the page's own text that only resembles code, name its path and check with the reason in finish_build's outputOverrides. A field that holds code or markup on purpose can declare its contentMediaType instead; its findings then name that type and never block. Blocking findings (script, css, markup, template_residue) refuse finish_build until fixed or overridden; the others never block. loose_text and looser_than_input judge the declared schema, not a value: type a needed value's field as strictly as the core skill says, and keep a field loose only where the page may genuinely not show its value. The publication reviewer reads every finding and every override with its reason.",
+          "The host checked every value this run returned. Check each finding against the page. Fix a wrong value at the read in source: read rendered text with visibleText, visibleTexts or readRows, expand collapsed text before reading it and read it back, and scope rows to the main list; never clean a string afterwards. A repeated item ID is often a sponsored copy of an organic result: first check whether the rows are variants or line items that share an ID on purpose, and return a copy once only when it is the same item (pagination skill). A field empty in every record of every tested run was usually read from a collapsed section or a guessed key: check it against a record whose page shows it, then read it from the page's embedded record data or the opened section, or remove it. A check can be wrong: when a value is correct as it is, such as code the tool is meant to return or the page's own text that only resembles code, name its path and check with the reason in finish_build's outputOverrides. A field that holds code or markup on purpose can declare its contentMediaType instead; its findings then name that type and never block. Blocking findings (script, css, markup, template_residue) refuse finish_build until fixed or overridden; the others never block. loose_text and looser_than_input judge the declared schema, not a value: type a needed value's field as strictly as the core skill says, and keep a field loose only where the page may genuinely not show its value. The publication reviewer reads every finding and every override with its reason.",
       };

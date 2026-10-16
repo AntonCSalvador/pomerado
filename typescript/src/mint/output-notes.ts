@@ -2,6 +2,7 @@ import {
   applyOutputOverrides,
   lintOutput,
   lintSchemas,
+  type FieldFill,
   outputCheckMeaning,
   type OutputFinding,
   type OutputOverride,
@@ -42,11 +43,14 @@ export const outputNotes = (input: {
   readonly inputSchema?: unknown;
   readonly controlLabels?: readonly string[];
   readonly overrides?: readonly OutputOverride[];
+  /** The fields of the tool's other tested runs on this source, as `hostEvidence.testedFields`. */
+  readonly alsoTested?: readonly FieldFill[];
 }): OutputNotes => {
   const findings = [
     ...lintOutput(input.output, {
       ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
       ...(input.controlLabels === undefined ? {} : { controlLabels: input.controlLabels }),
+      ...(input.alsoTested === undefined ? {} : { alsoTested: input.alsoTested }),
     }),
     ...lintSchemas(input.inputSchema, input.outputSchema),
   ];

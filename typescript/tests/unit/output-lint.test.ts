@@ -5,6 +5,7 @@ import { contractJsonSchema } from "../../src/runtime/operation.js";
 import {
   applyOutputOverrides,
   controlLabelsFromAriaSnapshot,
+  fieldFill,
   lintOutput,
   lintSchemas,
   type OutputCheck,
@@ -330,6 +331,117 @@ describe("output checks across a list's records", () => {
 
   it("flags repeated entries in a list of strings", () => {
     expect(checksOf({ tags: ["New", "Sale", "New"] })).toEqual(["tags[] duplicate_entries"]);
+  });
+
+  it("flags an item ID, SKU or link that repeats within one list, even in two records", () => {
+    const results = [
+      { product_id: "P-100", title: "Desk lamp", url: "https://shop.example.com/p/100", seller_id: "S1" },
+      { product_id: "P-200", title: "Floor lamp", url: "https://shop.example.com/p/200", seller_id: "S1" },
+      { product_id: "P-100", title: "Desk lamp", url: "https://shop.example.com/p/100", seller_id: "S2" },
+    ];
+    const findings = lintOutput({ results }, { samples: true });
+    expect(findings).toContainEqual(
+      expect.objectContaining({ path: "results[].product_id", check: "duplicate_entries", count: 1, sample: "P-100", blocking: false }),
+    );
+    expect(checksOf({ results })).toContain("results[].url duplicate_entries");
+    // Another record's ID, such as the seller's, may repeat.
+    expect(checksOf({ results })).not.toContain("results[].seller_id duplicate_entries");
+    expect(checksOf({ items: [{ sku: "A1" }, { sku: "A1" }] })).toEqual(["items[].sku duplicate_entries"]);
+    expect(checksOf({ items: [{ sku: "A1" }, { sku: "A2" }] })).toEqual([]);
+  });
+
+  // Live test records keep each finding's check, and a worker of an earlier release restores
+  // them from a checkpoint with its own closed list of checks. The new findings use only checks
+  // that list holds, so a mixed rollout never meets a check it cannot decode.
+  it("reports repeated IDs and fields empty across runs only under checks earlier releases decode", () => {
+    const earlierReleaseChecks = new Set([
+      "script",
+      "css",
+      "markup",
+      "template_residue",
+      "json_text",
+      "invisible_chars",
+      "untrimmed",
+      "too_long",
+      "collapsed_text",
+      "card_text",
+      "duplicate_entries",
+      "duplicate_records",
+      "constant_field",
+      "empty_field",
+    ]);
+    const output = {
+      name: "Desk lamp",
+      description: null,
+      results: [
+        { product_id: "P-100", url: "https://shop.example.com/p/100" },
+        { product_id: "P-100", url: "https://shop.example.com/p/100" },
+      ],
+    };
+    const findings = lintOutput(output, { alsoTested: [fieldFill(output)] });
+    expect(findings.length).toBeGreaterThan(0);
+    for (const finding of findings) expect(earlierReleaseChecks).toContain(finding.check);
+  });
+});
+
+describe("empty fields across a detail record and the tool's tested runs", () => {
+  const detail = (description: string | null, rating: number | null) => ({
+    name: "Desk lamp",
+    description,
+    rating,
+    specs: { weight: null },
+  });
+
+  it("flags a single detail record's field only when every other tested run left it empty too", () => {
+    // One run alone is no evidence the read is wrong.
+    expect(checksOf(detail(null, 4.5))).toEqual([]);
+    expect(checksOf(detail(null, 4.5), { alsoTested: [fieldFill(detail(null, null))] })).toEqual([
+      "description empty_field",
+      "specs.weight empty_field",
+    ]);
+    // A run that never returned the field, such as a failed one, is no evidence either.
+    expect(checksOf(detail(null, 4.5), { alsoTested: [fieldFill({ name: "Desk lamp" })] })).toEqual([]);
+  });
+
+  it("leaves a detail field another tested run filled alone", () => {
+    const alsoTested = [fieldFill(detail("A lamp with a weighted base.", null)), fieldFill(detail(null, null))];
+    expect(checksOf(detail(null, null), { alsoTested })).toEqual([
+      "rating empty_field",
+      "specs.weight empty_field",
+    ]);
+  });
+
+  it("flags a list field empty in every tested run's records once they reach three", () => {
+    const results = (note: string | null) => ({ results: [{ title: "Mug", note }, { title: "Cup", note: null }] });
+    expect(checksOf(results(null))).toEqual([]);
+    expect(checksOf(results(null), { alsoTested: [fieldFill(results(null))] })).toEqual([
+      "results[].note empty_field",
+    ]);
+    expect(checksOf(results(null), { alsoTested: [fieldFill(results("Dishwasher safe"))] })).toEqual([]);
+  });
+
+  it("leaves a list's own paging fields alone", () => {
+    const page = {
+      results: [{ title: "Mug" }],
+      next_cursor: null,
+      next_cursor_expires_at: null,
+      has_more: false,
+      total_results: null,
+      list_changed: false,
+    };
+    expect(checksOf(page, { alsoTested: [fieldFill(page)] })).toEqual([]);
+  });
+
+  it("keeps a field fill to paths and counts, never values", () => {
+    expect(fieldFill({ ...detail(null, 4.5), results: [{ title: "Mug" }, { title: "" }] })).toEqual({
+      name: { records: 1, filled: 1 },
+      description: { records: 1, filled: 0 },
+      rating: { records: 1, filled: 1 },
+      specs: { records: 1, filled: 1 },
+      "specs.weight": { records: 1, filled: 0 },
+      results: { records: 1, filled: 1 },
+      "results[].title": { records: 2, filled: 1 },
+    });
   });
 });
 

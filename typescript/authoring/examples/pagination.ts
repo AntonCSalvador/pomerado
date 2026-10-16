@@ -74,8 +74,11 @@ return {
   totalResults: counted === null ? null : Number(counted[1]),
 };`;
 
-/** A promoted copy keeps its own key, so the organic row and the copy both stay. */
-const keyOf = (row: Listing) => (row.sponsored ? `sponsored:${row.id}` : row.id);
+/**
+ * The listing's own ID, the same on a sponsored copy: `readList` drops a sponsored copy of a listing
+ * the rows it read show, or an earlier page returned, so a listing comes back at its organic place.
+ */
+const keyOf = (row: Listing) => row.id;
 
 /**
  * Reading on to another site page needs at least this much of the run's time left. With less, the
@@ -137,6 +140,7 @@ await page.locator("#q").fill(${JSON.stringify(input.query.trim())}, { timeout: 
 
     const page = await readList(list, {
       keyOf,
+      promoted: (row) => row.sponsored,
       remainingMs,
       readOnMs,
       open: async (position, count) => {
