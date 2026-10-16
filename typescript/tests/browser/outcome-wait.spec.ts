@@ -263,6 +263,73 @@ test("a filter whose answer comes after the unchanged window returns the redrawn
   });
 });
 
+test("a filter whose slow answer ends while a look reads the old list returns the redrawn list", async ({
+  page,
+}) => {
+  // The site answers after the 2 s window and redraws the list 50 ms later. The answer is held
+  // until a look after the window has read the list from before the filter, and released as that
+  // look's last read ends, so the request ends while the look runs, before it is judged.
+  const origin = "https://rooms.example.test";
+  await page.route(`${origin}/**`, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<button type="button">Pets allowed</button>
+        <section id="answer">${rooms.replace("</ul>", "<li>Loft room</li></ul>")}</section>
+        <script>
+          document.querySelector("button").onclick = async () => {
+            const names = await (await fetch("/rooms?pets=1")).json();
+            setTimeout(() => {
+              document.querySelector("#answer").innerHTML =
+                '<ul aria-label="Rooms">' + names.map((name) => "<li>" + name + "</li>").join("") + "</ul>";
+            }, 50);
+          };
+        </script>`,
+    }),
+  );
+  await page.goto(`${origin}/`);
+  expect(
+    await call(
+      page,
+      `let release;
+      const held = new Promise((resolve) => { release = resolve; });
+      await page.route("**/rooms?pets=1", async (route) => {
+        await held;
+        await route.fulfill({ contentType: "application/json", body: JSON.stringify(["Garden room"]) });
+      });
+      const answered = page.waitForEvent("requestfinished", (request) => request.url().endsWith("/rooms?pets=1"));
+      const answer = page.locator("#answer");
+      const list = answer.getByRole("list", { name: "Rooms", exact: true });
+      let clicked = Infinity;
+      // The list as the wait reads it, whose changed-text read comes last in each look.
+      const results = {
+        count: () => list.count(),
+        filter: (options) => {
+          const visible = list.filter(options);
+          return {
+            count: () => visible.count(),
+            evaluateAll: async (fn, arg) => {
+              const read = await visible.evaluateAll(fn, arg);
+              if (Date.now() - clicked > 2100) {
+                release();
+                await answered;
+              }
+              return read;
+            },
+          };
+        },
+      };
+      const shown = await waitForOutcome({ failed: answer.getByRole("alert"), results }, {
+        action: async () => {
+          await page.getByRole("button", { name: "Pets allowed" }).click();
+          clicked = Date.now();
+        },
+        timeout: 8000,
+      });
+      return { shown, rooms: await answer.getByRole("listitem").allInnerTexts() };`,
+    ),
+  ).toEqual({ result: { shown: "results", rooms: ["Garden room"] } });
+});
+
 test("a request the filter started that never ends delays the unchanged list, never past the deadline", async ({
   page,
 }) => {

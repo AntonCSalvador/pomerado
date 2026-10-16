@@ -419,21 +419,19 @@ const waitForOutcome = async (outcomes, options = {}) => {
     let signature;
     let quietBefore = false;
     while (true) {
+      // A request the action started that was in flight as the look began counts as in flight for
+      // that look's matches, even when it ends while the look runs.
+      const inflightAtStart = progress.causedInflight();
       const observations = await look();
       looks += 1;
-      const current = JSON.stringify(observations ?? null);
-      await progress.sample(
-        observations === undefined ? ["page replaced"]
-          : signature !== undefined && current !== signature ? ["outcome matches changing"] : [],
-      );
-      signature = current;
       last = observations ?? last;
       // A match from before the action stays stale while a request the action started is in flight,
       // but only until the deadline less the unchanged window, so a match the wait returned before
       // such requests held it back still returns in time. One clock read serves this and the
       // deadline below, so the hold never outlasts the deadline even with no unchanged window.
       const now = Date.now();
-      const stale = now < unchangedFrom || (now < until - unchangedMs && progress.causedInflight());
+      const stale = now < unchangedFrom ||
+        (now < until - unchangedMs && (inflightAtStart || progress.causedInflight()));
       const shown = names.find(
         (name) => observations?.[name].visible > 0 && !(stale && observations[name].changed === 0),
       );
@@ -451,6 +449,13 @@ const waitForOutcome = async (outcomes, options = {}) => {
         );
         return shown;
       }
+      // Only a look that decides nothing samples the page's progress: the decision never uses it.
+      const current = JSON.stringify(observations ?? null);
+      await progress.sample(
+        observations === undefined ? ["page replaced"]
+          : signature !== undefined && current !== signature ? ["outcome matches changing"] : [],
+      );
+      signature = current;
       if (now >= until) {
         const seen = last ?? (await look().catch(() => undefined)) ?? {};
         const failure = outcomeWaitFailure(
@@ -904,8 +909,9 @@ const waitForChange = async (fields, options = {}) => {
  * progressing. `action` is the step itself, such as `() => apply.click()`, which it runs exactly
  * once, after noting what each outcome showed: a match that was visible before it, with the same
  * text, counts only once it has stayed so for `unchangedMs` (default 2000) and no request the
- * action started is still in flight. Such a request holds it back for at most `lateFillCap` (15 s),
- * and never past `timeout` less `unchangedMs`, so the match still counts before the timeout.
+ * action started is still in flight, or was as the look began. Such a request holds it back for
+ * at most `lateFillCap` (15 s), and never past `timeout` less `unchangedMs`, so the match still
+ * counts before the timeout.
  * `timeout`, `noProgressMs` and `unchangedMs` start once the action returns. Its
  * `OutcomeWaitFailure` has `observations` (`OutcomeObservation` by key) and one of these reasons:
  *
