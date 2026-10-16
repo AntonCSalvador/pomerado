@@ -63,7 +63,6 @@ it.each([
     "a provider outage",
     () => new ReviewFailure({ code: "Unavailable", reviewPhase: "review_computation" }),
   ],
-  ["a turn limit", () => new ReviewFailure({ code: "TurnLimitExceeded" })],
   ["a required source read that failed", () => new ReviewFailure({ code: "SourceUnavailable" })],
   ["a decision that does not decode", () => ({ outcome: "allow", rationale: "" })],
 ] as const)(
@@ -110,6 +109,13 @@ it.each([
         reviewPhase: "diagnostic_retention",
         diagnosticRetentionReason: "storage",
       }),
+  ],
+  // Running out of turns or a model call that keeps stalling is no outage: reviewing again would
+  // repeat the whole review's work.
+  ["a turn limit", () => new ReviewFailure({ code: "TurnLimitExceeded" })],
+  [
+    "a stalled model call",
+    () => new ReviewFailure({ code: "ModelCallStalled", reviewPhase: "review_computation" }),
   ],
 ] as const)("returns %s at once, without another review", async (_, failure) => {
   const f = flaky(failure, 5, quickRetry);

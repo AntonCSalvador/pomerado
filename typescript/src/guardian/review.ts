@@ -122,13 +122,23 @@ export class ReviewFailure extends Data.TaggedError("ReviewFailure")<{
     | "InvalidOutcome"
     | "SourceUnavailable"
     | "PublicationBlocked"
+    /**
+     * The review used its turn limit and its one final turn, which may not read, still returned no
+     * decision. Running it again would repeat that work, so it is never retried as an outage.
+     */
     | "TurnLimitExceeded"
+    /**
+     * One model call went without a response for the per-call bound, and so did each time the
+     * reviewer sent that same call again. Never retried as an outage, which would start the whole
+     * review again.
+     */
+    | "ModelCallStalled"
     /**
      * An execution review allowed without reading the submitted entrypoint, still after the
      * in-review rounds that asked for it. A verdict on unread source, not an outage: no retry.
      */
     | "EntrypointNotRead";
-  readonly reviewPhase?: "review_computation" | "review_deadline" | "diagnostic_retention";
+  readonly reviewPhase?: "review_computation" | "diagnostic_retention";
   /**
    * The model provider refused the review's call because the account's quota is spent. Reviewing
    * again cannot help, and the attempt ends as the `model_quota_exhausted` host failure.
@@ -428,6 +438,14 @@ export interface ReviewTurn {
   readonly retainRuntimeRecord?: (record: RuntimeRecordInput) => Effect.Effect<void, ReviewFailure>;
   /** Finite timing only, for a review whose transcript is not retained (no `reportDiagnostic`). */
   readonly observeTiming?: (timing: ModelDiagnosticTiming) => Effect.Effect<void>;
+  /**
+   * A model call that went without a response for the per-call bound and is being sent again,
+   * with the same input: `attempt` counts the calls that stalled so far. Must not fail.
+   */
+  readonly observeModelCallRetry?: (retry: {
+    readonly attempt: number;
+    readonly timeoutMs: number;
+  }) => Effect.Effect<void>;
 }
 
 /** The retention failure's own detail (operation, underlying error) beneath the review's. */
@@ -470,8 +488,11 @@ export interface ReviewRetry {
   readonly budget: Duration.DurationInput;
 }
 
-/** Production retry for Guardian outages: provider errors, timeouts, turn limits, a decision
- * that does not decode and a required source read that failed. */
+/**
+ * Production retry for Guardian outages: provider errors, a decision that does not decode and a
+ * required source read that failed. A review that ran out of turns or whose model call stalled is
+ * not an outage, and is not started again.
+ */
 export const guardianOutageRetry: ReviewRetry = {
   delays: ["2 seconds", "5 seconds", "15 seconds", "30 seconds", "60 seconds"],
   budget: "5 minutes",
@@ -486,7 +507,6 @@ const retriableOutage = (failure: ReviewFailure): boolean =>
   failure.reviewPhase !== "diagnostic_retention" &&
   failure.diagnosticRetentionReason === undefined &&
   (failure.code === "Unavailable" ||
-    failure.code === "TurnLimitExceeded" ||
     failure.code === "InvalidDecision" ||
     failure.code === "SourceUnavailable");
 
@@ -634,7 +654,9 @@ export const makeGuardian = (
     if (retry === undefined) return attempt({ ordinal: 1, started: () => undefined });
     const budgetMs = Duration.toMillis(retry.budget);
     return Effect.gen(function* () {
-      const startedMs = yield* Clock.currentTimeMillis;
+      // The budget counts the outage, from the first failure on, not the review before it, which
+      // has no deadline and may run long.
+      let outageStartedMs: number | undefined;
       for (let retries = 0; ; retries++) {
         // The failed attempt's review, so its retry interval is tied to it.
         let correlation: Parameters<ReviewAttempt["started"]>[0] | undefined;
@@ -651,7 +673,9 @@ export const makeGuardian = (
         const waitMs = Duration.toMillis(
           retry.delays[Math.min(retries, retry.delays.length - 1)] ?? retry.delays[0],
         );
-        const outageMs = (yield* Clock.currentTimeMillis) - startedMs;
+        const failedMs = yield* Clock.currentTimeMillis;
+        outageStartedMs ??= failedMs;
+        const outageMs = failedMs - outageStartedMs;
         if (!retriableOutage(failure) || outageMs + waitMs > budgetMs) return yield* failure;
         const startOffsetMs = performance.now();
         yield* bestEffort(
@@ -1001,6 +1025,15 @@ export const makeGuardian = (
                 { reviewId, reviewKind },
               ) ?? Effect.void,
               "guardian.usage",
+            ),
+          observeModelCallRetry: (retry) =>
+            bestEffort(
+              diagnostics?.emit(
+                "guardian.model_call_retried",
+                { reviewId, details: retry },
+                { reviewId, reviewKind },
+              ) ?? Effect.void,
+              "guardian.model_call_retried",
             ),
           followUp: (output) => {
             // A private kind's exchange ends only at the next review request, so a correction
