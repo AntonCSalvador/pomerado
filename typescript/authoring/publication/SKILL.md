@@ -90,9 +90,11 @@ first:
   that narrows, orders or configures what the tool returns, a location included, is an optional
   input, even one the request never mentioned and one you never asked about (core skill, the
   input schema). The one exception is a choice the request, the caller or the owner declined,
-  which is never an input for any caller (core skill). Guardian counts such an input as part of
-  the tool, never as scope drift or an unsupported claim. Each input you accept is applied and read
-  back (core skill, the input schema, and `AGENTS.md`; the search skill for a search). An input
+  which is never an input for any caller (core skill), unless it is a paid add-on within the
+  tool's purpose, the payment method or the delivery address a write still meets on its path,
+  which stays an input or a declared question (writes skill). Guardian counts such an input as
+  part of the tool, never as scope drift or an unsupported claim. Each input you accept is
+  applied and read back (core skill, the input schema, and `AGENTS.md`; the search skill for a search). An input
   that tailors the answer, such as a location, store or vehicle, that the site won't apply
   returns what the site showed with the applied value beside the caller's and the site's
   message, which review accepts in place of a refusal (core skill, "Inputs that tailor the
@@ -187,9 +189,15 @@ pomerado:section publication.saved-files:end -->.
    - the input schema: no account-specific value (a passenger, loyalty or member number, saved
      card or address, account ID) as an enum member, example or default; every input as general
      as the site's field, never narrowed to the example's value; on a write, every option the
-     session met on the path is an input, and an add-on, pre-selected paid option or saved
-     payment is explicit, never left to the page's default;
+     session met on the path is an input, and a paid add-on or pre-selected paid option within
+     the tool's purpose, the payment method and the delivery address are inputs or run-time
+     questions, never left to the page's default or hard-coded from the build's request or
+     answers, which spoke for one caller; a paid upsell outside the tool's purpose is declined;
+   - a pop-up that shows only for some accounts, states or visits is handled when present and
+     never required;
    - declared questions ask only what the page or the caller uniquely knows, never a login;
+   - a write runs every check that can refuse, such as a limit on its total, before the mark of
+     the commit it guards, and refuses with `InvalidInput`, never as its output;
    - a composed write reproduces the session's flow and returns the confirmation or read-back it
      declares, without committing twice.
 
