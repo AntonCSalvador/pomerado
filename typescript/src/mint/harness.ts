@@ -3549,28 +3549,22 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             },
           ];
           if (published === "playwright" && !httpRuledOut) {
-            // The file the HTTP version's latest results ran, else its conventional file, while
-            // the workspace has it: a deleted HTTP version does not ship. A host that cannot tell
-            // keeps the file the latest results ran.
+            // The conventional file while the workspace has it: a deleted HTTP version does not
+            // ship, and a scratch `*-http.mjs` the latest results ran is not the version that
+            // ships. A host that cannot tell keeps the file the latest results ran.
             const ran = [...replacedOf("http"), ...liveTestRecords.http.values()]
               .map((record) => record.entrypoint)
               .filter((path) => path !== undefined)
               .at(-1);
-            const present = (path: string) =>
-              Effect.promise(async () => {
-                try {
-                  return await session.pathExists?.(path);
-                } catch {
-                  return undefined;
-                }
-              });
-            const ranPresent = ran === undefined ? false : yield* present(ran);
+            const shipping = yield* Effect.promise(async () => {
+              try {
+                return await session.pathExists?.(httpVersionPath);
+              } catch {
+                return undefined;
+              }
+            });
             const httpEntrypoint =
-              ran !== undefined && ranPresent !== false
-                ? ran
-                : (yield* present(httpVersionPath)) === true
-                  ? httpVersionPath
-                  : undefined;
+              shipping === true ? httpVersionPath : shipping === undefined ? ran : undefined;
             if (httpEntrypoint !== undefined)
               versions.push({
                 version: "http",

@@ -1269,53 +1269,60 @@ it("leaves a deleted HTTP version's results out of the publication record", asyn
   expect(published.seen[0]?.coverage).not.toContain("HTTP version");
 });
 
-// The latest HTTP batch ran a scratch file the minter then deleted, while src/tool-http.mjs still
-// ships: the record lists the HTTP version by its conventional file rather than dropping it.
-it("lists a shipping HTTP version when the file its latest batch ran was deleted", async () => {
-  const { host } = liveTestHost((batch) =>
-    batch === 0
-      ? { nothing: emptyResults }
-      : { "repeat-1": httpFailure, "sort-price": httpFailure, nothing: httpFailure, "page-2": httpFailure },
-  );
-  const published = publications();
-  let root = "";
-  const f = await fixture(
-    async (_request, index) => {
-      if (index === 3) await rm(join(root, "src/scratch-http.mjs"));
-      return (
-        [
-          call("execute", example, "example"),
-          call("live_tests", runAll, "run_playwright"),
-          call("live_tests", { ...runHttp, entrypoint: "src/scratch-http.mjs" }, "run_scratch"),
-          call("finish_build", finish, "finish"),
-        ][index] ?? prose()
-      );
-    },
-    {
-      liveTests: host,
-      deadline: Deadline.after(30 * 60_000),
-      reviewAndExecute: completedExample,
-      publish: published.publish,
-    },
-    read,
-  );
-  root = (f.workspace as unknown as { root: string }).root;
-  await writeWorkspace(root, {
-    "src/tool.ts": toolSource,
-    "src/tool-http.mjs": httpSource,
-    "src/scratch-http.mjs": httpSource,
-    "test/cases.json": JSON.stringify(cases),
-  });
-  const outcome = await f.run();
-  expect(outcome.build).toBe("published");
-  const record = published.seen[0]?.liveTests as {
-    versions: { version: string; entrypoint?: string }[];
-  };
-  expect(record.versions.map((entry) => [entry.version, entry.entrypoint])).toEqual([
-    ["playwright", "src/tool.ts"],
-    ["http", "src/tool-http.mjs"],
-  ]);
-});
+// The latest HTTP batch ran a scratch file, while src/tool-http.mjs still ships: the record lists
+// the HTTP version by its conventional file, whether the minter deleted the scratch file, rather
+// than dropping it, or kept it, rather than naming a file that does not ship.
+it.each([
+  { scratch: "deleted", remove: true },
+  { scratch: "kept", remove: false },
+])(
+  "lists a shipping HTTP version by its file when its latest batch ran a scratch file, $scratch",
+  async ({ remove }) => {
+    const { host } = liveTestHost((batch) =>
+      batch === 0
+        ? { nothing: emptyResults }
+        : { "repeat-1": httpFailure, "sort-price": httpFailure, nothing: httpFailure, "page-2": httpFailure },
+    );
+    const published = publications();
+    let root = "";
+    const f = await fixture(
+      async (_request, index) => {
+        if (index === 3 && remove) await rm(join(root, "src/scratch-http.mjs"));
+        return (
+          [
+            call("execute", example, "example"),
+            call("live_tests", runAll, "run_playwright"),
+            call("live_tests", { ...runHttp, entrypoint: "src/scratch-http.mjs" }, "run_scratch"),
+            call("finish_build", finish, "finish"),
+          ][index] ?? prose()
+        );
+      },
+      {
+        liveTests: host,
+        deadline: Deadline.after(30 * 60_000),
+        reviewAndExecute: completedExample,
+        publish: published.publish,
+      },
+      read,
+    );
+    root = (f.workspace as unknown as { root: string }).root;
+    await writeWorkspace(root, {
+      "src/tool.ts": toolSource,
+      "src/tool-http.mjs": httpSource,
+      "src/scratch-http.mjs": httpSource,
+      "test/cases.json": JSON.stringify(cases),
+    });
+    const outcome = await f.run();
+    expect(outcome.build).toBe("published");
+    const record = published.seen[0]?.liveTests as {
+      versions: { version: string; entrypoint?: string }[];
+    };
+    expect(record.versions.map((entry) => [entry.version, entry.entrypoint])).toEqual([
+      ["playwright", "src/tool.ts"],
+      ["http", "src/tool-http.mjs"],
+    ]);
+  },
+);
 
 // A sign-in counts only on the site it happened on: after an update moves the build to another
 // site, the read has not signed in there, so it is a read signed out and runs its live tests.
