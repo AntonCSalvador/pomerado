@@ -118,7 +118,10 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   button named Continue, Next or Save may save a draft, persist that page, or finish
   the task immediately; its label does not establish that another review or final
   submit follows. A step that saves or advances a form page is part of the task,
-  not a second write.
+  not a second write. The composed script runs the steps back to back, without the
+  pauses you took between them. So prefer ending a step that redraws the page, such
+  as a filter, a pick or a new table row, with `waitForOutcome` naming the element
+  the next step uses.
 - Report a confirm popup to `decideDialog` with a literal `step` name, and keep that
   literal in the helper the composed script imports. Runs accept a popup without
   asking only at the step the session accepted it at, so the host refuses to publish

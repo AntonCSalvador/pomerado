@@ -72,16 +72,19 @@ answers `{ success, result, error, stderr }`. Throw
 - Prefer taking a role locator's name from an ARIA snapshot (the host's `*.aria.yml` capture or a
   scoped `ariaSnapshot()`) over `textContent` or `innerText`, which include hidden labels. When the
   snapshot shows a link with no name, prefer its `href`.
-- After a step whose answer can vary, such as a click that may navigate, a search, a filter, a date
-  pick or a submit, prefer `waitForOutcome`, the step passed as its `action`, naming every result it
-  can lead to: the next page's own control, a dialog on the same URL, an empty or sold-out message,
-  a greyed-out choice (`getByRole(role, { name, disabled: true })` or the site's own disabled
-  marker), the site's error or validation message, a pick-one list. Prefer it over `waitForURL` or
-  `waitForLoadState`: a dialog keeps the URL, and a page that changes route without loading a
-  document passes `waitForLoadState` at once. Opening a record by its identifier or URL can also
-  answer with a removed or not-found page: name it, and throw `InvalidInput` with the page's own
-  words, never a readiness timeout. The waits paragraph below shows how to paste `waitCode` and
-  call it.
+- After a step whose answer can vary or that redraws part of the page, such as a click that may
+  navigate, a search, a filter, a pick from a list, a date pick, adding a table row or a submit,
+  prefer `waitForOutcome`, the step passed as its `action`, naming every result it can lead to: the
+  next page's own control, a dialog on the same URL, an empty or sold-out message, a greyed-out
+  choice (`getByRole(role, { name, disabled: true })` or the site's own disabled marker), the site's
+  error or validation message, a pick-one list, or the element the next step uses. Prefer it over
+  `waitForURL` or `waitForLoadState`: a dialog keeps the URL, and a page that changes route without
+  loading a document passes `waitForLoadState` at once. Opening a record by its identifier or URL
+  can also answer with a removed or not-found page: name it, and throw `InvalidInput` with the
+  page's own words, never a readiness timeout. The waits paragraph below shows how to paste
+  `waitCode` and call it. Prefer no fixed pauses unless necessary.
+- Check the null case if possible. Make sure the tool handles a lookup or filter that matches
+  nothing.
 - Start a response wait in the same call as the click that causes it, with
   `Promise.all([page.waitForResponse(...), button.click()])`. Listeners do not outlive a call.
 - Do site HTTP inside the page with `page.evaluate(() => fetch(...))`. Never use
