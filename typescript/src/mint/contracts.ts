@@ -1565,6 +1565,36 @@ export interface ExampleJournal {
   readonly stopped: Effect.Effect<void, MintFailure>;
 }
 
+/**
+ * One Guardian denial or escalation in this build: which review decided it, its outcome and
+ * reason, and the rationale and finding explanations Guardian wrote, screened as they are for the
+ * minter and capped.
+ */
+export interface LedgerDenial {
+  readonly review: "execution" | "live_tests" | "publication";
+  /** When the harness received it, in epoch milliseconds. */
+  readonly decidedAt: number;
+  readonly outcome?: "deny" | "escalate";
+  /** A publication review's finite reason. */
+  readonly reason?: string;
+  readonly reviewId?: string;
+  readonly rationale: string;
+  readonly findings?: readonly string[];
+  /** Findings past the ledger's bound, left out. */
+  readonly omittedFindings?: number;
+}
+
+export const LedgerDenial: Schema.Schema<LedgerDenial> = Schema.Struct({
+  review: Schema.Literal("execution", "live_tests", "publication"),
+  decidedAt: Schema.NonNegativeInt,
+  outcome: Schema.optionalWith(Schema.Literal("deny", "escalate"), { exact: true }),
+  reason: Schema.optionalWith(Schema.String, { exact: true }),
+  reviewId: Schema.optionalWith(Schema.String, { exact: true }),
+  rationale: Schema.String,
+  findings: Schema.optionalWith(Schema.Array(Schema.String), { exact: true }),
+  omittedFindings: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
+});
+
 export interface MintHarnessSnapshot {
   readonly executions: readonly ExecutionEvidence[];
   /**
@@ -1631,6 +1661,15 @@ export interface MintHarnessSnapshot {
    * a rollout's old and new workers each restore the other's checkpoint.
    */
   readonly invalidOutcomes?: number;
+  /**
+   * The decision ledger's denials so far. Optional, so a rollout's old and new workers each
+   * restore the other's checkpoint; one restored without it marks the ledger partial.
+   */
+  readonly decisionLedger?: {
+    readonly denials: readonly LedgerDenial[];
+    readonly omittedDenials?: number;
+    readonly partial?: true;
+  };
   /**
    * The current review outage is a blocked explanation's, which `report_blocked` resubmits.
    * Optional, so an older worker ignores it and a newer one restores an older checkpoint.
@@ -1806,6 +1845,14 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   }),
   reviewOutageStartedAt: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
   invalidOutcomes: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
+  decisionLedger: Schema.optionalWith(
+    Schema.Struct({
+      denials: Schema.Array(LedgerDenial),
+      omittedDenials: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
+      partial: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+    }),
+    { exact: true },
+  ),
   blockedReviewUnavailable: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   guardianRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   noAnswerHandBacks: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
@@ -1904,6 +1951,48 @@ export interface PublicationDecisionLog {
   readonly list: Effect.Effect<readonly PublicationDecision[], MintFailure>;
 }
 
+/**
+ * A live test case whose latest result did not pass. The verdict is the host's judgment; what the
+ * case threw is only what the agent's tool code reported, screened and capped.
+ */
+export interface LedgerTestFailure {
+  /** The agent's own name for the case. */
+  readonly caseId: string;
+  /** The entrypoint the case ran, which names its version. */
+  readonly entrypoint?: string;
+  readonly verdict: "fail" | "inconclusive";
+  /** The host's reading of a result the tool returned or the host stopped, when it threw nothing. */
+  readonly got?: string;
+  /** The error class and message the tool threw: the tool's account, never a host fact. */
+  readonly toolReported?: { readonly errorClass?: string; readonly message?: string };
+  /** A failure the minter replaced by changing the case, or that passed when run again. */
+  readonly retired?: true;
+}
+
+/**
+ * The harness's own record of what this build's reviews decided and its live tests showed, for
+ * the review of a blocked explanation, so the review does not depend on what Guardian's
+ * conversation still holds. Bounded: the latest denials and failing cases, with counts of what
+ * the bound left out.
+ */
+export interface DecisionLedger {
+  readonly denials: readonly LedgerDenial[];
+  readonly omittedDenials?: number;
+  /**
+   * The attempt restored a checkpoint that kept no ledger, so earlier denials may be missing: an
+   * absent denial proves nothing.
+   */
+  readonly partial?: true;
+  /** Each case's latest verdict, counted over both versions. */
+  readonly testCounts?: {
+    readonly pass: number;
+    readonly fail: number;
+    readonly inconclusive: number;
+  };
+  readonly testFailures: readonly LedgerTestFailure[];
+  readonly omittedTestFailures?: number;
+}
+
 export interface MintDependencies {
   readonly agentRecovery?: {
     readonly initial?: { readonly agent: MintAgentSnapshot; readonly harness: MintHarnessSnapshot };
@@ -1991,6 +2080,12 @@ export interface MintDependencies {
        * what the host refused instead of the agent's account of it. Absent when there are none.
        */
       readonly publicationDecisions?: readonly PublicationDecision[];
+      /**
+       * A blocked explanation's review only: the build's Guardian denials and failing live test
+       * cases, already screened. A host that forwards it lets the review judge the report against
+       * them; an older host leaves it out.
+       */
+      readonly decisionLedger?: DecisionLedger;
     },
   ) => Effect.Effect<QuestionDecision & { readonly reviewId?: string }, MintFailure>;
   /**
