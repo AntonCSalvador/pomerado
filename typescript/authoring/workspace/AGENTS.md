@@ -563,7 +563,7 @@ could still fix.
 
 Read .agents/publication/SKILL.md before your first `finish_build`: it says what publication
 checks, what to settle first, which private values never go into published files and how to
-act on each rejection.
+act on each rejection. Go through its edge cases before every `finish_build`.
 Publication requires a completed read example, or the write session step that read its
 confirmation (or read back the saved state; for a write declared unverifiable, the step that
 committed).
