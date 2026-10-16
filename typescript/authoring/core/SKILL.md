@@ -175,6 +175,7 @@ the task can't run without it (below).
   whose description starts "By design:" is applied in the use it records, a caller's decision:
   keep that use and its description word for word, and change them only after asking the same
   design question again (the input schema, "Inputs that tailor the answer").
+- Prefer fixing the whole class of a failure over its one instance: when the page requires a control the input has no value for, prefer making every such control a declared caller question with the page's live options over throwing for it.
 - Never derive a format from one sample: not an input format, an element key, a selector, a
   URL path or a label. A key the page showed for the example's value says nothing about the
   next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read
