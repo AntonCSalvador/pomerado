@@ -66,7 +66,7 @@ import {
   keptScriptAnswers,
   reusedScriptAnswers,
   scriptQuestionKeys,
-} from "./script-answer-reuse.js";
+} from "../mint/script-answer-reuse.js";
 import { error, mintError } from "./errors.js";
 import { mintSessionSignInFailure, type SessionSignInFailed } from "./session-sign-in.js";
 import { sessionCardFill } from "./card-fill.js";
