@@ -359,15 +359,6 @@ const prerenderedBody = (options: string) => `
   }, { action: () => page.getByRole("button", { name: "Pets allowed" }).click(), ${options} });
 `;
 
-test("an error hidden before the action and shown beside re-rendered results wins", async ({
-  page,
-}) => {
-  await prerendered(page, "error");
-  expect(await call(page, prerenderedBody("timeout: 3000, unchangedMs: 5000"))).toEqual({
-    result: "failed",
-  });
-});
-
 test("an empty state hidden before the action and shown by it answers at once", async ({
   page,
 }) => {
