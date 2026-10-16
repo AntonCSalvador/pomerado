@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import type { PublicationDecision } from "../mint/contracts.js";
+import type { DecisionLedger, PublicationDecision } from "../mint/contracts.js";
 import {
   type InputOption,
   type InputRequest,
@@ -56,6 +56,12 @@ export interface PendingQuestion {
    */
   readonly publicationDecisions?: readonly PublicationDecision[];
   /**
+   * Host evidence for a blocked report: the build's Guardian denials and failing live test cases,
+   * as the harness recorded them, so the report is judged against them and not against what the
+   * review's conversation still holds.
+   */
+  readonly decisionLedger?: DecisionLedger;
+  /**
    * Host fact: the operation's script asks this through `ask` while it runs, not the minting
    * agent through `request_input`.
    */
@@ -88,6 +94,7 @@ export const questionForReview = <E>(
     readonly credentialsAvailable: boolean;
     readonly blockedOutcome?: true;
     readonly publicationDecisions?: readonly PublicationDecision[];
+    readonly decisionLedger?: DecisionLedger;
     readonly scriptAsk?: true;
   },
   screen: (text: string) => Effect.Effect<string, E>,
@@ -139,6 +146,8 @@ export const questionForReview = <E>(
       ...(facts.publicationDecisions === undefined || facts.publicationDecisions.length === 0
         ? {}
         : { publicationDecisions: facts.publicationDecisions }),
+      // Written by the harness from text it already screened for the minter.
+      ...(facts.decisionLedger === undefined ? {} : { decisionLedger: facts.decisionLedger }),
       ...(facts.scriptAsk === true ? { scriptAsk: true as const } : {}),
     };
   });

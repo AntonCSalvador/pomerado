@@ -203,6 +203,107 @@ test("after an action that leaves the results as they were, the wait ends after 
   );
 });
 
+/**
+ * Results on a site page whose "Pets allowed" filter asks the site for its answer, which comes
+ * `answerMs` later, or never when it is `Infinity`: `replace` redraws the list with one room, `same`
+ * leaves it as it was. Returns a function that gives when the site last answered, by `Date.now()`.
+ */
+const filterOverNetwork = async (page: Page, answerMs: number, rendering: "replace" | "same") => {
+  const origin = "https://rooms.example.test";
+  let answeredAt = Number.NaN;
+  await page.route(`${origin}/**`, async (route) => {
+    if (new URL(route.request().url()).pathname === "/rooms") {
+      // Left unanswered, the request stays in flight, as a long-poll or a stream does.
+      if (answerMs === Infinity) return;
+      await new Promise((resolve) => setTimeout(resolve, answerMs));
+      answeredAt = Date.now();
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(rendering === "replace" ? ["Garden room"] : null),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<button type="button">Pets allowed</button>
+        <section id="answer">${rooms.replace("</ul>", "<li>Loft room</li></ul>")}</section>
+        <script>
+          document.querySelector("button").onclick = async () => {
+            const names = await (await fetch("/rooms?pets=1")).json();
+            if (names !== null)
+              document.querySelector("#answer").innerHTML =
+                '<ul aria-label="Rooms">' + names.map((name) => "<li>" + name + "</li>").join("") + "</ul>";
+          };
+        </script>`,
+    });
+  });
+  await page.goto(`${origin}/`);
+  return () => answeredAt;
+};
+
+/** Runs `body`, an async function body that returns an object, and adds how long it took. */
+const timed = (body: string) => `
+  const started = Date.now();
+  const answer = await (async () => { ${body} })();
+  return { ...answer, elapsed: Date.now() - started };
+`;
+
+/** How long a `timed` body took, in milliseconds. */
+const elapsed = (answer: { result?: unknown }) =>
+  (answer.result as { elapsed?: number } | undefined)?.elapsed ?? Number.NaN;
+
+test("a filter whose answer comes after the unchanged window returns the redrawn list", async ({
+  page,
+}) => {
+  // The answer comes after the default 2 s window: the list from before the filter is no answer
+  // while the request the filter started is still in flight.
+  await filterOverNetwork(page, 2500, "replace");
+  expect(await call(page, filterBody("timeout: 8000"))).toEqual({
+    result: { shown: "results", rooms: ["Garden room"] },
+  });
+});
+
+test("a request the filter started that never ends delays the unchanged list, never past the deadline", async ({
+  page,
+}) => {
+  // The request stays in flight past the deadline, and the list stays as it was. The list from
+  // before the filter counts once the wait's deadline less its unchanged window comes, so the
+  // wait returns it, as it did before such a request held it back, rather than timing out. The
+  // list coming back, not outcome_timeout, shows it counted before the deadline.
+  await filterOverNetwork(page, Infinity, "same");
+  const answer = await call(page, timed(filterBody("timeout: 8000")));
+  expect(answer).toMatchObject({
+    result: { shown: "results", rooms: ["Garden room", "Courtyard room", "Loft room"] },
+  });
+  expect(elapsed(answer)).toBeGreaterThanOrEqual(6000);
+});
+
+test("an already-settled page adds no extra delay", async ({ page }) => {
+  const answeredAt = await filterOverNetwork(page, 1500, "same");
+  // With no action, the answer on the page counts at its confirming look, well inside the 2 s
+  // unchanged window.
+  const settled = await call(
+    page,
+    timed(`return { shown: await waitForOutcome({
+      results: page.locator("#answer").getByRole("list", { name: "Rooms", exact: true }),
+    }, { timeout: 5000 }) };`),
+  );
+  expect(settled).toMatchObject({ result: { shown: "results" } });
+  expect(elapsed(settled)).toBeLessThan(1000);
+  // A filter whose request ended before its unchanged window, leaving the list as it was, still
+  // ends at that window, about 0.5 s after the site's answer at 1.5 s, not a window after the
+  // answer. Timed from the answer, a slow page before the click cannot push it past the bound, and
+  // a window counted from the request's end never ends inside it. The 8 s timeout keeps the
+  // deadline's own limit on the hold, at 6 s, out of the way.
+  const unchanged = await call(page, timed(filterBody("timeout: 8000, unchangedMs: 2000")));
+  const sinceAnswer = Date.now() - answeredAt();
+  expect(unchanged).toMatchObject({
+    result: { shown: "results", rooms: ["Garden room", "Courtyard room", "Loft room"] },
+  });
+  expect(elapsed(unchanged)).toBeGreaterThanOrEqual(2000);
+  expect(sinceAnswer).toBeLessThan(2000);
+});
+
 test("an action that loads a new page waits for that page's answer", async ({ page }) => {
   const origin = "https://rooms.example.test";
   await page.route(`${origin}/**`, async (route) => {

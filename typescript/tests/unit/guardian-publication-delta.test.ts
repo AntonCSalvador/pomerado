@@ -590,9 +590,12 @@ describe("what a later round may leave alone", () => {
     ["the decision did not decode", "decode" as const],
   ])("keeps the previous round when a review fails because %s", async (_name, failure) => {
     let failSave = false;
+    // A decision that does not decode gets one follow-up, which does not decode either.
     const requests = recorded([
       [message(deny)],
-      [message(failure === "decode" ? { outcome: "allow" } : allow)],
+      ...(failure === "decode"
+        ? [[message({ outcome: "allow" })], [message({ outcome: "allow" })]]
+        : [[message(allow)]]),
       [message(allow)],
     ]);
     const guardian = makeGuardian(reviewer(), undefined, {
@@ -610,7 +613,7 @@ describe("what a later round may leave alone", () => {
     failSave = false;
     await Effect.runPromise(guardian.review(pendingFor(roundTwo), reader(roundTwo)));
     // The third round is compared with the first, the last one that completed.
-    const delta = deltaOf(requests[2]);
+    const delta = deltaOf(requests.at(-1));
     expect(delta.priorReview.outcome).toBe("deny");
     expect(fileIn(delta, toolPath).status).toBe("changed");
   });
