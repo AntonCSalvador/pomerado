@@ -114,6 +114,23 @@ it.each([
   },
 );
 
+// A site that offers the task but declines the example's own facts ends under its own reason, with
+// the site's reason in the explanation its caller reads, not as a site that lacks the capability.
+it("ends a build the site declined for the example's own facts as site_declined", async () => {
+  const explanation =
+    "The site declined to quote this example applicant because it says they already hold a policy.";
+  const f = await fixture(
+    (_request, index) =>
+      [call("report_blocked", { reason: "site_declined", explanation })][index] ??
+      prose("Stopping."),
+  );
+  expect(await f.run()).toMatchObject({
+    build: "incomplete",
+    blocked: { reason: "site_declined", explanation },
+    stopReason: "site_declined",
+  });
+});
+
 // Guardian's refusal stays a policy block, even when a question also went unanswered.
 it("keeps a policy block that stands on a Guardian refusal", async () => {
   const explanation = "Guardian refused the only way to reach the requested page.";
