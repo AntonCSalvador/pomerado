@@ -81,6 +81,9 @@ export const guardianReviewInput = (
             ...(turn.pending.questionCandidate.publicationDecisions === undefined
               ? {}
               : { publicationDecisions: turn.pending.questionCandidate.publicationDecisions }),
+            ...(turn.pending.questionCandidate.decisionLedger === undefined
+              ? {}
+              : { decisionLedger: turn.pending.questionCandidate.decisionLedger }),
             ...(turn.pending.questionCandidate.scriptAsk === true ? { scriptAsk: true } : {}),
           },
         }),
@@ -182,16 +185,41 @@ export const SourceInput = Schema.Struct({
     ),
   ),
 });
-/** The files one `read_source` call reads, in order, or undefined for a malformed call. */
+/**
+ * The files one `read_source` call reads, in order, and whether it listed them in `paths`, or what
+ * to change in a call the host cannot read: a message for the model, since nothing was read.
+ */
 export const sourceReadsOf = (
-  input: typeof SourceInput.Type,
-): readonly SourceRead[] | undefined => {
-  const several = input.paths ?? null;
+  input: unknown,
+):
+  | { readonly files: readonly SourceRead[]; readonly several: boolean }
+  | { readonly problem: string } => {
+  const decoded = Schema.decodeUnknownEither(SourceInput)(input);
+  if (decoded._tag === "Left") {
+    const paths: unknown =
+      typeof input === "object" && input !== null ? Reflect.get(input, "paths") : undefined;
+    return {
+      problem:
+        Array.isArray(paths) && paths.length > sourceReadMaxFiles
+          ? `Nothing was read: read_source reads at most ${sourceReadMaxFiles} files per call. Split paths into several calls of up to ${sourceReadMaxFiles} files each.`
+          : `Nothing was read: read_source takes path, a non-negative integer offset and match or null for one file, or paths listing 1 to ${sourceReadMaxFiles} such files with path, offset and match null. Correct the arguments and call it again.`,
+    };
+  }
+  const args = decoded.right;
+  const several = args.paths ?? null;
   if (several === null)
-    return input.path === null
-      ? undefined
-      : [{ path: input.path, offset: input.offset ?? 0, match: input.match ?? null }];
-  return input.path !== null || (input.offset ?? null) !== null || (input.match ?? null) !== null
-    ? undefined
-    : several;
+    return args.path === null
+      ? {
+          problem: `Nothing was read: name a file in path, or list up to ${sourceReadMaxFiles} files in paths.`,
+        }
+      : {
+          files: [{ path: args.path, offset: args.offset ?? 0, match: args.match ?? null }],
+          several: false,
+        };
+  return args.path !== null || (args.offset ?? null) !== null || (args.match ?? null) !== null
+    ? {
+        problem:
+          "Nothing was read: read one file with path, offset and match, or several with paths and path, offset and match null, not both in one call.",
+      }
+    : { files: several, several: true };
 };

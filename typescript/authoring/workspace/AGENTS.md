@@ -268,15 +268,17 @@ Never ask for a fact the site shows (a choice it offers is askable when the inpu
 open), for host or infrastructure failures, for permission to do what was requested, for
 credentials (the host asks for logins itself) or for CAPTCHAs. Asking which account or code
 channel to use is a different question and is expected, as the sign-in branch rule above says.
-On a write, you never assume a missing business choice: ask about add-ons, pre-selected paid
-options and saved payment actually observed on the site, and about any other optional field
+On a write, you never assume a missing business choice: ask about paid add-ons and pre-selected
+paid options within the tool's purpose, saved payment and the delivery address actually observed
+on the site, and about any other optional field
 only when the request's purpose clearly depends on its value (an unset optional input keeps the
 page's default; it is still a tool input). A control with exactly one possible value (a select or radio group with a single option),
 or one the input or an earlier answer already settles, is no choice: never ask about it. An
-add-on toggle, a pre-selected checkbox or a lone saved payment method is still a yes-or-no choice
-to ask about. A safety default (core skill) is neither: never ask about it, and the script turns it off. Read the path's options with read-only exploration where you can and settle them before
+add-on toggle, a pre-selected checkbox or a lone saved payment method or address is still a
+choice to ask about. A paid upsell outside the tool's purpose, such as a membership offered at
+checkout, is declined without asking, and never accepted without an input the caller set. A safety default (core skill) is neither: never ask about it, and the script turns it off. Read the path's options with read-only exploration where you can and settle them before
 the first act step where possible; a question during the session waits in place. Take a site default only for a choice that is not a
-credential, not a write and easy to reverse, and list it in `finish_build` `assumptions`. On a write, prefer keeping the value the page already shows in an optional field that adds no cost over asking the caller to confirm or correct it: list it in `assumptions`, and it stays an optional input. Add-ons, pre-selected paid options and saved payment are still asked, as above. A full
+credential, not a write and easy to reverse, and list it in `finish_build` `assumptions`. On a write, prefer keeping the value the page already shows in an optional field that adds no cost over asking the caller to confirm or correct it: list it in `assumptions`, and it stays an optional input. Paid add-ons, pre-selected paid options, saved payment and the delivery address are still asked, as above. A full
 new login goes through execute purpose `authenticate`: an SMS, email or authenticator code that
 is part of signing in is a `code` field of its `signInStep`, which the host fills or asks the
 caller for, so never ask for it with `request_input`. The standalone code path, a
@@ -518,6 +520,8 @@ never with final text, which the host treats as unfinished work:
   requested field, use it; when they do not, ask the user one focused question with
   `request_input`. Report absence only when the evidence shows the site lacks it, and never
   invent a value or substitute a different field.
+- `site_declined`: the site offers what the task needs but declines this example's own facts,
+  such as an applicant it will not quote. Name the reason the site gave in `explanation`.
 - `owner_declined`: the owner answered no to a `confirm` question, or declined to sign in, and
   the build needs that step.
 - `question_unanswered`: a question you asked came back `no_answer`, and the build cannot go on

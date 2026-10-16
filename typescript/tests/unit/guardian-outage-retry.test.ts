@@ -64,7 +64,6 @@ it.each([
     () => new ReviewFailure({ code: "Unavailable", reviewPhase: "review_computation" }),
   ],
   ["a required source read that failed", () => new ReviewFailure({ code: "SourceUnavailable" })],
-  ["a decision that does not decode", () => ({ outcome: "allow", rationale: "" })],
 ] as const)(
   "reviews again after %s and returns the decision that completes",
   async (_, failure) => {
@@ -125,6 +124,27 @@ it.each([
   expect(result).toMatchObject({ _tag: "Left", left: { code: failure().code } });
   expect(f.runs()).toBe(1);
 });
+
+// A reviewer that sends no follow-up gets one fresh review for a decision that does not decode,
+// since a fresh sample may decode, and no more.
+it.each([
+  [1, "Right"],
+  [2, "Left"],
+] as const)(
+  "reviews once more after %i undecodable decisions from a reviewer that sends no follow-up",
+  async (outages, tag) => {
+    const f = flaky(() => ({ outcome: "allow", rationale: "" }), outages, quickRetry);
+    const result = await Effect.runPromise(
+      Effect.either(makeGuardian(f.reviewer).review(pending, readSource)),
+    );
+    expect(result).toMatchObject(
+      tag === "Right"
+        ? { _tag: "Right", right: { decision: { outcome: "allow" } } }
+        : { _tag: "Left", left: { code: "InvalidDecision" } },
+    );
+    expect(f.runs()).toBe(2);
+  },
+);
 
 it("times each review attempt and ties the retry to the attempt that failed", async () => {
   let now = 100;

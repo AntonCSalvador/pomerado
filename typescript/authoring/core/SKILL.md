@@ -108,7 +108,9 @@ pomerado:section core.execute-calls:end -->
   disabled without the page saying why; a read returns such a day unavailable, as "Configure,
   then read" says. When the value is not among choices the page lists, throw
   `new errors.InvalidInput(message, { field, available })` instead, as "Configure, then read"
-  below says. `errors` exists only in the script, never in a call's `code`, so when the page
+  below says. Add `kind`, the reason as a stable lowercase token such as `out_of_stock`, when
+  a caller needs to tell refusals apart (caller-input skill). `errors` exists only in the
+  script, never in a call's `code`, so when the page
   shows the refusal, return a marker such as `{ refused: "why", field, available }` from the
   call and throw once it returns. The run then fails as the caller's input; with `available`,
   the host ends it at once with those choices and no repair. A repair never asks the caller for
@@ -180,6 +182,7 @@ the task can't run without it (below).
   whose description starts "By design:" is applied in the use it records, a caller's decision:
   keep that use and its description word for word, and change them only after asking the same
   design question again (the input schema, "Inputs that tailor the answer").
+- Prefer fixing the whole class of a failure over its one instance: when the page requires a control the input has no value for, prefer making every such control a declared caller question with the page's live options over throwing for it.
 - Never derive a format from one sample: not an input format, an element key, a selector, a
   URL path or a label. A key the page showed for the example's value says nothing about the
   next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read
@@ -304,7 +307,9 @@ the task can't run without it (below).
 - A choice the request, the caller or the owner declined, or a step they said not to take (no
   location, no store, skip a filter, don't sign in), is not part of the tool for any caller:
   never offer it as an input, never set it in the example or a test, and never put it in
-  `exampleInput`. Note it in coverage.
+  `exampleInput`. Note it in coverage. That covers a step the tool then never takes. A paid
+  add-on, payment method or address a write still meets on its path is never settled this way:
+  it stays an input or a run-time question (writes skill).
 - When the caller input is empty (`{}`), write the tool's input from the request and the
   owner's answers, with dates normalized (10/4 is the next October 4, as `2026-10-04`), and
   pass it as `exampleInput`: on a read's example, or on each write act step that needs it. The
