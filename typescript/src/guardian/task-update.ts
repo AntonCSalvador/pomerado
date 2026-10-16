@@ -26,7 +26,8 @@ const SiteOrigin = Schema.String.pipe(
  * - `purpose`: what the finished tool is for, restated.
  * - `effect`: a read build becomes a write build. Nothing turns a write back into a read.
  * - `site`: the build moves to another site origin of the same product's workflow.
- * - `login`: the task now needs a sign-in, or a different login than the one it has.
+ * - `login`: the task now needs a sign-in, or a different login than the one it has, or it runs
+ *   signed out (`signed_out`): the owner chose the part the site shows without signing in.
  * - `output`: in maintenance only, one output field of the published tool's registered contract,
  *   by path, such as `price.amount` or `items[].currency`, with `text` saying the change as the
  *   caller reads it. `add` adds a field and `tighten` makes one stricter (optional or nullable to
@@ -50,7 +51,7 @@ export const TaskChange = Schema.Union(
   Schema.Struct({ setting: Schema.Literal("site"), origin: SiteOrigin }),
   Schema.Struct({
     setting: Schema.Literal("login"),
-    change: Schema.Literal("sign_in", "different_login"),
+    change: Schema.Literal("sign_in", "different_login", "signed_out"),
     text: Schema.optional(UpdateText),
   }),
   Schema.Struct({
