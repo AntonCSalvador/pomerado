@@ -135,6 +135,7 @@ export const localSignInLogin = (options: {
   readonly siteOrigin: string;
 }): SignInLogin<MintFailure> => {
   let held: WebsiteCredentials | undefined;
+  // The first ask may be declined: the owner has no account, or wants the public part only.
   const askLogin = (reason: "missing_credentials" | "invalid_credentials", username?: string) =>
     Effect.gen(function* () {
       const answers = yield* options
@@ -151,12 +152,15 @@ export const localSignInLogin = (options: {
               reason,
               allowSave: false,
               siteOrigin: options.siteOrigin,
+              ...(reason === "missing_credentials" ? { allowDecline: true } : {}),
               ...(username === undefined || username === "" ? {} : { username }),
             },
           ],
         })
         .pipe(Effect.mapError(loginFailure));
       const answer = answers["login"];
+      if (answer?.type === "credential" && answer.value.declined !== undefined)
+        return yield* new MintFailure({ code: "Unavailable", loginDeclined: answer.value.declined });
       if (
         answer?.type !== "credential" ||
         answer.value.username === undefined ||
