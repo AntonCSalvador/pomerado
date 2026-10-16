@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import { defineOperation, waitCode } from "../../src/browser/index.js";
 
 const Picked = Schema.Union(
-  Schema.Struct({ selected_key: Schema.NonEmptyString }),
+  Schema.Struct({ selected_key: Schema.NonEmptyTrimmedString }),
   Schema.Struct({
     failure: Schema.Literal("query_mismatch", "option_identity_mismatch", "committed_key_mismatch"),
   }),
@@ -14,13 +14,13 @@ export default defineOperation(
   {
     name: "select_catalog_item",
     input: Schema.Struct({
-      query: Schema.NonEmptyString.annotations({ description: "Text to search the catalog for" }),
-      key: Schema.NonEmptyString.annotations({
+      query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({ description: "Text to search the catalog for" }),
+      key: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({
         description: "Catalog key of the item to select, as its option is named",
       }),
     }),
     output: Schema.Struct({
-      selected_key: Schema.NonEmptyString.annotations({
+      selected_key: Schema.NonEmptyTrimmedString.annotations({
         description: "Catalog key the page now shows as selected",
       }),
     }),
@@ -30,8 +30,8 @@ export default defineOperation(
       timeout_sec: 60,
       code: `
         ${waitCode}
-        const query = ${JSON.stringify(input.query)};
-        const key = ${JSON.stringify(input.key)};
+        const query = ${JSON.stringify(input.query.trim())};
+        const key = ${JSON.stringify(input.key.trim())};
         // Locators are strict: two matching dialogs, inputs or options throw instead of guessing.
         // A dialog that never opens fails once the page stops progressing, not after a fixed wait.
         const dialog = page.getByRole("dialog", { name: "Catalog item picker", exact: true });

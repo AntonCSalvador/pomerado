@@ -110,7 +110,8 @@ export const guardianDecisionFormat: AgentOutputType = {
               type: "object",
               properties: {
                 path: { type: "string" },
-                // The exact text at fault; the host finds its byte range in the file.
+                // A line or two copied from the text at fault; the host places it at its first
+                // occurrence, or on the whole file.
                 quote: { type: "string" },
                 category: {
                   type: "string",
