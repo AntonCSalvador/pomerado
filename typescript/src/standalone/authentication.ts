@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { Effect, Schema } from "effect";
-import type { AutofillPopup } from "../destinations/autofill-contracts.js";
+import { Effect } from "effect";
 import { fillAutofillStep } from "../destinations/autofill-fill.js";
-import { autofillPageCode } from "../destinations/autofill-page-code.js";
+import { autofillMarkerVisible } from "../destinations/autofill-marker.js";
 import {
   checkAutofillSignedIn,
   inspectAutofillStep,
@@ -20,9 +19,9 @@ import type {
 } from "../destinations/sign-in-recipe.js";
 import { MintFailure } from "../mint/contracts.js";
 import type { CredentialRejectedField, WebsiteCredentials } from "../runtime/authentication.js";
+import { credentialMessage, credentialPrompt } from "../runtime/credential-prompts.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { InputRequestFailure, type InputAsker } from "../runtime/input-request.js";
-import { trustedUrl } from "../runtime/sign-in-origins.js";
 import type { SignInReplayBrowser } from "../runtime/sign-in-replay.js";
 
 /**
@@ -32,58 +31,6 @@ import type { SignInReplayBrowser } from "../runtime/sign-in-replay.js";
 export interface SessionTyping {
   typed: boolean;
 }
-
-/**
- * Whether a recorded rejection marker shows on its screen: on the screen's own origin, in a frame
- * on that origin or a configured sign-in origin, read only as visible or not. A screen off the
- * site, or a recorded popup that is gone, shows none.
- */
-const markerVisible = (input: {
-  readonly selector: string;
-  readonly screenPage: string;
-  readonly popup?: AutofillPopup | undefined;
-  readonly page: AutofillPage;
-  readonly siteOrigin: string;
-  readonly authenticationOrigins: readonly string[];
-}) => {
-  if (input.selector.includes(">>") || input.selector.includes("internal:"))
-    return Effect.succeed(false);
-  const expected = URL.parse(input.screenPage)?.origin;
-  if (
-    expected === undefined ||
-    !trustedUrl(input.siteOrigin, input.authenticationOrigins, input.screenPage)
-  )
-    return Effect.succeed(false);
-  return input.page
-    .execute(
-      `${autofillPageCode(input.page.targetId, input.popup)}
-const expected = ${JSON.stringify(expected)};
-if (new URL(primary.url()).origin !== expected) return false;
-const origins = ${JSON.stringify([expected, ...input.authenticationOrigins])};
-for (const frame of primary.frames()) {
-  let origin;
-  try { origin = new URL(frame.url()).origin; } catch { continue; }
-  if (!origins.includes(origin)) continue;
-  const marker = frame.locator(${JSON.stringify(input.selector)});
-  const count = Math.min(await marker.count(), 100);
-  for (let index = 0; index < count; index++)
-    if (await marker.nth(index).isVisible()) return true;
-}
-return false;`,
-      15,
-    )
-    .pipe(
-      Effect.flatMap(
-        Schema.decodeUnknown(
-          Schema.Union(
-            Schema.Boolean,
-            Schema.Struct({ error: Schema.Literal("popup_missing"), target: Schema.Literal("popup") }),
-          ),
-        ),
-      ),
-      Effect.map((visible) => visible === true),
-    );
-};
 
 /**
  * The local host's sign-in browser on the session's page, for a build's recorder and a run's
@@ -149,7 +96,7 @@ export const makeSignInBrowser = (options: {
     },
     open: (url) => openAutofillLogin({ page, url }),
     markerVisible: (selector, screenPage, popup) =>
-      markerVisible({
+      autofillMarkerVisible({
         selector,
         screenPage,
         popup,
@@ -159,19 +106,6 @@ export const makeSignInBrowser = (options: {
       }),
   };
 };
-
-/** Why the owner is asked for a login, above its fields and in the request's notice. */
-const loginWords = {
-  missing_credentials: {
-    prompt: "Sign in to the website so this request can continue.",
-    notice: "Pomerado needs a login for this website to continue.",
-  },
-  invalid_credentials: {
-    prompt: "The website rejected the login. Enter a correction to continue.",
-    notice:
-      "The website rejected the login you gave, so Pomerado won't try it again. Enter the correct login to continue.",
-  },
-} as const;
 
 const loginFailure = (cause: unknown) =>
   new MintFailure({
@@ -201,19 +135,18 @@ export const localSignInLogin = (options: {
   readonly siteOrigin: string;
 }): SignInLogin<MintFailure> => {
   let held: WebsiteCredentials | undefined;
-  const askLogin = (reason: keyof typeof loginWords, username?: string) =>
+  const askLogin = (reason: "missing_credentials" | "invalid_credentials", username?: string) =>
     Effect.gen(function* () {
-      const words = loginWords[reason];
       const answers = yield* options
         .ask({
           id: randomUUID(),
           source: "system",
-          notice: words.notice,
+          notice: credentialMessage(reason),
           questions: [
             {
               id: "login",
               type: "credential",
-              prompt: words.prompt,
+              prompt: credentialPrompt(reason),
               fields: "username_password",
               reason,
               allowSave: false,
