@@ -115,7 +115,7 @@ it.each([
 );
 
 // A site that offers the task but declines the example's own facts ends under its own reason, with
-// the site's reason in the explanation its caller reads, never as a site that lacks the capability.
+// the site's reason in the explanation its caller reads, not as a site that lacks the capability.
 it("ends a build the site declined for the example's own facts as site_declined", async () => {
   const explanation =
     "The site declined to quote this example applicant because it says they already hold a policy.";
