@@ -314,10 +314,14 @@ the task can't run without it (below).
   question is only for a value the request leaves open.
 - Callers and Guardian see the JSON Schema form, so write every constraint in one it
   shows: a `Schema.filter` shows nothing, its description included, so use
-  `Schema.NonEmptyString`, `pattern`, `minLength`, `Int`, `between` or `Literal`. Type every
-  output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
+  `Schema.NonEmptyTrimmedString`, `pattern`, `minLength`, `Int`, `between` or `Literal`. Type
+  every output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
   and its example's own input and output must decode under them, so settle both before that
   example.
+- Make each input as strict as the site's field: required text is non-empty and not whitespace
+  alone (`Schema.NonEmptyString.pipe(Schema.pattern(/\S/u))`, which still takes a caller's stray
+  space); a date, time or code keeps its `pattern`; a fixed set is a `Literal` enum. Make an input
+  optional only when the site accepts the field blank and the tool works without it.
 - Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear. A description that starts "By design:" keeps that marker first and puts the number of values after it, such as "By design: one postal code, …", never before it.
 - When a field takes one value and a caller might send several, say "one per call" and prefer a
   `pattern` that refuses a list, such as several codes separated by commas, while still accepting
@@ -385,9 +389,13 @@ fix-and-resubmit round.
 **Never loosen a value the request needs.** The values the request needs are each value it
 names, the record's identifier as the site shows it, and the context those depend on as the page
 shows it, such as dates, a party size or a location. Make each one required and non-null, typed
-so a value the code could not read fails the output check (`Schema.NonEmptyString` for text,
-`Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the
+so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for
+text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the
 request's wording or a description says. A run whose output fails its schema goes to repair.
+- Type each output field as strictly as its value: required text is non-empty and trimmed
+  (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports
+  an input's value reuses that input's enum or pattern. Make one optional or nullable only where
+  the page may genuinely not show the value.
 - The one exception is a record whose own page genuinely does not show the value, such as an
   item that is sold out and shows no amount, or a listing that shows no date yet. Then the value may be null only together with a
   field that says why, such as its availability, and both descriptions say so.

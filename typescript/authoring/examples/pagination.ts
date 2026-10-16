@@ -21,8 +21,8 @@ import {
 // replace them with what the build observed on the site.
 
 const Listing = Schema.Struct({
-  id: Schema.NonEmptyString.annotations({ description: "The site's listing ID" }),
-  title: Schema.String.annotations({ description: "The listing's title as the site shows it" }),
+  id: Schema.NonEmptyTrimmedString.annotations({ description: "The site's listing ID" }),
+  title: Schema.NonEmptyTrimmedString.annotations({ description: "The listing's title as the site shows it" }),
   sponsored: Schema.Boolean.annotations({
     description: "True for a listing the site marks as sponsored",
   }),
@@ -90,7 +90,7 @@ export default defineOperation(
   {
     name: "search_listings",
     input: Schema.Struct({
-      query: Schema.NonEmptyString.annotations({ description: "What to search the listings for" }),
+      query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({ description: "What to search the listings for" }),
       ...listInputFields,
     }),
     output: Schema.Struct({
@@ -132,7 +132,7 @@ ${readPageCode(count)}`,
     const search = (count: number) =>
       run(
         `${navigate(siteOrigin)}
-await page.locator("#q").fill(${JSON.stringify(input.query)}, { timeout: waitLimits.action });`,
+await page.locator("#q").fill(${JSON.stringify(input.query.trim())}, { timeout: waitLimits.action });`,
         `() => page.locator("#go").click({ timeout: waitLimits.action })`,
         count,
       );
@@ -173,8 +173,8 @@ await page.locator("#q").fill(${JSON.stringify(input.query)}, { timeout: waitLim
 );
 
 const Room = Schema.Struct({
-  id: Schema.NonEmptyString.annotations({ description: "The room's ID on the site" }),
-  name: Schema.NonEmptyString.annotations({ description: "The room's name" }),
+  id: Schema.NonEmptyTrimmedString.annotations({ description: "The room's ID on the site" }),
+  name: Schema.NonEmptyTrimmedString.annotations({ description: "The room's name" }),
 });
 type Room = typeof Room.Type;
 
@@ -183,7 +183,7 @@ type Room = typeof Room.Type;
  * show past them, whether "Show more" is still offered, and how many rows one step adds.
  */
 const Listed = Schema.Struct({
-  rows: Schema.Array(Schema.Struct({ key: Schema.NonEmptyString, name: Schema.NonEmptyString })),
+  rows: Schema.Array(Schema.Struct({ key: Schema.NonEmptyTrimmedString, name: Schema.NonEmptyTrimmedString })),
   more: Schema.Boolean,
   hasNext: Schema.Boolean,
   stepSize: Schema.Int.pipe(Schema.positive()),

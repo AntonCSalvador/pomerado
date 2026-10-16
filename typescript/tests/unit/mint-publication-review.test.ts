@@ -338,6 +338,14 @@ describe("reviewPublication", () => {
     ]);
   });
 
+  it("gives the review its reference files apart from its evidence", async () => {
+    const { requests, review } = recordingReview();
+    const references = new Map([[".agents/core/SKILL.md", "# Core"]]);
+    await Effect.runPromise(reviewPublication(review, { ...candidate, references }));
+    expect(requests[0]?.references).toBe(references);
+    expect([...(requests[0]?.evidence.keys() ?? [])]).not.toContain(".agents/core/SKILL.md");
+  });
+
   it("passes the review's denial through as it came", async () => {
     const denial = new MintFailure({
       code: "ReviewDenied",
