@@ -13,7 +13,7 @@ import { guardianContinuityPolicy } from "./session.js";
 import { guardianPublicationPolicy } from "./publication.js";
 import { publicationDeltaPolicy } from "./publication-delta.js";
 import { guardianModel, guardianModelCallBound } from "./model.js";
-import type { GuardianModelCallBound } from "./model.js";
+import type { GuardianModelCallBound, GuardianReasoningEffort } from "./model.js";
 import { sourceMatches } from "./source.js";
 import { providerQuotaExhausted } from "../models/provider-quota.js";
 import { modelUsageCounts } from "../models/model-usage.js";
@@ -57,11 +57,15 @@ export interface GuardianModelOptions {
    * A host may supply its own publication policy: a `policy` for a publication review replaces
    * the core publication policy, and that review then gets only the input and turn limit the
    * host sends, with no core `trusted_publication` index or 32-turn default.
+   *
+   * `reasoningEffort` sets this review's reasoning effort, `medium` when absent, on the same
+   * model as every other review. Each review's effort is reported in its `guardian.usage`.
    */
   readonly specialize?: (turn: ReviewTurn) => {
     readonly policy?: string;
     readonly input?: Readonly<Record<string, unknown>>;
     readonly maxTurns?: number;
+    readonly reasoningEffort?: GuardianReasoningEffort;
   };
   /**
    * How long one model call may go without a response before the reviewer sends that same call
@@ -182,10 +186,11 @@ const reviewInput = (turn: ReviewTurn, options: GuardianModelOptions) => {
   });
 };
 
-/** The review's token counts over all its model calls. */
-const guardianUsage = (usage: Usage): GuardianUsage => ({
+/** The review's token counts over all its model calls, and the effort it ran at. */
+const guardianUsage = (usage: Usage, reasoningEffort: GuardianReasoningEffort): GuardianUsage => ({
   modelCalls: usage.requests,
   ...modelUsageCounts(usage),
+  reasoningEffort,
 });
 
 /** What a readable record shows in place of one private review's exchange. */
@@ -424,10 +429,13 @@ const reviewerWithPolicy = (policy: string, options: GuardianModelOptions): Revi
               return "Source unavailable; do not assume the omitted source is safe.";
             },
           });
+          const specialized = options.specialize?.(turn);
+          const reasoningEffort =
+            specialized?.reasoningEffort ?? guardianModel.modelSettings.reasoning.effort;
           const agent = new Agent({
             name: "Pomerado Guardian",
             ...guardianModel,
-            modelSettings: guardianReviewSettings(turn),
+            modelSettings: guardianReviewSettings(turn, reasoningEffort),
             instructions: guardianInstructions(policy, turn),
             outputType: guardianDecisionFormat,
             tools: [readSource],
@@ -471,7 +479,6 @@ const reviewerWithPolicy = (policy: string, options: GuardianModelOptions): Revi
           const input = reviewInput(turn, options);
           diagnostics?.started(input);
           // A publication review reads its whole evidence index, so the core one gets more turns.
-          const specialized = options.specialize?.(turn);
           const maxTurns =
             specialized?.maxTurns ?? (corePublicationReview(turn, specialized) ? 32 : 12);
           let activeState = await Effect.runPromise(
@@ -609,9 +616,10 @@ const reviewerWithPolicy = (policy: string, options: GuardianModelOptions): Revi
             );
             if (turn.session)
               await Effect.runPromise(turn.session.observe(result.history), { signal });
-            await Effect.runPromise(turn.reportUsage?.(guardianUsage(usage)) ?? Effect.void, {
-              signal,
-            });
+            await Effect.runPromise(
+              turn.reportUsage?.(guardianUsage(usage, reasoningEffort)) ?? Effect.void,
+              { signal },
+            );
             const output: unknown = result.finalOutput;
             return output;
           } finally {
