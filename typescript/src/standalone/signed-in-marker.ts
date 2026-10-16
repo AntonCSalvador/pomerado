@@ -1,10 +1,11 @@
-import { Clock, Duration, Effect, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
   openAutofillLogin,
   type AutofillPage,
   type AutofillSignedIn,
   type AutofillSignedInCheck,
 } from "../destinations/autofill-step.js";
+import { settledMarkerCheck } from "../destinations/marker-settle.js";
 import {
   evaluateSignedInMarker,
   matchSignedOutSnapshots,
@@ -201,12 +202,6 @@ const redirects = await within(
 ).catch(() => late);
 return redirects === late || redirects === 0;`;
 
-/**
- * How long a loaded page may take to show the marker: the host checks it again each interval
- * until `totalMs` after its first check, by the clock, however long each check takes.
- */
-const markerSettle = { totalMs: 10_000, intervalMs: 500 };
-
 /** The most pages a build notes as explored signed in, newest last. */
 const keptPaths = 10;
 
@@ -252,17 +247,7 @@ export const makeMarkerChecks = (input: {
   // check loads it; each later one reads the page as it is. Any failure but a marker not shown
   // ends the wait.
   const load = (indicator: AutofillSignedIn, path: string) =>
-    Effect.gen(function* () {
-      let checked = yield* input.check({ ...indicator, openPath: path });
-      const until = (yield* Clock.currentTimeMillis) + markerSettle.totalMs;
-      while (!checked.signedIn && checked.failed === "indicator_not_visible") {
-        const left = until - (yield* Clock.currentTimeMillis);
-        if (left <= 0) break;
-        yield* Effect.sleep(Duration.millis(Math.min(markerSettle.intervalMs, left)));
-        checked = yield* input.check(indicator);
-      }
-      return checked;
-    });
+    settledMarkerCheck(input.check, { ...indicator, openPath: path });
   return {
     /**
      * Keeps the page a reset left signed out: one that cleared the browser's cookies and site

@@ -38,6 +38,7 @@ import {
 } from "effect";
 import type { ModelDiagnosticTiming } from "../models/model-diagnostic-timing.js";
 import type { RuntimeRecordInput } from "../models/model-runtime-record.js";
+import type { GuardianReasoningEffort } from "./model.js";
 import {
   cutToLimit,
   GuardianAction,
@@ -128,6 +129,11 @@ export const GuardianDecision = Schema.Struct({
   /** A publication review's finite reason; execution reviews have none. */
   reason: Schema.optional(Schema.suspend(() => PublicationReason)),
   findings: Schema.optional(Schema.Array(Schema.suspend(() => PublicationFinding))),
+  /**
+   * A publication denial's one short sentence its caller may read: why the tool was not
+   * published, in plain words, apart from the private rationale. Other kinds have none.
+   */
+  publicReason: Schema.optional(Schema.String.pipe(Schema.minLength(1))),
   /**
    * An execution review's label of what the code does on the website. Every execution allow
    * carries one; a deny or escalate may. Other kinds have none.
@@ -437,6 +443,8 @@ export interface GuardianUsage {
   readonly cacheWriteTokens: number;
   readonly outputTokens: number;
   readonly reasoningTokens: number;
+  /** The reasoning effort the review ran at; a host's own reviewer may leave it out. */
+  readonly reasoningEffort?: GuardianReasoningEffort;
 }
 
 /** What the host puts in view before the reviewer runs. */

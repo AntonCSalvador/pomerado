@@ -9,7 +9,7 @@ import type { KernelOperationContext } from "../../src/browser/index.js";
 // unasked. An account-specific value (a passenger, saved card or address) would be a free-form
 // input, never an enum member, example or default.
 export const OrderInput = Schema.Struct({
-  item: Schema.NonEmptyString.annotations({ description: "Item to order, as the site names it" }),
+  item: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({ description: "Item to order, as the site names it" }),
   quantity: Schema.Int.pipe(Schema.between(1, 99)).annotations({
     description: "How many to order, 1 to 99",
   }),
@@ -17,7 +17,7 @@ export const OrderInput = Schema.Struct({
 });
 type OrderInput = typeof OrderInput.Type;
 const Placed = Schema.Struct({
-  order_number: Schema.NonEmptyString.annotations({
+  order_number: Schema.NonEmptyTrimmedString.annotations({
     description: "Order number from the confirmation",
   }),
 });
@@ -26,7 +26,7 @@ const Filled = Schema.Union(
   Schema.Struct({ failure: Schema.Literal("checkout_changed") }),
 );
 const Confirmed = Schema.Union(
-  Schema.Struct({ order_number: Schema.NonEmptyString }),
+  Schema.Struct({ order_number: Schema.NonEmptyTrimmedString }),
   Schema.Struct({ failure: Schema.Literal("review_missing", "not_confirmed") }),
 );
 type Context = KernelOperationContext<OrderInput>;

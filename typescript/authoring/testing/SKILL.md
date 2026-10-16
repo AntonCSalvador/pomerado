@@ -104,7 +104,13 @@ error with the source line that threw. Name cases in action `plan` to read their
 and check what they mean, not just pass or fail: every item matches the filters, the order follows
 the sort, the applied location is the one asked for or labeled as another, page 2 differs from
 page 1. A failing case is a bug in the tool: fix the code at that line. Never drop the input, narrow the schema or change a
-case's expectation to match what it returned to make it pass; fix the code. While a fix is in
+case's expectation to match what it returned to make it pass; fix the code. The one exception
+is a case that expected an answer the site itself does not give for that input, such as `result`
+where the site shows its own no-results page: confirm it in a capture of a page reached through
+the site's own controls or a URL they produce, that reads back the input as the site applied it
+and shows the site's no-results state, never a challenge, error, sign-in, blocked or loading
+page. Then change the expectation to what the site shows, and name that capture in the case's
+`purpose` and in `coverage`; review accepts the change only against it. While a fix is in
 progress, prefer rerunning only the failing cases, all of them together in one batch named in
 `cases`, not one batch each: a batch of every case waits on its slowest case, each batch waits on
 its own review, and the cases that passed run again once after your last edit. A

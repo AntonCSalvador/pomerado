@@ -244,7 +244,7 @@ export const reviewFailureOf = (error: ReviewFailure, dispatch?: "not_sent") =>
  */
 export const reviewDenied = (
   reviewId: string,
-  decision: Pick<GuardianDecision, "rationale" | "reason" | "findings"> & {
+  decision: Pick<GuardianDecision, "rationale" | "reason" | "findings" | "publicReason"> & {
     readonly outcome: "deny" | "escalate";
   },
 ) =>
@@ -256,5 +256,6 @@ export const reviewDenied = (
       rationale: decision.rationale,
       reviewId,
       ...(decision.findings === undefined ? {} : { findings: decision.findings }),
+      ...(decision.publicReason === undefined ? {} : { publicReason: decision.publicReason }),
     },
   });
