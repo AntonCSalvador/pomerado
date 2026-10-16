@@ -104,8 +104,8 @@ const formControlText = (text) => {
     .toLowerCase();
   return folded === "" ? String(text ?? "").trim() : folded;
 };
-const formControlFrame = async (control) => {
-  const handle = await control.elementHandle();
+const formControlFrame = async (control, options) => {
+  const handle = await control.elementHandle(options);
   const frame = handle === null ? null : await handle.ownerFrame();
   return frame ?? control.page().mainFrame();
 };
@@ -166,6 +166,8 @@ const formControlChooseNative = async (control, wanted, timeout) => {
       value: option.value,
       disabled: option.disabled || (option.parentElement instanceof HTMLOptGroupElement && option.parentElement.disabled),
     })),
+    undefined,
+    { timeout },
   );
   const picked = formControlPick(
     options.map((option) => ({ ...option, label: formControlText(option.label), value: formControlText(option.value) })),
@@ -173,20 +175,20 @@ const formControlChooseNative = async (control, wanted, timeout) => {
   );
   if (picked.failure) throw formControlFailure(picked.failure);
   await control.selectOption({ index: picked.option.index }, { timeout });
-  if ((await control.evaluate((select) => select.selectedIndex)) !== picked.option.index)
+  if ((await control.evaluate((select) => select.selectedIndex, undefined, { timeout })) !== picked.option.index)
     throw formControlFailure("not_committed");
   const chosen = options[picked.option.index];
   return { shape: "select", label: chosen.label.trim(), value: chosen.value };
 };
-const formControlListbox = async (control, frame, until) => {
+const formControlListbox = async (control, frame, until, timeout) => {
   while (true) {
-    const ids = [await control.getAttribute("aria-controls"), await control.getAttribute("aria-owns")]
+    const ids = [await control.getAttribute("aria-controls", { timeout }), await control.getAttribute("aria-owns", { timeout })]
       .filter(Boolean)
       .flatMap((value) => value.split(/\s+/).filter(Boolean));
     for (const id of ids) {
       const owned = frame.locator("[id=" + JSON.stringify(id) + "]");
       if ((await owned.count()) !== 1 || !(await owned.isVisible())) continue;
-      if ((await owned.getAttribute("role")) === "listbox") return owned;
+      if ((await owned.getAttribute("role", { timeout })) === "listbox") return owned;
       const inner = owned.locator("[role=listbox]");
       if ((await inner.count()) === 1) return inner;
       return owned;
@@ -215,15 +217,17 @@ const formControlOptions = (listbox) =>
   );
 const formControlChooseCustom = async (control, wanted, timeout) => {
   const until = Date.now() + timeout;
-  const frame = await formControlFrame(control);
-  if ((await control.getAttribute("aria-expanded")) !== "true") await control.click({ timeout });
+  const frame = await formControlFrame(control, { timeout });
+  if ((await control.getAttribute("aria-expanded", { timeout })) !== "true") await control.click({ timeout });
   const editable = await control.evaluate(
     (element) => element instanceof HTMLInputElement && !element.readOnly && !element.disabled,
+    undefined,
+    { timeout },
   );
   let typed = false;
   // A dropdown that filters as you type can list nothing until something is typed.
   let listbox = editable
-    ? await formControlListbox(control, frame, Math.min(until, Date.now() + 500)).catch((error) => {
+    ? await formControlListbox(control, frame, Math.min(until, Date.now() + 500), timeout).catch((error) => {
         if (error.name !== "FormControlFailure") throw error;
         return null;
       })
@@ -232,7 +236,7 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
     await control.fill(wanted[0], { timeout });
     typed = true;
   }
-  listbox ??= await formControlListbox(control, frame, until);
+  listbox ??= await formControlListbox(control, frame, until, timeout);
   let picked = { failure: "option_missing" };
   let options = [];
   let stuck = 0;
@@ -256,7 +260,7 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
       const before = element.scrollTop;
       element.scrollTop = before + Math.max(element.clientHeight, 1);
       return element.scrollTop !== before;
-    });
+    }, undefined, { timeout });
     // Options the scroll asked for can take a moment to arrive; a list that stays put has no more.
     if (moved) stuck = 0;
     else if (!editable && ++stuck > 10) break;
@@ -274,6 +278,8 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
   while (true) {
     const shown = await control.evaluate((element) =>
       element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.value : element.textContent,
+      undefined,
+      { timeout },
     );
     const selected = await option.getAttribute("aria-selected", { timeout: 100 }).catch(() => null);
     if (names.some((name) => phrase(shown).includes(name)) || selected === "true")
@@ -286,7 +292,7 @@ const chooseOption = async (control, wanted, options = {}) => {
   const timeout = options.timeout ?? 10000;
   const choices = (Array.isArray(wanted) ? wanted : [wanted]).map(String);
   if (choices.length === 0) throw formControlFailure("option_missing");
-  const shape = await formControlShape(control);
+  const shape = await formControlShape(control, { timeout });
   if (shape === "select") return formControlChooseNative(control, choices, timeout);
   if (shape === "combobox") return formControlChooseCustom(control, choices, timeout);
   throw formControlFailure("control_unsupported");
@@ -296,13 +302,13 @@ const formControlSameText = (shown, expected) =>
   formControlText(shown).replace(/[^\p{L}\p{N}]/gu, "") === formControlText(expected).replace(/[^\p{L}\p{N}]/gu, "");
 const fillDate = async (control, iso, format, options = {}) => {
   const timeout = options.timeout ?? 10000;
-  const shape = await formControlShape(control);
-  const frame = await formControlFrame(control);
+  const shape = await formControlShape(control, { timeout });
+  const frame = await formControlFrame(control, { timeout });
   const locale = (await frame.evaluate(() => document.documentElement.lang).catch(() => "")) || "en-US";
   if (shape === "date") {
     formatDate(iso, "YYYY-MM-DD");
     await control.fill(iso, { timeout });
-    if ((await control.inputValue()) !== iso) throw formControlFailure("not_committed");
+    if ((await control.inputValue({ timeout })) !== iso) throw formControlFailure("not_committed");
     return { shape };
   }
   if (shape === "select" || shape === "combobox") {
@@ -312,13 +318,13 @@ const fillDate = async (control, iso, format, options = {}) => {
   if (shape !== "text") throw formControlFailure("control_unsupported");
   const text = formatDate(iso, format, locale);
   await control.fill(text, { timeout });
-  if (formControlSameText(await control.inputValue(), text)) return { shape };
+  if (formControlSameText(await control.inputValue({ timeout }), text)) return { shape };
   // A masked field rewrites what is filled at once; it takes the date typed key by key, with or
   // without its separators.
   for (const keys of [text, text.replace(/[^\p{L}\p{N}]/gu, "")]) {
     await control.fill("", { timeout });
     await control.pressSequentially(keys, { timeout });
-    if (formControlSameText(await control.inputValue(), text)) return { shape };
+    if (formControlSameText(await control.inputValue({ timeout }), text)) return { shape };
   }
   throw formControlFailure("not_committed");
 };
