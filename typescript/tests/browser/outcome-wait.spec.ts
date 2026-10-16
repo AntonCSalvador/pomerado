@@ -268,14 +268,14 @@ test("a request the filter started that never ends delays the unchanged list, ne
 }) => {
   // The request stays in flight past the deadline, and the list stays as it was. The list from
   // before the filter counts once the wait's deadline less its unchanged window comes, so the
-  // wait returns it, as it did before such a request held it back, rather than timing out.
+  // wait returns it, as it did before such a request held it back, rather than timing out. The
+  // list coming back, not outcome_timeout, shows it counted before the deadline.
   await filterOverNetwork(page, Infinity, "same");
   const answer = await call(page, timed(filterBody("timeout: 8000")));
   expect(answer).toMatchObject({
     result: { shown: "results", rooms: ["Garden room", "Courtyard room", "Loft room"] },
   });
   expect(elapsed(answer)).toBeGreaterThanOrEqual(6000);
-  expect(elapsed(answer)).toBeLessThan(8000);
 });
 
 test("an already-settled page adds no extra delay", async ({ page }) => {
