@@ -722,6 +722,85 @@ it("bounds the decision ledger a blocked explanation's review reads", async () =
   );
 });
 
+/**
+ * The decision ledger a takeover's blocked review reads after its predecessor's execution was
+ * denied, from the predecessor's checkpoint as `edit` leaves it.
+ */
+const ledgerAfterTakeover = async (edit: (checkpoint: Record<string, unknown>) => void) => {
+  let capture: (() => MintHarnessSnapshot) | undefined;
+  const first = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        yield* turn.actions.execute({ ...execution, purpose: "explore" });
+      }),
+    {
+      reviewAndExecute: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: { outcome: "deny", rationale: "The call creates server-side state." },
+          }),
+        ),
+      agentRecovery: {
+        bindHarness: (bound) =>
+          Effect.sync(() => {
+            capture = bound;
+          }),
+        save: () => Effect.void,
+      },
+    },
+  );
+  await first.run();
+  const checkpoint = JSON.parse(JSON.stringify(capture?.())) as Record<string, unknown>;
+  edit(checkpoint);
+  const harness = Schema.decodeUnknownSync(MintHarnessSnapshot)(checkpoint);
+  const ledgers: unknown[] = [];
+  const takeover = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        const reportBlocked = turn.actions.reportBlocked;
+        if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+        yield* reportBlocked({ reason: "policy", explanation: "Guardian refused the call." });
+      }),
+    {
+      reviewQuestion: (_request, options) =>
+        Effect.sync(() => {
+          ledgers.push(options?.decisionLedger);
+          return { outcome: "allow_business" as const, rationale: "Consistent." };
+        }),
+      agentRecovery: { initial: { agent: freshAgent, harness }, save: () => Effect.void },
+    },
+  );
+  await takeover.run();
+  return ledgers;
+};
+
+// A takeover's blocked review read an empty ledger as host evidence that nothing was denied,
+// though its predecessor's execution was.
+it("keeps the decision ledger's denials across a takeover", async () => {
+  const ledgers = await ledgerAfterTakeover(() => undefined);
+  expect(ledgers).toEqual([
+    {
+      denials: [
+        expect.objectContaining({
+          review: "execution",
+          outcome: "deny",
+          rationale: "The call creates server-side state.",
+        }),
+      ],
+      testFailures: [],
+    },
+  ]);
+});
+
+// A checkpoint from an older worker kept no ledger, so a missing denial there proves nothing.
+it("marks the decision ledger partial after a takeover from a checkpoint without one", async () => {
+  const ledgers = await ledgerAfterTakeover((checkpoint) => {
+    delete checkpoint["decisionLedger"];
+  });
+  expect(ledgers).toEqual([{ partial: true, denials: [], testFailures: [] }]);
+});
+
 // A takeover in the middle of a blocked explanation's review outage keeps it resubmittable, so the
 // build can still end blocked instead of looping on the refusal until it runs out of calls.
 it("ends blocked after a takeover during a blocked explanation's review outage", async () => {

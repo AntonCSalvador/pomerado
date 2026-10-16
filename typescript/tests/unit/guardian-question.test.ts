@@ -308,8 +308,8 @@ it("gives the blocked-explanation review the host's decision ledger as trusted e
     ],
     testCounts: { pass: 0, fail: 2, inconclusive: 0 },
     testFailures: [
-      { caseId: "case-1", verdict: "fail", got: "SiteRefusal", errorClass: "SiteRefusal" },
-      { caseId: "case-2", verdict: "fail", got: "SiteRefusal", errorClass: "SiteRefusal" },
+      { caseId: "case-1", verdict: "fail", toolReported: { errorClass: "SiteRefusal" } },
+      { caseId: "case-2", verdict: "fail", toolReported: { errorClass: "SiteRefusal" } },
     ],
   } as const;
   const requests = scripted([[message({ outcome: "allow_business", rationale: "Allowed." })]]);

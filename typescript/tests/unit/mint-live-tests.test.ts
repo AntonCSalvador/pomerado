@@ -1377,15 +1377,18 @@ it("never restores the HTTP version's results as the Playwright version's after 
 
 // Guardian's review of a blocked report read only the latest publication refusals' codes. The
 // earlier denials it had to check the report against lived only in its own compacted
-// conversation, so it rejected a true report as not established by the evidence.
+// conversation, so it rejected a true report as not established by the evidence. What a failing
+// case threw is the agent's own tool code speaking, so the ledger keeps it apart from host facts.
 it("shows the blocked-explanation review the build's denials and failing cases", async () => {
+  const toolMessage = "The site demands a human check on every request; automation cannot continue";
   const { host } = liveTestHost({
     "sort-price": {
       status: "failed",
-      errorClass: "SiteRefusal",
-      message: "The site answered: session state missing",
+      errorClass: "SiteRequiresHumanVerification",
+      message: toolMessage,
       frame: "src/tool.ts:12",
     },
+    "page-2": { status: "failed", errorClass: "E".repeat(400) },
     nothing: { status: "completed", output: { results: [], has_next_page: false, next_cursor: null } },
   });
   const explore = { ...example, purpose: "explore" };
@@ -1427,15 +1430,15 @@ it("shows the blocked-explanation review the build's denials and failing cases",
               reason: "source_correction",
               reviewId: "review_publication",
               rationale: publicationRationale,
-              findings: [
-                {
+              findings: [findingExplanation, "Second.", "Third.", "Fourth.", "Fifth."].map(
+                (explanation) => ({
                   path: "src/tool.ts",
                   byteStart: 0,
                   byteEnd: 10,
-                  category: "schema_mismatch",
-                  explanation: findingExplanation,
-                },
-              ],
+                  category: "schema_mismatch" as const,
+                  explanation,
+                }),
+              ),
             },
           }),
         ),
@@ -1468,18 +1471,20 @@ it("shows the blocked-explanation review the build's denials and failing cases",
           reason: "source_correction",
           reviewId: "review_publication",
           rationale: publicationRationale,
-          findings: [findingExplanation],
+          findings: [findingExplanation, "Second.", "Third.", "Fourth."],
+          omittedFindings: 1,
         },
       ],
-      testCounts: { pass: 3, fail: 1, inconclusive: 0 },
-      testFailures: [
-        {
-          caseId: "sort-price",
-          verdict: "fail",
-          errorClass: "SiteRefusal",
-          message: "The site answered: session state missing",
-        },
-      ],
+      testCounts: { pass: 2, fail: 2, inconclusive: 0 },
     },
   });
+  const failures = reviewed[0]?.decisionLedger?.testFailures ?? [];
+  // The verdict is the host's; the error class and message are only what the tool reported.
+  expect(failures[0]).toEqual({
+    caseId: "sort-price",
+    entrypoint: "src/tool.ts",
+    verdict: "fail",
+    toolReported: { errorClass: "SiteRequiresHumanVerification", message: toolMessage },
+  });
+  expect(failures[1]?.toolReported?.errorClass?.length).toBeLessThanOrEqual(120);
 });

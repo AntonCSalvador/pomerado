@@ -86,6 +86,7 @@ import type {
   MintHarnessSnapshot,
   DecisionLedger,
   LedgerDenial,
+  LedgerTestFailure,
   PublicationDecision,
   PublicationRecovery,
   SpentSignIn,
@@ -356,6 +357,8 @@ const ledgerBounds = {
   findingChars: 300,
   testFailures: 20,
   messageChars: 300,
+  errorClassChars: 120,
+  gotChars: 120,
 } as const;
 const capped = (text: string, chars: number) =>
   text.length <= chars ? text : `${text.slice(0, chars - 1)}…`;
@@ -1029,24 +1032,32 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       let guardianRefused = recovered?.guardianRefused === true;
       /**
-       * This attempt's Guardian denials as the minter read them, the latest first to go past the
-       * bound, for the blocked explanation's review. Memory only: a takeover starts without them.
+       * This build's Guardian denials, the oldest first to go past the bound, for the blocked
+       * explanation's review; a takeover restores them. A checkpoint from an older worker kept
+       * none, so the ledger is partial from then on.
        */
-      const ledgerDenials: LedgerDenial[] = [];
-      let omittedLedgerDenials = 0;
-      const recordDenial = (denial: Omit<LedgerDenial, "decidedAt">) =>
+      const ledgerDenials: LedgerDenial[] = [...(recovered?.decisionLedger?.denials ?? [])];
+      let omittedLedgerDenials = recovered?.decisionLedger?.omittedDenials ?? 0;
+      const ledgerPartial =
+        recovered !== undefined &&
+        (recovered.decisionLedger === undefined || recovered.decisionLedger.partial === true);
+      const recordDenial = (denial: Omit<LedgerDenial, "decidedAt" | "omittedFindings">) =>
         Effect.gen(function* () {
+          const findings = denial.findings ?? [];
           ledgerDenials.push({
             ...denial,
             decidedAt: yield* Clock.currentTimeMillis,
             rationale: capped(denial.rationale, ledgerBounds.rationaleChars),
-            ...(denial.findings === undefined || denial.findings.length === 0
+            ...(findings.length === 0
               ? {}
               : {
-                  findings: denial.findings
+                  findings: findings
                     .slice(0, ledgerBounds.findings)
                     .map((finding) => capped(finding, ledgerBounds.findingChars)),
                 }),
+            ...(findings.length > ledgerBounds.findings
+              ? { omittedFindings: findings.length - ledgerBounds.findings }
+              : {}),
           });
           const over = ledgerDenials.length - ledgerBounds.denials;
           if (over > 0) {
@@ -2853,7 +2864,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       };
       /**
        * Guardian's question review of a blocked explanation before any caller reads it, with the
-       * host's publication refusals and the attempt's decision ledger. `allow_business` shows it;
+       * host's publication refusals and the build's decision ledger. `allow_business` shows it;
        * an unavailable review is offered back for resubmission under the review outage budget
        * (`retry`), and past it, or for any other failure, leaves the reason's fixed sentence alone,
        * never the agent's words; any other outcome goes back to the agent with its rationale.
@@ -3227,12 +3238,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         const failing = [...liveTestReplaced, ...latest].filter(
           (record) => record.verdict !== "pass",
         );
-        if (ledgerDenials.length === 0 && latest.length === 0 && liveTestReplaced.length === 0)
+        if (
+          !ledgerPartial &&
+          ledgerDenials.length === 0 &&
+          latest.length === 0 &&
+          liveTestReplaced.length === 0
+        )
           return undefined;
         const shown = failing.slice(-ledgerBounds.testFailures);
         const count = (verdict: LiveTestRecord["verdict"]) =>
           latest.filter((record) => record.verdict === verdict).length;
         return {
+          ...(ledgerPartial ? { partial: true as const } : {}),
           denials: [...ledgerDenials],
           ...(omittedLedgerDenials === 0 ? {} : { omittedDenials: omittedLedgerDenials }),
           ...(latest.length === 0
@@ -3244,18 +3261,29 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   inconclusive: count("inconclusive"),
                 },
               }),
-          testFailures: shown.map((record) => ({
-            caseId: record.id,
-            ...(record.entrypoint === undefined ? {} : { entrypoint: record.entrypoint }),
-            verdict: record.verdict === "fail" ? "fail" : "inconclusive",
-            got: record.got,
-            ...(record.errorClass === undefined ? {} : { errorClass: record.errorClass }),
-            // Screened when the batch recorded it.
-            ...(record.message === undefined
-              ? {}
-              : { message: capped(record.message, ledgerBounds.messageChars) }),
-            ...(record.retired === true ? { retired: true as const } : {}),
-          })),
+          testFailures: shown.map((record): LedgerTestFailure => {
+            // What the tool threw is its own account. `got` repeats its error class when it threw,
+            // and is otherwise the host's reading of the result.
+            const toolReported = {
+              ...(record.errorClass === undefined
+                ? {}
+                : { errorClass: capped(record.errorClass, ledgerBounds.errorClassChars) }),
+              // Screened when the batch recorded it.
+              ...(record.message === undefined
+                ? {}
+                : { message: capped(record.message, ledgerBounds.messageChars) }),
+            };
+            return {
+              caseId: record.id,
+              ...(record.entrypoint === undefined ? {} : { entrypoint: record.entrypoint }),
+              verdict: record.verdict === "fail" ? "fail" : "inconclusive",
+              ...(record.errorClass === undefined
+                ? { got: capped(record.got, ledgerBounds.gotChars) }
+                : {}),
+              ...(Object.keys(toolReported).length === 0 ? {} : { toolReported }),
+              ...(record.retired === true ? { retired: true as const } : {}),
+            };
+          }),
           ...(failing.length > shown.length
             ? { omittedTestFailures: failing.length - shown.length }
             : {}),
@@ -5532,6 +5560,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         reviewUnavailableRetries: { ...reviewUnavailableRetries },
         ...(reviewOutageStartedAt === undefined ? {} : { reviewOutageStartedAt }),
         ...(invalidOutcomes === 0 ? {} : { invalidOutcomes }),
+        decisionLedger: {
+          denials: [...ledgerDenials],
+          ...(omittedLedgerDenials === 0 ? {} : { omittedDenials: omittedLedgerDenials }),
+          ...(ledgerPartial ? { partial: true as const } : {}),
+        },
         ...(blockedReviewUnavailable ? { blockedReviewUnavailable: true as const } : {}),
         ...(guardianRefused ? { guardianRefused: true as const } : {}),
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),

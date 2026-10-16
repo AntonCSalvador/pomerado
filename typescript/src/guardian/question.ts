@@ -56,7 +56,7 @@ export interface PendingQuestion {
    */
   readonly publicationDecisions?: readonly PublicationDecision[];
   /**
-   * Host evidence for a blocked report: the attempt's Guardian denials and failing live test cases,
+   * Host evidence for a blocked report: the build's Guardian denials and failing live test cases,
    * as the harness recorded them, so the report is judged against them and not against what the
    * review's conversation still holds.
    */
