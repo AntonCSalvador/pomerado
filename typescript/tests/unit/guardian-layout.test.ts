@@ -726,7 +726,10 @@ it.each([
       ),
     );
     expect(result).toMatchObject({ _tag: "Left", left: { code } });
-    expect(events.map((event) => event.name)).toContain("guardian.review_retried");
+    // A decision that does not decode is no outage, so only the provider error is retried.
+    if (code === "Unavailable")
+      expect(events.map((event) => event.name)).toContain("guardian.review_retried");
+    else expect(events.map((event) => event.name)).not.toContain("guardian.review_retried");
     // Each attempt's timing and the model's finite timing are kept, and are checked below too.
     const failed = events.filter((event) => event.name === "guardian.failed");
     expect(failed.length).toBeGreaterThan(0);

@@ -24,7 +24,18 @@ import {
 } from "../runtime/failure-detail.js";
 import type { FailureDetail } from "../runtime/failure-detail.js";
 import { randomUUID } from "node:crypto";
-import { Cause, Clock, Data, Duration, Effect, Option, Schema } from "effect";
+import {
+  Cause,
+  Clock,
+  Data,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Runtime,
+  Schema,
+} from "effect";
 import type { ModelDiagnosticTiming } from "../models/model-diagnostic-timing.js";
 import type { RuntimeRecordInput } from "../models/model-runtime-record.js";
 import {
@@ -124,6 +135,10 @@ export type GuardianDecision = typeof GuardianDecision.Type;
 export class ReviewFailure extends Data.TaggedError("ReviewFailure")<{
   readonly code:
     | "Unavailable"
+    /**
+     * The review's decision does not decode, still after the in-review correction that named the
+     * error. Reviewing the same input again repeats it, so it is never retried as an outage.
+     */
     | "InvalidDecision"
     /**
      * The review returned an outcome its kind does not return, still after the in-review
@@ -444,9 +459,9 @@ export interface ReviewTurn {
   readonly uncountedReads?: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
   /**
    * The follow-up the reviewer sends, in the same review, when the host cannot take its output
-   * yet: once for an outcome the review's kind does not return (never for a private host kind),
-   * and up to twice for a required read it did not do. Undefined when the output stands; a
-   * reviewer sends at most `reviewFollowUpRounds`.
+   * yet: once for an outcome the review's kind does not return and once for a decision that does
+   * not decode (neither for a private host kind), and up to twice for a required read it did not
+   * do. Undefined when the output stands; a reviewer sends at most `reviewFollowUpRounds`.
    */
   readonly followUp?: (raw: unknown) => string | undefined;
   readonly reportUsage?: (usage: GuardianUsage) => Effect.Effect<void>;
@@ -509,9 +524,9 @@ export interface ReviewRetry {
 }
 
 /**
- * Production retry for Guardian outages: provider errors, a decision that does not decode and a
- * required source read that failed. A review that ran out of turns or whose model call stalled is
- * not an outage, and is not started again.
+ * Production retry for Guardian outages: provider errors and a required source read that failed.
+ * A review that ran out of turns, whose model call stalled or whose decision did not decode is not
+ * an outage, and is not started again.
  */
 export const guardianOutageRetry: ReviewRetry = {
   delays: ["2 seconds", "5 seconds", "15 seconds", "30 seconds", "60 seconds"],
@@ -526,9 +541,7 @@ const retriableOutage = (failure: ReviewFailure): boolean =>
   failure.modelQuotaExhausted !== true &&
   failure.reviewPhase !== "diagnostic_retention" &&
   failure.diagnosticRetentionReason === undefined &&
-  (failure.code === "Unavailable" ||
-    failure.code === "InvalidDecision" ||
-    failure.code === "SourceUnavailable");
+  (failure.code === "Unavailable" || failure.code === "SourceUnavailable");
 
 export interface Reviewer {
   readonly run: (turn: ReviewTurn) => Effect.Effect<unknown, ReviewFailure>;
@@ -574,8 +587,34 @@ const completeSession = (session?: GuardianSession) =>
 /** The most follow-up rounds one review gets for a required read it skipped. */
 const requiredReadRounds = 2;
 
-/** The most follow-up rounds one review gets: one outcome correction and the required reads. */
-export const reviewFollowUpRounds = requiredReadRounds + 1;
+/**
+ * The most follow-up rounds one review gets: one outcome correction, one decode correction and
+ * the required reads.
+ */
+export const reviewFollowUpRounds = requiredReadRounds + 2;
+
+/** The longest decode error a follow-up quotes. */
+const decodeErrorLimit = 2000;
+
+/**
+ * Why a decision fails to decode, when its decode settles at once with `InvalidDecision`.
+ * Undefined when it decodes, fails otherwise, or needs asynchronous work, which is stopped.
+ */
+const decodeError = (decoded: Effect.Effect<unknown, ReviewFailure>): string | undefined => {
+  const exit = Effect.runSyncExit(decoded);
+  if (Exit.isSuccess(exit)) return undefined;
+  const defect = Option.getOrUndefined(Cause.dieOption(exit.cause));
+  if (Runtime.isAsyncFiberException(defect)) {
+    Effect.runFork(Fiber.interrupt(defect.fiber));
+    return undefined;
+  }
+  const failure = Option.getOrUndefined(Cause.failureOption(exit.cause));
+  if (failure?.code !== "InvalidDecision") return undefined;
+  return cutToLimit(
+    failure.failureDetail?.underlying?.message ?? "It does not match the output format.",
+    decodeErrorLimit,
+  );
+};
 
 const decisionFailure = (
   error: unknown,
@@ -799,6 +838,8 @@ export const makeGuardian = (
     pending: PendingExecution,
     readSource: ReviewTurn["readSource"],
     decode: (raw: unknown) => Effect.Effect<Decision, ReviewFailure>,
+    /** The decode with no source reads, for deciding at once whether an output decodes. */
+    probe: (raw: unknown) => Effect.Effect<unknown, ReviewFailure> = decode,
   ): Effect.Effect<{ reviewId: string; decision: Decision }, ReviewFailure> =>
     Effect.gen(function* () {
       const reviewId = randomUUID();
@@ -1097,7 +1138,11 @@ export const makeGuardian = (
           typeof Reflect.get(raw, "outcome") === "string" &&
           !outcomeAccepted(pending, raw);
         let outcomeCorrected = false;
+        let decodeCorrected = false;
         let readRounds = 0;
+        // A publication finding names one of these paths exactly.
+        const indexedPaths =
+          publication?.files.filter((file) => file.byteLength > 0).map((file) => file.path) ?? [];
         const unread = (raw: unknown) =>
           requireEntrypoint &&
           typeof raw === "object" &&
@@ -1147,6 +1192,19 @@ export const makeGuardian = (
               outcomeCorrected = true;
               followUpRounds++;
               return `The host did not accept this decision: a ${kindName} review returns only the outcome ${outcomes.join(", ")}, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them.`;
+            }
+            const invalid =
+              decodeCorrected || privateKind || outcomeRefused(output)
+                ? undefined
+                : decodeError(probe(decisionForKind(pending, output)));
+            if (invalid !== undefined) {
+              decodeCorrected = true;
+              followUpRounds++;
+              const paths =
+                indexedPaths.length === 0
+                  ? ""
+                  : ` Each finding's path is one of these indexed paths exactly, with nothing added: ${indexedPaths.join(", ")}.`;
+              return `The host could not decode this decision: ${invalid} Return this review's decision again in the output format, corrected.${paths}`;
             }
             if (!unread(output) || readRounds >= requiredReadRounds) return undefined;
             readRounds++;
@@ -1216,18 +1274,29 @@ export const makeGuardian = (
         )
           return Effect.fail(new ReviewFailure({ code: "InvalidDecision" }));
         const scope = pending.publication;
-        return withOutageRetry(scope === undefined ? "execution" : "publication", (run) =>
-          review(run, pending, readSource, (raw) =>
-            scope === undefined
-              ? decodeExecution(pending)(raw)
-              : anchorQuotedFindings(scope, raw, (path) => wholeSource(readSource, path)).pipe(
-                  Effect.flatMap((anchored) =>
-                    (options.decodePublication ?? decodePublicationDecision)(
-                      scope,
-                      boundedRationale(anchored),
-                    ),
-                  ),
+        if (scope === undefined)
+          return withOutageRetry("execution", (run) =>
+            review(run, pending, readSource, decodeExecution(pending)),
+          );
+        const publicationDecoder =
+          (text: (path: string) => Effect.Effect<string, ReviewFailure>) => (raw: unknown) =>
+            anchorQuotedFindings(scope, raw, text).pipe(
+              Effect.flatMap((anchored) =>
+                (options.decodePublication ?? decodePublicationDecision)(
+                  scope,
+                  boundedRationale(anchored),
                 ),
+              ),
+            );
+        // Where a quote sits never decides whether a decision decodes, so the probe reads no file
+        // and puts each quoted finding on its whole file.
+        return withOutageRetry("publication", (run) =>
+          review(
+            run,
+            pending,
+            readSource,
+            publicationDecoder((path) => wholeSource(readSource, path)),
+            publicationDecoder(() => Effect.fail(new ReviewFailure({ code: "SourceUnavailable" }))),
           ),
         );
       }),

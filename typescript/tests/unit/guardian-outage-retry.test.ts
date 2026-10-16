@@ -64,7 +64,6 @@ it.each([
     () => new ReviewFailure({ code: "Unavailable", reviewPhase: "review_computation" }),
   ],
   ["a required source read that failed", () => new ReviewFailure({ code: "SourceUnavailable" })],
-  ["a decision that does not decode", () => ({ outcome: "allow", rationale: "" })],
 ] as const)(
   "reviews again after %s and returns the decision that completes",
   async (_, failure) => {
@@ -110,9 +109,11 @@ it.each([
         diagnosticRetentionReason: "storage",
       }),
   ],
-  // Running out of turns or a model call that keeps stalling is no outage: reviewing again would
-  // repeat the whole review's work.
+  // Running out of turns, a model call that keeps stalling or a decision that does not decode
+  // (whose review already had its follow-up) is no outage: reviewing again would repeat the
+  // whole review's work.
   ["a turn limit", () => new ReviewFailure({ code: "TurnLimitExceeded" })],
+  ["a decision that does not decode", () => new ReviewFailure({ code: "InvalidDecision" })],
   [
     "a stalled model call",
     () => new ReviewFailure({ code: "ModelCallStalled", reviewPhase: "review_computation" }),
