@@ -279,7 +279,7 @@ const signIn = (
   fake: ReturnType<typeof fakeSite>,
   ask: ReturnType<typeof owner>["ask"],
   entryUrl = `${origin}/login`,
-  markerRequired = false,
+  allowCantTell = true,
 ) => {
   const secrets = makeRunSecrets();
   return Effect.runPromise(
@@ -294,7 +294,7 @@ const signIn = (
         site,
         siteOrigin: origin,
         timing: { stepWaitMs: 60, pollMs: 2 },
-        ...(markerRequired ? { markerRequired } : {}),
+        ...(allowCantTell ? { allowCantTell } : {}),
       }),
     ),
   );
@@ -415,10 +415,10 @@ it("signs in when the code lands on a chooser the site shows before any page wit
   expect(fake.state.page).toBe("chooser");
 });
 
-it("fails the sign-in check on a chooser when the sign-in needs its marker, as a write's does", async () => {
+it("fails the sign-in check on a chooser unless the sign-in allows a page that can't tell, as only a read's does", async () => {
   const fake = fakeSite({ code: true, landing: "chooser" });
   expect(
-    await signIn(recipeOf(codeScreenAt()), fake, owner().ask, `${origin}/login`, true),
+    await signIn(recipeOf(codeScreenAt()), fake, owner().ask, `${origin}/login`, false),
   ).toEqual(Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "sign_in_check_failed" })));
   expect(fake.state.page).toBe("chooser");
 });

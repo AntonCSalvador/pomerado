@@ -134,6 +134,8 @@ it("counts a sign-in that ends where the page can't tell as signed in, and never
       false,
     );
   expect(markerCantTell({ signedIn: true, url: "https://example.test/" }, recipe)).toBe(false);
+  // A check with no address says nothing of where the sign-in ended.
+  expect(markerCantTell({ signedIn: false, failed: "indicator_not_visible" }, recipe)).toBe(false);
 });
 
 it("reads a sign-in that ends on its own screens or form as no can't tell, whatever path the marker names", () => {

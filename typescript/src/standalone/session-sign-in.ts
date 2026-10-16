@@ -213,8 +213,8 @@ export const makeLocalSessionSignIn = (options: {
    */
   readonly spent?: { attempt: number; scope: number };
   readonly timing?: SignInReplayTiming;
-  /** Whether a sign-in again counts only once its marker shows, as a write run's does. */
-  readonly markerRequired?: boolean;
+  /** Whether a sign-in again may end on a page that can't tell, as a read's may. */
+  readonly allowCantTell?: boolean;
 }) => {
   const spent = options.spent ?? { attempt: 0, scope: 0 };
   const replayBrowser = (bound: SessionSignInBound | undefined) =>
@@ -242,7 +242,7 @@ export const makeLocalSessionSignIn = (options: {
         site: options.site,
         siteOrigin: options.siteOrigin,
         ...(options.timing === undefined ? {} : { timing: options.timing }),
-        ...(options.markerRequired === true ? { markerRequired: true } : {}),
+        ...(options.allowCantTell === true ? { allowCantTell: true } : {}),
       }),
     );
   /** The recorded marker on the current page; no recorded sign-in says nothing. */
@@ -428,7 +428,7 @@ export const makeRunSignIn = (
   authenticationOrigins: readonly string[],
   effect?: "read" | "write",
 ) => {
-  const markerRequired = effect !== "read";
+  const allowCantTell = effect === "read";
   const { browser, ask, secrets } = session;
   // The site as the owner's questions name it: its host, without `www.`.
   const site = new URL(siteOrigin).hostname.replace(/^www\./u, "");
@@ -455,7 +455,7 @@ export const makeRunSignIn = (
     carries: secrets.carries,
     site,
     siteOrigin,
-    markerRequired,
+    allowCantTell,
   });
   const again = makeLocalSessionSignIn({
     browser: signInBrowser,
@@ -468,7 +468,7 @@ export const makeRunSignIn = (
     siteOrigin,
     limits: runSessionSignIns,
     scope: "attempt",
-    markerRequired,
+    allowCantTell,
   });
   return { before, hook: again.hook };
 };

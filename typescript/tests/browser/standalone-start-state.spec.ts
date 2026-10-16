@@ -234,7 +234,9 @@ const startSite = async () => {
     markerOnEveryPage: boolean;
     /** Accepted sign-ins by password. */
     logins: number;
-  } = { signOutOn: undefined, markerOnEveryPage: true, logins: 0 };
+    /** Where the sign-in form goes once the site accepts the login. */
+    landing: string;
+  } = { signOutOn: undefined, markerOnEveryPage: true, logins: 0, landing: "/account" };
   const server = createServer(
     {
       key: await readFile(join(directory, "key.pem")),
@@ -291,8 +293,11 @@ const startSite = async () => {
           return page(
             response,
             `<title>Sign in</title><form id="login"><input name="username"><input name="password" type="password"><button>Sign in</button></form>
-<script>document.querySelector('#login').addEventListener('submit',async event=>{event.preventDefault();const form=new FormData(event.target);const sent=await fetch('/api/login',{method:'POST',body:JSON.stringify({username:form.get('username'),password:form.get('password')})});if(sent.ok){localStorage.setItem('token','member');location.href='/account'}})</script>`,
+<script>document.querySelector('#login').addEventListener('submit',async event=>{event.preventDefault();const form=new FormData(event.target);const sent=await fetch('/api/login',{method:'POST',body:JSON.stringify({username:form.get('username'),password:form.get('password')})});if(sent.ok){localStorage.setItem('token','member');location.href='${state.landing}'}})</script>`,
           );
+        // An account picker the site shows before its pages: no marker and no sign-in form.
+        if (path === "/choose")
+          return page(response, `<title>Choose an account</title><p>Pick an account</p>`);
         // A sign-in that submits itself once the password is typed, and removes its own form.
         if (path === "/login-self")
           return page(
@@ -579,6 +584,62 @@ test("a signed-in build whose reset's load signs it out signs in again before it
     tab: "yes",
     tabs: 1,
   });
+});
+
+// The reset's load signs the session out, and the sign-in again lands on an account picker, which
+// shows neither the marker nor the sign-in form. Only a read build's sign-in may end on a page that
+// can't tell; a write's needs its marker, since nothing checks the session again before it commits.
+const pickerAfterReset = (site: Site, effect: "read" | "write") => {
+  const [, signIn, check, explored] = readSteps(true);
+  if (!signIn || !check || !explored) throw new Error("Unexpected read steps");
+  const step = effect === "read" ? "example" : "act";
+  const entrypoint = effect === "read" ? "src/tool.mjs" : "src/act.mjs";
+  return build(site, { url: `${site.origin}/login`, effect }, [
+    () =>
+      patch({
+        "explore/look.mjs": explore,
+        "src/tool.mjs": operation("probe", probe("example")),
+        "src/act.mjs": operation("first_step", probe("act")),
+      }),
+    signIn,
+    check,
+    explored,
+    () => {
+      site.state.signOutOn = "/";
+      site.state.landing = "/choose";
+      return [execution(step, entrypoint)];
+    },
+    ...(effect === "read" ? [finish] : []),
+  ]).then(
+    (built) => ({ built }),
+    (error: unknown) => ({ error }),
+  );
+};
+
+test("a local write build whose sign-in again lands on an account picker fails its sign-in", async () => {
+  test.setTimeout(90_000);
+  const site = await startSite();
+  const ended = await pickerAfterReset(site, "write");
+  // The host signed in again from the root's form, and the site sent it to the picker. The write's
+  // sign-in needs its marker, so the act never ran.
+  expect(site.visits.slice(-3)).toEqual(["/login", "/login", "/choose"]);
+  expect(site.state.logins).toBe(2);
+  expect(site.probes.map(({ step }) => step)).toEqual([]);
+  const diagnostics =
+    "built" in ended ? (ended.built.diagnostics ?? []).map((line): unknown => JSON.parse(line)) : [];
+  expect(diagnostics).toContainEqual(
+    expect.objectContaining({ phase: "execution", purpose: "act", code: "Unavailable" }),
+  );
+});
+
+test("a local read build whose sign-in again lands on an account picker goes on from there", async () => {
+  test.setTimeout(90_000);
+  const site = await startSite();
+  const ended = await pickerAfterReset(site, "read");
+  expect(site.visits.slice(4, 7)).toEqual(["/login", "/login", "/choose"]);
+  expect(site.state.logins).toBe(2);
+  expect(site.probe("example")).toMatchObject({ cookies: ["explored", "member"] });
+  expect("built" in ended && ended.built.build).toBe("published");
 });
 
 test("a marker only the account page shows can't tell on the root after each reset, so the build goes on with its one sign-in", async () => {

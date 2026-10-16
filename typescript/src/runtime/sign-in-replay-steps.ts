@@ -142,10 +142,11 @@ export interface SignInReplayInput<E> {
   readonly retry: ReplayRetryState;
   readonly timing: SignInReplayTiming;
   /**
-   * Whether the sign-in counts only once its marker shows, as a write run's does: nothing checks
-   * the session again before the write commits, so a page that can't tell fails the check.
+   * Whether the sign-in may end signed in on a page that can't tell, as a read's may. Off by
+   * default: a write's, or one whose effect is unknown, counts only once its marker shows, since
+   * nothing checks the session again before a write commits.
    */
-  readonly markerRequired?: boolean;
+  readonly allowCantTell?: boolean;
 }
 
 /** The recipe's screens, as every version holds them. */
