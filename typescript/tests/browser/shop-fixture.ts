@@ -31,6 +31,8 @@ export const identityHost = "accounts.identity.test";
  */
 export const analyticsHost = "collect.analytics.test";
 /** An account the shop has locked: it answers 423 whatever the password. */
+/** The workspaces the account belongs to, which `workspaceChooser` offers after the sign-in. */
+export const shopWorkspaces = ["North Street", "Harbor"] as const;
 export const lockedShopAccount = {
   username: "grace@example.test",
   password: "locked-horse-battery-7",
@@ -88,6 +90,12 @@ interface ShopState extends StoreState {
    * it, `account` a redirect to the account page, as many sites answer a signed-in visit.
    */
   signedInLogin: "form" | "account";
+  /**
+   * Whether a signed-in session picks one of `shopWorkspaces` on `/choose-workspace` before the
+   * account page shows the account: the sign-in lands there, and the page shows neither the
+   * account nor a sign-in form, as an account or workspace picker does.
+   */
+  workspaceChooser: boolean;
   /**
    * A path whose next load by a signed-in browser signs it out, as a site that keeps its session
    * in the page does on a full load: that load expires the session cookie and shows the signed-out
@@ -271,7 +279,13 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
       ],
     });
     response.end(
-      JSON.stringify(state.loginCode ? { ok: true, next: "/two-factor" } : { ok: true }),
+      JSON.stringify(
+        state.loginCode
+          ? { ok: true, next: "/two-factor" }
+          : state.workspaceChooser
+            ? { ok: true, next: "/choose-workspace" }
+            : { ok: true },
+      ),
     );
   };
   // The code screen: a GET shows its form, and the form's post with the code signs in. A wrong
@@ -287,8 +301,30 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
     if (code !== shopCode || cookieOf(request, "shop_pending") !== pending)
       return html(response, `<title>Code</title><p id='wrong-code'>Wrong code</p>${codeForm}`);
     response.writeHead(303, {
-      location: "/account",
+      location: state.workspaceChooser ? "/choose-workspace" : "/account",
       "set-cookie": [`shop_session=${signedIn}; Path=/; Secure; HttpOnly; SameSite=Lax`],
+    });
+    response.end();
+  };
+  // The workspace picker: a signed-in session picks a workspace, which the account page then shows.
+  const workspaceOf = (request: IncomingMessage) => {
+    const picked = decodeURIComponent(cookieOf(request, "shop_workspace") ?? "");
+    return shopWorkspaces.find((workspace) => workspace === picked);
+  };
+  const chooseWorkspace: Route = async (request, response) => {
+    if (cookieOf(request, "shop_session") !== signedIn)
+      return html(response, "<title>Workspace</title><p id='signed-out'>Please sign in</p>");
+    if (request.method !== "POST")
+      return html(
+        response,
+        `<title>Choose a workspace</title><h1>Choose a workspace</h1><form method="post" action="/choose-workspace">${shopWorkspaces.map((workspace) => `<button name="workspace" value="${workspace}">${workspace}</button>`).join("")}</form>`,
+      );
+    const workspace = new URLSearchParams(await readBody(request)).get("workspace") ?? "";
+    response.writeHead(303, {
+      location: "/account",
+      "set-cookie": [
+        `shop_workspace=${encodeURIComponent(workspace)}; Path=/; Secure; HttpOnly; SameSite=Lax`,
+      ],
     });
     response.end();
   };
@@ -297,18 +333,26 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
       response,
       cookieOf(request, "shop_session") !== signedIn
         ? "<title>Account</title><p id='signed-out'>Please sign in</p>"
-        : state.accountRenderMs === 0
+        : state.workspaceChooser && workspaceOf(request) === undefined
+          ? "<title>Account</title><a href='/choose-workspace'>Choose a workspace</a>"
+          : state.workspaceChooser
+            ? `<title>Account</title><p id="account">${shopAccount.username}</p><p id="workspace">${workspaceOf(request) ?? ""}</p>`
+            : state.accountRenderMs === 0
           ? `<title>Account</title><p id="account">${shopAccount.username}</p>`
           : `<title>Account</title><main id="app"></main>
 <script>setTimeout(()=>{const account=document.createElement('p');account.id='account';account.textContent=${JSON.stringify(shopAccount.username)};document.querySelector('#app').append(account)},${state.accountRenderMs})</script>`,
     );
+  // A signed-out visit to a page behind the session shows the one-screen sign-in's form there,
+  // which is how a host tells the page signed out rather than one without the marker.
+  const signedOutNotice = (title: string) =>
+    `<title>${title}</title><p id='signed-out'>Please sign in</p><form action="/login"><input name="username"><input name="password" type="password"><button>Sign in</button></form>`;
   // The account's orders, behind the same session as its account page.
   const orders: Route = (request, response) =>
     html(
       response,
       cookieOf(request, "shop_session") === signedIn
         ? `<title>Orders</title><p id="account">${shopAccount.username}</p><p id="orders">2 orders</p>`
-        : "<title>Orders</title><p id='signed-out'>Please sign in</p>",
+        : signedOutNotice("Orders"),
     );
   // The account's statements, 30 to a page with a Next link, behind the same session.
   const statements: Route = (request, response) => {
@@ -316,8 +360,7 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
     const page = Math.max(1, Number(url.searchParams.get("page") ?? "1"));
     const signedInNow = cookieOf(request, "shop_session") === signedIn;
     state.statementLoads.push({ page, signedIn: signedInNow });
-    if (!signedInNow)
-      return html(response, "<title>Statements</title><p id='signed-out'>Please sign in</p>");
+    if (!signedInNow) return html(response, signedOutNotice("Statements"));
     const rows = state.statements.slice((page - 1) * 30, page * 30);
     const next = page * 30 < state.statements.length ? `/statements?page=${page + 1}` : null;
     return html(
@@ -524,6 +567,7 @@ ${next === null ? "" : `<a rel="next" href="${next}">Next</a>`}`,
     ["/orders", orders],
     ["/statements", statements],
     ["/two-factor", twoFactor],
+    ["/choose-workspace", chooseWorkspace],
     ["/hang", hang],
     ["/identity-login", identityLogin],
     ["/v1/sign-in", identitySignIn],
@@ -580,6 +624,7 @@ export const startShop = async (directory: string): Promise<Shop> => {
     accountRenderMs: 0,
     loginCode: false,
     signedInLogin: "form",
+    workspaceChooser: false,
     signOutOn: undefined,
     statements: Array.from({ length: 45 }, (_, index) => `S${index + 1}`),
     statementLoads: [],

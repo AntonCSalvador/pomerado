@@ -24,6 +24,7 @@ import {
   identityHost,
   startShop,
   shopAccount,
+  shopWorkspaces,
   shopCode,
   type Shop,
 } from "./shop-fixture.js";
@@ -1408,6 +1409,7 @@ const runInNewSession = (
   artifact: MintArtifact,
   url: string,
   effect?: "read" | "write",
+  input: unknown = {},
 ) =>
   Effect.runPromise(
     Effect.either(
@@ -1417,7 +1419,7 @@ const runInNewSession = (
           return yield* service.run(artifact, {
             url,
             intent: "Read the account",
-            input: {},
+            input,
             ...(effect === undefined ? {} : { effect }),
           });
         }),
@@ -1531,6 +1533,66 @@ test("a run that stays signed in through the script signs in once and types noth
     expect(result).toEqual(Either.right({ first: true, signedInAgain: false, second: true }));
     expect(reasons(asked)).toEqual(["missing_credentials"]);
     expect(shop.state.loginPosts).toBe(1);
+  });
+});
+
+/** Picks the input's workspace on the shop's workspace picker, then reads the account it shows. */
+const readWorkspaceAccount = `import { Schema } from "effect";
+import { defineOperation } from "../runtime/index.js";
+export default defineOperation({name:"read_workspace_account",input:Schema.Struct({workspace:Schema.String}),output:Schema.Struct({account:Schema.String,workspace:Schema.String})},
+async ({kernel,sessionId,input}) => {
+  const code = "await page.goto(new URL('/choose-workspace', page.url()).href); await page.getByRole('button', { name: " + JSON.stringify(input.workspace) + ", exact: true }).click(); await page.locator('#account').waitFor(); return { account: await page.locator('#account').textContent(), workspace: await page.locator('#workspace').textContent() };";
+  const response = await kernel.browsers.playwright.execute(sessionId,{code,timeout_sec:15});
+  if(!response.success) throw new Error(String(response.error));
+  return response.result;
+});`;
+/** The one-screen sign-in and the code screen after it, as a build publishes them. */
+const codeRecipe = (origin: string) => {
+  const login = loginRecipe(origin);
+  return {
+    ...login,
+    steps: [
+      ...login.steps,
+      {
+        page: `${origin}/two-factor`,
+        fields: [{ selector: "input[name=code]", slot: "code" }],
+        submit: "button",
+        submittedBy: "host",
+      },
+    ],
+  };
+};
+
+test("a run whose sign-in lands on an workspace picker without the marker carries on, and its operation picks the workspace and reads the account", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Chromium and a sign-in that waits out the recorded marker on the picker",
+  });
+  test.setTimeout(120_000);
+  await withShop(async (shop, endpoint) => {
+    shop.state.loginCode = true;
+    shop.state.workspaceChooser = true;
+    const asked: InputRequest[] = [];
+    const workspace = shopWorkspaces[1];
+    const result = await runInNewSession(
+      endpoint,
+      answers(asked),
+      {
+        entrypoint: "src/tool.mjs",
+        files: [{ path: "src/tool.mjs", content: readWorkspaceAccount }],
+        inputSchema: { type: "object" },
+        outputSchema: { type: "object" },
+        signIn: { recipe: codeRecipe(shop.origin), entryUrl: `${shop.origin}/login` },
+      } as MintArtifact,
+      `${shop.origin}/account`,
+      undefined,
+      { workspace },
+    );
+    expect(result).toEqual(Either.right({ account: shopAccount.username, workspace }));
+    // The login and the code once each: the picker never read as signed out.
+    expect(reasons(asked)).toEqual(["missing_credentials", "code"]);
+    expect(shop.state.loginPosts).toBe(1);
+    expect(shop.state.codePosts).toBe(1);
   });
 });
 
