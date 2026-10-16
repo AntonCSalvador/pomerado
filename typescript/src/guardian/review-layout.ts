@@ -72,7 +72,7 @@ const reviewFields: Record<ReviewKind, readonly string[]> = {
   recovery: [],
   question: [],
   update: [],
-  publication: ["reason", "findings"],
+  publication: ["reason", "findings", "publicReason"],
   host: ["label"],
 };
 
@@ -95,6 +95,8 @@ export const guardianDecisionFormat: AgentOutputType = {
       reason: {
         anyOf: [{ type: "null" }, { type: "string", enum: [...publicationReasons] }],
       },
+      // A publication denial's short reason for the caller, apart from the private rationale.
+      publicReason: { anyOf: [{ type: "null" }, { type: "string" }] },
       // A host-defined kind's finite code, one its policy lists; the host checks it.
       label: { anyOf: [{ type: "null" }, { type: "string" }] },
       // An execution review's label of what the code does on the website.
@@ -141,7 +143,7 @@ export const guardianDecisionFormat: AgentOutputType = {
         ],
       },
     },
-    required: ["outcome", "rationale", "reason", "findings", "label", "action"],
+    required: ["outcome", "rationale", "reason", "findings", "publicReason", "label", "action"],
     additionalProperties: false,
   },
 };

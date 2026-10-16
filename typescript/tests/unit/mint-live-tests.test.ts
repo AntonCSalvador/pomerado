@@ -655,16 +655,34 @@ const emptyList = {
   output: { results: [], has_next_page: false, next_cursor: null },
 };
 
-it("never excuses a failure by a case that changed its expectation to what the tool returned", async () => {
+// The review excuses a relabeled failure only when the captures show the site giving the new
+// answer for that input, so the host names the passing case for it and excuses nothing itself.
+it("never excuses a failure by a case that changed its expectation, and names that case for the review", async () => {
   // The second store's results come back empty; the agent relabels the case to expect that.
   const record = await batchesThenPublish({ "other-store": emptyList }, [
     { "src/tool.ts": toolSource, "test/cases.json": otherStore("result") },
     { "test/cases.json": otherStore("empty") },
   ]);
   expect(record.retired).toEqual([
-    expect.objectContaining({ id: "other-store", lastVerdict: "fail", expect: "result" }),
+    expect.objectContaining({
+      id: "other-store",
+      lastVerdict: "fail",
+      expect: "result",
+      changedExpectationBy: "other-store",
+    }),
   ]);
   expect(record.retired[0]).not.toHaveProperty("excusedBy");
+});
+
+it("names no case for a changed expectation that does not pass", async () => {
+  const record = await batchesThenPublish({ "other-store": emptyList }, [
+    { "src/tool.ts": toolSource, "test/cases.json": otherStore("result") },
+    { "test/cases.json": otherStore("invalid_input") },
+  ]);
+  expect(record.retired).toEqual([
+    expect.objectContaining({ id: "other-store", lastVerdict: "fail", expect: "result" }),
+  ]);
+  expect(record.retired[0]).not.toHaveProperty("changedExpectationBy");
 });
 
 it("excuses a failure only by a case passing its input and expectation after the code changed", async () => {

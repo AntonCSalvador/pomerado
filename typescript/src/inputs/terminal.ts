@@ -138,7 +138,16 @@ const answerQuestion = (question: Question): Effect.Effect<unknown, InputRequest
         return yield* line("> ", true);
       case "credential": {
         const username =
-          question.fields === "username_password" ? yield* line("Username: ") : undefined;
+          question.fields === "username_password"
+            ? yield* line(
+                question.allowDecline === true
+                  ? "Username (leave empty to go on without signing in): "
+                  : "Username: ",
+              )
+            : undefined;
+        // An empty username, where the question offers it, declines the login.
+        if (question.allowDecline === true && username?.trim() === "")
+          return { declined: "public_only", saveLogin: false };
         const password = yield* line("Password: ", true);
         return { ...(username === undefined ? {} : { username }), password, saveLogin: false };
       }
