@@ -3556,18 +3556,21 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               .map((record) => record.entrypoint)
               .filter((path) => path !== undefined)
               .at(-1);
-            const candidate = ran ?? httpVersionPath;
-            const present = yield* Effect.promise(async () => {
-              try {
-                return await session.pathExists?.(candidate);
-              } catch {
-                return undefined;
-              }
-            });
+            const present = (path: string) =>
+              Effect.promise(async () => {
+                try {
+                  return await session.pathExists?.(path);
+                } catch {
+                  return undefined;
+                }
+              });
+            const ranPresent = ran === undefined ? false : yield* present(ran);
             const httpEntrypoint =
-              present === true || (present === undefined && ran !== undefined)
-                ? candidate
-                : undefined;
+              ran !== undefined && ranPresent !== false
+                ? ran
+                : (yield* present(httpVersionPath)) === true
+                  ? httpVersionPath
+                  : undefined;
             if (httpEntrypoint !== undefined)
               versions.push({
                 version: "http",
