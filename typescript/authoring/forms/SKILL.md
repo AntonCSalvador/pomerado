@@ -149,6 +149,14 @@ When an overlay such as a cookie or consent banner covers the target, dismiss it
 control that declines optional cookies, such as Reject all or Necessary only, when the banner
 shows one, and otherwise with any of its controls, accept included.
 
+Decide whether each pop-up, banner or interstitial is conditional or always triggered. A
+conditional one shows only for some accounts, states or visits, such as a cookie banner, a
+one-time promotion or a membership upsell shown only to non-members: check for it, resolve it
+when it shows, and continue without error when it does not, as one outcome beside the page's
+next state. Never wait for it or require it. One the page always opens in answer to an action,
+such as a confirmation dialog a button always opens, may be expected. A pop-up the session met
+once is conditional unless the page shows it always follows that action.
+
 Type each date-only input and output as the runtime's `CalendarDate`, imported beside
 `formControlsCode`, never a bare `YYYY-MM-DD` pattern, which accepts `2026-02-30`. It checks
 the format and that the date exists, the check `fillDate` makes, so the host refuses an
