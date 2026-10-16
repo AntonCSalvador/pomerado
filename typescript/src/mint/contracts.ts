@@ -187,8 +187,8 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
   readonly outputFindings?: readonly Pick<OutputFinding, "path" | "check" | "count">[];
   /**
    * For `rehearsal_failed`: how the host's run of a write repair's bundle failed before its first
-   * commit step, the error's class, such as `OperationFailure`, its message and the authored source
-   * line that threw, such as `src/tool.mjs:88`.
+   * save, the error's class, such as `OperationFailure`, its message and the authored source line
+   * that threw, such as `src/tool.mjs:88`.
    */
   readonly rehearsal?: {
     readonly errorClass: string;
@@ -320,8 +320,9 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
     /** A write repair's bundle is the registered revision's, so it has nothing to publish. */
     | "repair_unchanged"
     /**
-     * A host ran a write repair's bundle once, set to stop before its first commit step, and it
-     * failed before reaching that step; `rehearsal` names how. The minter fixes the source.
+     * A host ran a write repair's bundle once, set to stop just before its first save request
+     * reached the site, and it failed before it got there; `rehearsal` names how. The minter fixes
+     * the source.
      */
     | "rehearsal_failed"
     /** The saved login to sign in with stayed held by another job through the host's wait. */

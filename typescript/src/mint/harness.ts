@@ -4431,7 +4431,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       "Not published: the source this repair would publish is byte for byte the registered revision's, so there is nothing to publish. A new name or description alone is not a repair. The registered revision stays current and this repair ends here; do not call finish_build again.",
                   });
                 }
-                // The host's run of a write repair, set to stop before its first commit step, failed
+                // The host's run of a write repair, set to stop just before its first save, failed
                 // short of it: the minter fixes the source and asks again, which runs it again. The
                 // failure goes out screened; its error class alone when screening is unavailable.
                 if (error.reason === "rehearsal_failed")

@@ -8,9 +8,10 @@ import {
 import { rehearsalFailedInstruction } from "../../src/mint/rehearsal.js";
 import { makeMintHarnessFixture, portableJobSession } from "../support/mint-fixtures.js";
 
-// A host may run a write repair's bundle once before it publishes, set to stop before its first
-// commit step, and refuse the publication when that run failed short of the step. The minter
-// reads the failure, screened, with the fixed instruction, fixes the source and asks again.
+// A host may run a write repair's bundle once before it publishes, set to stop just before its
+// first save request reaches the site, and refuse the publication when that run failed short of
+// it. The minter reads the failure, screened, with the fixed instruction, fixes the source and
+// asks again.
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const clean of cleanup.splice(0)) await clean();
