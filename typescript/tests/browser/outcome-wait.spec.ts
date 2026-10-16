@@ -56,6 +56,40 @@ test("the site's error wins over results shown beside it", async ({ page }) => {
   expect(await call(page, waitBody(5000))).toEqual({ result: "failed" });
 });
 
+test("the site's error drawn beside partial results between two reads of one look wins", async ({
+  page,
+}) => {
+  // The page draws its error banner and the rooms it could load in one render, as the look's
+  // first outcome read ends. Results read before that render, and the error after it, would
+  // return the results.
+  await page.setContent(`<section id="answer"><p>Searching</p></section>`);
+  const partial = `<div role="alert">Some rooms could not load</div><ul aria-label="Rooms"><li>Garden room</li></ul>`;
+  expect(
+    await call(
+      page,
+      `const answer = page.locator("#answer");
+      let drawn = false;
+      // Each outcome as the wait reads it: the page draws once the first count read ends.
+      const drawAfterFirstRead = (locator) => ({
+        count: async () => {
+          const count = await locator.count();
+          if (!drawn) {
+            drawn = true;
+            await page.evaluate((html) => { document.querySelector("#answer").innerHTML = html; }, ${JSON.stringify(partial)});
+          }
+          return count;
+        },
+        filter: (options) => locator.filter(options),
+      });
+      return await waitForOutcome({
+        failed: drawAfterFirstRead(answer.getByRole("alert")),
+        empty: drawAfterFirstRead(answer.getByText("No rooms match your dates", { exact: true })),
+        results: drawAfterFirstRead(answer.getByRole("list", { name: "Rooms", exact: true })),
+      }, { timeout: 5000 });`,
+    ),
+  ).toEqual({ result: "failed" });
+});
+
 test("a hidden copy makes the winning outcome ambiguous until its locator is scoped to visible elements", async ({
   page,
 }) => {

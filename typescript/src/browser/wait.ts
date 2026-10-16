@@ -367,15 +367,17 @@ const outcomeWaitChanged = (locator, key) =>
     const noted = globalThis[Symbol.for(key)];
     return elements.filter((element) => noted?.get(element) !== element.innerText).length;
   }, key);
+// Reads the outcomes lowest priority first, so an outcome drawn beside a higher one between two
+// reads is seen with it. The observations keep the listed order.
 const outcomeWaitObserve = async (outcomes, key) => {
   const observations = {};
-  for (const [name, locator] of Object.entries(outcomes)) {
+  for (const [name, locator] of Object.entries(outcomes).reverse()) {
     const count = await locator.count();
     const visible = count === 0 ? 0 : await locator.filter({ visible: true }).count();
     observations[name] = key === undefined ? { count, visible }
       : { count, visible, changed: visible === 0 ? 0 : await outcomeWaitChanged(locator, key) };
   }
-  return observations;
+  return Object.fromEntries(Object.keys(outcomes).map((name) => [name, observations[name]]));
 };
 const waitForOutcome = async (outcomes, options = {}) => {
   const names = Object.keys(outcomes);
