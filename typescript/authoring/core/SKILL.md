@@ -401,6 +401,13 @@ the request names. Leave out what is unrelated to the tool's purpose or of no us
 - Expand collapsed text (a "more", "show all" or similar control) before reading it, and read it
   back: a value that ends in an ellipsis or holds the control's own label was read collapsed or
   cut short.
+- Descriptions, specs, ingredients and variants often sit in collapsed accordion or tab sections
+  that read empty while hidden. Prefer the page's embedded record data; otherwise open the section
+  and read it back. Never guess a data key and fall back to null when it is missing.
+- Before your first example, see each nullable field filled on at least one record that should
+  have it. A field never seen filled is a wrong read: fix it or remove it. A field that says why a
+  value is absent rests on evidence that this record lacks it, never on a read that found nothing.
+  In `finish_build` coverage, name for each nullable field a tested record where it was filled.
 - Return each fact once. Never add a field holding a whole row's or card's text beside the typed
   fields: give a fact they miss its own typed field, or offer the whole text only as the
   `card_text` section below.
@@ -434,7 +441,9 @@ description says what each name adds and what it costs.
 inputs. Scope the row locator to the main list, and leave out related, recommended, recently
 viewed and "others also" sections; with `include: ["related"]` return them in their own `related`
 list of the same row shape, never mixed into the results and never counted toward a limit. A
-sponsored or promoted row inside the main list stays where it is, marked as such. A card that
+sponsored or promoted row inside the main list stays where it is, marked as such, unless the list
+already holds the same item (pagination skill); a promoted carousel is not part of the main list.
+A card that
 stands for a group, such as one product in several flavours or sizes, a hotel with several room
 types or a building with several units for rent, is one result marked as a group (for example
 `kind: "group"`), with the options or count the card shows, never presented as one of its members.
@@ -686,7 +695,9 @@ the browser to the site origin before it runs, closing other tabs, and keeps the
 browser's cookies and site storage. So the source must set every value its input controls,
 such as a location, store, filter or search, itself, and never rely on what the site
 remembers from exploration; a live test case that runs cold, on a new browser with an empty
-profile, is the proof. A sign-in that started and was never verified is the exception: that
+profile, is the proof. A published run can start on such a browser too, so the source also sets
+up its own start state from a cold page, such as a guest session, a chosen location or a consent
+banner, never relying on cookies or state only the build's browser holds. A sign-in that started and was never verified is the exception: that
 reset clears cookies and site storage. When the page is signed out after that reset, or after a
 full page load your source asks about with `ensureSignedIn`, the host signs in again by itself;
 do not call `authenticate` for it. When the host cannot keep the site signed in, the step fails with

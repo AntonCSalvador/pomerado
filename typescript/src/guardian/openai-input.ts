@@ -59,6 +59,10 @@ export const guardianReviewInput = (
       ...(reviewKindOf(turn.pending) === "execution" ? { paymentFrameOrigins } : {}),
     },
     ...extra,
+    // A later publication round: the prior round's decision and what changed since it.
+    ...(turn.sources?.publicationDelta === undefined
+      ? {}
+      : { publication_delta: turn.sources.publicationDelta }),
     ...(turn.pending.questionCandidate === undefined
       ? {}
       : {
