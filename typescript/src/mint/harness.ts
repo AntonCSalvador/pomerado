@@ -3671,8 +3671,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       /**
        * The publication review's record of a read's live tests, and its coverage line. It lists
        * only the versions that ship: the published entrypoint's, and the HTTP version beside a
-       * published Playwright version unless finish_build ruled it out (`httpRuledOut`). A version
-       * that does not ship is neither recorded nor judged.
+       * published Playwright version while its file exists, unless finish_build ruled it out
+       * (`httpRuledOut`). A version that does not ship is neither recorded nor judged.
        */
       const liveTestsForPublication = (entrypoint: string, httpRuledOut: boolean) =>
         Effect.gen(function* () {
@@ -3692,23 +3692,22 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             },
           ];
           if (published === "playwright" && !httpRuledOut) {
-            // The file the HTTP version's latest results ran, else its conventional file when
-            // the workspace has one.
+            // The conventional file while the workspace has it: a deleted HTTP version does not
+            // ship, and a scratch `*-http.mjs` the latest results ran is not the version that
+            // ships. A host that cannot tell keeps the file the latest results ran.
             const ran = [...replacedOf("http"), ...liveTestRecords.http.values()]
               .map((record) => record.entrypoint)
               .filter((path) => path !== undefined)
               .at(-1);
+            const shipping = yield* Effect.promise(async () => {
+              try {
+                return await session.pathExists?.(httpVersionPath);
+              } catch {
+                return undefined;
+              }
+            });
             const httpEntrypoint =
-              ran ??
-              ((yield* Effect.promise(async () => {
-                try {
-                  return (await session.pathExists?.(httpVersionPath)) === true;
-                } catch {
-                  return false;
-                }
-              }))
-                ? httpVersionPath
-                : undefined);
+              shipping === true ? httpVersionPath : shipping === undefined ? ran : undefined;
             if (httpEntrypoint !== undefined)
               versions.push({
                 version: "http",
