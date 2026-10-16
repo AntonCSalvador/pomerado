@@ -574,6 +574,14 @@ Never read it from a broad container, whole-page text, tag-stripped HTML, a rege
 text or a page-wide setting such as a currency or language picker: a heading, label or
 placeholder is not the value beside it. Read embedded data separately when it is relevant to
 the requested operation.
+On a hosted browser each Playwright call is a remote round trip, and each awaited call waits for
+its own, so a read costs its number of calls, not its navigations. Read every field a page needs in
+one `evaluate`, `readRows` or snapshot per page, never one locator call per field or a probe per
+element. Prefer values the list page already holds, in its rows or its embedded data, or the
+site's own data request (http-mcp skill), to opening each record's page. When the tool must open
+each record's detail page, keep each to a few calls (open, wait, one read), and consider whether
+the request is better served as two tools, a search and a details read by identifier; say so in
+`coverage`.
 Budgets: navigation 30 s for the document to commit; a click, fill or other action 5 s, taken
 only on an element a wait has shown ready. After a navigation commits or an action returns, the
 page gets 8 s without progress to show one of the answers you named, and up to 30 s while it
