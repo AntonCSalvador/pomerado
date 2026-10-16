@@ -84,7 +84,7 @@ answers `{ success, result, error, stderr }`. Throw
   page's own words, never a readiness timeout. The waits paragraph below shows how to paste
   `waitCode` and call it. Prefer no fixed pauses unless necessary.
 - Prefer no result wait after a step that changed nothing, such as closing a panel without picking anything.
-- `waitForOutcome` already waits for the page to settle, so prefer no extra settle check after it.
+- `waitForOutcome` already waited for its answer, so prefer no extra wait for that same answer after it.
 - Check the null case if possible. Make sure the tool handles a lookup or filter that matches
   nothing.
 - Start a response wait in the same call as the click that causes it, with
