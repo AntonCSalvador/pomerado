@@ -41,7 +41,8 @@ const scope = (overrides: Partial<ListCursorScope> = {}): ListCursorScope => ({
 });
 const input = { query: "lamps", limit: 2 };
 type Row = { readonly id: string; readonly sponsored?: boolean };
-const keyOf = (row: Row) => (row.sponsored === true ? `sponsored:${row.id}` : row.id);
+const keyOf = (row: Row) => row.id;
+const promoted = (row: Row) => row.sponsored === true;
 const rows = (...ids: readonly string[]): Row[] => ids.map((id) => ({ id }));
 /** A run's input as a host that signs cursors hands it to the script. */
 const hosted = (value: object, host: ListHost = {}) => withListHost(value, host);
@@ -359,10 +360,25 @@ describe("the rows a later page returns", () => {
     });
   });
 
-  it("never repeat a returned row, and keep a sponsored copy of one", () => {
-    expect(continued([...rows("a", "b"), { id: "a", sponsored: true }, ...rows("c", "a")])).toEqual(
-      { rows: [{ id: "a", sponsored: true }, ...rows("c")], listChanged: true },
-    );
+  it("never repeat a returned row, and drop a sponsored copy of one without calling it a change", () => {
+    const later = continuing(cursorOf(pageOne()));
+    const sponsored = (id: string) => ({ id, sponsored: true });
+    expect(selectRows(later, [...rows("a", "b"), sponsored("a"), ...rows("c")], keyOf, { promoted })).toEqual({
+      rows: rows("c"),
+      listChanged: false,
+    });
+    // A sponsored copy ahead of its organic row on the same page gives way to it; a promoted row
+    // whose item the page shows only promoted stays in place.
+    expect(
+      selectRows(later, [...rows("a", "b"), sponsored("d"), sponsored("e"), ...rows("c", "d")], keyOf, {
+        promoted,
+      }),
+    ).toEqual({ rows: [sponsored("e"), ...rows("c", "d")], listChanged: false });
+    // An organic row a previous page returned is a change, as without `promoted`.
+    expect(selectRows(later, [...rows("a", "b", "c", "a")], keyOf, { promoted })).toEqual({
+      rows: rows("c"),
+      listChanged: true,
+    });
   });
 });
 
@@ -433,6 +449,29 @@ describe("finishList", () => {
       rows: rows("d"),
       listChanged: false,
     });
+  });
+
+  it("anchors a later page that returned no rows on the sponsored row it resumed after", () => {
+    const later = continuing(cursorOf(pageOne()));
+    const fields = finishList(later, {
+      rows: [],
+      keyOf,
+      promoted,
+      next: { page: 1, offset: 3, href: "https://www.example.test/s?q=lamps" },
+      hasMore: true,
+      totalResults: null,
+      listChanged: false,
+      resumeAfter: "x",
+      resumeAfterPromoted: true,
+    });
+    const resumed = continuing(
+      cursorOf(sealListOutput({ results: [], ...fields }, input, scope())),
+    );
+    expect(
+      selectRows(resumed, [...rows("a", "b"), { id: "x", sponsored: true }, ...rows("c")], keyOf, {
+        promoted,
+      }),
+    ).toEqual({ rows: rows("c"), listChanged: false });
   });
 
   it("refuses more rows than limit", () => {
