@@ -268,7 +268,9 @@ test("a filter whose slow answer ends while a look reads the old list returns th
 }) => {
   // The site answers after the 2 s window and redraws the list 50 ms later. The answer is held
   // until a look after the window has read the list from before the filter, and released as that
-  // look's last read ends, so the request ends while the look runs, before it is judged.
+  // look's last read ends, so the request ends while the look runs, before it is judged. The
+  // returning look's own changed count shows whether it returned the old list, whatever the page
+  // shows by the time the rooms are read.
   const origin = "https://rooms.example.test";
   await page.route(`${origin}/**`, (route) =>
     route.fulfill({
@@ -287,10 +289,9 @@ test("a filter whose slow answer ends while a look reads the old list returns th
     }),
   );
   await page.goto(`${origin}/`);
-  expect(
-    await call(
-      page,
-      `let release;
+  const filtered = await call(
+    page,
+    `let release;
       const held = new Promise((resolve) => { release = resolve; });
       await page.route("**/rooms?pets=1", async (route) => {
         await held;
@@ -300,6 +301,7 @@ test("a filter whose slow answer ends while a look reads the old list returns th
       const answer = page.locator("#answer");
       const list = answer.getByRole("list", { name: "Rooms", exact: true });
       let clicked = Infinity;
+      let changed;
       // The list as the wait reads it, whose changed-text read comes last in each look.
       const results = {
         count: () => list.count(),
@@ -309,6 +311,7 @@ test("a filter whose slow answer ends while a look reads the old list returns th
             count: () => visible.count(),
             evaluateAll: async (fn, arg) => {
               const read = await visible.evaluateAll(fn, arg);
+              changed = read;
               if (Date.now() - clicked > 2100) {
                 release();
                 await answered;
@@ -325,9 +328,11 @@ test("a filter whose slow answer ends while a look reads the old list returns th
         },
         timeout: 8000,
       });
-      return { shown, rooms: await answer.getByRole("listitem").allInnerTexts() };`,
-    ),
-  ).toEqual({ result: { shown: "results", rooms: ["Garden room"] } });
+      return { shown, changed, rooms: await answer.getByRole("listitem").allInnerTexts() };`,
+  );
+  expect(filtered).toMatchObject({ result: { shown: "results" } });
+  expect((filtered.result as { changed?: number } | undefined)?.changed).toBeGreaterThan(0);
+  expect(filtered).toMatchObject({ result: { rooms: ["Garden room"] } });
 });
 
 test("a request the filter started that never ends delays the unchanged list, never past the deadline", async ({
