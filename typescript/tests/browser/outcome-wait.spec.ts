@@ -203,6 +203,82 @@ test("after an action that leaves the results as they were, the wait ends after 
   );
 });
 
+/**
+ * Results on a site page whose "Pets allowed" filter asks the site for its answer, which comes
+ * `answerMs` later: `replace` redraws the list with one room, `same` leaves it as it was.
+ */
+const filterOverNetwork = async (page: Page, answerMs: number, rendering: "replace" | "same") => {
+  const origin = "https://rooms.example.test";
+  await page.route(`${origin}/**`, async (route) => {
+    if (new URL(route.request().url()).pathname === "/rooms") {
+      await new Promise((resolve) => setTimeout(resolve, answerMs));
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(rendering === "replace" ? ["Garden room"] : null),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<button type="button">Pets allowed</button>
+        <section id="answer">${rooms.replace("</ul>", "<li>Loft room</li></ul>")}</section>
+        <script>
+          document.querySelector("button").onclick = async () => {
+            const names = await (await fetch("/rooms?pets=1")).json();
+            if (names !== null)
+              document.querySelector("#answer").innerHTML =
+                '<ul aria-label="Rooms">' + names.map((name) => "<li>" + name + "</li>").join("") + "</ul>";
+          };
+        </script>`,
+    });
+  });
+  await page.goto(`${origin}/`);
+};
+
+/** Runs `body`, an async function body that returns an object, and adds how long it took. */
+const timed = (body: string) => `
+  const started = Date.now();
+  const answer = await (async () => { ${body} })();
+  return { ...answer, elapsed: Date.now() - started };
+`;
+
+/** How long a `timed` body took, in milliseconds. */
+const elapsed = (answer: { result?: unknown }) =>
+  (answer.result as { elapsed?: number } | undefined)?.elapsed ?? Number.NaN;
+
+test("a filter whose answer comes after the unchanged window returns the redrawn list", async ({
+  page,
+}) => {
+  // The answer comes after the default 2 s window: the list from before the filter is no answer
+  // while the request the filter started is still in flight.
+  await filterOverNetwork(page, 2500, "replace");
+  expect(await call(page, filterBody("timeout: 8000"))).toEqual({
+    result: { shown: "results", rooms: ["Garden room"] },
+  });
+});
+
+test("an already-settled page adds no extra delay", async ({ page }) => {
+  await filterOverNetwork(page, 900, "same");
+  // With no action, the answer on the page counts at its confirming look, well inside the 2 s
+  // unchanged window.
+  const settled = await call(
+    page,
+    timed(`return { shown: await waitForOutcome({
+      results: page.locator("#answer").getByRole("list", { name: "Rooms", exact: true }),
+    }, { timeout: 5000 }) };`),
+  );
+  expect(settled).toMatchObject({ result: { shown: "results" } });
+  expect(elapsed(settled)).toBeLessThan(1000);
+  // A filter whose request ended before its unchanged window, leaving the list as it was, still
+  // ends at that window, not a window after the request.
+  const unchanged = await call(page, timed(filterBody("timeout: 5000, unchangedMs: 1000")));
+  expect(unchanged).toMatchObject({
+    result: { shown: "results", rooms: ["Garden room", "Courtyard room", "Loft room"] },
+  });
+  expect(elapsed(unchanged)).toBeGreaterThanOrEqual(1000);
+  expect(elapsed(unchanged)).toBeLessThan(1750);
+});
+
 test("an action that loads a new page waits for that page's answer", async ({ page }) => {
   const origin = "https://rooms.example.test";
   await page.route(`${origin}/**`, async (route) => {

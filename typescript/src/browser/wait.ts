@@ -428,7 +428,8 @@ const waitForOutcome = async (outcomes, options = {}) => {
       );
       signature = current;
       last = observations ?? last;
-      const stale = Date.now() < unchangedFrom;
+      // A match from before the action stays stale while a request the action started is in flight.
+      const stale = Date.now() < unchangedFrom || progress.causedInflight();
       const shown = names.find(
         (name) => observations?.[name].visible > 0 && !(stale && observations[name].changed === 0),
       );
@@ -900,7 +901,8 @@ const waitForChange = async (fields, options = {}) => {
  * once. `timeout` (default `answerCap`, 30 s) is the hard cap, reached only while the page keeps
  * progressing. `action` is the step itself, such as `() => apply.click()`, which it runs exactly
  * once, after noting what each outcome showed: a match that was visible before it, with the same
- * text, counts only once it has stayed so for `unchangedMs` (default 2000). `timeout`,
+ * text, counts only once it has stayed so for `unchangedMs` (default 2000) and no request the
+ * action started is still in flight. `timeout`,
  * `noProgressMs` and `unchangedMs` start once the action returns. Its `OutcomeWaitFailure` has
  * `observations` (`OutcomeObservation` by key) and one of these reasons:
  *
