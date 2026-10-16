@@ -367,8 +367,8 @@ const outcomeWaitChanged = (locator, key) =>
     const noted = globalThis[Symbol.for(key)];
     return elements.filter((element) => noted?.get(element) !== element.innerText).length;
   }, key);
-// Reads the outcomes lowest priority first, so an outcome drawn beside a higher one between two
-// reads is seen with it. The observations keep the listed order.
+// Reads the outcomes highest priority last, so a look that sees one also sees a higher one drawn
+// in the same render. The observations keep the listed order.
 const outcomeWaitObserve = async (outcomes, key) => {
   const observations = {};
   for (const [name, locator] of Object.entries(outcomes).reverse()) {
