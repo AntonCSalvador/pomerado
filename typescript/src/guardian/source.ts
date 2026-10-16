@@ -70,14 +70,11 @@ export const makeSourceInspector =
 /** The most chunks of one file the host reads to anchor a quote or answer a query: 4 MiB. */
 const wholeSourceChunks = 64;
 
-/**
- * A file's whole screened text through a reviewer's chunked reader: what Guardian would see by
- * following `nextOffset`, up to 4 MiB.
- */
-export const wholeSource = (
+/** A file's screened text up to 4 MiB, and whether that is the whole file. */
+const sourceUpToBound = (
   read: ReviewTurn["readSource"],
   path: string,
-): Effect.Effect<string, ReviewFailure> =>
+): Effect.Effect<{ readonly text: string; readonly complete: boolean }, ReviewFailure> =>
   Effect.gen(function* () {
     let text = "";
     let offset = 0;
@@ -87,11 +84,33 @@ export const wholeSource = (
       if (chunk === undefined || typeof source !== "string")
         return yield* new ReviewFailure({ code: "SourceUnavailable" });
       text += source;
-      if (!chunk.hasMore || chunk.nextOffset <= offset) break;
+      if (!chunk.hasMore || chunk.nextOffset <= offset) return { text, complete: true };
       offset = chunk.nextOffset;
     }
-    return text;
+    return { text, complete: false };
   });
+
+/**
+ * A file's whole screened text through a reviewer's chunked reader: what Guardian would see by
+ * following `nextOffset`, up to 4 MiB.
+ */
+export const wholeSource = (
+  read: ReviewTurn["readSource"],
+  path: string,
+): Effect.Effect<string, ReviewFailure> =>
+  sourceUpToBound(read, path).pipe(Effect.map(({ text }) => text));
+
+/**
+ * A file's whole screened text, or undefined when it is longer than the 4 MiB the host reads, so
+ * a caller comparing files never mistakes a prefix for the file.
+ */
+export const completeSource = (
+  read: ReviewTurn["readSource"],
+  path: string,
+): Effect.Effect<string | undefined, ReviewFailure> =>
+  sourceUpToBound(read, path).pipe(
+    Effect.map(({ text, complete }) => (complete ? text : undefined)),
+  );
 
 /** `text` as a pattern that matches it literally. */
 export const literalPattern = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
