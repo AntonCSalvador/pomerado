@@ -39,7 +39,7 @@ import {
   makeRejectableLogin,
   mintSessionSignInFailure,
 } from "./session-sign-in.js";
-import type { KeptScriptAnswer } from "./script-answer-reuse.js";
+import type { KeptScriptAnswer } from "../mint/script-answer-reuse.js";
 import type { StandaloneSession } from "./session.js";
 import type { RequestContext } from "./request-context.js";
 import type { PomeradoRequest } from "./contracts.js";
