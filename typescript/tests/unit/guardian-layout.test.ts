@@ -431,14 +431,16 @@ const readMany = (
   }),
 });
 /** The output a later model request shows for one tool call, parsed. */
-const callResult = (request: ModelRequest | undefined, callId: string): unknown => {
+const callOutput = (request: ModelRequest | undefined, callId: string): string | undefined => {
   const input = request?.input;
   const item = (typeof input === "string" ? [] : (input ?? [])).find(
     (entry) => entry.type === "function_call_result" && entry.callId === callId,
   );
   const output = item?.type === "function_call_result" ? item.output : undefined;
-  const text =
-    typeof output === "string" ? output : (output as { text?: string } | undefined)?.text;
+  return typeof output === "string" ? output : (output as { text?: string } | undefined)?.text;
+};
+const callResult = (request: ModelRequest | undefined, callId: string): unknown => {
+  const text = callOutput(request, callId);
   return text === undefined ? undefined : JSON.parse(text);
 };
 
@@ -495,6 +497,100 @@ it("reads several files in one call, each with its own result, and counts each a
   expect(
     (reviewRequest(requests[2]).trusted_review as { unchangedSources?: string[] }).unchangedSources,
   ).toEqual(["operation/src/helper.mjs", "operation/wrapped.mjs"]);
+});
+
+it("leaves the files past a call's size limit unread, and out of the next review's unchanged sources", async () => {
+  const large = ["one", "two", "three", "four", "five"].map((name) => `operation/src/${name}.mjs`);
+  const requests = scripted([
+    [readMany("large", large.map((path) => ({ path })))],
+    [allow],
+    [allow],
+  ]);
+  const workspace = files();
+  for (const path of large) workspace.set(path, `// ${path}\n${"x".repeat(60_000)}`);
+  const executed: PendingExecution = {
+    ...pending,
+    mintContext: {
+      repeatableRead: false,
+      operationSources: [...workspace.keys()],
+      executedSources: ["operation/operation.mjs", ...large],
+      browser: "active",
+      executions: [],
+    },
+  };
+  const guardian = makeGuardian(
+    makeOpenAIReviewer("{{ tenant_policy_config }}", false, native),
+    undefined,
+    {},
+  );
+  const reader = sourcesOf(workspace);
+  await Effect.runPromise(guardian.review(executed, reader));
+  // Four results pass 200,000 characters, so the fifth file never starts.
+  expect(callResult(requests[1], "large")).toMatchObject({
+    kind: "untrusted_sources",
+    files: [
+      ...large.slice(0, 4).map((path) => ({ kind: "untrusted_source", path, hasMore: false })),
+      { path: large[4], status: "not_read" },
+    ],
+  });
+  await Effect.runPromise(guardian.review({ ...executed, screenedInput: '{"day":2}' }, reader));
+  expect(
+    (reviewRequest(requests[2]).trusted_review as { unchangedSources?: string[] }).unchangedSources,
+  ).toEqual(large.slice(0, 4));
+});
+
+it.each([
+  [
+    "names more files than one call reads",
+    {
+      path: null,
+      offset: null,
+      match: null,
+      paths: Array.from({ length: 11 }, (_, index) => ({
+        path: `operation/src/file-${index}.mjs`,
+        offset: 0,
+        match: null,
+      })),
+    },
+  ],
+  [
+    "sets both path and paths",
+    {
+      path: "operation/src/helper.mjs",
+      offset: 0,
+      match: null,
+      paths: [{ path: "operation/wrapped.mjs", offset: 0, match: null }],
+    },
+  ],
+])("tells Guardian how to fix a read_source call that %s, without reading", async (_, call) => {
+  const requests = scripted([
+    [
+      {
+        type: "function_call",
+        callId: "malformed",
+        name: "read_source",
+        status: "completed",
+        arguments: JSON.stringify(call),
+      },
+    ],
+    [allow],
+  ]);
+  const reader = sourcesOf(files());
+  const reads: string[] = [];
+  await Effect.runPromise(
+    makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).review(
+      pending,
+      (path, offset) => {
+        reads.push(path);
+        return reader(path, offset);
+      },
+    ),
+  );
+  // Only the host's own read of the entrypoint for the request.
+  expect(reads).toEqual([pending.entrypoint]);
+  const output = callOutput(requests[1], "malformed");
+  expect(output).toBeDefined();
+  expect(output).not.toMatch(/source unavailable/iu);
 });
 
 it("accepts an allow whose entrypoint Guardian read within a several-file call", async () => {
