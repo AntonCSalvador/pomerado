@@ -283,6 +283,7 @@ export const mintState = (
         });
         const recorder = yield* makeSignInRecorder<Error>({
           browser: signInBrowser,
+          markerVisible: signInBrowser.markerVisible,
           login: login.login,
           values,
           // The screen may show a value the caller gave, such as the typed email on a password
