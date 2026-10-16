@@ -491,8 +491,10 @@ test("chooseOption and fillDate fail within about their timeout, never 30 s, whe
 }) => {
   // Playwright's own default: a read that passes no timeout waits this long for its element.
   page.setDefaultTimeout(30_000);
-  // A dropdown that lists two places when opened, then drops its list as the page redraws.
-  await page.setContent(`<form>
+  // A dropdown that lists two places when opened, taller than the list shows, then drops its list
+  // as the page redraws once it first scrolls.
+  await page.setContent(`<style>#place-list { height: 2em; overflow-y: auto } #place-list div { height: 10em }</style>
+<form>
 <button type="button" aria-label="Place" aria-haspopup="listbox" aria-expanded="false" aria-controls="place-list">Select</button>
 <div role="listbox" id="place-list" hidden></div></form>
 <script>
@@ -502,7 +504,7 @@ button.addEventListener("click", () => {
   list.innerHTML = '<div role="option">Lyon</div><div role="option">Paris</div>';
   list.hidden = false;
   button.setAttribute("aria-expanded", "true");
-  setTimeout(() => list.remove(), 200);
+  list.addEventListener("scroll", () => list.remove(), { once: true });
 });
 </script>`);
   const timed = (step: string) => `
@@ -513,18 +515,19 @@ button.addEventListener("click", () => {
     } catch (error) {
       return { name: error.name, elapsed: Date.now() - started };
     }`;
-  for (const step of [
-    // The wanted place is not listed, and the list goes while the picker looks further down it.
-    `chooseOption(page.getByRole("button", { name: "Place" }), "Nice", { timeout: 1000 })`,
+  for (const [timeout, step] of [
+    // The wanted place is not listed, and the list goes once the picker scrolls to look further
+    // down it.
+    [2000, `chooseOption(page.getByRole("button", { name: "Place" }), "Nice", { timeout: 2000 })`],
     // The control itself is gone.
-    `chooseOption(page.getByLabel("Country"), "France", { timeout: 1000 })`,
-    `fillDate(page.getByLabel("Month"), "1990-07-04", "MM", { timeout: 1000 })`,
-  ]) {
+    [1000, `chooseOption(page.getByLabel("Country"), "France", { timeout: 1000 })`],
+    [1000, `fillDate(page.getByLabel("Month"), "1990-07-04", "MM", { timeout: 1000 })`],
+  ] as const) {
     const answer = await call(page, timed(step));
     // Each read waits at most the picker's timeout, so it fails one timeout after the read that
     // missed, never after Playwright's 30 s.
     expect(answer, step).toMatchObject({ result: { name: "TimeoutError" } });
-    expect((answer.result as { elapsed: number }).elapsed, step).toBeLessThan(2000);
+    expect((answer.result as { elapsed: number }).elapsed, step).toBeLessThan(2 * timeout);
   }
 });
 

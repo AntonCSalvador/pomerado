@@ -405,7 +405,8 @@ const waitForOutcome = async (outcomes, options = {}) => {
     progress.begin();
     begun = Date.now();
     const until = begun + timeout;
-    const unchangedFrom = begun + (options.unchangedMs ?? waitLimits.unchanged);
+    const unchangedMs = options.unchangedMs ?? waitLimits.unchanged;
+    const unchangedFrom = begun + unchangedMs;
     // A page or frame the action is replacing can drop a look midway; the next look sees the new one.
     const look = () =>
       outcomeWaitObserve(outcomes, key).catch((error) => {
@@ -428,8 +429,12 @@ const waitForOutcome = async (outcomes, options = {}) => {
       );
       signature = current;
       last = observations ?? last;
-      // A match from before the action stays stale while a request the action started is in flight.
-      const stale = Date.now() < unchangedFrom || progress.causedInflight();
+      // A match from before the action stays stale while a request the action started is in flight,
+      // but only until the deadline less the unchanged window, so a match the wait returned before
+      // such requests held it back still returns in time. One clock read serves this and the
+      // deadline below, so the hold never outlasts the deadline even with no unchanged window.
+      const now = Date.now();
+      const stale = now < unchangedFrom || (now < until - unchangedMs && progress.causedInflight());
       const shown = names.find(
         (name) => observations?.[name].visible > 0 && !(stale && observations[name].changed === 0),
       );
@@ -447,7 +452,7 @@ const waitForOutcome = async (outcomes, options = {}) => {
       }
       const settled = decision === undefined || previous !== undefined;
       // A first sighting at the deadline still gets its confirming look.
-      if (Date.now() >= until && settled) {
+      if (now >= until && settled) {
         const seen = last ?? (await look().catch(() => undefined)) ?? {};
         const failure = outcomeWaitFailure(
           "outcome_timeout",
@@ -902,9 +907,10 @@ const waitForChange = async (fields, options = {}) => {
  * progressing. `action` is the step itself, such as `() => apply.click()`, which it runs exactly
  * once, after noting what each outcome showed: a match that was visible before it, with the same
  * text, counts only once it has stayed so for `unchangedMs` (default 2000) and no request the
- * action started is still in flight. `timeout`,
- * `noProgressMs` and `unchangedMs` start once the action returns. Its `OutcomeWaitFailure` has
- * `observations` (`OutcomeObservation` by key) and one of these reasons:
+ * action started is still in flight. Such a request holds it back for at most `lateFillCap` (15 s),
+ * and never past `timeout` less `unchangedMs`, so the match still counts before the timeout.
+ * `timeout`, `noProgressMs` and `unchangedMs` start once the action returns. Its
+ * `OutcomeWaitFailure` has `observations` (`OutcomeObservation` by key) and one of these reasons:
  *
  * - `outcome_ambiguous`, when the winning outcome's locator matches more than one element; its
  *   `outcome` is that key. Scope the locator, for example with `.filter({ visible: true })`.

@@ -205,12 +205,15 @@ test("after an action that leaves the results as they were, the wait ends after 
 
 /**
  * Results on a site page whose "Pets allowed" filter asks the site for its answer, which comes
- * `answerMs` later: `replace` redraws the list with one room, `same` leaves it as it was.
+ * `answerMs` later, or never when it is `Infinity`: `replace` redraws the list with one room, `same`
+ * leaves it as it was.
  */
 const filterOverNetwork = async (page: Page, answerMs: number, rendering: "replace" | "same") => {
   const origin = "https://rooms.example.test";
   await page.route(`${origin}/**`, async (route) => {
     if (new URL(route.request().url()).pathname === "/rooms") {
+      // Left unanswered, the request stays in flight, as a long-poll or a stream does.
+      if (answerMs === Infinity) return;
       await new Promise((resolve) => setTimeout(resolve, answerMs));
       await route.fulfill({
         contentType: "application/json",
@@ -257,6 +260,21 @@ test("a filter whose answer comes after the unchanged window returns the redrawn
   });
 });
 
+test("a request the filter started that never ends delays the unchanged list, never past the deadline", async ({
+  page,
+}) => {
+  // The request stays in flight past the deadline, and the list stays as it was. The list from
+  // before the filter counts once the wait's deadline less its unchanged window comes, so the
+  // wait returns it, as it did before such a request held it back, rather than timing out.
+  await filterOverNetwork(page, Infinity, "same");
+  const answer = await call(page, timed(filterBody("timeout: 8000")));
+  expect(answer).toMatchObject({
+    result: { shown: "results", rooms: ["Garden room", "Courtyard room", "Loft room"] },
+  });
+  expect(elapsed(answer)).toBeGreaterThanOrEqual(6000);
+  expect(elapsed(answer)).toBeLessThan(8000);
+});
+
 test("an already-settled page adds no extra delay", async ({ page }) => {
   await filterOverNetwork(page, 900, "same");
   // With no action, the answer on the page counts at its confirming look, well inside the 2 s
@@ -270,13 +288,13 @@ test("an already-settled page adds no extra delay", async ({ page }) => {
   expect(settled).toMatchObject({ result: { shown: "results" } });
   expect(elapsed(settled)).toBeLessThan(1000);
   // A filter whose request ended before its unchanged window, leaving the list as it was, still
-  // ends at that window, not a window after the request.
+  // ends at that window, not a window after the request, which the 0.9 s answer puts past 1.9 s.
   const unchanged = await call(page, timed(filterBody("timeout: 5000, unchangedMs: 1000")));
   expect(unchanged).toMatchObject({
     result: { shown: "results", rooms: ["Garden room", "Courtyard room", "Loft room"] },
   });
   expect(elapsed(unchanged)).toBeGreaterThanOrEqual(1000);
-  expect(elapsed(unchanged)).toBeLessThan(1750);
+  expect(elapsed(unchanged)).toBeLessThan(1850);
 });
 
 test("an action that loads a new page waits for that page's answer", async ({ page }) => {
