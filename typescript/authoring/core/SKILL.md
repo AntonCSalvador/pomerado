@@ -66,6 +66,9 @@ answers `{ success, result, error, stderr }`. Throw
   it a real pointer click, after the same checks Playwright makes. `force`, `position`,
   `modifiers`, `button`, `clickCount` and `delay` keep a synthetic click, so pass them only
   when the step needs them.
+- Prefer waiting for the page a click opens, which may be a new tab, over waiting on the old
+  page's URL.
+- Prefer clicking a control's visible label when its input is hidden.
 - Prefer taking a role locator's name from an ARIA snapshot (the host's `*.aria.yml` capture or a
   scoped `ariaSnapshot()`) over `textContent` or `innerText`, which include hidden labels. When the
   snapshot shows a link with no name, prefer its `href`.
@@ -306,10 +309,14 @@ the task can't run without it (below).
   question is only for a value the request leaves open.
 - Callers and Guardian see the JSON Schema form, so write every constraint in one it
   shows: a `Schema.filter` shows nothing, its description included, so use
-  `Schema.NonEmptyString`, `pattern`, `minLength`, `Int`, `between` or `Literal`. Type every
-  output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
+  `Schema.NonEmptyTrimmedString`, `pattern`, `minLength`, `Int`, `between` or `Literal`. Type
+  every output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
   and its example's own input and output must decode under them, so settle both before that
   example.
+- Make each input as strict as the site's field: required text is non-empty and not whitespace
+  alone (`Schema.NonEmptyString.pipe(Schema.pattern(/\S/u))`, which still takes a caller's stray
+  space); a date, time or code keeps its `pattern`; a fixed set is a `Literal` enum. Make an input
+  optional only when the site accepts the field blank and the tool works without it.
 - Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear. A description that starts "By design:" keeps that marker first and puts the number of values after it, such as "By design: one postal code, …", never before it.
 - When a field takes one value and a caller might send several, say "one per call" and prefer a
   `pattern` that refuses a list, such as several codes separated by commas, while still accepting
@@ -367,15 +374,23 @@ the task can't run without it (below).
 page offers: a control no input covers, an input you cannot wire, a value the request needs
 that the page does not show, or a needed field you would have to make nullable. Settle each
 then: wire it, ask the owner with `request_input` when the request reads two ways, or state in
-the description why the tool lacks it. Publication review blocks on the same gaps, and finding
-them at `finish_build` costs a full fix-and-resubmit round.
+the description why the tool lacks it. When the site never shows a value the request needs, a
+field to return or a filter or option to apply, ask the owner with `request_input` as soon as you
+find it missing, before you build, whether to build without it or stop. When they need it, end
+with `report_blocked` reason `site_lacks_capability` (`AGENTS.md`, "Impossible as asked").
+Publication review blocks on the same gaps, and finding them at `finish_build` costs a full
+fix-and-resubmit round.
 
 **Never loosen a value the request needs.** The values the request needs are each value it
 names, the record's identifier as the site shows it, and the context those depend on as the page
 shows it, such as dates, a party size or a location. Make each one required and non-null, typed
-so a value the code could not read fails the output check (`Schema.NonEmptyString` for text,
-`Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the
+so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for
+text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the
 request's wording or a description says. A run whose output fails its schema goes to repair.
+- Type each output field as strictly as its value: required text is non-empty and trimmed
+  (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports
+  an input's value reuses that input's enum or pattern. Make one optional or nullable only where
+  the page may genuinely not show the value.
 - The one exception is a record whose own page genuinely does not show the value, such as an
   item that is sold out and shows no amount, or a listing that shows no date yet. Then the value may be null only together with a
   field that says why, such as its availability, and both descriptions say so.
@@ -563,6 +578,14 @@ Never read it from a broad container, whole-page text, tag-stripped HTML, a rege
 text or a page-wide setting such as a currency or language picker: a heading, label or
 placeholder is not the value beside it. Read embedded data separately when it is relevant to
 the requested operation.
+On a hosted browser each Playwright call is a remote round trip, and each awaited call waits for
+its own, so a read costs its number of calls, not its navigations. Read every field a page needs in
+one `evaluate`, `readRows` or snapshot per page, never one locator call per field or a probe per
+element. Prefer values the list page already holds, in its rows or its embedded data, or the
+site's own data request (http-mcp skill), to opening each record's page. When the tool must open
+each record's detail page, keep each to a few calls (open, wait, one read), and consider whether
+the request is better served as two tools, a search and a details read by identifier; say so in
+`coverage`.
 Budgets: navigation 30 s for the document to commit; a click, fill or other action 5 s, taken
 only on an element a wait has shown ready. After a navigation commits or an action returns, the
 page gets 8 s without progress to show one of the answers you named, and up to 30 s while it

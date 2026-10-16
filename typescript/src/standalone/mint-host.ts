@@ -27,7 +27,7 @@ import { localLiveTests } from "./mint-live-tests.js";
 import { askError, mintError } from "./errors.js";
 import { memoryPublicationDecisions } from "./publication-decisions.js";
 import { listed, signInOriginsToAsk } from "./sign-in-origin-question.js";
-import { forgetScriptAnswers } from "./script-answer-reuse.js";
+import { forgetScriptAnswers } from "../mint/script-answer-reuse.js";
 import type { FileHandles } from "../mint/file-handles.js";
 import { secretKindsOf } from "../mint/secret-handles.js";
 /**

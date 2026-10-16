@@ -82,6 +82,8 @@ interface Options {
   readonly answers?: Record<string, string[]>;
   readonly approve?: boolean;
   readonly refuseIndicator?: boolean;
+  /** The selectors that show on the page now, which an account rejection names. */
+  readonly visible?: readonly string[];
   /** The configured sign-in origins off the site. */
   readonly authenticationOrigins?: readonly string[];
 }
@@ -195,6 +197,12 @@ const harness = (options: Options = {}) => {
             texts.some((text) => text.includes(value) || decoded(text).includes(value)),
           ),
       ),
+    ...(options.visible === undefined
+      ? {}
+      : {
+          markerVisible: (selector: string) =>
+            Effect.succeed(options.visible?.includes(selector) === true),
+        }),
     ...(options.refuseIndicator === true
       ? {
           refuseIndicator: () => ({
@@ -979,6 +987,34 @@ it("accepts a rejected value only once it was sent, and corrects a password once
       expect.objectContaining({ code: "CredentialsRejected", rejectedCredential: "password" }),
     ),
   );
+});
+
+// A page that says the account is locked is no field the owner can correct: once the login's
+// identifier went out and the element that says so shows, the sign-in ends as an account-level
+// rejection, and nothing is asked.
+it("ends the sign-in as AccountLocked once the site visibly refused the account the login named", async () => {
+  const host = harness({ corrections: [account], visible: ["#locked"] });
+  const exit = await host.run((recorder) =>
+    Effect.gen(function* () {
+      const locked = (selector: string): SignInStep => ({
+        rejected: { account: "locked", selector },
+      });
+      const early = yield* recorder.step(locked("#locked"), undefined, Effect.void);
+      expect(early.result).toMatchObject({ step: { reason: "nothing_rejected" } });
+      yield* recorder.step(identifierAndPassword, undefined, Effect.void);
+      const hidden = yield* recorder.step(locked("#other"), undefined, Effect.void);
+      expect(hidden.result).toMatchObject({ step: { reason: "marker_not_visible" } });
+      return yield* Effect.exit(recorder.step(locked("#locked"), undefined, Effect.void));
+    }),
+  );
+  expect(exit).toEqual(
+    Exit.fail(
+      expect.objectContaining({
+        authentication: expect.objectContaining({ code: "AccountLocked", account: "locked" }),
+      }),
+    ),
+  );
+  expect(host.logins).toEqual(["missing_credentials"]);
 });
 
 it("ends the build when the correction repeats the rejected password", async () => {

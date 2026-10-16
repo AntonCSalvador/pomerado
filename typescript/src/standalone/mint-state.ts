@@ -39,7 +39,7 @@ import {
   makeRejectableLogin,
   mintSessionSignInFailure,
 } from "./session-sign-in.js";
-import type { KeptScriptAnswer } from "./script-answer-reuse.js";
+import type { KeptScriptAnswer } from "../mint/script-answer-reuse.js";
 import type { StandaloneSession } from "./session.js";
 import type { RequestContext } from "./request-context.js";
 import type { PomeradoRequest } from "./contracts.js";
@@ -283,6 +283,7 @@ export const mintState = (
         });
         const recorder = yield* makeSignInRecorder<Error>({
           browser: signInBrowser,
+          markerVisible: signInBrowser.markerVisible,
           login: login.login,
           values,
           // The screen may show a value the caller gave, such as the typed email on a password

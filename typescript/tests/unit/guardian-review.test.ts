@@ -617,6 +617,27 @@ describe("OpenAI reviewer policy and trusted authority", () => {
       expect(policy).toContain(sentence);
   });
 
+  // The host asks the owner for a sign-in code or answer only while the step runs, after Guardian
+  // allowed it. A build deadlocked when Guardian refused such a step for want of an earlier code.
+  it("allows a host sign-in step's code or answer slot before any code is supplied", async () => {
+    const requests = readThenDecide({
+      outcome: "allow",
+      rationale: "Controlled source was read.",
+      action: "read",
+    });
+    await Effect.runPromise(
+      makeGuardian(reviewer(markedUpstreamPolicy)).review(pending, readEntrypoint),
+    );
+    const rule =
+      "into the fields the step names and clicks the step's submit. The host fills a code, recovery_code or private_answer slot only after you allow the step, from a saved value or by asking the owner then. So allow such a step without an earlier code or answer. Judge it against the screen the file shows for it.";
+    for (const policy of [
+      requests[0]?.systemInstructions ?? "",
+      guardianExecutionPolicy(otherHost),
+      guardianExecutionPolicy(nativeExecutionEnvironment),
+    ])
+      expect(policy).toContain(rule);
+  });
+
   // A site's own trackers carry caller input off-site and its page saves recent searches, and a
   // host recording gap was read as an order to stop probing. None of these is the source's doing.
   it("tells Guardian page traffic and a recording gap are not the source's effects", async () => {
