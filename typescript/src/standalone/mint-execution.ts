@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   controlLabelsFromAriaSnapshot,
   lintOutput,
+  lintSchemas,
   outputChecksNotice,
 } from "../runtime/output-lint.js";
 import { Effect, Either } from "effect";
@@ -66,7 +67,7 @@ import {
   keptScriptAnswers,
   reusedScriptAnswers,
   scriptQuestionKeys,
-} from "./script-answer-reuse.js";
+} from "../mint/script-answer-reuse.js";
 import { error, mintError } from "./errors.js";
 import { mintSessionSignInFailure, type SessionSignInFailed } from "./session-sign-in.js";
 import { sessionCardFill } from "./card-fill.js";
@@ -470,16 +471,20 @@ const completedReceipt = (receipt: ReceiptInput, result: LocalOperationOutput) =
       execution.target === "liveBrowser" ? state.context.observedCapture : undefined;
     const controlLabels =
       capture === undefined ? undefined : controlLabelsFromAriaSnapshot(capture);
+    // An example's notice adds the advisory checks of the declared schemas.
     const outputChecks =
       result.output === undefined
         ? undefined
-        : outputChecksNotice(
-            lintOutput(result.output, {
+        : outputChecksNotice([
+            ...lintOutput(result.output, {
               outputSchema: result.schemas.output,
               ...(controlLabels === undefined ? {} : { controlLabels }),
               samples: true,
             }),
-          );
+            ...(execution.purpose === "example"
+              ? lintSchemas(result.schemas.input, result.schemas.output)
+              : []),
+          ]);
     const evidence: ExecutionEvidence = {
       executionId: id,
       status: "completed",

@@ -1,9 +1,15 @@
 import { lunaModel } from "../models/models.js";
 
+/**
+ * The reasoning efforts a host may pick for one review through `specialize`. Every review runs on
+ * the same model, so a session's history stays valid across reviews of different efforts.
+ */
+export type GuardianReasoningEffort = "low" | "medium";
+
 /** Execution and question reviews share the user's selected Guardian configuration. */
 export const guardianModel = {
   model: lunaModel,
-  modelSettings: { store: false, reasoning: { effort: "medium" as const } },
+  modelSettings: { store: false, reasoning: { effort: "medium" as GuardianReasoningEffort } },
 };
 
 /**
