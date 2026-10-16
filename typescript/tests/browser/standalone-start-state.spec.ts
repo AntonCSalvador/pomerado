@@ -277,13 +277,17 @@ const startSite = async () => {
           return;
         }
         visits.push(path);
-        if (path === state.signOutOn && request.headers.cookie?.includes("member=signed")) {
+        const signedOutHere =
+          path === state.signOutOn && request.headers.cookie?.includes("member=signed") === true;
+        if (signedOutHere) {
           state.signOutOn = undefined;
           response.setHeader("set-cookie", "member=; Path=/; Max-Age=0; Secure; HttpOnly");
-          request.headers.cookie = request.headers.cookie.replace("member=signed", "");
+          request.headers.cookie = request.headers.cookie?.replace("member=signed", "");
         }
         const signedIn = request.headers.cookie?.includes("member=signed") === true;
-        if (path === "/login")
+        // A load that signs the session out shows the sign-in form, as a site whose session expired
+        // does.
+        if (path === "/login" || signedOutHere)
           return page(
             response,
             `<title>Sign in</title><form id="login"><input name="username"><input name="password" type="password"><button>Sign in</button></form>
@@ -554,9 +558,9 @@ test("a signed-in build whose reset's load signs it out signs in again before it
     finished,
   ]);
   expect(built.build).toBe("published");
-  // The host found the root signed out after the reset. Its check that types nothing loaded the
-  // sign-in page, which showed its form, so it signed in again with the login the build holds
-  // and reset once more. The root then showed the marker.
+  // The host found the root signed out after the reset, as the root showed the sign-in form. Its
+  // check that types nothing loaded the sign-in page, which showed its form, so it signed in again
+  // with the login the build holds and reset once more. The root then showed the marker.
   expect(site.visits).toEqual([
     "/login",
     "/account",
@@ -577,7 +581,7 @@ test("a signed-in build whose reset's load signs it out signs in again before it
   });
 });
 
-test("a marker only the account page shows reads signed out on the root after each reset, which signs the build in again until its sign-ins run out", async () => {
+test("a marker only the account page shows can't tell on the root after each reset, so the build goes on with its one sign-in", async () => {
   test.setTimeout(150_000);
   const site = await startSite();
   // A marker with no path and no page to open, which the root never shows, on a site whose
@@ -613,53 +617,19 @@ test("a marker only the account page shows reads signed out on the root after ea
     undefined,
     asked,
   );
-  // Each reset loads the root, which reads signed out. The check that types nothing loads the
-  // sign-in page, which shows its form, so the host signs in again with the login the build holds.
-  // After the first sign-in the reopened root reads signed out again, so the host signs in once
-  // more and takes the session as one the root's load loses: from then on each reset signs in
-  // once, and the step starts on the page that sign-in left.
-  expect(logins).toEqual([1, 3, 4, 5]);
-  expect(site.visits).toEqual([
-    "/login",
-    "/account",
-    "/deep",
-    // The first test's reset: two sign-ins, with the root reopened between them.
-    "/",
-    "/login",
-    "/login",
-    "/account",
-    "/",
-    "/login",
-    "/login",
-    "/account",
-    // The second and third tests' resets: one sign-in each.
-    "/",
-    "/login",
-    "/login",
-    "/account",
-    "/",
-    "/login",
-    "/login",
-    "/account",
-    // The example's reset: the build's four automatic sign-ins are spent.
-    "/",
-    "/login",
+  // Each reset loads the root, which shows neither the marker nor the sign-in form: it can't
+  // tell, so the host signs in no more, and each step starts at the root on the build's one
+  // sign-in, whose session the probes see.
+  expect(logins).toEqual([1, 1, 1, 1, 1]);
+  expect(site.visits).toEqual(["/login", "/account", "/deep", "/", "/", "/", "/"]);
+  expect(site.probes.map(({ step, path, cookies }) => ({ step, path, cookies }))).toEqual([
+    { step: "test", path: "/", cookies: ["explored", "member"] },
+    { step: "test", path: "/", cookies: ["explored", "member"] },
+    { step: "test", path: "/", cookies: ["explored", "member"] },
+    { step: "example", path: "/", cookies: ["explored", "member"] },
   ]);
-  expect(site.probes.map(({ step, path }) => ({ step, path }))).toEqual([
-    { step: "test", path: "/account" },
-    { step: "test", path: "/account" },
-    { step: "test", path: "/account" },
-  ]);
-  // The build asked for the login once, and ends with the session not kept.
   expect(asked.map(({ questions }) => questions.map(({ id }) => id))).toEqual([["login"]]);
-  expect(built).toMatchObject({ build: "incomplete", recoveryReason: "sign_in_unavailable" });
-  expect(built.diagnostics).toContainEqual(
-    JSON.stringify({
-      phase: "sign_in",
-      reason: "sign_in_unavailable",
-      sessionLoss: "session_not_kept",
-    }),
-  );
+  expect(built.build).toBe("published");
 });
 
 test("a signed-in build that moves to another site replays nothing of the old site's sign-in there, and starts the new site signed out", async () => {
