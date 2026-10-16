@@ -48,6 +48,19 @@ an input that tailors the answer, which a read returns labeled with the value th
    - An option the page lists but greys out, such as a booked date or a sold-out size, on a
      read: not an error. Return it unavailable, with the page's reason and alternatives, and the
      run succeeds. A write throws `InvalidInput` with `available` instead.
+   - A write that declines the task because the caller's own limit or the page's state rules it
+     out, such as a total over the caller's price limit, an item out of stock, a variant the
+     page does not offer or a product number whose page names another item than the caller's:
+     `InvalidInput`, thrown before the mark of the commit it guards (writes skill). Pass
+     `field`, the input the caller would change, `kind`, the reason as a stable lowercase token
+     such as `over_price_limit`, `out_of_stock`, `variant_unavailable` or `item_mismatch`, and
+     `available` where the page lists choices, and give in the message the values the caller
+     needs, such as the total the page shows beside the limit. That is a refusal: the run
+     reports why, and that it changed nothing unless an earlier marked step ran, and the caller
+     can run again with corrected input. It differs from a failure, a tool that broke, and from
+     a write that may have changed the site and could not confirm it (both below). Never return
+     a refusal as a write's output: a write that returns without `verified()` reports a possible
+     change.
    - A write whose steps may have changed the site and then failed or could not confirm the
      change: let it end as a possible change, which is never retried. Never throw
      `InvalidInput` or `InputNotApplied` to make it look untouched (writes skill).
@@ -65,7 +78,10 @@ Try first. Ask only for what the page or the caller uniquely knows at that point
 
 - a choice whose options exist only once the run reaches them: the open seats of the
   flight the caller just chose, the delivery slots for the cart the run just filled, or
-  which of the account's saved travelers or addresses to use;
+  which of the account's saved travelers, addresses or payment methods to use;
+- whether to take a paid add-on within the tool's purpose that the page shows on the way to a
+  commit when the input leaves it open, asked before the commit mark; a paid upsell outside the
+  tool's purpose is declined, never asked (writes skill);
 - which of several site entries the caller's value matches equally, such as a restaurant
   with several locations or a city with several airports, with those entries as the options.
   That is ambiguous, as is a near-miss name the site offers alternatives for: prefer not
@@ -79,7 +95,9 @@ Try first. Ask only for what the page or the caller uniquely knows at that point
 
 Never ask for a value the request, the input or an earlier answer already supplied, a private
 one included: use that value. Never undo an answer that declined something by doing it anyway
-or by offering it as an input (core skill). In the tool, take it from its input, or a private one, such as
+or by offering it as an input (core skill), except a paid add-on within the tool's purpose, the
+payment method or the delivery address a write still meets on its path, which stays an input or
+a declared question (writes skill). In the tool, take it from its input, or a private one, such as
 part of an identity number, through a declared `secret` question, never a plain-text field.
 When question review finds a question redundant, remove the ask and use the supplied value; a
 reworded question still asks for it again. A placeholder that stands in for a redacted value,
