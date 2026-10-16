@@ -50,7 +50,8 @@ where the site has it; none is required, and one case may serve several:
   category, a record whose page is laid out differently (a single option, grouped options, a
   multi-item page, sold out); for other reads, another route, date range or region, another
   category of listing, or a document or order page of another kind. Find them on the site, in a
-  listing or picker you opened; never invent them;
+  listing or picker you opened; never invent them. Prefer trying other records as one batch of
+  live cases rather than one probe at a time, so they're reviewed together;
 - edge cases: a value the site does not list at all (`invalid_input`, with the page's choices
   listed), a query or filter with no results (`empty`, never a throw), and an option the page lists
   but greys out, such as a sold-out size, which a read returns as unavailable data;
