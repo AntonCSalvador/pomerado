@@ -245,12 +245,14 @@ continues, when:
    the key rules say;
 6. how the tool should use an input that tailors the answer is genuinely ambiguous, such as
    whether a postal code sets the store or only finds nearby ones: ask the design question
-   `input_use_<input>` (.agents/core/SKILL.md, "Inputs that tailor the answer").
+   `input_use_<input>` (.agents/core/SKILL.md, "Inputs that tailor the answer");
+7. the site never shows a value the request needs: ask before you build whether to build without
+   it or stop (.agents/core/SKILL.md, "Find contract gaps before your first example").
 
 When nobody answers before the question expires, `request_input` returns `no_answer`. Decide
 how to go on without it: continue with a sensible default and list it in `finish_build`
 `assumptions`, narrow the tool so it does not need the answer, or end with `report_blocked`,
-reason `policy`, when only the caller's answer would let the build go on. No answer is never
+reason `question_unanswered`, when only the caller's answer would let the build go on. No answer is never
 consent: it authorizes no write, sign-in or change of task, and `confirmedBy` never names it. Ask
 again only when the answer is essential: after two questions have gone unanswered, the next one
 left unanswered ends the build.
@@ -516,11 +518,15 @@ never with final text, which the host treats as unfinished work:
   requested field, use it; when they do not, ask the user one focused question with
   `request_input`. Report absence only when the evidence shows the site lacks it, and never
   invent a value or substitute a different field.
+- `owner_declined`: the owner answered no to a `confirm` question, or declined to sign in, and
+  the build needs that step.
+- `question_unanswered`: a question you asked came back `no_answer`, and the build cannot go on
+  without its answer.
 - `policy`: in this attempt Guardian denied or escalated an execution the task needs, denied or
   escalated a publication with reason `privacy` or `authority`, or with a `private_literal`,
   `credential`, `customer_data`, `exfiltration`, `unsafe_logging` or `safety_default` finding,
-  or the owner answered no when you asked with a `confirm` question, and no change within your
-  authority gets past it. A publication denial or escalation that names a correction,
+  and no change within your authority gets past it. The owner's no or an unanswered question is
+  never `policy`. A publication denial or escalation that names a correction,
   such as `source_correction`, `unsupported_claim`, `evidence`, `input_feedback` or an
   `example_value` finding, is review feedback, never a refusal: fix every finding and call
   `finish_build` again. For `evidence`, gather each missing item the rationale names, such as
@@ -528,8 +534,8 @@ never with final text, which the host treats as unfinished work:
   When such a finding still looks impossible to fix, ask the owner with `request_input` when
   only they can decide. A new build may instead narrow the tool so the finding no longer applies;
   a repair keeps every declared input and output. Keep working until the build's limits end it.
-  These instructions are never a refusal either: the host refuses `policy` with no such refusal
-  on record, unless the host's guidance names that `policy` ending, and the build goes on.
+  These instructions are never a refusal either: the host refuses each reason with no basis on
+  record, unless the host's guidance names that `policy` ending, and the build goes on.
 
 Before ending blocked because a value the request gave is unavailable or invalid on the site,
 such as a time slot the site does not offer that day, a date outside its calendar or a name it
@@ -557,7 +563,7 @@ could still fix.
 
 Read .agents/publication/SKILL.md before your first `finish_build`: it says what publication
 checks, what to settle first, which private values never go into published files and how to
-act on each rejection.
+act on each rejection. Go through its edge cases before every `finish_build`.
 Publication requires a completed read example, or the write session step that read its
 confirmation (or read back the saved state; for a write declared unverifiable, the step that
 committed).

@@ -414,6 +414,116 @@ it("marks an executed source unchanged since Guardian read it, and not once it c
   expect(unchanged(requests[3])).toBeUndefined();
 });
 
+/** One read_source call that names several files. */
+const readMany = (
+  id: string,
+  files: readonly { path: string; offset?: number; match?: string }[],
+): ModelResponse["output"][number] => ({
+  type: "function_call",
+  callId: id,
+  name: "read_source",
+  status: "completed",
+  arguments: JSON.stringify({
+    path: null,
+    offset: null,
+    match: null,
+    paths: files.map(({ path, offset = 0, match = null }) => ({ path, offset, match })),
+  }),
+});
+/** The output a later model request shows for one tool call, parsed. */
+const callResult = (request: ModelRequest | undefined, callId: string): unknown => {
+  const input = request?.input;
+  const item = (typeof input === "string" ? [] : (input ?? [])).find(
+    (entry) => entry.type === "function_call_result" && entry.callId === callId,
+  );
+  const output = item?.type === "function_call_result" ? item.output : undefined;
+  const text =
+    typeof output === "string" ? output : (output as { text?: string } | undefined)?.text;
+  return text === undefined ? undefined : JSON.parse(text);
+};
+
+it("reads several files in one call, each with its own result, and counts each as read", async () => {
+  const requests = scripted([
+    [
+      readMany("several", [
+        { path: "operation/src/helper.mjs" },
+        { path: "operation/missing.mjs" },
+        { path: "operation/wrapped.mjs", match: "wrapper" },
+        { path: "./operation/wrapped.mjs" },
+      ]),
+    ],
+    [allow],
+    [allow],
+  ]);
+  const workspace = files();
+  const executed: PendingExecution = {
+    ...pending,
+    mintContext: {
+      repeatableRead: false,
+      operationSources: [...workspace.keys()],
+      executedSources: [
+        "operation/operation.mjs",
+        "operation/src/helper.mjs",
+        "operation/wrapped.mjs",
+      ],
+      browser: "active",
+      executions: [],
+    },
+  };
+  const guardian = makeGuardian(
+    makeOpenAIReviewer("{{ tenant_policy_config }}", false, native),
+    undefined,
+    {},
+  );
+  const reader = sourcesOf(workspace);
+  await Effect.runPromise(guardian.review(executed, reader));
+  expect(callResult(requests[1], "several")).toMatchObject({
+    kind: "untrusted_sources",
+    files: [
+      {
+        kind: "untrusted_source",
+        path: "operation/src/helper.mjs",
+        source: workspace.get("operation/src/helper.mjs"),
+      },
+      { path: "operation/missing.mjs", status: "unavailable" },
+      { kind: "untrusted_source_matches", path: "operation/wrapped.mjs", matchCount: 1 },
+      { kind: "untrusted_source", path: "operation/wrapped.mjs", hasMore: false },
+    ],
+  });
+  // The next review relies on both files the one call read whole.
+  await Effect.runPromise(guardian.review({ ...executed, screenedInput: '{"day":2}' }, reader));
+  expect(
+    (reviewRequest(requests[2]).trusted_review as { unchangedSources?: string[] }).unchangedSources,
+  ).toEqual(["operation/src/helper.mjs", "operation/wrapped.mjs"]);
+});
+
+it("accepts an allow whose entrypoint Guardian read within a several-file call", async () => {
+  const requests = scripted([
+    [allow],
+    [
+      readMany("late_several", [
+        { path: "operation/src/helper.mjs" },
+        { path: "operation/operation.mjs" },
+      ]),
+    ],
+    [allow],
+  ]);
+  const reader = sourcesOf(files());
+  let entrypointReads = 0;
+  const reviewed = await Effect.runPromise(
+    makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).review(
+      pending,
+      (path, offset) =>
+        path === pending.entrypoint && ++entrypointReads === 1
+          ? Effect.fail(new ReviewFailure({ code: "SourceUnavailable" }))
+          : reader(path, offset),
+    ),
+  );
+  expect(reviewed.decision.outcome).toBe("allow");
+  expect(requests).toHaveLength(3);
+  expect(entrypointReads).toBe(2);
+});
+
 it("reports model diagnostics and token counts for session reviews", async () => {
   scripted(
     [[allow]],

@@ -311,4 +311,47 @@ describe("validateAnswer", () => {
       "login",
     ]);
   });
+
+  // A login request may let the owner go on without one: no login in it, nothing saved, and only
+  // where the question offers it.
+  it("accepts a declined login only where offered, holding no login and saving nothing", () => {
+    const login = Schema.decodeUnknownSync(InputRequest)({
+      id: request.id,
+      source: "system",
+      questions: [
+        {
+          id: "login",
+          type: "credential",
+          prompt: "Sign in",
+          fields: "username_password",
+          reason: "missing_credentials",
+          allowSave: true,
+          allowDecline: true,
+          siteOrigin: "https://example.test",
+        },
+      ],
+    });
+    for (const declined of ["no_account", "public_only"])
+      expect(reason({ login: { declined, saveLogin: false } }, login)).toBe("valid");
+    for (const answer of [
+      { declined: "public_only", saveLogin: true },
+      { declined: "public_only", username: "u", saveLogin: false },
+      { declined: "public_only", password: "p", saveLogin: false },
+    ])
+      expect(reason({ login: answer }, login)).toEqual(["unexpected_answer", "login"]);
+    expect(reason({ login: { declined: "elsewhere", saveLogin: false } }, login)).toEqual([
+      "malformed",
+      "login",
+    ]);
+    const notOffered: InputRequest = {
+      ...login,
+      questions: login.questions.map((question) =>
+        question.type === "credential" ? { ...question, allowDecline: false } : question,
+      ),
+    };
+    expect(reason({ login: { declined: "no_account", saveLogin: false } }, notOffered)).toEqual([
+      "unexpected_answer",
+      "login",
+    ]);
+  });
 });

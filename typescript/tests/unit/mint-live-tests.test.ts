@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Usage } from "@openai/agents";
 import type { ModelProvider, ModelRequest, ModelResponse } from "@openai/agents";
@@ -655,16 +655,34 @@ const emptyList = {
   output: { results: [], has_next_page: false, next_cursor: null },
 };
 
-it("never excuses a failure by a case that changed its expectation to what the tool returned", async () => {
+// The review excuses a relabeled failure only when the captures show the site giving the new
+// answer for that input, so the host names the passing case for it and excuses nothing itself.
+it("never excuses a failure by a case that changed its expectation, and names that case for the review", async () => {
   // The second store's results come back empty; the agent relabels the case to expect that.
   const record = await batchesThenPublish({ "other-store": emptyList }, [
     { "src/tool.ts": toolSource, "test/cases.json": otherStore("result") },
     { "test/cases.json": otherStore("empty") },
   ]);
   expect(record.retired).toEqual([
-    expect.objectContaining({ id: "other-store", lastVerdict: "fail", expect: "result" }),
+    expect.objectContaining({
+      id: "other-store",
+      lastVerdict: "fail",
+      expect: "result",
+      changedExpectationBy: "other-store",
+    }),
   ]);
   expect(record.retired[0]).not.toHaveProperty("excusedBy");
+});
+
+it("names no case for a changed expectation that does not pass", async () => {
+  const record = await batchesThenPublish({ "other-store": emptyList }, [
+    { "src/tool.ts": toolSource, "test/cases.json": otherStore("result") },
+    { "test/cases.json": otherStore("invalid_input") },
+  ]);
+  expect(record.retired).toEqual([
+    expect.objectContaining({ id: "other-store", lastVerdict: "fail", expect: "result" }),
+  ]);
+  expect(record.retired[0]).not.toHaveProperty("changedExpectationBy");
 });
 
 it("excuses a failure only by a case passing its input and expectation after the code changed", async () => {
@@ -1223,6 +1241,106 @@ it("leaves a ruled-out HTTP version's results out of the publication record", as
   expect(record.cases.every((testCase) => testCase.results["playwright"]?.status === "pass")).toBe(true);
   expect(published.seen[0]?.coverage).not.toContain("HTTP version");
 });
+
+// An HTTP version the minter deleted after its batch failed does not ship either, so the record
+// leaves it out as it does a ruled-out one: a version listed without its file would draw coverage
+// findings no test can clear.
+it("leaves a deleted HTTP version's results out of the publication record", async () => {
+  const { host } = liveTestHost((batch) =>
+    batch === 0
+      ? { nothing: emptyResults }
+      : { "repeat-1": httpFailure, "sort-price": httpFailure, nothing: httpFailure, "page-2": httpFailure },
+  );
+  const published = publications();
+  let root = "";
+  const f = await fixture(
+    async (_request, index) => {
+      // The agent deletes the HTTP version after its batch failed, then publishes.
+      if (index === 3) await rm(join(root, "src/tool-http.mjs"));
+      return (
+        [
+          call("execute", example, "example"),
+          call("live_tests", runAll, "run_playwright"),
+          call("live_tests", runHttp, "run_http"),
+          call("finish_build", finish, "finish"),
+        ][index] ?? prose()
+      );
+    },
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/tool-http.mjs": httpSource,
+    "test/cases.json": JSON.stringify(cases),
+  });
+  const outcome = await f.run();
+  expect(outcome.build).toBe("published");
+  const record = published.seen[0]?.liveTests as { versions: { version: string }[] };
+  expect(record.versions.map((entry) => entry.version)).toEqual(["playwright"]);
+  expect(published.seen[0]?.coverage).not.toContain("HTTP version");
+});
+
+// The latest HTTP batch ran a scratch file, while src/tool-http.mjs still ships: the record lists
+// the HTTP version by its conventional file, whether the minter deleted the scratch file, rather
+// than dropping it, or kept it, rather than naming a file that does not ship.
+it.each([
+  { scratch: "deleted", remove: true },
+  { scratch: "kept", remove: false },
+])(
+  "lists a shipping HTTP version by its file when its latest batch ran a scratch file, $scratch",
+  async ({ remove }) => {
+    const { host } = liveTestHost((batch) =>
+      batch === 0
+        ? { nothing: emptyResults }
+        : { "repeat-1": httpFailure, "sort-price": httpFailure, nothing: httpFailure, "page-2": httpFailure },
+    );
+    const published = publications();
+    let root = "";
+    const f = await fixture(
+      async (_request, index) => {
+        if (index === 3 && remove) await rm(join(root, "src/scratch-http.mjs"));
+        return (
+          [
+            call("execute", example, "example"),
+            call("live_tests", runAll, "run_playwright"),
+            call("live_tests", { ...runHttp, entrypoint: "src/scratch-http.mjs" }, "run_scratch"),
+            call("finish_build", finish, "finish"),
+          ][index] ?? prose()
+        );
+      },
+      {
+        liveTests: host,
+        deadline: Deadline.after(30 * 60_000),
+        reviewAndExecute: completedExample,
+        publish: published.publish,
+      },
+      read,
+    );
+    root = (f.workspace as unknown as { root: string }).root;
+    await writeWorkspace(root, {
+      "src/tool.ts": toolSource,
+      "src/tool-http.mjs": httpSource,
+      "src/scratch-http.mjs": httpSource,
+      "test/cases.json": JSON.stringify(cases),
+    });
+    const outcome = await f.run();
+    expect(outcome.build).toBe("published");
+    const record = published.seen[0]?.liveTests as {
+      versions: { version: string; entrypoint?: string }[];
+    };
+    expect(record.versions.map((entry) => [entry.version, entry.entrypoint])).toEqual([
+      ["playwright", "src/tool.ts"],
+      ["http", "src/tool-http.mjs"],
+    ]);
+  },
+);
 
 // A sign-in counts only on the site it happened on: after an update moves the build to another
 // site, the read has not signed in there, so it is a read signed out and runs its live tests.

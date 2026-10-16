@@ -1,7 +1,9 @@
 import { posix } from "node:path";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
+import { fileURLToPath } from "node:url";
 import { localRuntimeAssets } from "../../src/execution/local-runtime-assets.js";
+import { loadStandaloneAuthoring, skillReferenceFiles } from "../../src/mint/skills.js";
 import { makeRunSecrets } from "../../src/inputs/secrets.js";
 import { sourceInspector } from "../../src/standalone/request-context.js";
 
@@ -60,6 +62,45 @@ describe("Guardian's source reads on the local host", () => {
         pending.push(posix.normalize(posix.join(posix.dirname(path), specifier)));
     }
     expect(seen.size).toBeGreaterThan(1);
+  });
+
+  it("reads the SDK's modules under pomerado/, and a TypeScript spelling as the JavaScript that runs", async () => {
+    const { trustedSources, read } = await reader(new Map());
+    const operation = trustedSources.get("runtime/operation.js");
+    const entry = trustedSources.get("browser/index.js");
+    expect(operation).toBeDefined();
+    for (const path of [
+      "pomerado/runtime/operation.js",
+      "pomerado/runtime/operation.ts",
+      "pomerado/runtime/operation.d.ts",
+      "runtime/operation.ts",
+      "operation/pomerado/runtime/operation.d.ts",
+    ])
+      expect(await read(path), path).toEqual({ source: operation });
+    expect(await read("pomerado/browser/index.ts")).toEqual({ source: entry });
+    expect(await read("pomerado/runtime/missing.ts")).toEqual({ failure: "SourceUnavailable" });
+  });
+
+  it("reads an authored TypeScript file as written, never as the SDK's JavaScript", async () => {
+    const { read } = await reader(
+      new Map([["operation/runtime/operation.ts", "export const authored = 1;\n"]]),
+    );
+    expect(await read("operation/runtime/operation.ts")).toEqual({
+      source: "export const authored = 1;\n",
+    });
+  });
+
+  it("reads each of the minter's skills where the minter reads it", async () => {
+    const { skills } = await Effect.runPromise(
+      loadStandaloneAuthoring(fileURLToPath(new URL("../../authoring/", import.meta.url))),
+    );
+    const references = skillReferenceFiles(skills);
+    expect(references.size).toBe(skills.length);
+    const { read } = await reader(references);
+    // The skill is long, so its first chunk starts it.
+    const core = await read(".agents/core/SKILL.md");
+    expect("source" in core && core.source.length > 0).toBe(true);
+    expect(references.get(".agents/core/SKILL.md")?.startsWith("source" in core ? core.source : "-")).toBe(true);
   });
 
   it("reads an authored file before the SDK file at the same path", async () => {

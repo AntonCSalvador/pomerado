@@ -32,6 +32,7 @@ import {
   type SignInRecord,
   type SignInValueHooks,
 } from "../destinations/sign-in-recipe.js";
+import type { AutofillPopup } from "../destinations/autofill-contracts.js";
 import type { CredentialRejectedField, WebsiteCredentials } from "../runtime/authentication.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { InputRequestFailure } from "../runtime/input-request.js";
@@ -70,7 +71,8 @@ const refusedStep = (
     | "credential_already_filled"
     | "nothing_rejected"
     | "selector_names_contact"
-    | "page_names_contact",
+    | "page_names_contact"
+    | "marker_not_visible",
   target: number,
   nextStep: string,
 ): SignInStepResult => ({ result: { step: { outcome: "refused", reason, target }, nextStep } });
@@ -282,6 +284,15 @@ export const makeSignInRecorder = <E>(input: {
   /** The site as a question names it: its host, without `www.`. */
   readonly site: string;
   readonly carries: SecretMatcher;
+  /**
+   * Whether `selector` shows on the page now, on the origin of `page` (the sign-in's latest
+   * screen); it checks an account rejection's element. Absent, the host takes the minter's word.
+   */
+  readonly markerVisible?: (
+    selector: string,
+    page: string,
+    popup?: AutofillPopup,
+  ) => Effect.Effect<boolean, E>;
   readonly refuseIndicator?: (
     indicator: AutofillSignedIn,
   ) => Readonly<Record<string, unknown>> | undefined;
@@ -696,6 +707,42 @@ export const makeSignInRecorder = <E>(input: {
         };
       });
 
+    /**
+     * The site showed the account itself locked or suspended, at `selector`. Only a sign-in that
+     * sent the login's identifier can be refused for its account, and only an element that shows
+     * now counts; then no correction gets past it, and sign-in ends in the build.
+     */
+    const accountRejectedStep = (account: "locked" | "suspended", selector: string) =>
+      Effect.gen(function* () {
+        if (![...sent.keys()].some(isIdentifier))
+          return refusedStep(
+            "nothing_rejected",
+            0,
+            "No identifier was sent in this sign-in, so the site cannot have refused its account. Explore read-only to see the page, then send the next signInStep.",
+          );
+        const screen = open?.steps.at(-1);
+        if (
+          input.markerVisible !== undefined &&
+          (screen === undefined ||
+            !(yield* input.markerVisible(selector, screen.page, screen.popup)))
+        )
+          return refusedStep(
+            "marker_not_visible",
+            0,
+            "The element the selector names does not show on the page now, so the host cannot take the account as refused. Explore read-only, name the visible element whose text says the account is locked or suspended, and send the step again.",
+          );
+        close();
+        return yield* new MintFailure({
+          code: "Unavailable",
+          authentication: {
+            phase: "credential_submit",
+            code: "AccountLocked",
+            account,
+            afterSubmission: true,
+          },
+        });
+      });
+
     const signedIn = (indicator: AutofillSignedIn) =>
       Effect.gen(function* () {
         yield* tracker.settled;
@@ -756,7 +803,10 @@ export const makeSignInRecorder = <E>(input: {
           loginUrl = entryOf(given) ?? loginUrl;
           if ("fields" in step) return fill(step, beforeFill);
           if ("approval" in step) return approval(step);
-          if ("rejected" in step) return rejectedStep(step.rejected.slot);
+          if ("rejected" in step)
+            return "slot" in step.rejected
+              ? rejectedStep(step.rejected.slot)
+              : accountRejectedStep(step.rejected.account, step.rejected.selector);
           return signedIn(step.signedIn);
         }),
       /**
