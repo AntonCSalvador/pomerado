@@ -66,6 +66,9 @@ answers `{ success, result, error, stderr }`. Throw
   it a real pointer click, after the same checks Playwright makes. `force`, `position`,
   `modifiers`, `button`, `clickCount` and `delay` keep a synthetic click, so pass them only
   when the step needs them.
+- Prefer waiting for the page a click opens, which may be a new tab, over waiting on the old
+  page's URL.
+- Prefer clicking a control's visible label when its input is hidden.
 - Prefer taking a role locator's name from an ARIA snapshot (the host's `*.aria.yml` capture or a
   scoped `ariaSnapshot()`) over `textContent` or `innerText`, which include hidden labels. When the
   snapshot shows a link with no name, prefer its `href`.
