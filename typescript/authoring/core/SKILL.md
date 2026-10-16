@@ -66,6 +66,9 @@ answers `{ success, result, error, stderr }`. Throw
   it a real pointer click, after the same checks Playwright makes. `force`, `position`,
   `modifiers`, `button`, `clickCount` and `delay` keep a synthetic click, so pass them only
   when the step needs them.
+- Prefer waiting for the page a click opens, which may be a new tab, over waiting on the old
+  page's URL.
+- Prefer clicking a control's visible label when its input is hidden.
 - Prefer taking a role locator's name from an ARIA snapshot (the host's `*.aria.yml` capture or a
   scoped `ariaSnapshot()`) over `textContent` or `innerText`, which include hidden labels. When the
   snapshot shows a link with no name, prefer its `href`.
@@ -100,7 +103,9 @@ pomerado:section core.execute-calls:end -->
   disabled without the page saying why; a read returns such a day unavailable, as "Configure,
   then read" says. When the value is not among choices the page lists, throw
   `new errors.InvalidInput(message, { field, available })` instead, as "Configure, then read"
-  below says. `errors` exists only in the script, never in a call's `code`, so when the page
+  below says. Add `kind`, the reason as a stable lowercase token such as `out_of_stock`, when
+  a caller needs to tell refusals apart (caller-input skill). `errors` exists only in the
+  script, never in a call's `code`, so when the page
   shows the refusal, return a marker such as `{ refused: "why", field, available }` from the
   call and throw once it returns. The run then fails as the caller's input; with `available`,
   the host ends it at once with those choices and no repair. A repair never asks the caller for
@@ -296,7 +301,9 @@ the task can't run without it (below).
 - A choice the request, the caller or the owner declined, or a step they said not to take (no
   location, no store, skip a filter, don't sign in), is not part of the tool for any caller:
   never offer it as an input, never set it in the example or a test, and never put it in
-  `exampleInput`. Note it in coverage.
+  `exampleInput`. Note it in coverage. That covers a step the tool then never takes. A paid
+  add-on, payment method or address a write still meets on its path is never settled this way:
+  it stays an input or a run-time question (writes skill).
 - When the caller input is empty (`{}`), write the tool's input from the request and the
   owner's answers, with dates normalized (10/4 is the next October 4, as `2026-10-04`), and
   pass it as `exampleInput`: on a read's example, or on each write act step that needs it. The
@@ -306,10 +313,14 @@ the task can't run without it (below).
   question is only for a value the request leaves open.
 - Callers and Guardian see the JSON Schema form, so write every constraint in one it
   shows: a `Schema.filter` shows nothing, its description included, so use
-  `Schema.NonEmptyString`, `pattern`, `minLength`, `Int`, `between` or `Literal`. Type every
-  output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
+  `Schema.NonEmptyTrimmedString`, `pattern`, `minLength`, `Int`, `between` or `Literal`. Type
+  every output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
   and its example's own input and output must decode under them, so settle both before that
   example.
+- Make each input as strict as the site's field: required text is non-empty and not whitespace
+  alone (`Schema.NonEmptyString.pipe(Schema.pattern(/\S/u))`, which still takes a caller's stray
+  space); a date, time or code keeps its `pattern`; a fixed set is a `Literal` enum. Make an input
+  optional only when the site accepts the field blank and the tool works without it.
 - Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear. A description that starts "By design:" keeps that marker first and puts the number of values after it, such as "By design: one postal code, …", never before it.
 - When a field takes one value and a caller might send several, say "one per call" and prefer a
   `pattern` that refuses a list, such as several codes separated by commas, while still accepting
@@ -367,15 +378,23 @@ the task can't run without it (below).
 page offers: a control no input covers, an input you cannot wire, a value the request needs
 that the page does not show, or a needed field you would have to make nullable. Settle each
 then: wire it, ask the owner with `request_input` when the request reads two ways, or state in
-the description why the tool lacks it. Publication review blocks on the same gaps, and finding
-them at `finish_build` costs a full fix-and-resubmit round.
+the description why the tool lacks it. When the site never shows a value the request needs, a
+field to return or a filter or option to apply, ask the owner with `request_input` as soon as you
+find it missing, before you build, whether to build without it or stop. When they need it, end
+with `report_blocked` reason `site_lacks_capability` (`AGENTS.md`, "Impossible as asked").
+Publication review blocks on the same gaps, and finding them at `finish_build` costs a full
+fix-and-resubmit round.
 
 **Never loosen a value the request needs.** The values the request needs are each value it
 names, the record's identifier as the site shows it, and the context those depend on as the page
 shows it, such as dates, a party size or a location. Make each one required and non-null, typed
-so a value the code could not read fails the output check (`Schema.NonEmptyString` for text,
-`Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the
+so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for
+text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the
 request's wording or a description says. A run whose output fails its schema goes to repair.
+- Type each output field as strictly as its value: required text is non-empty and trimmed
+  (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports
+  an input's value reuses that input's enum or pattern. Make one optional or nullable only where
+  the page may genuinely not show the value.
 - The one exception is a record whose own page genuinely does not show the value, such as an
   item that is sold out and shows no amount, or a listing that shows no date yet. Then the value may be null only together with a
   field that says why, such as its availability, and both descriptions say so.
@@ -401,6 +420,13 @@ the request names. Leave out what is unrelated to the tool's purpose or of no us
 - Expand collapsed text (a "more", "show all" or similar control) before reading it, and read it
   back: a value that ends in an ellipsis or holds the control's own label was read collapsed or
   cut short.
+- Descriptions, specs, ingredients and variants often sit in collapsed accordion or tab sections
+  that read empty while hidden. Prefer the page's embedded record data; otherwise open the section
+  and read it back. Never guess a data key and fall back to null when it is missing.
+- Before your first example, see each nullable field filled on at least one record that should
+  have it. A field never seen filled is a wrong read: fix it or remove it. A field that says why a
+  value is absent rests on evidence that this record lacks it, never on a read that found nothing.
+  In `finish_build` coverage, name for each nullable field a tested record where it was filled.
 - Return each fact once. Never add a field holding a whole row's or card's text beside the typed
   fields: give a fact they miss its own typed field, or offer the whole text only as the
   `card_text` section below.
@@ -434,7 +460,9 @@ description says what each name adds and what it costs.
 inputs. Scope the row locator to the main list, and leave out related, recommended, recently
 viewed and "others also" sections; with `include: ["related"]` return them in their own `related`
 list of the same row shape, never mixed into the results and never counted toward a limit. A
-sponsored or promoted row inside the main list stays where it is, marked as such. A card that
+sponsored or promoted row inside the main list stays where it is, marked as such, unless the list
+already holds the same item (pagination skill); a promoted carousel is not part of the main list.
+A card that
 stands for a group, such as one product in several flavours or sizes, a hotel with several room
 types or a building with several units for rent, is one result marked as a group (for example
 `kind: "group"`), with the options or count the card shows, never presented as one of its members.
@@ -554,6 +582,14 @@ Never read it from a broad container, whole-page text, tag-stripped HTML, a rege
 text or a page-wide setting such as a currency or language picker: a heading, label or
 placeholder is not the value beside it. Read embedded data separately when it is relevant to
 the requested operation.
+On a hosted browser each Playwright call is a remote round trip, and each awaited call waits for
+its own, so a read costs its number of calls, not its navigations. Read every field a page needs in
+one `evaluate`, `readRows` or snapshot per page, never one locator call per field or a probe per
+element. Prefer values the list page already holds, in its rows or its embedded data, or the
+site's own data request (http-mcp skill), to opening each record's page. When the tool must open
+each record's detail page, keep each to a few calls (open, wait, one read), and consider whether
+the request is better served as two tools, a search and a details read by identifier; say so in
+`coverage`.
 Budgets: navigation 30 s for the document to commit; a click, fill or other action 5 s, taken
 only on an element a wait has shown ready. After a navigation commits or an action returns, the
 page gets 8 s without progress to show one of the answers you named, and up to 30 s while it
@@ -678,7 +714,9 @@ the browser to the site origin before it runs, closing other tabs, and keeps the
 browser's cookies and site storage. So the source must set every value its input controls,
 such as a location, store, filter or search, itself, and never rely on what the site
 remembers from exploration; a live test case that runs cold, on a new browser with an empty
-profile, is the proof. A sign-in that started and was never verified is the exception: that
+profile, is the proof. A published run can start on such a browser too, so the source also sets
+up its own start state from a cold page, such as a guest session, a chosen location or a consent
+banner, never relying on cookies or state only the build's browser holds. A sign-in that started and was never verified is the exception: that
 reset clears cookies and site storage. When the page is signed out after that reset, or after a
 full page load your source asks about with `ensureSignedIn`, the host signs in again by itself;
 do not call `authenticate` for it. When the host cannot keep the site signed in, the step fails with

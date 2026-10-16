@@ -280,6 +280,38 @@ describe("a publication decision", () => {
     expect(decision.findings?.[0]?.explanation).toBe(kept);
   });
 
+  // A denial's short public reason is the caller's, apart from the private rationale; an allow
+  // has none to give.
+  it.each([
+    { outcome: "deny", reason: "privacy", kept: "The tool could not be published safely." },
+    { outcome: "allow", reason: "approved", kept: undefined },
+  ])("keeps a public reason only on a denial: $outcome", async ({ outcome, reason, kept }) => {
+    const { decision } = await Effect.runPromise(
+      makeGuardian({
+        run: () =>
+          Effect.succeed({
+            outcome,
+            reason,
+            rationale: "The source hard-codes a private value.",
+            findings:
+              outcome === "deny"
+                ? [
+                    {
+                      path: pending.entrypoint,
+                      byteStart: 0,
+                      byteEnd: 1,
+                      category: "private_literal",
+                      explanation,
+                    },
+                  ]
+                : [],
+            publicReason: " The tool could not be published safely. ",
+          }),
+      }).review(pending, sourcesOf(files)),
+    );
+    expect(decision.publicReason).toBe(kept);
+  });
+
   // Guardian's shared output format sends null for a field a kind does not use.
   it("reads a null findings list as none and an allow without a reason as approved", async () => {
     const { decision } = await Effect.runPromise(
@@ -401,6 +433,57 @@ describe("a publication decision", () => {
         ? { _tag: "Right", right: { decision: { reason: "host_owned", findings } } }
         : { _tag: "Left", left: { code: "InvalidDecision" } },
     );
+  });
+
+  // The live test record is the host's copy of the minter's cases and their results on its
+  // source: the minter fixes a finding there through its cases or source, so it goes back as a
+  // correction, never as a host fault that ends the build.
+  it("decides a finding in the live test record as the minter's, never host_owned", async () => {
+    const record = JSON.stringify({ kind: "host_live_tests", cases: [], retired: [] });
+    const withRecord = new Map([...files, ["publication/tests.json", record]]);
+    const recordPending: PendingExecution = {
+      ...pending,
+      publication: {
+        files: [
+          ...(pending.publication?.files ?? []),
+          {
+            path: "publication/tests.json",
+            byteLength: Buffer.byteLength(record),
+            published: false,
+            current: true,
+            owner: "host",
+          },
+        ],
+      },
+    };
+    const findings = [
+      {
+        path: "publication/tests.json",
+        byteStart: 0,
+        byteEnd: 1,
+        category: "unsupported_claim",
+        explanation,
+      },
+    ];
+    const decideOnRecord = (reason: string) =>
+      Effect.runPromise(
+        Effect.either(
+          makeGuardian({
+            run: (turn) =>
+              inspectAll(turn).pipe(
+                Effect.as({ outcome: "deny", reason, rationale: "No case tests it", findings }),
+              ),
+          }).review(recordPending, sourcesOf(withRecord)),
+        ),
+      );
+    expect(await decideOnRecord("host_owned")).toMatchObject({
+      _tag: "Left",
+      left: { code: "InvalidDecision" },
+    });
+    expect(await decideOnRecord("evidence")).toMatchObject({
+      _tag: "Right",
+      right: { decision: { reason: "evidence", findings } },
+    });
   });
 
   it("accepts a confirmation finding as a source correction", async () => {
@@ -619,7 +702,8 @@ describe("the OpenAI publication reviewer", () => {
     ]);
     expect(request).not.toHaveProperty("trusted_publication");
     expect(result).toMatchObject({ _tag: "Left", left: { code: "TurnLimitExceeded" } });
-    expect(requests).toHaveLength(12);
+    // Its 12 turns, then the one final turn that must decide.
+    expect(requests).toHaveLength(13);
   });
 
   // Guardian lets a "By design:" input, a limited use such as a postal code that only lists
@@ -751,7 +835,8 @@ describe("the OpenAI publication reviewer", () => {
           ? { _tag: "Left", left: { code: "TurnLimitExceeded" } }
           : { _tag: "Right", right: { decision: { outcome: "allow" } } },
       );
-      expect(requests).toHaveLength(repeatUnavailable ? 32 : 14);
+      // A review that never decides gets its 32 turns and the one final turn.
+      expect(requests).toHaveLength(repeatUnavailable ? 33 : 14);
       expect(events.find((event) => event.name === "guardian.started")).toMatchObject({
         details: { details: { manifestFiles: 13 } },
       });
@@ -825,7 +910,7 @@ describe("the OpenAI publication reviewer", () => {
       ),
     );
     expect(result).toMatchObject({ _tag: "Left", left: { code: "TurnLimitExceeded" } });
-    expect(requests).toHaveLength(3);
+    expect(requests).toHaveLength(4);
   });
 
   it.each([

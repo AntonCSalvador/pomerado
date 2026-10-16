@@ -26,7 +26,7 @@ export default defineOperation(
     name: "read_invoice_ids",
     input: Schema.Struct({}),
     output: Schema.Struct({
-      ids: Schema.Array(Schema.NonEmptyString).annotations({
+      ids: Schema.Array(Schema.NonEmptyTrimmedString).annotations({
         description: "IDs of the account's invoices, in page order",
       }),
     }),
@@ -69,7 +69,7 @@ export default defineOperation(
     )(answer.result);
     const ids = result[selectInvoiceLayout(result.observed)];
     return {
-      ids: Schema.decodeUnknownSync(Schema.Array(Schema.NonEmptyString), { errors: "all" })(ids),
+      ids: Schema.decodeUnknownSync(Schema.Array(Schema.NonEmptyTrimmedString), { errors: "all" })(ids),
     };
   },
 );
