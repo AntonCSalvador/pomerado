@@ -7,7 +7,7 @@ import type { CapabilityReview } from "../capabilities/review-contracts.js";
 import { IntakeReasonCode } from "../capabilities/intake-contracts.js";
 import type { FailureDetail } from "../runtime/failure-detail.js";
 import type { InputIssue } from "../runtime/errors.js";
-import { outputChecks, type OutputFinding } from "../runtime/output-lint.js";
+import { outputChecks, type FieldFill, type OutputFinding } from "../runtime/output-lint.js";
 import type { DestinationPrivateCandidateReason } from "../destinations/private-candidate.js";
 import type { SignedInMarkerCheck } from "../destinations/signed-in-marker.js";
 import type { DestinationReason } from "./destination-reason.js";
@@ -2198,8 +2198,10 @@ export interface MintDependencies {
      * Host evidence for the publication review. `liveTests` is the harness's record of a read's
      * live tests on the source it publishes: the host gives it to the review as the host-owned,
      * unpublished file `publication/tests.json`. Never a reason to refuse publication by itself.
+     * `testedFields` holds each of those cases' output fields as paths and counts, no value: the
+     * host passes them to `outputNotes` as `alsoTested`, so a field no tested run filled is noted.
      */
-    hostEvidence?: { readonly liveTests?: object },
+    hostEvidence?: { readonly liveTests?: object; readonly testedFields?: readonly FieldFill[] },
   ) => Effect.Effect<MintCompletion, MintFailure>;
   /** Absent when this host never publishes past unresolved input feedback. */
   readonly inputFeedbackFallback?: InputFeedbackFallback;

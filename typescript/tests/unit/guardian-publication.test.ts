@@ -651,7 +651,8 @@ describe("the OpenAI publication reviewer", () => {
     ]);
     expect(request).not.toHaveProperty("trusted_publication");
     expect(result).toMatchObject({ _tag: "Left", left: { code: "TurnLimitExceeded" } });
-    expect(requests).toHaveLength(12);
+    // Its 12 turns, then the one final turn that must decide.
+    expect(requests).toHaveLength(13);
   });
 
   // Guardian lets a "By design:" input, a limited use such as a postal code that only lists
@@ -783,7 +784,8 @@ describe("the OpenAI publication reviewer", () => {
           ? { _tag: "Left", left: { code: "TurnLimitExceeded" } }
           : { _tag: "Right", right: { decision: { outcome: "allow" } } },
       );
-      expect(requests).toHaveLength(repeatUnavailable ? 32 : 14);
+      // A review that never decides gets its 32 turns and the one final turn.
+      expect(requests).toHaveLength(repeatUnavailable ? 33 : 14);
       expect(events.find((event) => event.name === "guardian.started")).toMatchObject({
         details: { details: { manifestFiles: 13 } },
       });
@@ -857,7 +859,7 @@ describe("the OpenAI publication reviewer", () => {
       ),
     );
     expect(result).toMatchObject({ _tag: "Left", left: { code: "TurnLimitExceeded" } });
-    expect(requests).toHaveLength(3);
+    expect(requests).toHaveLength(4);
   });
 
   it.each([

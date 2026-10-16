@@ -11,13 +11,15 @@ import {
 import { guardianDecisionFormat, reviewKindOf, withholdPrivateReviews } from "./review-layout.js";
 import { guardianContinuityPolicy } from "./session.js";
 import { guardianPublicationPolicy } from "./publication.js";
-import { guardianModel, guardianReviewTimeout } from "./model.js";
+import { publicationDeltaPolicy } from "./publication-delta.js";
+import { guardianModel, guardianModelCallBound } from "./model.js";
+import type { GuardianModelCallBound } from "./model.js";
 import { sourceMatches } from "./source.js";
 import { providerQuotaExhausted } from "../models/provider-quota.js";
 import { modelUsageCounts } from "../models/model-usage.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { Agent, AgentsError, MaxTurnsExceededError, Runner, tool, Usage } from "@openai/agents";
-import { Effect, Exit, Schema } from "effect";
+import { Effect, Exit, identity, Schema } from "effect";
 import { reviewFollowUpRounds, ReviewFailure } from "./review.js";
 import { withTenantPolicy } from "./upstream-policy.js";
 import type { GuardianUsage, Reviewer, ReviewTurn } from "./review.js";
@@ -25,7 +27,7 @@ import type { ModelObserver, ModelObserverFactory } from "../models/model-observ
 import type { RuntimeRecordInput } from "../models/model-runtime-record.js";
 import { modelFailureMetadata, modelCauseMetadata } from "../models/model-failure.js";
 import type { ModelFailureMetadata } from "../models/model-failure.js";
-import type { AgentInputItem, ModelProvider, ModelRequest } from "@openai/agents";
+import type { AgentInputItem, ModelProvider, ModelRequest, ModelResponse } from "@openai/agents";
 import type { Cause } from "effect";
 
 export { nativeExecutionEnvironment } from "./execution-policy.js";
@@ -61,6 +63,11 @@ export interface GuardianModelOptions {
     readonly input?: Readonly<Record<string, unknown>>;
     readonly maxTurns?: number;
   };
+  /**
+   * How long one model call may go without a response before the reviewer sends that same call
+   * again, and how many times it does: `guardianModelCallBound` by default.
+   */
+  readonly modelCallBound?: GuardianModelCallBound;
 }
 
 // After the upstream policy, whose Outcome Policy asks for a one-sentence rationale, so the model
@@ -135,8 +142,9 @@ const guardianInstructions = (policy: string, turn: ReviewTurn) =>
 /**
  * The kind's policy, sent in the review's user message: for an execution, recovery or
  * publication review the allow, deny or escalate outcome policy, then the host's own or, for a
- * publication review without one, the core publication policy, then a question or task update
- * review's policy, which names its own outcomes.
+ * publication review without one, the core publication policy, and for a later publication
+ * round the delta policy, then a question or task update review's policy, which names its own
+ * outcomes.
  */
 const reviewPolicy = (turn: ReviewTurn, options: GuardianModelOptions) => {
   const specialized = options.specialize?.(turn);
@@ -151,6 +159,10 @@ const reviewPolicy = (turn: ReviewTurn, options: GuardianModelOptions) => {
     kind === "question" || kind === "update" ? undefined : executionOutcomePolicy,
     kind === "execution" ? executionActionPolicy : undefined,
     corePublicationReview(turn, specialized) ? guardianPublicationPolicy : host,
+    // Whichever policy judges the publication, a later round reads it as a delta.
+    kind === "publication" && turn.sources?.publicationDelta !== undefined
+      ? publicationDeltaPolicy
+      : undefined,
     kind === "question" ? questionPolicy : undefined,
     kind === "update" ? taskUpdatePolicy : undefined,
   ]
@@ -245,24 +257,60 @@ const withheldFromObserver = (
   return through(observe(through(base, restore)), hide);
 };
 
+/** One model call went without a response for the per-call bound, each time it was sent. */
+class ModelCallStalled extends Error {
+  override readonly name = "ModelCallStalled";
+  constructor(
+    readonly attempts: number,
+    readonly timeoutMs: number,
+  ) {
+    super(`A Guardian model call went ${timeoutMs} ms without a response, ${attempts} times`);
+  }
+}
+
 /**
- * A model provider that reports how long each call took whose response compacted the
- * conversation. A compaction is the provider's work on the conversation, not the review's.
+ * A model provider that bounds each call: a call with no response after `bound.timeoutMs` is
+ * aborted and the same request sent again, up to `bound.retries` times, then fails as
+ * ModelCallStalled. Only that call runs again; the review, its earlier calls and its reads stand.
+ * Wrappers above may rewrap the error, so `stalled` tells the reviewer itself.
  */
-const timedCompactions = (
+const boundedModelCalls = (
   provider: ModelProvider,
-  compacted: (ms: number) => void,
+  bound: GuardianModelCallBound,
+  observe: { readonly retried: (attempt: number) => void; readonly stalled: () => void },
 ): ModelProvider => ({
   getModel: async (name?: string) => {
     const model = await provider.getModel(name);
     return {
       ...model,
-      getResponse: async (request: ModelRequest) => {
-        const started = performance.now();
-        const response = await model.getResponse(request);
-        if (response.output.some((item) => item.type === "compaction"))
-          compacted(performance.now() - started);
-        return response;
+      getResponse: async (request: ModelRequest): Promise<ModelResponse> => {
+        for (let attempt = 1; ; attempt++) {
+          const call = new AbortController();
+          const parent = request.signal;
+          const abort = () => call.abort(parent?.reason);
+          if (parent?.aborted) abort();
+          else parent?.addEventListener("abort", abort, { once: true });
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const stalled = new Promise<"stalled">((resolve) => {
+            timer = setTimeout(() => resolve("stalled"), bound.timeoutMs);
+          });
+          try {
+            const response = model.getResponse({ ...request, signal: call.signal });
+            // The abandoned call's own failure, once aborted, is not this call's outcome.
+            response.catch(() => undefined);
+            const outcome = await Promise.race([response, stalled]);
+            if (outcome !== "stalled") return outcome;
+            call.abort(new ModelCallStalled(attempt, bound.timeoutMs));
+            if (attempt > bound.retries) {
+              observe.stalled();
+              throw new ModelCallStalled(attempt, bound.timeoutMs);
+            }
+            observe.retried(attempt);
+          } finally {
+            clearTimeout(timer);
+            parent?.removeEventListener("abort", abort);
+          }
+        }
       },
       getStreamedResponse: (request: ModelRequest) => model.getStreamedResponse(request),
     };
@@ -270,26 +318,13 @@ const timedCompactions = (
 });
 
 /**
- * Ends after `limitMs` of review time. Time the provider spent compacting the conversation does
- * not count: each finished compacting call moves the end later by its duration. A compacting call
- * still running at the end is cut off with the review.
+ * The host's message for a review's last turn, after it used its turn limit. That turn offers no
+ * source read, so the review decides from the evidence it already has.
  */
-const reviewDeadline = (limitMs: number, compactingMs: () => number) =>
-  Effect.gen(function* () {
-    yield* Effect.sleep(limitMs);
-    let granted = 0;
-    while (compactingMs() > granted) {
-      const extra = compactingMs() - granted;
-      granted += extra;
-      yield* Effect.sleep(extra);
-    }
-  });
+const finalTurnNote =
+  "This review has used its turns. Decide it now under its policy from the evidence already in view: this turn cannot read source. Where that evidence leaves a point unsettled, decide as the policy says for evidence that is missing.";
 
-const reviewerWithPolicy = (
-  policy: string,
-  developmentPublicRead: boolean,
-  options: GuardianModelOptions,
-): Reviewer => ({
+const reviewerWithPolicy = (policy: string, options: GuardianModelOptions): Reviewer => ({
   run: (turn) =>
     Effect.suspend(() => {
       let diagnosticState: ModelObserver | undefined;
@@ -298,6 +333,8 @@ const reviewerWithPolicy = (
       let reviewComputationDetail: ReviewFailure["failureDetail"];
       /** The provider refused the review's call for a spent quota. */
       let quotaExhausted = false;
+      /** A model call went without a response each time it was sent. */
+      let callStalled = false;
       return Effect.tryPromise({
         try: async (signal) => {
           let reviewSignal = signal;
@@ -347,7 +384,9 @@ const reviewerWithPolicy = (
                 Effect.runPromise(
                   args.match === undefined || args.match === null || args.match.trim() === ""
                     ? turn.readSource(args.path, args.offset)
-                    : sourceMatches(turn.readSource, args.path, args.match),
+                    : (turn.uncountedReads ?? identity)(
+                        sourceMatches(turn.readSource, args.path, args.match),
+                      ),
                   { signal: reviewSignal },
                 );
               const observation = diagnostics
@@ -400,6 +439,21 @@ const reviewerWithPolicy = (
             tracingDisabled: true,
             traceIncludeSensitiveData: false,
           });
+          // Each model call is bounded on its own, below every observer, so a call sent again
+          // reaches the session and the transcript as the one call it is.
+          const callBound = options.modelCallBound ?? guardianModelCallBound;
+          runner.config.modelProvider = boundedModelCalls(runner.config.modelProvider, callBound, {
+            retried: (attempt) => {
+              const observed = turn.observeModelCallRetry?.({
+                attempt,
+                timeoutMs: callBound.timeoutMs,
+              });
+              if (observed !== undefined) Effect.runFork(observed);
+            },
+            stalled: () => {
+              callStalled = true;
+            },
+          });
           // Preserve the trusted host's configured provider, including proof budget enforcement.
           // A private review's own records are protected; every later review's readable records
           // see earlier private exchanges only as placeholders.
@@ -434,11 +488,6 @@ const reviewerWithPolicy = (
               () => activeState.history,
               () => reviewSignal,
             );
-          // Time the provider spent on model calls that compacted the conversation.
-          let compactingMs = 0;
-          runner.config.modelProvider = timedCompactions(runner.config.modelProvider, (ms) => {
-            compactingMs += ms;
-          });
           const flushDiagnostics = async () => {
             try {
               await diagnostics?.flush();
@@ -448,20 +497,47 @@ const reviewerWithPolicy = (
             }
           };
           try {
-            // Bound review computation separately from mandatory diagnostic retention.
-            // The outer signal still fences both phases at the invocation deadline.
+            // Review computation is bounded by its turn limit and each model call's bound, and
+            // fails apart from mandatory diagnostic retention. The outer signal fences both.
             const completed = await Effect.runPromise(
               Effect.tryPromise({
                 try: async (computationSignal) => {
                   reviewSignal = computationSignal;
                   const usage = new Usage();
+                  // A review that uses its turn limit gets one more turn, which offers no read
+                  // and so must decide. One that still does not ends as TurnLimitExceeded.
+                  const finalAgent = agent.clone({
+                    modelSettings: { ...agent.modelSettings, toolChoice: "none" },
+                  });
                   const run = async () => {
-                    const outcome = await runner.run(agent, activeState, {
-                      signal: computationSignal,
-                      maxTurns,
-                    });
-                    usage.add(outcome.runContext.usage);
-                    return outcome;
+                    try {
+                      const outcome = await runner.run(agent, activeState, {
+                        signal: computationSignal,
+                        maxTurns,
+                      });
+                      usage.add(outcome.runContext.usage);
+                      return outcome;
+                    } catch (error) {
+                      if (!(error instanceof MaxTurnsExceededError) || error.state === undefined)
+                        throw error;
+                      usage.add(error.state.usage);
+                      const history = error.state.history;
+                      if (turn.session)
+                        await Effect.runPromise(turn.session.observe(history), {
+                          signal: computationSignal,
+                        });
+                      activeState = await Effect.runPromise(
+                        guardianFollowUpState(turn, history, finalTurnNote, finalAgent, 1),
+                        { signal: computationSignal },
+                      );
+                      if (turn.session) leadingPrivate = turn.session.leadingPrivate();
+                      const outcome = await runner.run(finalAgent, activeState, {
+                        signal: computationSignal,
+                        maxTurns: 1,
+                      });
+                      usage.add(outcome.runContext.usage);
+                      return outcome;
+                    }
                   };
                   let outcome = await run();
                   // An output the host cannot take yet gets bounded follow-ups in this same review.
@@ -484,7 +560,11 @@ const reviewerWithPolicy = (
                 catch: (error) => {
                   diagnostics?.failed(privateKind ? error : withheldError(error, leadingPrivate));
                   failureCode =
-                    error instanceof MaxTurnsExceededError ? "TurnLimitExceeded" : "Unavailable";
+                    error instanceof MaxTurnsExceededError
+                      ? "TurnLimitExceeded"
+                      : callStalled
+                        ? "ModelCallStalled"
+                        : "Unavailable";
                   const finite = (options.failureMetadata ?? modelFailureMetadata)(error);
                   quotaExhausted =
                     providerQuotaExhausted(error) || finite.code === "insufficient_quota";
@@ -517,29 +597,7 @@ const reviewerWithPolicy = (
                       : { failureDetail: reviewComputationDetail }),
                   });
                 },
-              }).pipe(
-                Effect.raceFirst(
-                  reviewDeadline(
-                    guardianReviewTimeout(
-                      developmentPublicRead,
-                      reviewKindOf(turn.pending) === "publication",
-                    ),
-                    () => compactingMs,
-                  ).pipe(
-                    Effect.zipRight(
-                      Effect.suspend(() => {
-                        failurePhase = "review_deadline";
-                        const failure = new ReviewFailure({
-                          code: "Unavailable",
-                          reviewPhase: failurePhase,
-                        });
-                        diagnostics?.failed(failure);
-                        return Effect.fail(failure);
-                      }),
-                    ),
-                  ),
-                ),
-              ),
+              }),
               { signal },
             );
             const { outcome: result, usage } = completed;
@@ -611,13 +669,17 @@ const reviewerWithPolicy = (
     }),
 });
 
+/**
+ * Guardian's reviewer on the OpenAI Agents SDK. `_developmentPublicRead` once chose a longer review
+ * deadline; a review has none now, so it has no effect. It stays so existing callers compile and
+ * will be removed.
+ */
 export const makeOpenAIReviewer = (
   upstreamPolicy: string,
-  developmentPublicRead: boolean,
+  _developmentPublicRead: boolean,
   options: GuardianModelOptions,
 ): Reviewer =>
   reviewerWithPolicy(
     withTenantPolicy(upstreamPolicy, guardianExecutionPolicy(options.executionEnvironment)),
-    developmentPublicRead,
     options,
   );

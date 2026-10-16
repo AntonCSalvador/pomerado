@@ -819,6 +819,8 @@ it("keeps an earlier private host kind's exchange out of a later review's failed
       }),
     ],
     [read("call_turn_limit", "operation/src/helper.mjs")],
+    // The turn after the limit offers no read; a model that still asks for one gets no decision.
+    [read("call_final_turn", "operation/src/helper.mjs")],
   ]);
   const timing: ModelDiagnosticTiming = {
     phase: "completed",
