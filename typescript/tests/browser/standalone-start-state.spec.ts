@@ -632,6 +632,74 @@ test("a local write build whose sign-in again lands on an account picker fails i
   );
 });
 
+// A read build the caller makes a write, after it signed in as a read: its sign-in again needs the
+// marker from then on, as a write build's does.
+test("a local read build that a task update makes a write fails its sign-in again on an account picker", async () => {
+  test.setTimeout(90_000);
+  const site = await startSite();
+  const [, signIn, check, explored] = readSteps(true);
+  if (!signIn || !check || !explored) throw new Error("Unexpected read steps");
+  const ended = await build(site, { url: `${site.origin}/login`, effect: "read" }, [
+    () =>
+      patch({
+        "explore/look.mjs": explore,
+        "src/act.mjs": operation("first_step", probe("act")),
+      }),
+    signIn,
+    check,
+    explored,
+    () => [
+      call(
+        "request_input",
+        {
+          intent: "Ask whether the build may save",
+          questions: [
+            {
+              id: "save",
+              type: "choice",
+              prompt: "Saving the report changes the site. May this build save it?",
+              options: [
+                { id: "save", label: "Yes, save the report" },
+                { id: "look", label: "No, only look" },
+              ],
+            },
+          ],
+        },
+        "ask",
+      ),
+    ],
+    () => [
+      call(
+        "mint_update",
+        {
+          intent: "Make the build a write, as the caller confirmed",
+          summary: "Save the report on the site instead of only reading it.",
+          changes: [{ setting: "effect", effect: "write" }],
+          confirmedBy: ["save"],
+          recommend: "update",
+        },
+        "update",
+      ),
+    ],
+    () => {
+      site.state.signOutOn = "/";
+      site.state.landing = "/choose";
+      return [execution("act", "src/act.mjs")];
+    },
+  ]).then(
+    (built) => ({ built }),
+    (error: unknown) => ({ error }),
+  );
+  expect(site.visits.slice(-3)).toEqual(["/login", "/login", "/choose"]);
+  expect(site.state.logins).toBe(2);
+  expect(site.probes.map(({ step }) => step)).toEqual([]);
+  const diagnostics =
+    "built" in ended ? (ended.built.diagnostics ?? []).map((line): unknown => JSON.parse(line)) : [];
+  expect(diagnostics).toContainEqual(
+    expect.objectContaining({ phase: "execution", purpose: "act", code: "Unavailable" }),
+  );
+});
+
 test("a local read build whose sign-in again lands on an account picker goes on from there", async () => {
   test.setTimeout(90_000);
   const site = await startSite();

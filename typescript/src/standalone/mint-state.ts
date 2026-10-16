@@ -360,9 +360,9 @@ export const mintState = (
           limits: mintSessionSignIns,
           scope: "check",
           spent: signInsSpent,
-          // Only a read build's sign-in may end on a page that can't tell; a write's, or one
-          // whose effect the build decides, needs its marker.
-          allowCantTell: request.effect === "read",
+          // Only a read build's sign-in may end on a page that can't tell; a write's, one a task
+          // update made a write since, or one whose effect the build decides, needs its marker.
+          allowCantTell: () => request.effect === "read" && context.buildEffect === "read",
         });
         /**
          * The origins a signed-in check found the login sent only to, off the site and its sign-in
