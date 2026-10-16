@@ -8,7 +8,7 @@ import { afterEach, expect, it } from "vitest";
 import { makeOpenAIReviewer } from "../../src/guardian/openai.js";
 import { nativeExecutionEnvironment } from "../../src/guardian/execution-policy.js";
 import { ReviewFailure, makeGuardian } from "../../src/guardian/review.js";
-import type { PendingExecution } from "../../src/guardian/review.js";
+import type { GuardianDiagnostics, PendingExecution } from "../../src/guardian/review.js";
 import { makeSourceInspector } from "../../src/guardian/source.js";
 
 afterEach(() => setDefaultModelProvider(new OpenAIProvider()));
@@ -63,20 +63,33 @@ const scripted = (responses: readonly ModelResponse["output"][]) => {
   });
   return requests;
 };
-const guardian = () =>
-  makeGuardian({
-    ...makeOpenAIReviewer("{{ tenant_policy_config }}", false, {
-      executionEnvironment: nativeExecutionEnvironment,
-    }),
-    retry: { delays: ["1 millis"], budget: "1 minute" },
-  });
+const guardian = (diagnostics?: GuardianDiagnostics) =>
+  makeGuardian(
+    {
+      ...makeOpenAIReviewer("{{ tenant_policy_config }}", false, {
+        executionEnvironment: nativeExecutionEnvironment,
+      }),
+      retry: { delays: ["1 millis"], budget: "1 minute" },
+    },
+    diagnostics,
+  );
 
-it("reviews again when an execution allow carries no action label", async () => {
+it("asks once, in the same review, for the action label an execution allow lacks", async () => {
   const requests = scripted([
     decision({ outcome: "allow", rationale: "Clicks save." }),
     decision({ outcome: "allow", rationale: "Clicks save.", action: "read" }),
   ]);
-  const reviewed = await Effect.runPromise(guardian().review(pending, reader));
+  const names: string[] = [];
+  const record: GuardianDiagnostics["emit"] = (name) => Effect.sync(() => void names.push(name));
+  const reviewed = await Effect.runPromise(
+    guardian({
+      emit: record,
+      retainModelTranscript: record,
+      retainScreenedSource: () => Effect.void,
+    }).review(pending, reader),
+  );
+  expect(names.filter((name) => name === "guardian.started")).toHaveLength(1);
+  expect(names).not.toContain("guardian.review_retried");
   expect(reviewed.decision).toEqual({
     outcome: "allow",
     rationale: "Clicks save.",

@@ -10,6 +10,7 @@ import {
 } from "./review-contracts.js";
 import type { PublicationScope } from "./review-contracts.js";
 import { ReviewFailure } from "./review.js";
+import { sourcePath } from "./review-layout.js";
 import { literalPattern } from "./source.js";
 
 /** The public definition the host writes from the minter's source and build metadata. */
@@ -28,9 +29,21 @@ type IndexedFile = PublicationScope["files"][number];
 const isInputFinding = (finding: PublicationFinding) =>
   inputFindingCategories.some((category) => category === finding.category);
 
-/** Findings the decision cannot carry: in a file outside the index, or in an empty one. */
-const misplaced = (decision: Decision, files: ReadonlyMap<string, IndexedFile>) =>
-  decision.findings.some((finding) => !files.get(finding.path)?.byteLength);
+/**
+ * The first path a finding names that the decision cannot carry: a file outside the index, or an
+ * empty one. Checked before the decision's format, so the error names the path.
+ */
+const misplaced = (raw: unknown, files: ReadonlyMap<string, IndexedFile>) => {
+  const findings: unknown =
+    typeof raw === "object" && raw !== null ? Reflect.get(raw, "findings") : undefined;
+  if (!Array.isArray(findings)) return undefined;
+  for (const finding of findings as unknown[]) {
+    const path: unknown =
+      typeof finding === "object" && finding !== null ? Reflect.get(finding, "path") : undefined;
+    if (typeof path === "string" && !files.get(path)?.byteLength) return path;
+  }
+  return undefined;
+};
 
 /**
  * A finding's range fitted to its file: cut at the file's end, or the whole file when nothing of
@@ -65,11 +78,45 @@ export const quoteRange = (text: string, quote: string) => {
   return { byteStart, byteEnd: byteStart + utf8Length(matched) };
 };
 
+const segments = (path: string) => sourcePath(path).split("/");
+
+/**
+ * The indexed file a quoted finding's path names. A path the index holds exactly, an empty file's
+ * included, names that file, and so does one whose part before a `#` it holds exactly, such as a
+ * file followed by a JSON pointer into it. Otherwise the path may miss or add a leading directory:
+ * it names the indexed file that shares the most trailing path segments with it, the file name at
+ * least, a current file before a historical one. Undefined when no file shares even its name, or
+ * when more than one shares as many, so the decision fails to decode and the review is told the
+ * exact paths.
+ */
+const indexedPath = (scope: PublicationScope, written: string): string | undefined => {
+  const exact = (path: string) =>
+    scope.files.find((file) => file.path === path || file.path === sourcePath(path))?.path;
+  const path = written.split("#")[0] ?? written;
+  const named = exact(written) ?? exact(path);
+  if (named !== undefined) return named;
+  const wanted = segments(path).reverse();
+  const shared = (indexed: string) => {
+    const reversed = segments(indexed).reverse();
+    let count = 0;
+    while (count < wanted.length && wanted[count] === reversed[count]) count++;
+    return count;
+  };
+  const scored = scope.files.map((file) => ({ file, shared: shared(file.path) }));
+  const most = Math.max(0, ...scored.map((entry) => entry.shared));
+  if (most === 0) return undefined;
+  const closest = scored.filter((entry) => entry.shared === most).map((entry) => entry.file);
+  const current = closest.filter((file) => file.current);
+  const candidates = current.length > 0 ? current : closest;
+  return candidates.length === 1 ? candidates[0]?.path : undefined;
+};
+
 /**
  * Guardian anchors each finding by quoting the text at fault, and the host finds its byte range,
  * so the model never rereads a file to count offsets. A quote the file does not hold, or a file
  * the host cannot read, puts the finding on the whole file: a denial is a verdict, so it stands.
- * A finding that already carries a byte range, from a reviewer that sends one, is left as it is.
+ * A path that names its file inexactly is put on that file, as `indexedPath` reads it. A finding
+ * that already carries a byte range, from a reviewer that sends one, is left as it is.
  */
 export const anchorQuotedFindings = (
   scope: PublicationScope,
@@ -91,10 +138,11 @@ export const anchorQuotedFindings = (
         continue;
       }
       const { quote: _quote, ...rest } = finding as Record<string, unknown>;
-      const path = rest["path"];
-      const length = typeof path === "string" ? lengths.get(path) : undefined;
-      // A path outside the index keeps no range, and the decision fails to decode as before.
-      if (typeof path !== "string" || length === undefined) {
+      const written = rest["path"];
+      const path = typeof written === "string" ? indexedPath(scope, written) : undefined;
+      const length = path === undefined ? undefined : lengths.get(path);
+      // A path that names no indexed file keeps no range, and the decision fails to decode.
+      if (path === undefined || length === undefined) {
         anchored.push(rest);
         continue;
       }
@@ -104,7 +152,7 @@ export const anchorQuotedFindings = (
         onNone: () => undefined,
         onSome: (content) => quoteRange(content, quote),
       });
-      anchored.push({ ...rest, ...(range ?? { byteStart: 0, byteEnd: length }) });
+      anchored.push({ ...rest, path, ...(range ?? { byteStart: 0, byteEnd: length }) });
     }
     return { ...raw, findings: anchored };
   });
@@ -167,10 +215,21 @@ const withNullDefaults = (raw: unknown): unknown => {
   };
 };
 
+const invalidDecision = (message: string) =>
+  new ReviewFailure({
+    failureDetail: failureDetail("guardian_dependency_failed", { error: new Error(message) }),
+    code: "InvalidDecision",
+  });
+
 /** Decodes a publication decision and checks each finding against the host's index. */
 export const decodePublicationDecision = (scope: PublicationScope, raw: unknown) =>
   Effect.gen(function* () {
     const files = new Map(scope.files.map((file) => [file.path, file]));
+    const outside = misplaced(raw, files);
+    if (outside !== undefined)
+      return yield* invalidDecision(
+        `The finding path ${JSON.stringify(outside)} is not a non-empty file in trusted_publication.files.`,
+      );
     const decoded = yield* Schema.decodeUnknown(PublicationDecision)(
       boundedExplanations(withNullDefaults(raw)),
     ).pipe(
@@ -182,14 +241,16 @@ export const decodePublicationDecision = (scope: PublicationScope, raw: unknown)
           }),
       ),
     );
-    if (misplaced(decoded, files)) return yield* new ReviewFailure({ code: "InvalidDecision" });
     const decision = {
       ...decoded,
       findings: decoded.findings.map((finding) =>
         fitted(finding, files.get(finding.path)?.byteLength ?? 0),
       ),
     };
-    if (inconsistent(decision, files)) return yield* new ReviewFailure({ code: "InvalidDecision" });
+    if (inconsistent(decision, files))
+      return yield* invalidDecision(
+        `The reason ${decision.reason} does not fit the outcome ${decision.outcome} and its ${decision.findings.length} findings, as the publication decision policy describes.`,
+      );
     // A public reason is only a denial's or an escalation's, and only one with words in it.
     const publicReason =
       decision.outcome !== "allow" && decision.publicReason?.trim()
