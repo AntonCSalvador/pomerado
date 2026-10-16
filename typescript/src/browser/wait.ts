@@ -367,9 +367,12 @@ const outcomeWaitChanged = (locator, key) =>
     const noted = globalThis[Symbol.for(key)];
     return elements.filter((element) => noted?.get(element) !== element.innerText).length;
   }, key);
+// The outcomes are read last listed first, so each outcome that outranks one a look sees is read
+// after it: an answer drawn while the look runs, such as an error beside new results, is seen in
+// that look. The observations keep the listed order.
 const outcomeWaitObserve = async (outcomes, key) => {
-  const observations = {};
-  for (const [name, locator] of Object.entries(outcomes)) {
+  const observations = Object.fromEntries(Object.keys(outcomes).map((name) => [name, undefined]));
+  for (const [name, locator] of Object.entries(outcomes).reverse()) {
     const count = await locator.count();
     const visible = count === 0 ? 0 : await locator.filter({ visible: true }).count();
     observations[name] = key === undefined ? { count, visible }
