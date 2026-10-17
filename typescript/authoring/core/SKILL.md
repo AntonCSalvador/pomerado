@@ -81,8 +81,8 @@ answers `{ success, result, error, stderr }`. Throw
   `waitForURL` or `waitForLoadState`: a dialog keeps the URL, and a page that changes route without
   loading a document passes `waitForLoadState` at once. Opening a record by its identifier or URL
   can also answer with a removed or not-found page: name it, and throw `InvalidInput` with the
-  page's own words, never a readiness timeout. The waits paragraph below shows how to paste
-  `waitCode` and call it. Prefer no fixed pauses unless necessary.
+  page's own words and `field`, never a readiness timeout. The waits paragraph below shows how to
+  paste `waitCode` and call it. Prefer no fixed pauses unless necessary.
 - Prefer no result wait after a step that changed nothing, such as closing a panel without picking anything.
 - `waitForOutcome` already waited for its answer, so prefer no extra wait for that same answer after it.
 - Check the null case if possible. Make sure the tool handles a lookup or filter that matches
@@ -98,7 +98,8 @@ pomerado:section core.execute-calls:end -->
   returns true once the page is usable. It throws `ChallengeFailure` if the page stays blocked.
 - Never repeat a call that may have run.
 - When the site itself refuses a caller's value, such as a past date, an unknown airport code
-  or a party size over its limit, throw `new errors.InvalidInput(message)` saying why. When the
+  or a party size over its limit, throw `new errors.InvalidInput(message, { field })` saying why,
+  with `field` the input's name. When the
   refusal is obvious, start the message with "Caller input error:" so the caller gets it at
   once. It is obvious when the input alone breaks a rule of the task, checked before any site
   action, such as a departure date before today in its airport's time zone, a return before
@@ -683,8 +684,8 @@ started. Without an `action`, a list beside a loader that never leaves costs abo
 no-progress window. A request already in flight when a wait starts is not seen: on a page still
 loading its list, name its loading sign as `loading`. Read results;
 return an empty list for a listing's empty state;
-throw `InvalidInput` with the site's own words for a refusal; handle a greyed-out choice the
-input asked for as "Configure, then read" says, unavailable data on a read and `InvalidInput`
+throw `InvalidInput` with `field` and the site's own words for a refusal; handle a greyed-out
+choice the input asked for as "Configure, then read" says, unavailable data on a read and `InvalidInput`
 with `available` on a write; ask the caller about a pick-one list
 (.agents/caller-input/SKILL.md). It throws an
 `Error` named `OutcomeWaitFailure` whose message says what each outcome matched, which progress

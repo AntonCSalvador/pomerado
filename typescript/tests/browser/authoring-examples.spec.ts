@@ -299,6 +299,7 @@ test("detail example searches the site for the record, follows its link and chec
   expect(failure(await read("record_9"))).toMatchObject({
     _tag: "InvalidInput",
     message: "The site's search lists no record with this ID",
+    field: "record_id",
   });
   // Results still loading, or a search that failed, say nothing about the caller's value.
   expect(await read("record_8")).toEqual(
@@ -347,7 +348,7 @@ test("detail example opens the caller's record URL unchanged and checks the page
     "https://records.other.invalid/records/record_42",
     "http://records.example.invalid/records/record_42",
   ])
-    expect(failure(await read(offSite))).toMatchObject({ _tag: "InvalidInput" });
+    expect(failure(await read(offSite))).toMatchObject({ _tag: "InvalidInput", field: "record_url" });
   expect(site.opened).toHaveLength(before);
 });
 
@@ -361,7 +362,11 @@ test("detail example reports the site's not-found page for a record URL at once"
     { record_url: `${origin}/records/record_gone` },
     { siteOrigin: origin },
   );
-  expect(failure(result)).toMatchObject({ _tag: "InvalidInput", message: "The site has no record at this URL" });
+  expect(failure(result)).toMatchObject({
+    _tag: "InvalidInput",
+    message: "The site has no record at this URL",
+    field: "record_url",
+  });
   expect(Date.now() - started).toBeLessThan(3000);
 });
 
