@@ -27,7 +27,7 @@ import {
   withEvidence,
 } from "./autofill-refusal.js";
 import { sameSite, siteDomain } from "../runtime/same-site.js";
-import { trustedUrl } from "../runtime/sign-in-origins.js";
+import { anySignInUrl, trustedUrl } from "../runtime/sign-in-origins.js";
 import { type CardSlot, isCardSlot, onPaymentFrameOrigin } from "./payment-frames.js";
 import type { PageControls } from "./page-controls.js";
 import type {
@@ -260,6 +260,8 @@ export interface AutofillInspection {
   /** What the host judged the targets against, which each fill call judges them against again. */
   readonly siteOrigin: string;
   readonly authenticationOrigins: readonly string[];
+  /** The host trusts any sign-in origin for this sign-in step (`trustAnySignInOrigin`). */
+  readonly trustAnySignInOrigin?: true | undefined;
   /** The payment frame origins a card field may also sit in, for a card-fill step only. */
   readonly paymentFrameOrigins?: readonly string[] | undefined;
   readonly screen: {
@@ -375,11 +377,22 @@ export interface AutofillPage {
 }
 
 /**
+ * Whether `trust` takes any sign-in origin for `step`: its host set `trustAnySignInOrigin`, and the
+ * step is a sign-in's, with no part of a payment card.
+ */
+const trustsAnySignInOrigin = (
+  trust: { readonly trustAnySignInOrigin?: boolean | undefined },
+  step: AutofillStep<FillSlot>,
+) => trust.trustAnySignInOrigin === true && !step.fields.some((field) => isCardSlot(field.slot));
+
+/**
  * The first control that sits or submits off the site and its configured sign-in origins, or a
  * field still to be typed (from index `from`) that takes no typing: where its own frame, document,
  * form actions and link destination are, naming only `named` origins once anything was typed. A
  * field for a part of a payment card may also sit in a frame on one of `paymentFrameOrigins`,
- * exactly; no other field ever counts one as trusted.
+ * exactly; no other field ever counts one as trusted. A sign-in step's controls may also sit and
+ * submit on any https host with a registrable domain when the host trusts any sign-in origin
+ * (`trustAnySignInOrigin`); a card-fill step's never do.
  */
 export const untrustedTarget = (
   targets: typeof Targets.Type,
@@ -388,13 +401,16 @@ export const untrustedTarget = (
     readonly siteOrigin: string;
     readonly authenticationOrigins: readonly string[];
     readonly paymentFrameOrigins?: readonly string[] | undefined;
+    readonly trustAnySignInOrigin?: boolean | undefined;
   },
   from: number,
   named?: ReadonlySet<string>,
 ) => {
+  const anywhere = trustsAnySignInOrigin(trust, step);
   const trusted = (url: string, card: boolean) =>
     trustedUrl(trust.siteOrigin, trust.authenticationOrigins, url) ||
-    (card && onPaymentFrameOrigin(url, trust.paymentFrameOrigins ?? []));
+    (card && onPaymentFrameOrigin(url, trust.paymentFrameOrigins ?? [])) ||
+    (anywhere && anySignInUrl(url));
   const untrustedPart = (target: Target, action: string, card = false) => {
     if (!trusted(target.ownerUrl ?? "", card)) return "frame";
     if (!trusted(target.documentOrigin, card)) return "document_origin";
@@ -459,6 +475,9 @@ export const untrustedTarget = (
  * (`judgedBeforeTyping` given), a refusal names only the origins `namedAfterTyping` allows.
  * A step with a part of a payment card (a card-fill step) is refused unless the primary tab's top
  * document is on the site, and its card fields may sit in a frame on `paymentFrameOrigins`.
+ * `trustAnySignInOrigin` lets a sign-in step's controls and popup sit on any https host with a
+ * registrable domain (`anySignInUrl`), and the fill judges again by the same rule; evidence names
+ * origins as before.
  */
 export const inspectAutofillStep = (input: {
   readonly step: AutofillStep<FillSlot>;
@@ -467,12 +486,18 @@ export const inspectAutofillStep = (input: {
   readonly authenticationOrigins: readonly string[];
   readonly paymentFrameOrigins?: readonly string[] | undefined;
   readonly judgedBeforeTyping?: readonly string[] | undefined;
+  /**
+   * The host trusts any sign-in origin for a sign-in step, as when its owner allowed the sign-in to
+   * go wherever the site sends it. Unset, only the site and `authenticationOrigins`.
+   */
+  readonly trustAnySignInOrigin?: boolean | undefined;
 }): Effect.Effect<AutofillRefusal | AutofillInspection> =>
   Effect.gen(function* () {
     const { step, page, siteOrigin, authenticationOrigins } = input;
     if (
       step.popup !== undefined &&
-      !trustedUrl(siteOrigin, authenticationOrigins, step.popup.origin)
+      !trustedUrl(siteOrigin, authenticationOrigins, step.popup.origin) &&
+      !(trustsAnySignInOrigin(input, step) && anySignInUrl(step.popup.origin))
     )
       return withCheck(refused("credential_target_refused"), "destination", {
         part: "popup",
@@ -527,6 +552,7 @@ export const inspectAutofillStep = (input: {
       targets,
       siteOrigin,
       authenticationOrigins,
+      ...(input.trustAnySignInOrigin === true ? { trustAnySignInOrigin: true as const } : {}),
       ...(input.paymentFrameOrigins === undefined
         ? {}
         : { paymentFrameOrigins: input.paymentFrameOrigins }),
