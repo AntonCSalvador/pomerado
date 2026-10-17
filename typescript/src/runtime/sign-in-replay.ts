@@ -428,9 +428,14 @@ const awaitIndicator = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
     }
   });
 
-/** Words in a field's name or id that mark a one-time code. */
-const codeWords = ["otp", "code", "verification", "2fa", "mfa"];
-/** Words in a field's name, id or autocomplete that mark some other value. */
+/** Words in a field's name or id that alone mark a one-time code. */
+const oneTimeCodeWords = ["otp", "totp", "2fa", "mfa"];
+/** Words in a field's name or id that mark a one-time code only on a short numeric box. */
+const codeWords = ["code", "verification"];
+/**
+ * Words in a field's name, id or autocomplete that mark some other value, which win over the
+ * words above: the one list to add such a word to.
+ */
 const otherWords = [
   "password",
   "email",
@@ -438,42 +443,83 @@ const otherWords = [
   "search",
   "zip",
   "postal",
+  "post",
   "phone",
   "promo",
   "coupon",
+  "discount",
+  "gift",
+  "voucher",
+  "referral",
+  "recovery",
+  "backup",
+  "captcha",
+  "security",
+  "confirmation",
+  "access",
+  "company",
+  "country",
+  "card",
+  "cvv",
+  "cvc",
+  "csc",
+  "pin",
+  "redeem",
+  "area",
+  "year",
 ];
-const named = (words: readonly string[]) =>
-  words.flatMap((word) => [`[name*="${word}" i]`, `[id*="${word}" i]`]);
-const anyOf = (selectors: readonly string[]) => selectors.join(", ");
-const shortMaxlength = [4, 5, 6, 7, 8].map((length) => `[maxlength="${length}"]`);
 
 /**
- * A one-time-code field the recipe never recorded: a text, number or phone-digits input marked by
- * `autocomplete="one-time-code"`, a code word in its name or id, or a numeric keyboard with a
- * maxlength of 4 to 8, and named or autocompleted for no other value.
+ * A one-time-code field the recipe never recorded and its form's submit, matched
+ * case-insensitively on attributes alone. A field marked `autocomplete="one-time-code"` is one
+ * whatever its name, and a page with one matches only it. On a page with none, a text, number or
+ * phone-digits input is one when its name or id holds `oneTimeCodeWords`, or holds `codeWords` on
+ * a short numeric box (`inputmode="numeric"`, or a number or phone input, with a `maxlength` of 4
+ * to 8), unless its name, id or autocomplete holds `otherWords` or its autocomplete starts with
+ * `tel` or `cc-`. A false match types a code where none belongs, so it matches narrowly.
  */
-const unrecordedCodeField = [
-  "input",
-  `:is(${anyOf([":not([type])", '[type="text" i]', '[type="number" i]', '[type="tel" i]'])})`,
-  `:is(${anyOf([
-    '[autocomplete="one-time-code" i]',
-    ...named(codeWords),
-    `[inputmode="numeric" i]:is(${anyOf(shortMaxlength)})`,
-  ])})`,
-  `:not(${anyOf([
-    ...named(otherWords),
-    ...otherWords.map((word) => `[autocomplete*="${word}" i]`),
-    '[autocomplete^="tel" i]',
-  ])})`,
-].join("");
-const unrecordedCodeStep: AutofillStep = {
-  fields: [{ selector: unrecordedCodeField, slot: "code" }],
-  submit: `form:has(${unrecordedCodeField}) :is(${anyOf([
+const unrecordedCodeStep = ((): AutofillStep => {
+  const anyOf = (selectors: readonly string[]) => selectors.join(", ");
+  const named = (words: readonly string[]) =>
+    anyOf(words.flatMap((word) => [`[name*="${word}" i]`, `[id*="${word}" i]`]));
+  const marked = 'input[autocomplete="one-time-code" i]';
+  const shortNumeric = [
+    `:is(${anyOf(['[inputmode="numeric" i]', '[type="number" i]', '[type="tel" i]'])})`,
+    `:is(${anyOf([4, 5, 6, 7, 8].map((length) => `[maxlength="${length}"]`))})`,
+  ].join("");
+  const typed = anyOf([":not([type])", '[type="text" i]', '[type="number" i]', '[type="tel" i]']);
+  const codeLike = [
+    `input:is(${typed})`,
+    `:is(${named(oneTimeCodeWords)}, :is(${named(codeWords)})${shortNumeric})`,
+    `:not(${anyOf([
+      named(otherWords),
+      ...otherWords.map((word) => `[autocomplete*="${word}" i]`),
+      '[autocomplete^="tel" i]',
+      '[autocomplete^="cc-" i]',
+    ])})`,
+  ].join("");
+  const unmarkedPage = `:root:not(:has(${marked}))`;
+  const submit = `:is(${anyOf([
     'button[type="submit" i]',
     'input[type="submit" i]',
     "button:not([type])",
-  ])})`,
-};
+  ])})`;
+  return {
+    fields: [{ selector: `${marked}, ${unmarkedPage} ${codeLike}`, slot: "code" }],
+    submit: `form:has(${marked}) ${submit}, ${unmarkedPage} form:has(${codeLike}) ${submit}`,
+  };
+})();
+
+/**
+ * Whether a field of `step`, a screen this replay submitted, may still show: only a field the page
+ * no longer has (`not_found`) is gone.
+ */
+const stillShows = <E>(browser: SignInReplayBrowser<E>, step: AutofillStep) =>
+  Effect.exists(step.fields, (field) =>
+    browser
+      .inspect({ fields: [field], ...(step.popup === undefined ? {} : { popup: step.popup }) })
+      .pipe(Effect.map((found) => !("outcome" in found) || found.reason !== "not_found")),
+  );
 
 /** A probed code screen: its page and its field's id, name and label. */
 const codeScreenOf = (inspection: AutofillInspection) => {
@@ -489,19 +535,32 @@ const codeScreenOf = (inspection: AutofillInspection) => {
 /**
  * A code screen the recipe never recorded, looked for after its screens only while no code may
  * have gone out, on a recorded screen's origin or a sign-in origin. So it looks once: its code
- * goes out, or the replay ends. The code comes as a recorded code screen's does: a saved value,
- * else the owner's answer. `ran` once it was filled and submitted, `none` when none shows, else
- * why it stopped.
+ * goes out, or the full check decides. The screen this replay last submitted still showing is the
+ * site's answer to it, such as a password screen shown again or a refused recovery code, so no
+ * code goes into it. The code comes as a recorded code screen's does: a saved value, else the
+ * owner's answer. `ran` once it was filled and submitted, else why it stopped: a code typed but
+ * not sent never reads as signed in. `none` when none shows, or when the fill typed nothing, which
+ * leaves the sign-in as it was for the full check.
  */
 const unrecordedCode = <E>(replay: Replay<E>, probe: { screen?: string | undefined }) =>
   Effect.gen(function* () {
-    if (replay.session.sent.maySent.has("code")) return "none" as const;
-    const inspected = yield* replay.session.input.browser.inspect(unrecordedCodeStep);
+    const { input, sent, record, progress } = replay.session;
+    if (sent.maySent.has("code")) return "none" as const;
+    const inspected = yield* input.browser.inspect(unrecordedCodeStep);
     if ("outcome" in inspected) return "none" as const;
     const at = originOf(inspected.page);
     if (at === undefined || !replay.signInOrigins.has(at)) return "none" as const;
+    const submitted = progress.ran.at(-1);
+    if (submitted !== undefined && (yield* stillShows(input.browser, submitted)))
+      return "none" as const;
     probe.screen = codeScreenOf(inspected);
-    return (yield* replay.runStep(unrecordedCodeStep, inspected)) ?? ("ran" as const);
+    const before = progress.ran.length;
+    const failed = yield* replay.runStep(unrecordedCodeStep, inspected);
+    if (failed === undefined) return "ran" as const;
+    const typed = record.pending.has("code") || record.submittedSlots.has("code");
+    if (sent.maySent.has("code") || typed) return failed;
+    progress.ran.splice(before);
+    return "none" as const;
   });
 
 /**

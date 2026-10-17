@@ -4,6 +4,7 @@ import type {
   AutofillInspection,
   AutofillSignedInCheck,
   AutofillStep,
+  AutofillStepReport,
 } from "../../src/destinations/autofill-step.js";
 import type { SignInRecipe, SignInRequest } from "../../src/destinations/sign-in-recipe.js";
 import { makeInputAsker } from "../../src/inputs/callback.js";
@@ -76,6 +77,15 @@ interface SiteOptions {
   readonly unrecorded?: readonly string[];
   /** The unrecorded screens' origin, the site's own by default. */
   readonly unrecordedOrigin?: string;
+  /**
+   * How a fill on an unrecorded screen goes, when not as asked: the host refuses it before typing,
+   * or types the code and never clicks the submit.
+   */
+  readonly unrecordedFill?: "refused" | "unclicked";
+  /** Markup the login screen shows beside its fields once it refused a login, as a CAPTCHA. */
+  readonly captcha?: string;
+  /** A recovery code screen's markup, shown after the login, which refuses every code. */
+  readonly recovery?: string;
   /** The sign-in origins the run configured off the site. */
   readonly authenticationOrigins?: readonly string[];
 }
@@ -88,6 +98,7 @@ const pages = {
   account: [] as string[],
   chooser: ["#pick"],
   unrecorded: [] as string[],
+  recovery: [] as string[],
 } as const;
 type Page = keyof typeof pages;
 
@@ -103,6 +114,7 @@ const fakeSite = (options: SiteOptions = {}) => {
     loads: 0,
     codeSpent: false,
     unrecorded: 0,
+    captcha: false,
   };
   const fills: { readonly page: Page; readonly values: readonly string[] }[] = [];
   const opened: string[] = [];
@@ -117,17 +129,22 @@ const fakeSite = (options: SiteOptions = {}) => {
           : page === "unrecorded"
             ? (options.unrecordedOrigin ?? origin)
             : origin;
-  /** The unrecorded screen showing, parsed, whose one match of a selector is its control. */
-  const markup = () =>
-    state.page === "unrecorded" ? parseHtml(options.unrecorded?.[state.unrecorded] ?? "") : undefined;
-  const shows = (selector: string) => {
-    const page = markup();
-    if (page !== undefined) return page.select(selector).length === 1;
-    return (
-      !(state.page === "code" && state.codeSpent) &&
-      (pages[state.page] as readonly string[]).includes(selector)
-    );
+  /** The markup the page shows, parsed, whose one match of a selector is its control. */
+  const markup = () => {
+    const html =
+      state.page === "unrecorded"
+        ? options.unrecorded?.[state.unrecorded]
+        : state.page === "recovery"
+          ? options.recovery
+          : state.page === "login" && state.captcha
+            ? options.captcha
+            : undefined;
+    return html === undefined ? undefined : parseHtml(`<html><body>${html}</body></html>`);
   };
+  const shows = (selector: string) =>
+    markup()?.select(selector).length === 1 ||
+    (!(state.page === "code" && state.codeSpent) &&
+      (pages[state.page] as readonly string[]).includes(selector));
   const navigate = (page: Page) => {
     state.page = page;
     state.question = options.questions?.[state.loads++] ?? state.question;
@@ -148,9 +165,11 @@ const fakeSite = (options: SiteOptions = {}) => {
         ? "code"
         : options.question
           ? "question"
-          : options.unrecorded !== undefined
-            ? "unrecorded"
-            : "account";
+          : options.recovery !== undefined
+            ? "recovery"
+            : options.unrecorded !== undefined
+              ? "unrecorded"
+              : "account";
   const browser: SignInReplayBrowser<Error> = {
     inspect: (step) =>
       Effect.sync((): AutofillInspection | { readonly outcome: "refused"; readonly reason: "not_found" } => {
@@ -196,9 +215,18 @@ const fakeSite = (options: SiteOptions = {}) => {
         };
       }),
     fill: ({ step, values }) =>
-      Effect.sync(() => {
+      Effect.sync((): AutofillStepReport => {
         const page = state.page;
+        if (page === "unrecorded" && options.unrecordedFill === "refused")
+          return { outcome: "refused", reason: "not_editable" };
         fills.push({ page, values: [...values] });
+        if (page === "unrecorded" && options.unrecordedFill === "unclicked")
+          return {
+            outcome: "filled",
+            fields: step.fields.map((field) => ({ slot: field.slot, status: "filled" as const })),
+            submit: "failed",
+            url: `${origin}/${page}`,
+          };
         const request: SignInRequest = {
           url: `${pageOrigin(page)}/${page}`,
           method: "POST",
@@ -212,6 +240,7 @@ const fakeSite = (options: SiteOptions = {}) => {
           const right = values[0] === account.username && values[1] === account.password;
           state.loginError = !right && options.marker === true;
           state.usernameError = values[0] !== account.username && options.usernameMarker === true;
+          state.captcha ||= !right && options.captcha !== undefined;
           if (right && afterLogin() === "account") land();
           else if (right) navigate(afterLogin());
         } else if (page === "method") navigate("code");
@@ -699,7 +728,9 @@ it("answers a code screen the recipe never recorded with the code question, then
 
 it("takes a promo code field for no sign-in code field", async () => {
   const promo = '<form><input name="promo_code"><button type="submit">Apply</button></form>';
-  const fake = fakeSite({ unrecorded: [promo + codeForm('id="verification-code"')] });
+  const fake = fakeSite({
+    unrecorded: [promo + codeForm('id="verification-code" inputmode="numeric" maxlength="6"')],
+  });
   const { ask, asked } = owner();
   expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
   expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
@@ -733,5 +764,80 @@ it("looks for an unrecorded code field once, and fills no second code screen", a
   const { ask, asked } = owner();
   expect(await signIn(recipeOf(), fake, ask, undefined, false)).toEqual(checkFailed);
   expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(fake.fills.map(({ page }) => page)).toEqual(["login", "unrecorded"]);
+});
+
+it("answers a field marked one-time-code whatever its name, such as email_otp", async () => {
+  const fake = fakeSite({ unrecorded: [codeForm('name="email_otp" autocomplete="one-time-code"')] });
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(fake.fills).toEqual([
+    { page: "login", values: [account.username, account.password] },
+    { page: "unrecorded", values: [code] },
+  ]);
+});
+
+for (const [kind, attributes] of [
+  ["a voucher box", 'name="voucher_code" inputmode="numeric" maxlength="6"'],
+  ["a card's security code named cardCode", 'name="cardCode" inputmode="numeric" maxlength="4"'],
+  ["a box autocompleted cc-csc", 'id="code" autocomplete="cc-csc" inputmode="numeric" maxlength="4"'],
+  ["a box autocompleted cc-exp", 'id="code" autocomplete="cc-exp" inputmode="numeric" maxlength="4"'],
+] as const)
+  it(`types no code into ${kind} on the page a read's sign-in lands on that can't tell`, async () => {
+    const fake = fakeSite({ unrecorded: [codeForm(attributes)] });
+    const { ask, asked } = owner();
+    expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+    expect(kinds(asked)).toEqual(["credential:missing_credentials"]);
+    expect(fake.fills.map(({ page }) => page)).toEqual(["login"]);
+  });
+
+it("types no code into a CAPTCHA's numeric box on a login screen shown again after a wrong password", async () => {
+  const captcha = codeForm('name="verificationCode" inputmode="numeric" maxlength="4"');
+  const fake = fakeSite({ captcha });
+  const wrong = { ...account, password: "synthetic-wrong" };
+  const { ask, asked } = owner({ logins: [wrong, account] });
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual([
+    "credential:missing_credentials",
+    "credential:invalid_credentials",
+  ]);
+  // The wrong password went out once, and nothing went into the CAPTCHA's box.
+  expect(fake.fills).toEqual([
+    { page: "login", values: [account.username, wrong.password] },
+    { page: "login", values: [account.username, account.password] },
+  ]);
+});
+
+it("types no code into a recorded recovery code screen shown again after its code", async () => {
+  const fake = fakeSite({
+    recovery:
+      '<form><input id="recovery" name="recovery_code" inputmode="numeric" maxlength="8"><button type="submit" id="verify-recovery">Verify</button></form>',
+  });
+  const recoveryStep = {
+    page: `${origin}/recovery`,
+    fields: [{ selector: "#recovery", slot: "recovery_code" as const }],
+    submit: "#verify-recovery",
+  };
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(recoveryStep), fake, ask, undefined, false)).toEqual(checkFailed);
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "recovery_code"]);
+  expect(fake.fills.map(({ page }) => page)).toEqual(["login", "recovery"]);
+});
+
+it("leaves the sign-in to the full check when an unrecorded code screen's fill typed nothing", async () => {
+  const fake = fakeSite({ unrecorded: [codeForm('name="otp"')], unrecordedFill: "refused" });
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(fake.fills.map(({ page }) => page)).toEqual(["login"]);
+});
+
+it("fails the sign-in when an unrecorded code screen's code was typed and never submitted", async () => {
+  const fake = fakeSite({ unrecorded: [codeForm('name="otp"')], unrecordedFill: "unclicked" });
+  const { ask } = owner();
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(
+    Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "submit_failed" })),
+  );
   expect(fake.fills.map(({ page }) => page)).toEqual(["login", "unrecorded"]);
 });
