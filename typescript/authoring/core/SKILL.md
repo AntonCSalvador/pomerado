@@ -101,8 +101,8 @@ pomerado:section core.execute-calls:end -->
   or a party size over its limit, throw `new errors.InvalidInput(message)` saying why. When the
   refusal is obvious, start the message with "Caller input error:" so the caller gets it at
   once. It is obvious when the input alone breaks a rule of the task, checked before any site
-  action, such as a departure date before today in the site's time zone, a return before its
-  departure or a count below one. It is also obvious when the page itself refuses the value in
+  action, such as a departure date before today in its airport's time zone, a return before
+  its departure or a count below one. It is also obvious when the page itself refuses the value in
   its own words, which the message quotes. Never use that start when the tool's own read found
   nothing, such as an empty suggestion list, a slider or list that hadn't loaded, or a day a
   write finds disabled without the page saying why; a read returns such a day unavailable, as "Configure,
@@ -119,12 +119,13 @@ pomerado:section core.execute-calls:end -->
   shows it with the caller's own input, and the run ends with those choices. A write that throws it before entering a commit mark reports that it changed nothing. A page,
   control or response that changed is still `OperationFailure`.
 - Check every rule the input alone breaks before any site action, such as a check-out on or
-  before its check-in, a count below one or a date before today in the site's time zone, and
-  throw `InvalidInput` at once, starting "Caller input error:" and naming the field and the
-  rule. A date at a place, such as a restaurant or a departure airport, uses that place's time
-  zone. UTC's date can be a day ahead or behind. When the tool can't tell the time zone, refuse
-  only a date that is past in every time zone. Hold in the input schema every rule it can
-  express. The caller-input skill, "Validate it, and fail with the right error", lists the
+  before its check-in, a count below one or a past date, and throw `InvalidInput` at once,
+  starting "Caller input error:" and naming the field and the rule. A date is past when it is
+  before today in the site's time zone. UTC's date can be a day ahead or behind. A site with
+  places in several time zones uses the place's zone, such as a restaurant's or a departure
+  airport's, when the tool knows it before any site action. Otherwise refuse only a date that
+  is past in every time zone, such as one before yesterday in UTC. Hold in the input schema
+  every rule it can express. The caller-input skill, "Validate it, and fail with the right error", lists the
   rules and when to throw each error.
 - When the page does not apply a valid value the caller supplied, such as a filter, sort or
   date it ignored, reset or replaced with its own (on a write, a location or store too), after

@@ -289,7 +289,8 @@ export const publicationLiveTestsPolicy = [
  * published revision's inputs back, a throw
  * where empty or null was right (and the reverse), URLs built outside the site's own pattern, code that submits caller details in a step
  * the captures show creating an account or lasting record, in a read, source that requires a pop-up
- * shown only to some accounts or states, and a write that does not reconcile the state it changes.
+ * shown only to some accounts or states, a write that does not reconcile the state it changes, and
+ * source that refuses a date as past by today's date in UTC rather than the site's or place's.
  */
 export const publicationOutputPolicy = [
   "A needed value is an output fact, never a missing input: each value the request names, the record's identifier, and context those depend on, such as dates. In any implementation the bundle publishes, each of the following is a schema_mismatch finding with reason source_correction.",

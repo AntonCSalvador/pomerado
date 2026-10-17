@@ -20,8 +20,10 @@ an input that tailors the answer, which a read returns labeled with the value th
    `new errors.InvalidInput(message, { field })` at once, starting "Caller input error:" and
    naming the field and the rule. Such rules include:
    - an end date on or after its start date, and a check-out after its check-in;
-   - a date the task rules out, such as a departure before today in the site's time zone (core
-     skill);
+   - a date the task rules out, such as a departure before today in its airport's time zone.
+     On a site with places in several time zones, use the place's zone when the tool knows it
+     before any site action, and otherwise refuse only a date that is past in every time zone,
+     such as one before yesterday in UTC (core skill);
    - a count within the site's own limits, such as a party size or quantity the site caps,
      found while building and stated in the message;
    - inputs that exclude each other, such as a store and a ZIP code where the site takes one;
