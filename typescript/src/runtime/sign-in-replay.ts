@@ -1,6 +1,7 @@
 import { Clock, Duration, Effect, type Scope } from "effect";
 import type { SignInMethodChoice } from "../destinations/autofill-contracts.js";
 import type {
+  AutofillInspection,
   AutofillRefusal,
   AutofillSignedIn,
   AutofillSlot,
@@ -202,6 +203,8 @@ const endedCantTell = <E>(session: ReplaySession<E>) =>
     return markerCantTell(yield* session.checkHere, session.input.recipe);
   });
 
+const originOf = (page: string) => URL.parse(page)?.origin;
+
 const makeReplay = <E>(input: SignInReplayInput<E>) => {
   const session = makeReplaySession(input);
   const run = (
@@ -218,6 +221,12 @@ const makeReplay = <E>(input: SignInReplayInput<E>) => {
     /** The run holds no login yet: this replay is its value-free sign-in check. */
     valueFree: input.credentials === undefined,
     pages: new Set(session.steps.map((step) => step.page)),
+    /** Where an unrecorded code screen may be: a recorded screen's origin or a sign-in origin. */
+    signInOrigins: new Set(
+      [...session.steps.map((step) => step.page), ...input.browser.authenticationOrigins].flatMap(
+        (page) => originOf(page) ?? [],
+      ),
+    ),
     awaitScreen: makeReplayScreenWait(input, session.progress, input.timing, resolve, () =>
       screenRejection(session, extras),
     ),
@@ -231,8 +240,6 @@ const makeReplay = <E>(input: SignInReplayInput<E>) => {
   };
 };
 type Replay<E> = ReturnType<typeof makeReplay<E>>;
-
-const originOf = (page: string) => URL.parse(page)?.origin;
 
 /** The recorded screen as it runs now: a method choice clicks the method the owner picks. */
 const screenFor = <E>(
@@ -421,13 +428,173 @@ const awaitIndicator = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
     }
   });
 
+/** Words in a field's name or id that alone mark a one-time code. */
+const oneTimeCodeWords = ["otp", "totp", "2fa", "mfa"];
+/** Words in a field's name or id that mark a one-time code only on a short numeric box. */
+const codeWords = ["code", "verification"];
+/**
+ * Words in a field's name, id or autocomplete that mark some other value, which win over the
+ * words above: the one list to add such a word to.
+ */
+const otherWords = [
+  "password",
+  "email",
+  "username",
+  "search",
+  "zip",
+  "postal",
+  "post",
+  "phone",
+  "promo",
+  "coupon",
+  "discount",
+  "gift",
+  "voucher",
+  "referral",
+  "recovery",
+  "backup",
+  "captcha",
+  "security",
+  "confirmation",
+  "access",
+  "company",
+  "country",
+  "card",
+  "cvv",
+  "cvc",
+  "csc",
+  "pin",
+  "pincode",
+  "redeem",
+  "area",
+  "year",
+];
+/**
+ * Words of `otherWords` that count only as a word of their own, so "pin" rules out pinCode,
+ * card_pin and cardPin but not otpInput or spinner. A word ends at the start or end, a non-letter,
+ * or a change from lower to upper case. "pincode" and "PINCode" hold no such word, so "pincode"
+ * counts anywhere.
+ */
+const wholeOtherWords = ["pin"];
+
+/** Whether an unmarked field's name, id or autocomplete holds one of `wholeOtherWords`. */
+const namesWholeOtherWord = (field: AutofillInspection["screen"]["fields"][number]) =>
+  field.autocomplete?.toLowerCase() !== "one-time-code" &&
+  [field.name, field.id, field.autocomplete].some((value) =>
+    (value ?? "")
+      .split(/[^A-Za-z]+|(?<=[a-z])(?=[A-Z])/u)
+      .some((word) => wholeOtherWords.includes(word.toLowerCase())),
+  );
+
+/**
+ * A one-time-code field the recipe never recorded and its form's submit, matched
+ * case-insensitively on attributes alone. A field marked `autocomplete="one-time-code"` is one
+ * whatever its name, and a page with one matches only it. On a page with none, a text, number or
+ * phone-digits input is one when its name or id holds `oneTimeCodeWords`, or holds `codeWords` on
+ * a short numeric box (`inputmode="numeric"`, or a number or phone input, with a `maxlength` of 4
+ * to 8), unless its name, id or autocomplete holds `otherWords` or its autocomplete starts with
+ * `tel` or `cc-`. A false match types a code where none belongs, so it matches narrowly. The
+ * selector leaves `wholeOtherWords` to `namesWholeOtherWord`, which CSS cannot tell apart.
+ */
+const unrecordedCodeStep = ((): AutofillStep => {
+  const anyOf = (selectors: readonly string[]) => selectors.join(", ");
+  const named = (words: readonly string[]) =>
+    anyOf(words.flatMap((word) => [`[name*="${word}" i]`, `[id*="${word}" i]`]));
+  const marked = 'input[autocomplete="one-time-code" i]';
+  const shortNumeric = [
+    `:is(${anyOf(['[inputmode="numeric" i]', '[type="number" i]', '[type="tel" i]'])})`,
+    `:is(${anyOf([4, 5, 6, 7, 8].map((length) => `[maxlength="${length}"]`))})`,
+  ].join("");
+  const typed = anyOf([":not([type])", '[type="text" i]', '[type="number" i]', '[type="tel" i]']);
+  const substrings = otherWords.filter((word) => !wholeOtherWords.includes(word));
+  const codeLike = [
+    `input:is(${typed})`,
+    `:is(${named(oneTimeCodeWords)}, :is(${named(codeWords)})${shortNumeric})`,
+    `:not(${anyOf([
+      named(substrings),
+      ...substrings.map((word) => `[autocomplete*="${word}" i]`),
+      '[autocomplete^="tel" i]',
+      '[autocomplete^="cc-" i]',
+    ])})`,
+  ].join("");
+  const unmarkedPage = `:root:not(:has(${marked}))`;
+  const submit = `:is(${anyOf([
+    'button[type="submit" i]',
+    'input[type="submit" i]',
+    "button:not([type])",
+  ])})`;
+  return {
+    fields: [{ selector: `${marked}, ${unmarkedPage} ${codeLike}`, slot: "code" }],
+    submit: `form:has(${marked}) ${submit}, ${unmarkedPage} form:has(${codeLike}) ${submit}`,
+  };
+})();
+
+/**
+ * Whether a field of `step`, a screen this replay submitted, may still show: only a field the page
+ * no longer has (`not_found`) is gone.
+ */
+const stillShows = <E>(browser: SignInReplayBrowser<E>, step: AutofillStep) =>
+  Effect.exists(step.fields, (field) =>
+    browser
+      .inspect({ fields: [field], ...(step.popup === undefined ? {} : { popup: step.popup }) })
+      .pipe(Effect.map((found) => !("outcome" in found) || found.reason !== "not_found")),
+  );
+
+/** A probed code screen: its page and its field's id, name and label. */
+const codeScreenOf = (inspection: AutofillInspection) => {
+  const field = inspection.screen.fields[0];
+  return JSON.stringify([
+    inspection.page,
+    field?.id ?? null,
+    field?.name ?? null,
+    field?.label ?? null,
+  ]);
+};
+
+/**
+ * A code screen the recipe never recorded, looked for after its screens only while no code may
+ * have gone out, on a recorded screen's origin or a sign-in origin. So it looks once: its code
+ * goes out, or the full check decides. The screen this replay last submitted still showing is the
+ * site's answer to it, such as a password screen shown again or a refused recovery code, so no
+ * code goes into it. The code comes as a recorded code screen's does: a saved value, else the
+ * owner's answer. `ran` once it was filled and submitted, else why it stopped: a code typed but
+ * not sent never reads as signed in. `none` when none shows, or when the fill typed nothing, which
+ * leaves the sign-in as it was for the full check.
+ */
+const unrecordedCode = <E>(replay: Replay<E>, probe: { screen?: string | undefined }) =>
+  Effect.gen(function* () {
+    const { input, sent, record, progress } = replay.session;
+    if (sent.maySent.has("code")) return "none" as const;
+    const inspected = yield* input.browser.inspect(unrecordedCodeStep);
+    if ("outcome" in inspected) return "none" as const;
+    const at = originOf(inspected.page);
+    if (at === undefined || !replay.signInOrigins.has(at)) return "none" as const;
+    const field = inspected.screen.fields[0];
+    if (field !== undefined && namesWholeOtherWord(field)) return "none" as const;
+    const submitted = progress.ran.at(-1);
+    if (submitted !== undefined && (yield* stillShows(input.browser, submitted)))
+      return "none" as const;
+    probe.screen = codeScreenOf(inspected);
+    const before = progress.ran.length;
+    const failed = yield* replay.runStep(unrecordedCodeStep, inspected);
+    if (failed === undefined) return "ran" as const;
+    const typed = record.pending.has("code") || record.submittedSlots.has("code");
+    if (sent.maySent.has("code") || typed) return failed;
+    progress.ran.splice(before);
+    return "none" as const;
+  });
+
 /**
  * A code screen that came back: the owner gives a new code, never one the site rejected. The
  * screen decides the rest: every other password or code field it shows empty is filled again,
  * and a field that still holds a value is left as it is. A password goes out at most twice. A
  * code its page may have sent itself (`page`) came back refused only once a request carried it.
  */
-const retryCode = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
+const retryCode = <E>(
+  input: SignInReplayInput<E>,
+  replay: Replay<E>,
+  probedScreen: string | undefined,
+) =>
   Effect.gen(function* () {
     const { session } = replay;
     const observed = yield* session.observeRejections;
@@ -439,6 +606,15 @@ const retryCode = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
     if (rejected !== undefined && rejected !== "code") return "username_rejected";
     const shown = yield* replay.shownAgain("code");
     if (shown === undefined) return "none" as const;
+    // A probed code screen shows again only where it was found: a code field elsewhere is the
+    // site's next screen, not a refusal of the code it took.
+    if (probedScreen !== undefined) {
+      const here = yield* input.browser.inspect({
+        fields: shown.fields,
+        ...(shown.popup === undefined ? {} : { popup: shown.popup }),
+      });
+      if ("outcome" in here || codeScreenOf(here) !== probedScreen) return "none" as const;
+    }
     // A code screen whose page may have sent the code itself shows a refusal only once a request
     // carried that code: a page that only seemed to move on sent nothing, and a new code asked
     // then would say the site refused one it never got.
@@ -503,10 +679,12 @@ const lastCheck = <E>(input: SignInReplayInput<E>, replay: Replay<E>, opened: bo
 
 /**
  * After the screens, the recipe's own check decides: the marker on the page, a code screen
- * answered again first, then the full check, which may open the account page.
+ * answered again first, else one the recipe never recorded (`unrecordedCode`), then the full
+ * check, which may open the account page.
  */
 const settle = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
   Effect.gen(function* () {
+    const probe: { screen?: string | undefined } = {};
     while (true) {
       const shown = yield* awaitIndicator(input, replay);
       if (!replay.session.progress.anythingSent) return yield* alreadySignedIn(input, replay);
@@ -516,9 +694,12 @@ const settle = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
       const opens = input.recipe.signedIn.openPath !== undefined;
       if (opens && (yield* replay.verify(input.recipe.signedIn)))
         return { outcome: "signed_in", alreadySignedIn: false } as const;
-      const code = yield* retryCode(input, replay);
+      const code = yield* retryCode(input, replay, probe.screen);
       if (code === "retried" || code === "extra_retried") continue;
       if (code !== "none") return replay.session.outcome(code);
+      const unrecorded = yield* unrecordedCode(replay, probe);
+      if (unrecorded === "ran") continue;
+      if (unrecorded !== "none") return replay.session.outcome(unrecorded);
       return yield* lastCheck(input, replay, opens);
     }
   });
@@ -527,7 +708,8 @@ const settle = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
  * Replays a published sign-in recipe on the run's browser: it opens the entry page, finds and
  * judges each recorded screen (one visible match, its frame and form on the site or a configured
  * sign-in origin, on the recorded screen's own origin), fills and submits it, then checks the
- * recipe's marker. A password or code goes out at most twice, any other secret once, a visible
+ * recipe's marker, answering first a code screen the recipe never recorded, looked for once
+ * (`unrecordedCode`). A password or code goes out at most twice, any other secret once, a visible
  * rejection stops before another fill, and only a request the page sent carrying a value counts
  * as sending it. The page's requests are heard only while it runs.
  */
