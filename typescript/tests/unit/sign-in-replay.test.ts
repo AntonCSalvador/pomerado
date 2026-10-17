@@ -784,6 +784,7 @@ for (const [kind, attributes] of [
   ["a box autocompleted cc-csc", 'id="code" autocomplete="cc-csc" inputmode="numeric" maxlength="4"'],
   ["a box autocompleted cc-exp", 'id="code" autocomplete="cc-exp" inputmode="numeric" maxlength="4"'],
   ["a PIN box named pinCode", 'name="pinCode" inputmode="numeric" maxlength="6"'],
+  ["a PIN box named pin_code", 'name="pin_code" inputmode="numeric" maxlength="6"'],
   ["a postal PIN box named pincode", 'name="pincode" inputmode="numeric" maxlength="6"'],
   ["a postal PIN box named PINCode", 'name="PINCode" inputmode="numeric" maxlength="6"'],
   ["a text box named code with no short numeric shape", 'name="code" type="text"'],
