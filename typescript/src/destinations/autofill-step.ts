@@ -390,12 +390,19 @@ const signInUrlTrust = (
 
 /**
  * Whether the host trusts `value` for a sign-in step by its own predicate: never an address core
- * would not let it trust (`trustableSignInUrl`), which the predicate is never asked about.
+ * would not let it trust (`trustableSignInUrl`), which the predicate is never asked about. A
+ * predicate that throws trusts nothing.
  */
 const hostTrusts = (predicate: ((url: URL) => boolean) | undefined, value: string) => {
   if (predicate === undefined) return false;
   const url = URL.parse(value);
-  return url !== null && trustableSignInUrl(url) && predicate(url) === true;
+  if (url === null || !trustableSignInUrl(url)) return false;
+  try {
+    return predicate(url) === true;
+    // error-reporting-allow: typed-recovery a host predicate that throws trusts nothing, so the step is refused as untrusted
+  } catch {
+    return false;
+  }
 };
 
 /**
@@ -503,7 +510,10 @@ export const inspectAutofillStep = (input: {
    * The host's own trust of more sign-in addresses for a sign-in step, as when its user allowed the
    * sign-in to go wherever the site sends it: asked about each address of a control or popup off
    * the site and `authenticationOrigins` that `trustableSignInUrl` allows, never about a card-fill
-   * step's. It must not throw. Unset, only the site and `authenticationOrigins`.
+   * step's. It is also asked after typing, about addresses the page shaped, which may hold what was
+   * typed: the host must never log, keep or forward a URL it is asked about, and answers from the
+   * URL alone. A predicate that throws trusts nothing. Unset, only the site and
+   * `authenticationOrigins`.
    */
   readonly trustSignInUrl?: ((url: URL) => boolean) | undefined;
 }): Effect.Effect<AutofillRefusal | AutofillInspection> =>

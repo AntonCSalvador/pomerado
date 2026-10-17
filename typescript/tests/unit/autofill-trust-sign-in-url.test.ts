@@ -187,6 +187,10 @@ describe("a host's own trust of sign-in addresses", () => {
     ["a .local host", "https://x.local/u/login"],
     ["a .test host", "https://a.test/u/login"],
     ["an .invalid host", "https://a.invalid/u/login"],
+    // Names the public suffix list holds as ICANN, yet no public website signs in under.
+    ["a .home.arpa host", "https://printer.home.arpa/u/login"],
+    ["an .in-addr.arpa host", "https://7.113.0.203.in-addr.arpa/u/login"],
+    ["an .onion host", "https://exampleexampleexample.onion/u/login"],
   ])(
     "still refuses a sign-in form on %s, never asking the host's predicate",
     async (_, frameUrl) => {
@@ -207,6 +211,8 @@ describe("a host's own trust of sign-in addresses", () => {
     ["https://:secret@login.example.net/u/login", false],
     ["https://user@login.example.net/u/login", false],
     ["https://metadata.google.internal/", false],
+    ["https://printer.home.arpa/", false],
+    ["https://exampleexampleexample.onion/", false],
   ])("lets a host trust %s: %s", (value, trustable) => {
     expect(trustableSignInUrl(new URL(value))).toBe(trustable);
   });
@@ -232,6 +238,29 @@ describe("a host's own trust of sign-in addresses", () => {
       documentOrigin: "other",
       actionOrigins: "other",
     });
+  });
+
+  it("refuses, as untrusted, what a predicate that throws was asked about", async () => {
+    const report = await inspect(`${signInHost}/u/login`, {
+      trustSignInUrl: () => {
+        throw new Error("synthetic predicate failure");
+      },
+    });
+    expect(report).toMatchObject({ outcome: "refused", reason: "credential_target_refused" });
+    expect(refusedCheck(report)).toMatchObject({ check: "destination", part: "frame" });
+  });
+
+  it.each([
+    ["plain http", "http://login.example.net"],
+    ["an IP address", "https://203.0.113.7"],
+  ])("refuses a sign-in popup at %s whatever the host trusts", async (_, origin) => {
+    const host = predicate();
+    const report = await inspect(`${site}/sign-in`, {
+      step: { ...signInStep, popup: { opener: "primary", origin } },
+      trustSignInUrl: host.trustSignInUrl,
+    });
+    expect(refusedCheck(report)).toMatchObject({ check: "destination", part: "popup" });
+    expect(host.asked).toEqual([]);
   });
 
   it("trusts a sign-in popup on another site's host only when the host's predicate does", async () => {
@@ -293,6 +322,21 @@ describe("card fields when the host trusts more sign-in addresses", () => {
     expect(host.asked).toEqual([]);
   });
 
+  it("trusts no sign-in field of a step with a card field after it", () => {
+    expect(
+      untrustedTarget(
+        {
+          fields: [target(`${signInHost}/u/login`), target(`${site}/checkout`)],
+          submit: null,
+        },
+        cardStep("password", "card_number"),
+        trust,
+        0,
+      ),
+    ).toMatchObject({ outcome: "refused", reason: "credential_target_refused", target: 0 });
+    expect(host.asked).toEqual([]);
+  });
+
   it("refuses a card step's page off the site, as before, and keeps no predicate", async () => {
     const step = cardStep("card_number");
     const page = (url: string) => ({
@@ -332,11 +376,12 @@ describe("the fill's judgment when a control moves", () => {
   const password = "synthetic-password";
 
   /**
-   * The password field, found on `signInHost`, then moved by the page into a frame on `otherHost`
+   * The password field, found on `signInHost`, then moved by the page into a frame on `movedTo`
    * when the fill's first call looks for it: the fill judges it again by the inspection's rule.
    */
   const fillMoved = (
     trust: Pick<AutofillInspection, "authenticationOrigins" | "trustSignInUrl">,
+    movedTo = `${otherHost}/password`,
   ) => {
     const typed: string[] = [];
     let calls = 0;
@@ -360,12 +405,12 @@ describe("the fill's judgment when a control moves", () => {
               calls += 1;
               if (calls === 1)
                 return {
-                  changed: { fields: [target(`${otherHost}/password`)], submit: null },
-                  url: `${otherHost}/password`,
+                  changed: { fields: [target(movedTo)], submit: null },
+                  url: movedTo,
                 };
               return calls === 2
-                ? { focused: true, url: `${otherHost}/password` }
-                : { submit: "none", url: `${otherHost}/password` };
+                ? { focused: true, url: movedTo }
+                : { submit: "none", url: movedTo };
             }),
         },
         keyboard: {
@@ -394,6 +439,13 @@ describe("the fill's judgment when a control moves", () => {
   it.each([
     { case: "its predicate refuses", trustSignInUrl: (url: URL) => url.origin === signInHost },
     { case: "it has no predicate", trustSignInUrl: undefined },
+    {
+      case: "its predicate throws",
+      trustSignInUrl: (url: URL) => {
+        if (url.origin === signInHost) return true;
+        throw new Error("synthetic predicate failure");
+      },
+    },
   ])("refuses that field, typing nothing, when $case", async ({ trustSignInUrl }) => {
     const { report, typed } = fillMoved({
       authenticationOrigins: [signInHost],
@@ -402,4 +454,27 @@ describe("the fill's judgment when a control moves", () => {
     expect(await report).toMatchObject({ outcome: "refused", reason: "credential_target_refused" });
     expect(typed).toEqual([]);
   });
+
+  it.each([
+    ["plain http", "http://auth.example.org/password"],
+    ["an IP address", "https://203.0.113.7/password"],
+    ["localhost", "https://localhost/password"],
+  ])(
+    "refuses a field the page moved to %s, typing nothing, whatever the predicate trusts",
+    async (_, movedTo) => {
+      const host = predicate();
+      const { report, typed } = fillMoved(
+        { authenticationOrigins: [], trustSignInUrl: host.trustSignInUrl },
+        movedTo,
+      );
+      expect(await report).toMatchObject({
+        outcome: "refused",
+        reason: "credential_target_refused",
+      });
+      expect(typed).toEqual([]);
+      expect(host.asked.filter((url) => new URL(url).origin === new URL(movedTo).origin)).toEqual(
+        [],
+      );
+    },
+  );
 });
