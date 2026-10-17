@@ -4,6 +4,7 @@ import type {
   AutofillInspection,
   AutofillSignedInCheck,
   AutofillStep,
+  AutofillStepReport,
 } from "../../src/destinations/autofill-step.js";
 import type { SignInRecipe, SignInRequest } from "../../src/destinations/sign-in-recipe.js";
 import { makeInputAsker } from "../../src/inputs/callback.js";
@@ -19,6 +20,7 @@ import {
   SignInRunFailed,
   type SignInReplayBrowser,
 } from "../../src/runtime/sign-in-replay.js";
+import { parseHtml } from "../../src/runtime/html.js";
 import { askingValueHooks } from "../../src/runtime/sign-in-values.js";
 import { localSignInLogin } from "../../src/standalone/authentication.js";
 
@@ -68,6 +70,24 @@ interface SiteOptions {
   readonly chooserOrigin?: string;
   /** The code screen's origin, the site's own by default. */
   readonly codeOrigin?: string;
+  /**
+   * Code screens the recipe never recorded, each as its markup, shown in turn after the login. The
+   * right code moves to the next, and past the last the sign-in lands.
+   */
+  readonly unrecorded?: readonly string[];
+  /** The unrecorded screens' origin, the site's own by default. */
+  readonly unrecordedOrigin?: string;
+  /**
+   * How a fill on an unrecorded screen goes, when not as asked: the host refuses it before typing,
+   * or types the code and never clicks the submit.
+   */
+  readonly unrecordedFill?: "refused" | "unclicked";
+  /** Markup the login screen shows beside its fields once it refused a login, as a CAPTCHA. */
+  readonly captcha?: string;
+  /** A recovery code screen's markup, shown after the login, which refuses every code. */
+  readonly recovery?: string;
+  /** The sign-in origins the run configured off the site. */
+  readonly authenticationOrigins?: readonly string[];
 }
 
 const pages = {
@@ -77,6 +97,8 @@ const pages = {
   question: ["#question", "#answer", "#continue"],
   account: [] as string[],
   chooser: ["#pick"],
+  unrecorded: [] as string[],
+  recovery: [] as string[],
 } as const;
 type Page = keyof typeof pages;
 
@@ -91,6 +113,8 @@ const fakeSite = (options: SiteOptions = {}) => {
     question: options.questions?.[0] ?? question,
     loads: 0,
     codeSpent: false,
+    unrecorded: 0,
+    captcha: false,
   };
   const fills: { readonly page: Page; readonly values: readonly string[] }[] = [];
   const opened: string[] = [];
@@ -102,10 +126,25 @@ const fakeSite = (options: SiteOptions = {}) => {
         ? (options.chooserOrigin ?? origin)
         : page === "code"
           ? (options.codeOrigin ?? origin)
-          : origin;
+          : page === "unrecorded"
+            ? (options.unrecordedOrigin ?? origin)
+            : origin;
+  /** The markup the page shows, parsed, whose one match of a selector is its control. */
+  const markup = () => {
+    const html =
+      state.page === "unrecorded"
+        ? options.unrecorded?.[state.unrecorded]
+        : state.page === "recovery"
+          ? options.recovery
+          : state.page === "login" && state.captcha
+            ? options.captcha
+            : undefined;
+    return html === undefined ? undefined : parseHtml(`<html><body>${html}</body></html>`);
+  };
   const shows = (selector: string) =>
-    !(state.page === "code" && state.codeSpent) &&
-    (pages[state.page] as readonly string[]).includes(selector);
+    markup()?.select(selector).length === 1 ||
+    (!(state.page === "code" && state.codeSpent) &&
+      (pages[state.page] as readonly string[]).includes(selector));
   const navigate = (page: Page) => {
     state.page = page;
     state.question = options.questions?.[state.loads++] ?? state.question;
@@ -120,7 +159,17 @@ const fakeSite = (options: SiteOptions = {}) => {
     navigate(options.landing === "chooser" ? "chooser" : "account");
   };
   const afterLogin = (): Page =>
-    options.method ? "method" : options.code ? "code" : options.question ? "question" : "account";
+    options.method
+      ? "method"
+      : options.code
+        ? "code"
+        : options.question
+          ? "question"
+          : options.recovery !== undefined
+            ? "recovery"
+            : options.unrecorded !== undefined
+              ? "unrecorded"
+              : "account";
   const browser: SignInReplayBrowser<Error> = {
     inspect: (step) =>
       Effect.sync((): AutofillInspection | { readonly outcome: "refused"; readonly reason: "not_found" } => {
@@ -149,9 +198,9 @@ const fakeSite = (options: SiteOptions = {}) => {
               role: null,
               formMethod: "post",
               type: "text",
-              name: null,
-              id: null,
-              autocomplete: null,
+              name: markup()?.selectOne(field.selector)?.attr("name") ?? null,
+              id: markup()?.selectOne(field.selector)?.attr("id") ?? null,
+              autocomplete: markup()?.selectOne(field.selector)?.attr("autocomplete") ?? null,
               inputmode: null,
               label: "Field",
               placeholder: null,
@@ -166,9 +215,18 @@ const fakeSite = (options: SiteOptions = {}) => {
         };
       }),
     fill: ({ step, values }) =>
-      Effect.sync(() => {
+      Effect.sync((): AutofillStepReport => {
         const page = state.page;
+        if (page === "unrecorded" && options.unrecordedFill === "refused")
+          return { outcome: "refused", reason: "not_editable" };
         fills.push({ page, values: [...values] });
+        if (page === "unrecorded" && options.unrecordedFill === "unclicked")
+          return {
+            outcome: "filled",
+            fields: step.fields.map((field) => ({ slot: field.slot, status: "filled" as const })),
+            submit: "failed",
+            url: `${origin}/${page}`,
+          };
         const request: SignInRequest = {
           url: `${pageOrigin(page)}/${page}`,
           method: "POST",
@@ -182,12 +240,15 @@ const fakeSite = (options: SiteOptions = {}) => {
           const right = values[0] === account.username && values[1] === account.password;
           state.loginError = !right && options.marker === true;
           state.usernameError = values[0] !== account.username && options.usernameMarker === true;
+          state.captcha ||= !right && options.captcha !== undefined;
           if (right && afterLogin() === "account") land();
           else if (right) navigate(afterLogin());
         } else if (page === "method") navigate("code");
         else if (page === "code") {
           state.codeError = values[0] !== code;
           if (!state.codeError) land();
+        } else if (page === "unrecorded") {
+          if (values[0] === code && ++state.unrecorded >= (options.unrecorded?.length ?? 0)) land();
         } else if (page === "question" && values[0] === answer) land();
         else navigate(page);
         return {
@@ -210,7 +271,7 @@ const fakeSite = (options: SiteOptions = {}) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    authenticationOrigins: [],
+    authenticationOrigins: options.authenticationOrigins ?? [],
     open: (url) =>
       options.entryFails === true
         ? Effect.fail(new Error(`net::ERR_NAME_NOT_RESOLVED at ${url}`))
@@ -641,4 +702,177 @@ it("fails RecipeFailed, value-free, when the entry page does not load", async ()
   );
   expect(asked).toEqual([]);
   expect(fake.fills).toEqual([]);
+});
+
+// A site may ask for a code the recipe never saw, after the password. Once its screens ran and no
+// code went out, the replay looks once for a one-time-code field and answers it as a recorded code
+// screen, with the same code question.
+
+/** A code screen's form: one field with these attributes and its submit. */
+const codeForm = (attributes: string) =>
+  `<form><input ${attributes}><button type="submit">Verify</button></form>`;
+const checkFailed = Either.left(
+  new SignInRunFailed({ code: "RecipeFailed", reason: "sign_in_check_failed" }),
+);
+
+it("answers a code screen the recipe never recorded with the code question, then signs in", async () => {
+  const fake = fakeSite({ unrecorded: [codeForm('name="otp" inputmode="numeric" maxlength="6"')] });
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(fake.fills).toEqual([
+    { page: "login", values: [account.username, account.password] },
+    { page: "unrecorded", values: [code] },
+  ]);
+});
+
+it("takes a promo code field for no sign-in code field", async () => {
+  const promo = '<form><input name="promo_code"><button type="submit">Apply</button></form>';
+  const fake = fakeSite({
+    unrecorded: [promo + codeForm('id="verification-code" inputmode="numeric" maxlength="6"')],
+  });
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(fake.fills.map(({ page }) => page)).toEqual(["login", "unrecorded"]);
+});
+
+it("looks for an unrecorded code field only on a recorded screen's origin or a sign-in origin", async () => {
+  const screen = codeForm('autocomplete="one-time-code"');
+  // Another origin of the site, where no recorded screen ran.
+  const elsewhere = fakeSite({ unrecorded: [screen], unrecordedOrigin: `https://accounts.${site}` });
+  const first = owner();
+  expect(await signIn(recipeOf(), elsewhere, first.ask, undefined, false)).toEqual(checkFailed);
+  expect(kinds(first.asked)).toEqual(["credential:missing_credentials"]);
+  expect(elsewhere.fills.map(({ page }) => page)).toEqual(["login"]);
+  // A sign-in origin the run configured.
+  const provider = "https://id.example-sign-in.test";
+  const configured = fakeSite({
+    unrecorded: [screen],
+    unrecordedOrigin: provider,
+    authenticationOrigins: [provider],
+  });
+  const second = owner();
+  expect(await signIn(recipeOf(), configured, second.ask)).toEqual(
+    Either.right({ alreadySignedIn: false }),
+  );
+  expect(kinds(second.asked)).toEqual(["credential:missing_credentials", "code"]);
+});
+
+it("looks for an unrecorded code field once, and fills no second code screen", async () => {
+  const fake = fakeSite({ unrecorded: [codeForm('name="otp"'), codeForm('name="mfa_token"')] });
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(), fake, ask, undefined, false)).toEqual(checkFailed);
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(fake.fills.map(({ page }) => page)).toEqual(["login", "unrecorded"]);
+});
+
+it("answers a field marked one-time-code whatever its name, such as email_otp", async () => {
+  const fake = fakeSite({ unrecorded: [codeForm('name="email_otp" autocomplete="one-time-code"')] });
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(fake.fills).toEqual([
+    { page: "login", values: [account.username, account.password] },
+    { page: "unrecorded", values: [code] },
+  ]);
+});
+
+for (const [kind, attributes] of [
+  ["a voucher box", 'name="voucher_code" inputmode="numeric" maxlength="6"'],
+  ["a card's security code named cardCode", 'name="cardCode" inputmode="numeric" maxlength="4"'],
+  ["a box autocompleted cc-csc", 'id="code" autocomplete="cc-csc" inputmode="numeric" maxlength="4"'],
+  ["a box autocompleted cc-exp", 'id="code" autocomplete="cc-exp" inputmode="numeric" maxlength="4"'],
+  ["a PIN box named pinCode", 'name="pinCode" inputmode="numeric" maxlength="6"'],
+  ["a PIN box named pin_code", 'name="pin_code" inputmode="numeric" maxlength="6"'],
+  ["a postal PIN box named pincode", 'name="pincode" inputmode="numeric" maxlength="6"'],
+  ["a postal PIN box named PINCode", 'name="PINCode" inputmode="numeric" maxlength="6"'],
+  ["a text box named code with no short numeric shape", 'name="code" type="text"'],
+  ["a code box autocompleted tel-national", 'name="code" autocomplete="tel-national" inputmode="numeric" maxlength="6"'],
+  ["a CAPTCHA box named captcha_code", 'name="captcha_code" inputmode="numeric" maxlength="6"'],
+] as const)
+  it(`types no code into ${kind} on the page a read's sign-in lands on that can't tell`, async () => {
+    const fake = fakeSite({ unrecorded: [codeForm(attributes)] });
+    const { ask, asked } = owner();
+    expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+    expect(kinds(asked)).toEqual(["credential:missing_credentials"]);
+    expect(fake.fills.map(({ page }) => page)).toEqual(["login"]);
+  });
+
+it("types no code into a CAPTCHA's numeric box on a login screen shown again after a wrong password", async () => {
+  const captcha = codeForm('name="verificationCode" inputmode="numeric" maxlength="4"');
+  const fake = fakeSite({ captcha });
+  const wrong = { ...account, password: "synthetic-wrong" };
+  const { ask, asked } = owner({ logins: [wrong, account] });
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual([
+    "credential:missing_credentials",
+    "credential:invalid_credentials",
+  ]);
+  // The wrong password went out once, and nothing went into the CAPTCHA's box.
+  expect(fake.fills).toEqual([
+    { page: "login", values: [account.username, wrong.password] },
+    { page: "login", values: [account.username, account.password] },
+  ]);
+});
+
+it("types no code into a recorded recovery code screen shown again after its code", async () => {
+  const fake = fakeSite({
+    recovery:
+      '<form><input id="recovery" name="recovery_code" inputmode="numeric" maxlength="8"><button type="submit" id="verify-recovery">Verify</button></form>',
+  });
+  const recoveryStep = {
+    page: `${origin}/recovery`,
+    fields: [{ selector: "#recovery", slot: "recovery_code" as const }],
+    submit: "#verify-recovery",
+  };
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(recoveryStep), fake, ask, undefined, false)).toEqual(checkFailed);
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "recovery_code"]);
+  expect(fake.fills.map(({ page }) => page)).toEqual(["login", "recovery"]);
+});
+
+it("leaves the sign-in to the full check when an unrecorded code screen's fill typed nothing", async () => {
+  const fake = fakeSite({ unrecorded: [codeForm('name="otp"')], unrecordedFill: "refused" });
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(fake.fills.map(({ page }) => page)).toEqual(["login"]);
+});
+
+it("fails the sign-in when an unrecorded code screen's code was typed and never submitted", async () => {
+  const fake = fakeSite({ unrecorded: [codeForm('name="otp"')], unrecordedFill: "unclicked" });
+  const { ask } = owner();
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(
+    Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "submit_failed" })),
+  );
+  expect(fake.fills.map(({ page }) => page)).toEqual(["login", "unrecorded"]);
+});
+
+it("answers an unmarked box named otpInput, whose letters p, i, n make no word of their own", async () => {
+  const fake = fakeSite({
+    unrecorded: [codeForm('name="otpInput" inputmode="numeric" maxlength="6"')],
+  });
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(fake.fills).toEqual([
+    { page: "login", values: [account.username, account.password] },
+    { page: "unrecorded", values: [code] },
+  ]);
+});
+
+it("answers only the marked one-time-code field on a page that has one, never an unmarked otp box", async () => {
+  const fake = fakeSite({
+    unrecorded: [
+      '<form><input name="sms_otp" autocomplete="one-time-code"><input name="otp"><button type="submit">Verify</button></form>',
+    ],
+  });
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(fake.fills).toEqual([
+    { page: "login", values: [account.username, account.password] },
+    { page: "unrecorded", values: [code] },
+  ]);
 });
