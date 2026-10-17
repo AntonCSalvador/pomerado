@@ -2206,6 +2206,87 @@ it("has Guardian review the effect question, which the owner may answer in their
   expect(logins).toBe(0);
 });
 
+// Guardian rejected the read-or-write question as redundant, and the host told the agent it could
+// withdraw it. The turn offers no other tool, so withdrawing ended the build with nothing, and the
+// agent could never change the host's own answer labels Guardian also objected to.
+it("tells the agent to ask a rejected read-or-write question again, never to withdraw it", async () => {
+  const responses: unknown[] = [];
+  let reviews = 0;
+  const effectChoice = {
+    questions: [
+      {
+        id: "effect",
+        type: "choice" as const,
+        prompt: "Should this tool only look up your orders, or also cancel one?",
+        options: [
+          { id: "read", label: "read" },
+          { id: "write", label: "write" },
+        ],
+      },
+    ],
+  };
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        responses.push(
+          JSON.parse(yield* turn.actions.requestInput(effectChoice)),
+          JSON.parse(yield* turn.actions.requestInput(effectChoice)),
+        );
+      }),
+    {
+      reviewQuestion: () =>
+        Effect.succeed(
+          reviews++ === 0
+            ? { outcome: "reword" as const, rationale: "The request already says read-only." }
+            : { outcome: "authentication" as const, rationale: "It may ask for a login." },
+        ),
+    },
+  );
+  await f.run({ ...request, effect: "ask" });
+  const instruction =
+    "Reword the question using the rationale and call request_input again. This read-or-write question is required, and no other tool opens until the person answers it. The host sets its two answer labels, so change only the prompt.";
+  expect(responses).toEqual([
+    {
+      status: "question_rejected",
+      rationale: "The request already says read-only.",
+      userInputRequired: false,
+      instruction,
+    },
+    {
+      status: "question_rejected",
+      rationale: "It may ask for a login.",
+      userInputRequired: false,
+      instruction,
+    },
+  ]);
+});
+
+it("keeps the reword-or-withdraw instruction for a rejected question other than read-or-write", async () => {
+  const responses: unknown[] = [];
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        responses.push(
+          JSON.parse(yield* turn.actions.requestInput(textQuestion("Which account type?"))),
+        );
+      }),
+    {
+      reviewQuestion: () =>
+        Effect.succeed({ outcome: "reword" as const, rationale: "The site shows the types." }),
+    },
+  );
+  await f.run();
+  expect(responses).toEqual([
+    {
+      status: "question_rejected",
+      rationale: "The site shows the types.",
+      userInputRequired: false,
+      instruction:
+        "Reword the question using the rationale, or withdraw it and continue. Do not ask again for a value you were already given or that the site shows. A reworded question is reviewed again.",
+    },
+  ]);
+});
+
 it("publishes without assumptions when the build lists none", async () => {
   const f = await fixture((turn) =>
     Effect.gen(function* () {

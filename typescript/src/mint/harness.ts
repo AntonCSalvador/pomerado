@@ -5154,13 +5154,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     instruction: loginRequestInstruction(login),
                   });
                 }
+                // The read-or-write question is the turn's only move, so it is never withdrawn.
                 if (review.outcome !== "allow_business")
                   return JSON.stringify({
                     status: "question_rejected",
                     rationale,
                     userInputRequired: false,
-                    instruction:
-                      "Reword the question using the rationale, or withdraw it and continue. Do not ask again for a value you were already given or that the site shows. A reworded question is reviewed again.",
+                    instruction: effectQuestion
+                      ? "Reword the question using the rationale and call request_input again. This read-or-write question is required, and no other tool opens until the person answers it. The host sets its two answer labels, so change only the prompt."
+                      : "Reword the question using the rationale, or withdraw it and continue. Do not ask again for a value you were already given or that the site shows. A reworded question is reviewed again.",
                   });
               }
               const answers = yield* dependencies.askInput(submitted, {
