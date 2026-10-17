@@ -9,12 +9,13 @@ import {
   type FillSlot,
 } from "../../src/destinations/autofill-step.js";
 import { paymentFrameOrigins } from "../../src/destinations/payment-frames.js";
+import { trustableSignInUrl } from "../../src/runtime/sign-in-origins.js";
 
-// A host may trust any sign-in origin for a sign-in (`trustAnySignInOrigin`): a sign-in field
-// then goes into a control on any https host with a registrable domain. Unset, only the site and
-// its configured sign-in origins count, as before. Card fields, plain http, IP addresses, hosts
-// with no registrable domain and addresses that carry credentials stay refused either way, and a
-// refusal still names an unjudged origin `other` once anything was typed.
+// A host may trust more sign-in addresses for a sign-in step with its own predicate
+// (`trustSignInUrl`): a sign-in field then goes into a control on an address the predicate trusts.
+// Core asks it only about an address it would let a host trust (`trustableSignInUrl`), never about
+// a card-fill step's. Unset, only the site and its configured sign-in origins count, as before, and
+// a refusal still names an unjudged origin `other` once anything was typed.
 
 const site = "https://www.shop.example";
 const signInHost = "https://login.example.net";
@@ -78,12 +79,24 @@ const pageWith = (
     }),
 });
 
+/** A host predicate that trusts `trusts` and keeps every address it was asked about. */
+const predicate = (trusts: (url: URL) => boolean = () => true) => {
+  const asked: string[] = [];
+  return {
+    asked,
+    trustSignInUrl: (url: URL) => {
+      asked.push(url.href);
+      return trusts(url);
+    },
+  };
+};
+
 const inspect = (
   frameUrl: string,
   options: {
     readonly step?: AutofillStep<FillSlot>;
     readonly actions?: readonly string[];
-    readonly trustAnySignInOrigin?: boolean;
+    readonly trustSignInUrl?: (url: URL) => boolean;
     readonly authenticationOrigins?: readonly string[];
     readonly judgedBeforeTyping?: readonly string[];
   } = {},
@@ -95,9 +108,7 @@ const inspect = (
       page: pageWith(step, frameUrl, options.actions),
       siteOrigin: site,
       authenticationOrigins: options.authenticationOrigins ?? [],
-      ...(options.trustAnySignInOrigin === undefined
-        ? {}
-        : { trustAnySignInOrigin: options.trustAnySignInOrigin }),
+      ...(options.trustSignInUrl === undefined ? {} : { trustSignInUrl: options.trustSignInUrl }),
       ...(options.judgedBeforeTyping === undefined
         ? {}
         : { judgedBeforeTyping: options.judgedBeforeTyping }),
@@ -113,29 +124,52 @@ const refusedCheck = (report: object) =>
     ? report.failureDetail.context
     : undefined;
 
-describe("trusting any sign-in origin", () => {
-  it("refuses a sign-in form on another site's host unless the host trusts any sign-in origin", async () => {
+describe("a host's own trust of sign-in addresses", () => {
+  it("refuses a sign-in form on another site's host unless the host's predicate trusts it", async () => {
     const unset = await inspect(`${signInHost}/u/login`);
     expect(unset).toMatchObject({ outcome: "refused", reason: "credential_target_refused" });
     expect(refusedCheck(unset)).toMatchObject({ check: "destination", part: "frame" });
+    const host = predicate();
     const set = await inspect(`${signInHost}/u/login`, {
       actions: [`${otherHost}/session`],
-      trustAnySignInOrigin: true,
+      trustSignInUrl: host.trustSignInUrl,
     });
     expect(set).not.toHaveProperty("outcome");
-    expect(set).toMatchObject({ trustAnySignInOrigin: true, authenticationOrigins: [] });
+    // The inspection keeps the predicate, for the fill to ask again.
+    expect(set).toMatchObject({ authenticationOrigins: [] });
+    expect("trustSignInUrl" in set && set.trustSignInUrl).toBe(host.trustSignInUrl);
+    // Asked about each address off the site: the frame, its document and the form's action.
+    expect(new Set(host.asked)).toEqual(
+      new Set([`${signInHost}/u/login`, `${signInHost}/`, `${otherHost}/session`]),
+    );
   });
 
-  it("returns the same inspection as before when the host leaves it unset or false", async () => {
+  it("refuses what the host's predicate does not trust", async () => {
+    const host = predicate((url) => url.origin === signInHost);
+    const report = await inspect(`${signInHost}/u/login`, {
+      actions: [`${otherHost}/session`],
+      trustSignInUrl: host.trustSignInUrl,
+    });
+    expect(refusedCheck(report)).toMatchObject({ check: "destination", part: "form_action" });
+  });
+
+  it("never asks the predicate about the site or a configured sign-in origin", async () => {
+    const host = predicate();
+    const report = await inspect(`${signInHost}/u/login`, {
+      actions: [`${site}/session`],
+      authenticationOrigins: [signInHost],
+      trustSignInUrl: host.trustSignInUrl,
+    });
+    expect(report).not.toHaveProperty("outcome");
+    expect(host.asked).toEqual([]);
+  });
+
+  it("returns the same inspection as before when the host leaves it unset", async () => {
     const before = await inspect(`${site}/sign-in`);
     expect(before).not.toHaveProperty("outcome");
-    expect(Object.keys(before)).not.toContain("trustAnySignInOrigin");
-    const off = await inspect(`${site}/sign-in`, { trustAnySignInOrigin: false });
-    expect(Object.keys(off)).toEqual(Object.keys(before));
-    expect(await inspect(`${signInHost}/u/login`, { trustAnySignInOrigin: false })).toMatchObject({
-      outcome: "refused",
-      reason: "credential_target_refused",
-    });
+    expect(Object.keys(before)).not.toContain("trustSignInUrl");
+    const set = await inspect(`${site}/sign-in`, { trustSignInUrl: predicate().trustSignInUrl });
+    expect(Object.keys(set).filter((key) => key !== "trustSignInUrl")).toEqual(Object.keys(before));
   });
 
   it.each([
@@ -144,29 +178,51 @@ describe("trusting any sign-in origin", () => {
     ["an IPv6 address", "https://[2001:db8::1]/u/login"],
     ["localhost", "https://localhost/u/login"],
     ["a bare public suffix", "https://github.io/u/login"],
-    ["an address carrying credentials", "https://user:secret@login.example.net/u/login"],
+    ["an address carrying a user name and password", "https://user:secret@login.example.net/u"],
+    ["an address carrying a password alone", "https://:secret@login.example.net/u/login"],
+    ["an address carrying a user name alone", "https://user@login.example.net/u/login"],
+    // Names only a private network resolves, whose top-level label no public suffix list holds.
+    ["a .localhost host", "https://foo.localhost/u/login"],
+    ["a .internal host", "https://metadata.google.internal/u/login"],
+    ["a .local host", "https://x.local/u/login"],
+    ["a .test host", "https://a.test/u/login"],
+    ["an .invalid host", "https://a.invalid/u/login"],
   ])(
-    "still refuses a sign-in form on %s when the host trusts any sign-in origin",
+    "still refuses a sign-in form on %s, never asking the host's predicate",
     async (_, frameUrl) => {
-      expect(await inspect(frameUrl, { trustAnySignInOrigin: true })).toMatchObject({
+      const host = predicate();
+      expect(await inspect(frameUrl, { trustSignInUrl: host.trustSignInUrl })).toMatchObject({
         outcome: "refused",
         reason: "credential_target_refused",
       });
+      expect(host.asked).toEqual([]);
     },
   );
 
-  it("still refuses a form that posts to plain http when the host trusts any sign-in origin", async () => {
+  it.each([
+    ["https://login.example.net/u/login", true],
+    ["https://login.example.co.uk/u/login", true],
+    ["https://tenant.github.io/u/login", true],
+    ["https://login.example.net:8443/u/login", true],
+    ["https://:secret@login.example.net/u/login", false],
+    ["https://user@login.example.net/u/login", false],
+    ["https://metadata.google.internal/", false],
+  ])("lets a host trust %s: %s", (value, trustable) => {
+    expect(trustableSignInUrl(new URL(value))).toBe(trustable);
+  });
+
+  it("still refuses a form that posts to plain http whatever the host trusts", async () => {
     const report = await inspect(`${signInHost}/u/login`, {
       actions: ["http://plain.example.net/session"],
-      trustAnySignInOrigin: true,
+      trustSignInUrl: predicate().trustSignInUrl,
     });
     expect(refusedCheck(report)).toMatchObject({ check: "destination", part: "form_action" });
   });
 
-  it("names an unjudged origin other once anything was typed, whatever it trusts", async () => {
+  it("names an unjudged origin other once anything was typed, whatever the host trusts", async () => {
     const report = await inspect(`${signInHost}/u/login`, {
       actions: ["http://plain.example.net/session"],
-      trustAnySignInOrigin: true,
+      trustSignInUrl: predicate().trustSignInUrl,
       judgedBeforeTyping: [],
     });
     expect(refusedCheck(report)).toMatchObject({
@@ -178,27 +234,33 @@ describe("trusting any sign-in origin", () => {
     });
   });
 
-  it("trusts a sign-in popup on another site's host only when the host trusts any sign-in origin", async () => {
+  it("trusts a sign-in popup on another site's host only when the host's predicate does", async () => {
     const popupStep: AutofillStep = {
       ...signInStep,
       popup: { opener: "primary", origin: signInHost },
     };
     const unset = await inspect(`${signInHost}/u/login`, { step: popupStep });
     expect(refusedCheck(unset)).toMatchObject({ check: "destination", part: "popup" });
+    const refusing = await inspect(`${signInHost}/u/login`, {
+      step: popupStep,
+      trustSignInUrl: () => false,
+    });
+    expect(refusedCheck(refusing)).toMatchObject({ check: "destination", part: "popup" });
     const set = await inspect(`${signInHost}/u/login`, {
       step: popupStep,
-      trustAnySignInOrigin: true,
+      trustSignInUrl: predicate().trustSignInUrl,
     });
     expect(set).not.toHaveProperty("outcome");
   });
 });
 
-describe("card fields when the host trusts any sign-in origin", () => {
+describe("card fields when the host trusts more sign-in addresses", () => {
+  const host = predicate();
   const trust = {
     siteOrigin: site,
     authenticationOrigins: [],
     paymentFrameOrigins,
-    trustAnySignInOrigin: true,
+    trustSignInUrl: host.trustSignInUrl,
   };
   const cardStep = (...slots: FillSlot[]): AutofillStep<FillSlot> => ({
     fields: slots.map((slot, index) => ({ selector: `#field-${index}`, slot })),
@@ -213,6 +275,7 @@ describe("card fields when the host trusts any sign-in origin", () => {
         0,
       ),
     ).toMatchObject({ outcome: "refused", reason: "credential_target_refused" });
+    expect(host.asked).toEqual([]);
   });
 
   it("trusts no other field of a card step on another site's host", () => {
@@ -227,33 +290,40 @@ describe("card fields when the host trusts any sign-in origin", () => {
         0,
       ),
     ).toMatchObject({ outcome: "refused", reason: "credential_target_refused", target: 1 });
+    expect(host.asked).toEqual([]);
   });
 
-  it("refuses a card step's page off the site, as before", async () => {
+  it("refuses a card step's page off the site, as before, and keeps no predicate", async () => {
     const step = cardStep("card_number");
-    expect(
-      await Effect.runPromise(
+    const page = (url: string) => ({
+      targetId: "primary",
+      execute: () =>
+        Effect.succeed({
+          fields: [
+            { target: target(paymentFrameOrigins[0] ?? site), described: described("number") },
+          ],
+          submit: null,
+          buttons: [],
+          url,
+        }),
+    });
+    const card = (url: string) =>
+      Effect.runPromise(
         inspectAutofillStep({
           step,
-          page: {
-            targetId: "primary",
-            execute: () =>
-              Effect.succeed({
-                fields: [
-                  { target: target(paymentFrameOrigins[0] ?? site), described: described("number") },
-                ],
-                submit: null,
-                buttons: [],
-                url: `${signInHost}/checkout`,
-              }),
-          },
+          page: page(url),
           siteOrigin: site,
           authenticationOrigins: [],
           paymentFrameOrigins,
-          trustAnySignInOrigin: true,
+          trustSignInUrl: host.trustSignInUrl,
         }),
-      ),
-    ).toMatchObject({ outcome: "refused", reason: "credential_target_refused" });
+      );
+    expect(await card(`${signInHost}/checkout`)).toMatchObject({
+      outcome: "refused",
+      reason: "credential_target_refused",
+    });
+    expect(Object.keys(await card(`${site}/checkout`))).not.toContain("trustSignInUrl");
+    expect(host.asked).toEqual([]);
   });
 });
 
@@ -266,7 +336,7 @@ describe("the fill's judgment when a control moves", () => {
    * when the fill's first call looks for it: the fill judges it again by the inspection's rule.
    */
   const fillMoved = (
-    trust: Pick<AutofillInspection, "authenticationOrigins" | "trustAnySignInOrigin">,
+    trust: Pick<AutofillInspection, "authenticationOrigins" | "trustSignInUrl">,
   ) => {
     const typed: string[] = [];
     let calls = 0;
@@ -310,14 +380,25 @@ describe("the fill's judgment when a control moves", () => {
     return { report, typed };
   };
 
-  it("types into a field the page moved to another site's host when the inspection trusts any sign-in origin", async () => {
-    const { report, typed } = fillMoved({ authenticationOrigins: [], trustAnySignInOrigin: true });
+  it("types into a field the page moved to another site's host the inspection's predicate trusts", async () => {
+    const host = predicate();
+    const { report, typed } = fillMoved({
+      authenticationOrigins: [],
+      trustSignInUrl: host.trustSignInUrl,
+    });
     expect(await report).toMatchObject({ outcome: "filled" });
     expect(typed).toEqual([password]);
+    expect(host.asked).toContain(`${otherHost}/password`);
   });
 
-  it("refuses that field, typing nothing, when the inspection trusts only its configured origins", async () => {
-    const { report, typed } = fillMoved({ authenticationOrigins: [signInHost] });
+  it.each([
+    { case: "its predicate refuses", trustSignInUrl: (url: URL) => url.origin === signInHost },
+    { case: "it has no predicate", trustSignInUrl: undefined },
+  ])("refuses that field, typing nothing, when $case", async ({ trustSignInUrl }) => {
+    const { report, typed } = fillMoved({
+      authenticationOrigins: [signInHost],
+      ...(trustSignInUrl === undefined ? {} : { trustSignInUrl }),
+    });
     expect(await report).toMatchObject({ outcome: "refused", reason: "credential_target_refused" });
     expect(typed).toEqual([]);
   });

@@ -1,3 +1,4 @@
+import { parse } from "tldts";
 import { sameSite, siteDomain } from "./same-site.js";
 
 /**
@@ -19,17 +20,16 @@ export const trustedUrl = (
 };
 
 /**
- * Whether a URL could be a sign-in page on any site, for a host that trusts any sign-in origin: an
- * https address with no user name or password, on a host with a registrable domain, never plain
- * http, an IP address, localhost or a bare public suffix such as github.io.
+ * Whether a host may trust `url` for a sign-in step beyond the site and its configured sign-in
+ * origins (`trustSignInUrl`): an https address with no user name or password, on a host with a
+ * registrable domain under a listed public suffix. Never plain http, an IP address, localhost, a
+ * bare public suffix such as github.io, or a name only a private network resolves, such as one
+ * under .localhost, .internal, .local, .test or .invalid. The host's own predicate is asked only
+ * about a URL that passes this.
  */
-export const anySignInUrl = (value: string) => {
-  const url = URL.parse(value);
-  return (
-    url !== null &&
-    url.protocol === "https:" &&
-    !url.username &&
-    !url.password &&
-    siteDomain(url.origin) !== undefined
-  );
+export const trustableSignInUrl = (url: URL) => {
+  if (url.protocol !== "https:" || url.username || url.password) return false;
+  if (siteDomain(url.origin) === undefined) return false;
+  const { isIcann, isPrivate } = parse(url.hostname, { allowPrivateDomains: true });
+  return isIcann === true || isPrivate === true;
 };
