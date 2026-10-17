@@ -367,15 +367,17 @@ const outcomeWaitChanged = (locator, key) =>
     const noted = globalThis[Symbol.for(key)];
     return elements.filter((element) => noted?.get(element) !== element.innerText).length;
   }, key);
+// Reads the outcomes highest priority last, so a look that sees one also sees a higher one drawn
+// in the same render. The observations keep the listed order.
 const outcomeWaitObserve = async (outcomes, key) => {
   const observations = {};
-  for (const [name, locator] of Object.entries(outcomes)) {
+  for (const [name, locator] of Object.entries(outcomes).reverse()) {
     const count = await locator.count();
     const visible = count === 0 ? 0 : await locator.filter({ visible: true }).count();
     observations[name] = key === undefined ? { count, visible }
       : { count, visible, changed: visible === 0 ? 0 : await outcomeWaitChanged(locator, key) };
   }
-  return observations;
+  return Object.fromEntries(Object.keys(outcomes).map((name) => [name, observations[name]]));
 };
 const waitForOutcome = async (outcomes, options = {}) => {
   const names = Object.keys(outcomes);
@@ -413,33 +415,29 @@ const waitForOutcome = async (outcomes, options = {}) => {
         if (waitContextLost(error)) return undefined;
         throw error;
       });
-    // The outcomes are looked at one after another, so the page can change between two of them:
-    // a decision holds only once the next look, taken at once, agrees.
-    let previous;
+    // The first look that shows an outcome decides: no second look confirms it. An answer from
+    // before the action is kept out of that look by the stale rule below, not by a second look.
     let last;
     let signature;
     let quietBefore = false;
     while (true) {
+      // A request the action started that was in flight as the look began counts as in flight for
+      // that look's matches, even when it ends while the look runs.
+      const inflightAtStart = progress.causedInflight();
       const observations = await look();
       looks += 1;
-      const current = JSON.stringify(observations ?? null);
-      await progress.sample(
-        observations === undefined ? ["page replaced"]
-          : signature !== undefined && current !== signature ? ["outcome matches changing"] : [],
-      );
-      signature = current;
       last = observations ?? last;
       // A match from before the action stays stale while a request the action started is in flight,
       // but only until the deadline less the unchanged window, so a match the wait returned before
       // such requests held it back still returns in time. One clock read serves this and the
       // deadline below, so the hold never outlasts the deadline even with no unchanged window.
       const now = Date.now();
-      const stale = now < unchangedFrom || (now < until - unchangedMs && progress.causedInflight());
+      const stale = now < unchangedFrom ||
+        (now < until - unchangedMs && (inflightAtStart || progress.causedInflight()));
       const shown = names.find(
         (name) => observations?.[name].visible > 0 && !(stale && observations[name].changed === 0),
       );
-      const decision = shown === undefined ? undefined : shown + ":" + Math.min(observations[shown].count, 2);
-      if (decision !== undefined && decision === previous) {
+      if (shown !== undefined) {
         if (observations[shown].count > 1) {
           const failure = outcomeWaitFailure("outcome_ambiguous", ": " + outcomeWaitSeen(observations), observations, {
             outcome: shown,
@@ -447,12 +445,20 @@ const waitForOutcome = async (outcomes, options = {}) => {
           finish({ reason: "outcome_ambiguous", outcome: shown }, failure.message);
           throw failure;
         }
-        finish({ outcome: shown }, '"' + shown + '" showed after ' + (Date.now() - begun) + " ms (" + looks + " looks)");
+        finish(
+          { outcome: shown },
+          '"' + shown + '" showed after ' + (Date.now() - begun) + " ms (" + looks + (looks === 1 ? " look)" : " looks)"),
+        );
         return shown;
       }
-      const settled = decision === undefined || previous !== undefined;
-      // A first sighting at the deadline still gets its confirming look.
-      if (now >= until && settled) {
+      // Only a look that decides nothing samples the page's progress: the decision never uses it.
+      const current = JSON.stringify(observations ?? null);
+      await progress.sample(
+        observations === undefined ? ["page replaced"]
+          : signature !== undefined && current !== signature ? ["outcome matches changing"] : [],
+      );
+      signature = current;
+      if (now >= until) {
         const seen = last ?? (await look().catch(() => undefined)) ?? {};
         const failure = outcomeWaitFailure(
           "outcome_timeout",
@@ -467,7 +473,7 @@ const waitForOutcome = async (outcomes, options = {}) => {
       // A quiet page fails only when the next look agrees, since the page may have answered
       // between this look's outcomes and its progress sample.
       const anyShown = names.some((name) => observations?.[name].visible > 0);
-      const quiet = decision === undefined && !anyShown && progress.quietMs() >= noProgressMs;
+      const quiet = !anyShown && progress.quietMs() >= noProgressMs;
       if (quiet && !quietBefore) quietBefore = true;
       else if (quiet) {
         const seen = last ?? {};
@@ -481,9 +487,7 @@ const waitForOutcome = async (outcomes, options = {}) => {
         finish({ reason: "outcome_unknown" }, failure.message);
         throw failure;
       } else quietBefore = false;
-      // Only a first sighting is looked at again at once; anything else waits for the next poll.
-      if (settled) await waitSleep(100);
-      previous = decision;
+      await waitSleep(100);
     }
   } finally {
     if (key !== undefined)
@@ -879,8 +883,8 @@ const waitForChange = async (fields, options = {}) => {
  * string, then wait with your verified Playwright locators. It declares four waits that share one
  * set of limits (`waitLimits`, from `timeoutDefaults`) and one progress budget, and `waitReport()`.
  *
- * Every wait returns as soon as its condition holds: a ready page costs one confirming look, and
- * the value waits `settle` (0.5 s) between their two looks. While it waits it watches the page's
+ * Every wait returns as soon as its condition holds: a ready page costs `waitForOutcome` one look,
+ * and the value waits two looks `settle` (0.5 s) apart. While it waits it watches the page's
  * progress: the site's own loading sign passed as `loading`, for as long as it shows; a generic
  * sign (a busy region, an indeterminate progress bar, a skeleton, shimmer, spinner or loader class,
  * within `region` when named) only while it is new, so a decoration holds a wait for at most one
@@ -902,13 +906,14 @@ const waitForChange = async (fields, options = {}) => {
  * refusal, the site's error or a greyed-out choice before an empty state, and an empty state before
  * results. Each locator names one element, such as the results list rather than its rows. It only
  * observes: about every 100 ms it counts each locator's matches and its visible ones, and never
- * clicks, types or navigates itself. It answers once two looks in a row agree, the second taken at
- * once. `timeout` (default `answerCap`, 30 s) is the hard cap, reached only while the page keeps
+ * clicks, types or navigates itself. It answers at the first look that shows an outcome.
+ * `timeout` (default `answerCap`, 30 s) is the hard cap, reached only while the page keeps
  * progressing. `action` is the step itself, such as `() => apply.click()`, which it runs exactly
  * once, after noting what each outcome showed: a match that was visible before it, with the same
  * text, counts only once it has stayed so for `unchangedMs` (default 2000) and no request the
- * action started is still in flight. Such a request holds it back for at most `lateFillCap` (15 s),
- * and never past `timeout` less `unchangedMs`, so the match still counts before the timeout.
+ * action started is still in flight, or was as the look began. Such a request holds it back for
+ * at most `lateFillCap` (15 s), and never past `timeout` less `unchangedMs`, so the match still
+ * counts before the timeout.
  * `timeout`, `noProgressMs` and `unchangedMs` start once the action returns. Its
  * `OutcomeWaitFailure` has `observations` (`OutcomeObservation` by key) and one of these reasons:
  *

@@ -81,8 +81,10 @@ answers `{ success, result, error, stderr }`. Throw
   `waitForURL` or `waitForLoadState`: a dialog keeps the URL, and a page that changes route without
   loading a document passes `waitForLoadState` at once. Opening a record by its identifier or URL
   can also answer with a removed or not-found page: name it, and throw `InvalidInput` with the
-  page's own words, never a readiness timeout. The waits paragraph below shows how to paste
-  `waitCode` and call it. Prefer no fixed pauses unless necessary.
+  page's own words and `field`, never a readiness timeout. The waits paragraph below shows how to
+  paste `waitCode` and call it. Prefer no fixed pauses unless necessary.
+- Prefer no result wait after a step that changed nothing, such as closing a panel without picking anything.
+- `waitForOutcome` already waited for its answer, so prefer no extra wait for that same answer after it.
 - Check the null case if possible. Make sure the tool handles a lookup or filter that matches
   nothing.
 - Start a response wait in the same call as the click that causes it, with
@@ -96,14 +98,15 @@ pomerado:section core.execute-calls:end -->
   returns true once the page is usable. It throws `ChallengeFailure` if the page stays blocked.
 - Never repeat a call that may have run.
 - When the site itself refuses a caller's value, such as a past date, an unknown airport code
-  or a party size over its limit, throw `new errors.InvalidInput(message)` saying why. When the
+  or a party size over its limit, throw `new errors.InvalidInput(message, { field })` saying why,
+  with `field` the input's name. When the
   refusal is obvious, start the message with "Caller input error:" so the caller gets it at
   once. It is obvious when the input alone breaks a rule of the task, checked before any site
-  action, such as a departure date before yesterday in UTC, a return before its departure or a
-  count below one. It is also obvious when the page itself refuses the value in its own words,
-  which the message quotes. Never use that start when the tool's own read found nothing, such
-  as an empty suggestion list, a slider or list that hadn't loaded, or a day a write finds
-  disabled without the page saying why; a read returns such a day unavailable, as "Configure,
+  action, such as a departure date before today in its airport's time zone, a return before
+  its departure or a count below one. It is also obvious when the page itself refuses the value in
+  its own words, which the message quotes. Never use that start when the tool's own read found
+  nothing, such as an empty suggestion list, a slider or list that hadn't loaded, or a day a
+  write finds disabled without the page saying why; a read returns such a day unavailable, as "Configure,
   then read" says. When the value is not among choices the page lists, throw
   `new errors.InvalidInput(message, { field, available })` instead, as "Configure, then read"
   below says. Add `kind`, the reason as a stable lowercase token such as `out_of_stock`, when
@@ -117,10 +120,14 @@ pomerado:section core.execute-calls:end -->
   shows it with the caller's own input, and the run ends with those choices. A write that throws it before entering a commit mark reports that it changed nothing. A page,
   control or response that changed is still `OperationFailure`.
 - Check every rule the input alone breaks before any site action, such as a check-out on or
-  before its check-in, a count below one or a date before yesterday in UTC, and throw
-  `InvalidInput` at once, starting "Caller input error:" and naming the field and the rule.
-  Hold in the input schema every rule it can express. The caller-input skill, "Validate it,
-  and fail with the right error", lists the rules and when to throw each error.
+  before its check-in, a count below one or a past date, and throw `InvalidInput` at once,
+  starting "Caller input error:" and naming the field and the rule. A date is past when it is
+  before today in the site's time zone. UTC's date can be a day ahead or behind. A site with
+  places in several time zones uses the place's zone, such as a restaurant's or a departure
+  airport's, when the tool knows it before any site action. When it doesn't know the zone,
+  refuse only a date that is past in every time zone, such as one before yesterday in UTC. Hold
+  in the input schema every rule it can express. The caller-input skill, "Validate it, and
+  fail with the right error", lists the rules and when to throw each error.
 - When the page does not apply a valid value the caller supplied, such as a filter, sort or
   date it ignored, reset or replaced with its own (on a write, a location or store too), after
   the tool's bounded retries, throw
@@ -180,6 +187,7 @@ the task can't run without it (below).
   whose description starts "By design:" is applied in the use it records, a caller's decision:
   keep that use and its description word for word, and change them only after asking the same
   design question again (the input schema, "Inputs that tailor the answer").
+- Prefer fixing the whole class of a failure over its one instance: when the page requires a control the input has no value for, prefer making every such control a declared caller question with the page's live options over throwing for it.
 - Never derive a format from one sample: not an input format, an element key, a selector, a
   URL path or a label. A key the page showed for the example's value says nothing about the
   next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read
@@ -676,8 +684,8 @@ started. Without an `action`, a list beside a loader that never leaves costs abo
 no-progress window. A request already in flight when a wait starts is not seen: on a page still
 loading its list, name its loading sign as `loading`. Read results;
 return an empty list for a listing's empty state;
-throw `InvalidInput` with the site's own words for a refusal; handle a greyed-out choice the
-input asked for as "Configure, then read" says, unavailable data on a read and `InvalidInput`
+throw `InvalidInput` with `field` and the site's own words for a refusal; handle a greyed-out
+choice the input asked for as "Configure, then read" says, unavailable data on a read and `InvalidInput`
 with `available` on a write; ask the caller about a pick-one list
 (.agents/caller-input/SKILL.md). It throws an
 `Error` named `OutcomeWaitFailure` whose message says what each outcome matched, which progress

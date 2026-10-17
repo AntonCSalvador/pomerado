@@ -100,7 +100,8 @@ an earlier stage. The host acts only on the observed recorded screen. It skips a
 only when a later recorded page or distinct credential fields prove progression, or the published
 signed-in check verifies the session. A missing control, a timeout or a coincident Continue button
 on the same page does not prove an account choice happened. Record an authorized choice and its
-following Continue as separate steps.
+following Continue as separate steps. Prefer exercising a chooser step from both starts in the
+build, right after a sign-in and from a saved session already past the chooser.
 
 Call `execute` with purpose `authenticate`, target `liveBrowser` and a `signInStep` for the screen in
 front of you. Pass the site's own sign-in link as you clicked it (above) as `loginUrl` on the first
@@ -349,8 +350,7 @@ shows.
   showed the sign-in form, the site keeps its session only in page memory or session storage, and
   the host signs in automatically at each operation start; the marker must still be site-wide.
 
-The published tool records the check with its screens, and each run decides whether its sign-in
-worked by that check alone: a run whose check fails requests sign-in repair before its operation.
+The published tool records the check with its screens.
 
 ## A sign-in refusal found by operation code
 

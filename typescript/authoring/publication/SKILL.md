@@ -52,6 +52,9 @@ pomerado:section publication.metadata-readers:end -->:
 
 ## Check before `finish_build`
 
+Before your first `finish_build`, prefer checking the tool against each rule the request states
+for its inputs, outputs and refusals.
+
 Guardian reports what it finds in rounds, and each round costs minutes, so settle all of these
 first:
 
@@ -132,6 +135,8 @@ first:
     input");
   - a free-text place, name or venue that matches several of the site's options lists them for
     the caller instead of picking one (core skill, the input schema);
+  - a check that refuses a past date compares with today in the site's time zone, or the
+    place's, not with today in UTC (core skill) ("Past date in UTC");
   - in a read signed out, each declared input is used, or changed from its default, by a passing
     case, and a case whose expectation you changed because the site itself gave another answer
     for that input names the capture of that answer, such as the site's no-results page for that

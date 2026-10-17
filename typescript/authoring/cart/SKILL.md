@@ -60,8 +60,9 @@ it shows only to some accounts.
 ## Minimums and refusals
 
 When the site refuses the order as asked, such as an order under its minimum or an empty cart
-at checkout, the tool throws `InvalidInput` with the site's reason, before its commit mark
-whenever the page shows the limit first. A checkout that takes a limit of the caller's, such as
+at checkout, the tool throws `new errors.InvalidInput(message, { field })` with the site's
+reason, `field` the input the caller would change, before its commit mark whenever the page shows
+the limit first. A checkout that takes a limit of the caller's, such as
 a maximum total, reads the final total and compares it before the order's commit mark, and
 refuses with `InvalidInput`, `field` that input and `kind: "over_price_limit"`, giving the total
 and the limit (the caller-input skill). Never add items, raise a quantity or change the

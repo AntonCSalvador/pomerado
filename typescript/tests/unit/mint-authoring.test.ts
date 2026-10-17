@@ -189,6 +189,12 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "auth",
     "After a step whose submit the host clicked, its result names `captures/after-submit/<step>.json` (`nextScreen`)",
   ],
+  // A run on a saved session can start past a chooser that shows right after sign-in, so the build
+  // exercises a chooser step from both starts.
+  [
+    "auth",
+    "Record an authorized choice and its following Continue as separate steps. Prefer exercising a chooser step from both starts in the build, right after a sign-in and from a saved session already past the chooser.",
+  ],
   [
     "caller-input",
     "Use a published input instead whenever the value is stable and the caller can supply it up front",
@@ -247,6 +253,12 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "Read this before your first `finish_build`. `finish_build` asks the host to review the current source and publish it against an execution that already ran",
   ],
   ["publication", "Guardian reports what it finds in rounds, and each round costs minutes"],
+  // A builder that skipped the request's own rules met them again as one refusal per round, so the
+  // checks before `finish_build` open with them.
+  [
+    "publication",
+    "## Check before `finish_build` Before your first `finish_build`, prefer checking the tool against each rule the request states for its inputs, outputs and refusals.",
+  ],
   [
     "publication",
     "- Published files are all of `src/`, the named entrypoints and any `explore/`, `test/` or `scratch/` module they import",
@@ -289,11 +301,13 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "ending, and the build goes on. Before ending blocked because a value the request gave is unavailable or invalid on the site, such as a time slot the site does not offer that day, a date outside its calendar or a name it does not list, ask the owner with `request_input` to revise it or stop, as the key rules say. End blocked only when they stop or their answer cannot be met either. In maintenance, follow the intake screen instead. Give the evidence in `intent`",
   ],
   // Only what the caller asked for decides whether a tool books or refuses, every listed option
-  // gets read, a repair fixes a broken input but keeps a caller's documented design decision, and
-  // a format read from one sample breaks on the next value, so the minter reads it off the page.
+  // gets read, a repair fixes a broken input but keeps a caller's documented design decision, a
+  // fix covers every required control the input has no value for rather than the one that
+  // failed, and a format read from one sample breaks on the next value, so the minter reads it
+  // off the page.
   [
     "core",
-    "never just the example's value. The example's values are one case, never limits. - Prefer keying only on what the caller asked for. A detail that changes from one listing to the next, such as a seating label or a room name, shouldn't decide whether the tool books or refuses unless the caller chose it. - Read results for every option the schema lists. When an option leads to a page with a different structure (other fields or sections), handle that layout too, and on a read signed out run it live as a test case (testing skill); an option that only reorders or filters the same rows needs no case of its own. Never return results for another option in its place. - A repair that finds a declared input broken, never applied or always reported unsupported fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract means every input and output it declares works, not leaving a broken one as it was. An input whose description starts \"By design:\" is applied in the use it records, a caller's decision: keep that use and its description word for word, and change them only after asking the same design question again (the input schema, \"Inputs that tailor the answer\"). - Never derive a format from one sample: not an input format, an element key, a selector, a URL path or a label. A key the page showed for the example's value says nothing about the next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read the format off the page for the value you need, such as the day cell whose visible label or accessible name is the caller's date, or a key the page itself lists, never a key rebuilt from the one you saw. - Inputs are values a caller knows",
+    "never just the example's value. The example's values are one case, never limits. - Prefer keying only on what the caller asked for. A detail that changes from one listing to the next, such as a seating label or a room name, shouldn't decide whether the tool books or refuses unless the caller chose it. - Read results for every option the schema lists. When an option leads to a page with a different structure (other fields or sections), handle that layout too, and on a read signed out run it live as a test case (testing skill); an option that only reorders or filters the same rows needs no case of its own. Never return results for another option in its place. - A repair that finds a declared input broken, never applied or always reported unsupported fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract means every input and output it declares works, not leaving a broken one as it was. An input whose description starts \"By design:\" is applied in the use it records, a caller's decision: keep that use and its description word for word, and change them only after asking the same design question again (the input schema, \"Inputs that tailor the answer\"). - Prefer fixing the whole class of a failure over its one instance: when the page requires a control the input has no value for, prefer making every such control a declared caller question with the page's live options over throwing for it. - Never derive a format from one sample: not an input format, an element key, a selector, a URL path or a label. A key the page showed for the example's value says nothing about the next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read the format off the page for the value you need, such as the day cell whose visible label or accessible name is the caller's date, or a key the page itself lists, never a key rebuilt from the one you saw. - Inputs are values a caller knows",
   ],
   // The minter reads the never-loosened needed values, the facts a caller could use, typed output
   // and kept rows before it writes the schema and the parser, so a fact the code could not read
@@ -726,16 +740,16 @@ it("renders the pinned standalone authoring", async () => {
     ...skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name]),
     ...[...guide.files].map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["20d78599f7983cf658f05c4b3e084d9784b471740b598472ba31e2e538a190b5", "core"],
+    ["f0e612fcff845baa3bad0d6da70eb72083063d374f7f515dc8f6b681f369838f", "core"],
     ["0adaf6002bad034a70f753ac36d60bc15053a22f11972b612f9500a9e7c1c58f", "search"],
-    ["5825c40bff134e80289968fc90563d5a4a7a20cfd9f9bd500e237acbb779a9e4", "auth"],
-    ["e9ca2e802db42d1ea80c53d23f15fa1052579ea51cedbe68df4a8a27ccc5c825", "testing"],
+    ["26a2397035b3b493bd7201dcbcb0ee8108cf1e0a18d3b81f989374d6bd7f48f4", "auth"],
+    ["03c44d2b4b7e998d3fe1b86d110702d49ca27e3527b63abb69e41fe167056e54", "testing"],
     ["fc4707b0cd5692efe8cc9b96be4ec88b1f8807451348056eb13dfc3d88486b0f", "pagination"],
-    ["44ce352110857385d00dfa3f712d545de8168d572c24a1eee3592d9e1bb2ca03", "forms"],
+    ["7e39ab2d515b817c3d42070922a575f6d3cd5b8427d3c97a4af151cec7a32656", "forms"],
     ["7c8bb597069555e8cafead00b323c91c438b58e30ac2284931aaf5a9b317d782", "writes"],
-    ["fcee35e6bf69a013174d3deb93d86f7585e553c1aac0529c3b01ed48e9c0f36e", "cart"],
-    ["6a802f13e2d166fcb53fac9d248e34e6c5ba8f54be511b878ddae453858ea784", "caller-input"],
-    ["a13949fdcc1fa7d0f9768e2ebfe7b94b99a5b65294e70a86b30744ea8ed1d395", "publication"],
+    ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
+    ["5e3017df8368f31f52d925062ca0d7f24f2a8badffd8da1589ba9c7860e27b7a", "caller-input"],
+    ["6b731bff43e00509cc46974f62b69f7a71b6023af68fd7c5957a454abd3065d9", "publication"],
     ["25c57a8d7abfa064413e993dadbb1a26270d002f163f710e35f86329c6521b87", "workspace/AGENTS.md"],
     ["e023d1b6f7bc3673118d4310d9813cfa878c554b68a353413e73592054d2704d", "workspace/README.md"],
   ]);
