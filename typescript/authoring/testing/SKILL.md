@@ -37,8 +37,9 @@ selectable variant the schema offers, such as a second store or seller. Run a no
 once and see what the site shows before you write its expectation: some sites answer it with a
 fallback grid or a "no exact matches" view rather than an empty list. Every free-text input, one
 the caller types rather than picks, gets three cases of its own in a build and a repair alike: a
-blank value, an over-long value and a made-up value the site has no match for. The first two
-expect `invalid_input`, refused by the input schema (caller-input skill). The made-up value
+blank value (`invalid_input` when the input is required; an optional one may treat it as left
+out), an over-long value and a made-up value the site has no match for. The over-long value
+expects `invalid_input` too, refused by the input schema (caller-input skill). The made-up value
 expects what the caller-input skill says: `invalid_input` naming the field, `empty` for a search
 query, or a labeled `result` for a location the site won't apply. None of the three may end in
 another throw. Skip the made-up value for an input that takes a person's, account's or record's
