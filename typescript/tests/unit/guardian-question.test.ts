@@ -256,6 +256,68 @@ it("keeps a repair's caller-input question to invalid or real", async () => {
   );
 });
 
+// The question review rejected the read-or-write question as redundant when trusted intent already
+// leaned read-only, and objected to the answer labels the host sets itself, so the build could
+// never get past its required first question.
+it("tells the question review the read-or-write question is required and its labels are the host's", async () => {
+  const requests = scripted([[message({ outcome: "allow_business", rationale: "Allowed." })]]);
+  await Effect.runPromise(
+    makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).reviewQuestion(
+      pending,
+      question,
+      unreadable,
+    ),
+  );
+  const input = JSON.parse(userText(requests[0])) as { trusted_review: { policy: string } };
+  expect(input.trusted_review.policy).toContain(
+    "\n- the request is one choice between the host's two answers, keeping the build read-only or making it a write build: the build's first question, asked before any website access, whether the requested tool only looks things up or changes something on the website. Allow it when its prompt says plainly what the tool would do; reword it when the prompt asks for anything more, such as a value or private detail the user would type in their own words. The host requires this question and sets its two answer labels, so judge only the prompt and prefer allow when it plainly says what the tool would do, even when trusted intent already leans one way. A write build does the requested task once, for real, while it builds, so a prompt may say so.\n",
+  );
+});
+
+// The question review saw no build effect, since its allowedEffects is empty on purpose, so it
+// rejected the true statement that a write build publishes only after it does the task for real.
+it.each(["read", "write"] as const)(
+  "gives the question review a %s build's effect as host context",
+  async (buildEffect) => {
+    const requests = scripted([[message({ outcome: "allow_business", rationale: "Allowed." })]]);
+    const candidate = await Effect.runPromise(
+      questionForReview(
+        { questions: [{ id: "blocked", type: "text", prompt: "Publishing needs one real run." }] },
+        { credentialsAvailable: false, blockedOutcome: true, buildEffect },
+        (text) => Effect.succeed(text),
+      ),
+    );
+    await Effect.runPromise(
+      makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).reviewQuestion(
+        pending,
+        candidate,
+        unreadable,
+      ),
+    );
+    const input = JSON.parse(userText(requests[0])) as {
+      trusted_review: { policy: string };
+      question_review: { buildEffect?: unknown };
+    };
+    expect(input.question_review.buildEffect).toBe(buildEffect);
+    expect(input.trusted_review.policy).toContain(
+      "\nWhen question_review.buildEffect is write, the build publishes only after it does the requested task once, for real, with the person's values. A question or report that says so is true, so prefer allow for that statement.\n",
+    );
+  },
+);
+
+it("leaves the build effect out of a question review whose host sends none", async () => {
+  const requests = scripted([[message({ outcome: "allow_business", rationale: "Allowed." })]]);
+  await Effect.runPromise(
+    makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).reviewQuestion(
+      pending,
+      question,
+      unreadable,
+    ),
+  );
+  const input = JSON.parse(userText(requests[0])) as { question_review: object };
+  expect(input.question_review).not.toHaveProperty("buildEffect");
+});
+
 // Guardian judged a blocked report about a refused publication from the agent's words alone.
 it("gives the question review the host's publication refusals as trusted evidence", async () => {
   const refusal = {

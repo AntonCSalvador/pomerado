@@ -1706,6 +1706,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         Effect.map((refusals) => (refusals.length === 0 ? {} : { publicationDecisions: refusals })),
       );
       /**
+       * The build's effect as a question or blocked-explanation review's option, read when the
+       * review starts, so an update to a write build counts. None before the owner chose one.
+       */
+      const decidedBuildEffect = () => (buildEffect === "ask" ? {} : { buildEffect });
+      /**
        * Keeps one publication decision through the host's hook. A decision that ended the build
        * leaves nothing to recover. Evidence the host could not keep, a thrown error included, is a
        * recorded gap.
@@ -2968,6 +2973,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       blockedOutcome: true,
                       ...publicationDecisions,
                       ...(ledger === undefined ? {} : { decisionLedger: ledger }),
+                      ...decidedBuildEffect(),
                     },
                   );
                 }),
@@ -3024,7 +3030,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           if (screened === "") return undefined;
           const decision = yield* review(
             { questions: [{ id: "blocked", type: "text", prompt: screened }] },
-            { blockedOutcome: true, ...(yield* publicationRefusals) },
+            { blockedOutcome: true, ...(yield* publicationRefusals), ...decidedBuildEffect() },
           ).pipe(
             Effect.timeoutFail({
               duration: dependencies.stopExplanationReviewMs ?? 60_000,
@@ -3235,14 +3241,20 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               instruction:
                 "Nothing changed, and the build continues under the current task. Revise the update using the rationale and call mint_update again, or continue without it.",
             });
-          if (decision.outcome === "clarify")
+          // Guardian's new_mint on the minter's same-task update asks the caller first: they asked
+          // for this task, and only the minter's own recommendation writes a new build's request.
+          if (
+            decision.outcome === "clarify" ||
+            (decision.outcome === "new_mint" && submitted.recommend === "update")
+          )
             return taskUpdateAnswer("clarification_required", {
               source: "guardian",
               rationale,
               instruction:
                 "Nothing changed. Ask the caller with request_input about what the rationale says is unconfirmed, naming the change plainly, then call mint_update again naming the questions they answered in confirmedBy.",
             });
-          if (decision.outcome === "new_mint" || submitted.recommend === "new_mint")
+          // Only the minter's own recommendation ends the build, so it carries its suggested request.
+          if (submitted.recommend === "new_mint")
             return yield* recommendNewMint(
               update,
               decision.outcome === "new_mint" ? "guardian" : "minter",
@@ -5071,6 +5083,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 const review = yield* dependencies.reviewQuestion(submitted, {
                   requestId,
                   ...(yield* publicationRefusals),
+                  ...decidedBuildEffect(),
                 });
                 yield* reviewCompleted;
                 reviewId = review.reviewId;
@@ -5154,13 +5167,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     instruction: loginRequestInstruction(login),
                   });
                 }
+                // The read-or-write question is the turn's only move, so it is never withdrawn.
                 if (review.outcome !== "allow_business")
                   return JSON.stringify({
                     status: "question_rejected",
                     rationale,
                     userInputRequired: false,
-                    instruction:
-                      "Reword the question using the rationale, or withdraw it and continue. Do not ask again for a value you were already given or that the site shows. A reworded question is reviewed again.",
+                    instruction: effectQuestion
+                      ? "Reword the question using the rationale and call request_input again. This read-or-write question is required, and no other tool opens until the person answers it. The host sets its two answer labels, so change only the prompt."
+                      : "Reword the question using the rationale, or withdraw it and continue. Do not ask again for a value you were already given or that the site shows. A reworded question is reviewed again.",
                   });
               }
               const answers = yield* dependencies.askInput(submitted, {
