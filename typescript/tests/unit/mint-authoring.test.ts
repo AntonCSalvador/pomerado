@@ -253,6 +253,12 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "Read this before your first `finish_build`. `finish_build` asks the host to review the current source and publish it against an execution that already ran",
   ],
   ["publication", "Guardian reports what it finds in rounds, and each round costs minutes"],
+  // A builder that skipped the request's own rules met them again as one refusal per round, so the
+  // checks before `finish_build` open with them.
+  [
+    "publication",
+    "## Check before `finish_build` Before your first `finish_build`, prefer checking the tool against each rule the request states for its inputs, outputs and refusals.",
+  ],
   [
     "publication",
     "- Published files are all of `src/`, the named entrypoints and any `explore/`, `test/` or `scratch/` module they import",
@@ -743,7 +749,7 @@ it("renders the pinned standalone authoring", async () => {
     ["9bc4d77d21fb8744bc16d4f89884af478a0b7a789e83a8723cfe98e8c5c3cd18", "writes"],
     ["fcee35e6bf69a013174d3deb93d86f7585e553c1aac0529c3b01ed48e9c0f36e", "cart"],
     ["f947e79ebefe5161bc439c208c85fea8e5c4863782a9543220f9fce6b561bcfa", "caller-input"],
-    ["fa5d7889da7fb06bc98feef5cdbaadcfd757d6dbf42ff4ef8577ae641ea77d3e", "publication"],
+    ["ef1a786d3c6d323f6b886a5dd4075be549dfdf1578eae621b16b5c28d261eaf3", "publication"],
     ["25c57a8d7abfa064413e993dadbb1a26270d002f163f710e35f86329c6521b87", "workspace/AGENTS.md"],
     ["e023d1b6f7bc3673118d4310d9813cfa878c554b68a353413e73592054d2704d", "workspace/README.md"],
   ]);

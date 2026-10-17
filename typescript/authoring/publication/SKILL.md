@@ -52,6 +52,9 @@ pomerado:section publication.metadata-readers:end -->:
 
 ## Check before `finish_build`
 
+Before your first `finish_build`, prefer checking the tool against each rule the request states
+for its inputs, outputs and refusals.
+
 Guardian reports what it finds in rounds, and each round costs minutes, so settle all of these
 first:
 
