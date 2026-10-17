@@ -1706,6 +1706,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         Effect.map((refusals) => (refusals.length === 0 ? {} : { publicationDecisions: refusals })),
       );
       /**
+       * The build's effect as a question or blocked-explanation review's option, read when the
+       * review starts, so an update to a write build counts. None before the owner chose one.
+       */
+      const decidedBuildEffect = () => (buildEffect === "ask" ? {} : { buildEffect });
+      /**
        * Keeps one publication decision through the host's hook. A decision that ended the build
        * leaves nothing to recover. Evidence the host could not keep, a thrown error included, is a
        * recorded gap.
@@ -2968,6 +2973,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       blockedOutcome: true,
                       ...publicationDecisions,
                       ...(ledger === undefined ? {} : { decisionLedger: ledger }),
+                      ...decidedBuildEffect(),
                     },
                   );
                 }),
@@ -3024,7 +3030,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           if (screened === "") return undefined;
           const decision = yield* review(
             { questions: [{ id: "blocked", type: "text", prompt: screened }] },
-            { blockedOutcome: true, ...(yield* publicationRefusals) },
+            { blockedOutcome: true, ...(yield* publicationRefusals), ...decidedBuildEffect() },
           ).pipe(
             Effect.timeoutFail({
               duration: dependencies.stopExplanationReviewMs ?? 60_000,
@@ -5071,6 +5077,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 const review = yield* dependencies.reviewQuestion(submitted, {
                   requestId,
                   ...(yield* publicationRefusals),
+                  ...decidedBuildEffect(),
                 });
                 yield* reviewCompleted;
                 reviewId = review.reviewId;

@@ -2092,6 +2092,12 @@ export interface MintDependencies {
        * them; an older host leaves it out.
        */
       readonly decisionLedger?: DecisionLedger;
+      /**
+       * The build's effect from the harness's own task state, once decided: absent on the
+       * read-or-write question's turn. A host that forwards it lets the review know a write build
+       * does the task once, for real, before it publishes; an older host leaves it out.
+       */
+      readonly buildEffect?: "read" | "write";
     },
   ) => Effect.Effect<QuestionDecision & { readonly reviewId?: string }, MintFailure>;
   /**

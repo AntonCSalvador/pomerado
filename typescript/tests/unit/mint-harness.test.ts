@@ -2287,6 +2287,68 @@ it("keeps the reword-or-withdraw instruction for a rejected question other than 
   ]);
 });
 
+// The question review didn't know a build was a write build, so it rejected the true statement
+// that a write build does the task once, for real, before it publishes.
+it.each(["read", "write"] as const)(
+  "gives a %s build's question and blocked report reviews the build's effect",
+  async (effect) => {
+    const reviewed: unknown[] = [];
+    const f = await fixture(
+      (turn) =>
+        Effect.gen(function* () {
+          yield* turn.actions.requestInput(textQuestion("Which account type?"));
+          const reportBlocked = turn.actions.reportBlocked;
+          if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+          yield* reportBlocked(blockedReport);
+        }),
+      {
+        reviewQuestion: (_submitted, options) =>
+          Effect.sync(() => {
+            reviewed.push(options);
+            return { outcome: "allow_business" as const, rationale: "Plain." };
+          }),
+      },
+    );
+    await f.run({ ...request, effect });
+    expect(reviewed).toEqual([
+      expect.objectContaining({ buildEffect: effect }),
+      expect.objectContaining({ blockedOutcome: true, buildEffect: effect }),
+    ]);
+  },
+);
+
+it("gives the read-or-write question's review no build effect, since none is decided", async () => {
+  const reviewed: unknown[] = [];
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        yield* turn.actions.requestInput({
+          questions: [
+            {
+              id: "effect",
+              type: "choice" as const,
+              prompt: "Should this tool only look up your orders, or also cancel one?",
+              options: [
+                { id: "read", label: "read" },
+                { id: "write", label: "write" },
+              ],
+            },
+          ],
+        });
+      }),
+    {
+      reviewQuestion: (_submitted, options) =>
+        Effect.sync(() => {
+          reviewed.push(options);
+          return { outcome: "reword" as const, rationale: "Say what it would cancel." };
+        }),
+    },
+  );
+  await f.run({ ...request, effect: "ask" });
+  expect(reviewed).toHaveLength(1);
+  expect(reviewed[0]).not.toHaveProperty("buildEffect");
+});
+
 it("publishes without assumptions when the build lists none", async () => {
   const f = await fixture((turn) =>
     Effect.gen(function* () {

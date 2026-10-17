@@ -274,6 +274,50 @@ it("tells the question review the read-or-write question is required and its lab
   );
 });
 
+// The question review saw no build effect, since its allowedEffects is empty on purpose, so it
+// rejected the true statement that a write build publishes only after it does the task for real.
+it.each(["read", "write"] as const)(
+  "gives the question review a %s build's effect as host context",
+  async (buildEffect) => {
+    const requests = scripted([[message({ outcome: "allow_business", rationale: "Allowed." })]]);
+    const candidate = await Effect.runPromise(
+      questionForReview(
+        { questions: [{ id: "blocked", type: "text", prompt: "Publishing needs one real run." }] },
+        { credentialsAvailable: false, blockedOutcome: true, buildEffect },
+        (text) => Effect.succeed(text),
+      ),
+    );
+    await Effect.runPromise(
+      makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).reviewQuestion(
+        pending,
+        candidate,
+        unreadable,
+      ),
+    );
+    const input = JSON.parse(userText(requests[0])) as {
+      trusted_review: { policy: string };
+      question_review: { buildEffect?: unknown };
+    };
+    expect(input.question_review.buildEffect).toBe(buildEffect);
+    expect(input.trusted_review.policy).toContain(
+      "\nWhen question_review.buildEffect is write, the build publishes only after it does the requested task once, for real, with the person's values. A question or report that says so is true, so prefer allow for that statement.\n",
+    );
+  },
+);
+
+it("leaves the build effect out of a question review whose host sends none", async () => {
+  const requests = scripted([[message({ outcome: "allow_business", rationale: "Allowed." })]]);
+  await Effect.runPromise(
+    makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).reviewQuestion(
+      pending,
+      question,
+      unreadable,
+    ),
+  );
+  const input = JSON.parse(userText(requests[0])) as { question_review: object };
+  expect(input.question_review).not.toHaveProperty("buildEffect");
+});
+
 // Guardian judged a blocked report about a refused publication from the agent's words alone.
 it("gives the question review the host's publication refusals as trusted evidence", async () => {
   const refusal = {

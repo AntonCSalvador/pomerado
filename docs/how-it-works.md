@@ -69,6 +69,7 @@ Pomerado has three parts. The minter builds an integration, Guardian reviews the
 - A host keeps them as evidence through `MintDependencies.publicationDecisions`, which records each decision and lists the build's decisions. The local host keeps them in memory for the request.
 - A question review and a blocked-explanation review get the latest refusals as `question_review.publicationDecisions`, and a task update review as `update_review.publicationDecisions`, so Guardian reads what the host refused, not only the minter's account of it.
 - A blocked-explanation review also gets the harness's decision ledger as `question_review.decisionLedger`: the build's Guardian denials of executions, live test batches and publications, with the rationale and findings Guardian wrote, and the live test cases whose latest result did not pass, with what their tool threw marked `toolReported`. It is bounded, a takeover keeps it, and it does not depend on what Guardian's compacted conversation still holds.
+- Both reviews also get the build's effect, once the owner or the request decided it, as `question_review.buildEffect`. Their `allowedEffects` stays empty on purpose, so this is how Guardian knows a write build publishes only after it does the requested task once, for real.
 
 ## Guardian
 
