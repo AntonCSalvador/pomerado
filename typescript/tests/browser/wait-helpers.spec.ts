@@ -68,7 +68,7 @@ interface OutcomeAnswer {
   readonly reason?: string;
   readonly message?: string;
   readonly ms: number;
-  readonly report?: readonly { readonly summary: string }[];
+  readonly report?: readonly { readonly summary: string; readonly looks: number }[];
 }
 
 const outcome = async (page: Page, options: string): Promise<OutcomeAnswer> => {
@@ -87,6 +87,16 @@ test("a quiet page that shows none of the answers fails as outcome_unknown long 
   expect(answer.message).toMatch(
     /^outcome_unknown after \d+ ms, 300 ms without progress, no outcome showing: failed 0 visible of 0, empty 0 visible of 0, results 0 visible of 0; no progress seen$/u,
   );
+});
+
+test("an answer already on the page returns at the first look, with no second look to confirm it", async ({
+  page,
+}) => {
+  await page.setContent(`<section id="answer">${rooms}</section>`);
+  const answer = await outcome(page, "timeout: 3000");
+  expect(answer.shown).toBe("results");
+  expect(answer.report?.[0]?.looks).toBe(1);
+  expect(answer.report?.[0]?.summary).toMatch(/^waitForOutcome: "results" showed after \d+ ms \(1 look\); /u);
 });
 
 test("a page showing a loading sign keeps the wait alive past the no-progress window", async ({
