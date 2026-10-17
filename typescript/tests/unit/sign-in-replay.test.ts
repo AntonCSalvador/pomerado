@@ -784,6 +784,11 @@ for (const [kind, attributes] of [
   ["a box autocompleted cc-csc", 'id="code" autocomplete="cc-csc" inputmode="numeric" maxlength="4"'],
   ["a box autocompleted cc-exp", 'id="code" autocomplete="cc-exp" inputmode="numeric" maxlength="4"'],
   ["a PIN box named pinCode", 'name="pinCode" inputmode="numeric" maxlength="6"'],
+  ["a postal PIN box named pincode", 'name="pincode" inputmode="numeric" maxlength="6"'],
+  ["a postal PIN box named PINCode", 'name="PINCode" inputmode="numeric" maxlength="6"'],
+  ["a text box named code with no short numeric shape", 'name="code" type="text"'],
+  ["a code box autocompleted tel-national", 'name="code" autocomplete="tel-national" inputmode="numeric" maxlength="6"'],
+  ["a CAPTCHA box named captcha_code", 'name="captcha_code" inputmode="numeric" maxlength="6"'],
 ] as const)
   it(`types no code into ${kind} on the page a read's sign-in lands on that can't tell`, async () => {
     const fake = fakeSite({ unrecorded: [codeForm(attributes)] });
@@ -846,6 +851,21 @@ it("fails the sign-in when an unrecorded code screen's code was typed and never 
 it("answers an unmarked box named otpInput, whose letters p, i, n make no word of their own", async () => {
   const fake = fakeSite({
     unrecorded: [codeForm('name="otpInput" inputmode="numeric" maxlength="6"')],
+  });
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(fake.fills).toEqual([
+    { page: "login", values: [account.username, account.password] },
+    { page: "unrecorded", values: [code] },
+  ]);
+});
+
+it("answers only the marked one-time-code field on a page that has one, never an unmarked otp box", async () => {
+  const fake = fakeSite({
+    unrecorded: [
+      '<form><input name="sms_otp" autocomplete="one-time-code"><input name="otp"><button type="submit">Verify</button></form>',
+    ],
   });
   const { ask, asked } = owner();
   expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));

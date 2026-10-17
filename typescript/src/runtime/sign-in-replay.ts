@@ -464,6 +464,7 @@ const otherWords = [
   "cvc",
   "csc",
   "pin",
+  "pincode",
   "redeem",
   "area",
   "year",
@@ -471,7 +472,8 @@ const otherWords = [
 /**
  * Words of `otherWords` that count only as a word of their own, so "pin" rules out pinCode,
  * card_pin and cardPin but not otpInput or spinner. A word ends at the start or end, a non-letter,
- * or a change from lower to upper case.
+ * or a change from lower to upper case. "pincode" and "PINCode" hold no such word, so "pincode"
+ * counts anywhere.
  */
 const wholeOtherWords = ["pin"];
 
