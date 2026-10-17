@@ -200,7 +200,7 @@ const fakeSite = (options: SiteOptions = {}) => {
               type: "text",
               name: markup()?.selectOne(field.selector)?.attr("name") ?? null,
               id: markup()?.selectOne(field.selector)?.attr("id") ?? null,
-              autocomplete: null,
+              autocomplete: markup()?.selectOne(field.selector)?.attr("autocomplete") ?? null,
               inputmode: null,
               label: "Field",
               placeholder: null,
@@ -783,6 +783,7 @@ for (const [kind, attributes] of [
   ["a card's security code named cardCode", 'name="cardCode" inputmode="numeric" maxlength="4"'],
   ["a box autocompleted cc-csc", 'id="code" autocomplete="cc-csc" inputmode="numeric" maxlength="4"'],
   ["a box autocompleted cc-exp", 'id="code" autocomplete="cc-exp" inputmode="numeric" maxlength="4"'],
+  ["a PIN box named pinCode", 'name="pinCode" inputmode="numeric" maxlength="6"'],
 ] as const)
   it(`types no code into ${kind} on the page a read's sign-in lands on that can't tell`, async () => {
     const fake = fakeSite({ unrecorded: [codeForm(attributes)] });
@@ -840,4 +841,17 @@ it("fails the sign-in when an unrecorded code screen's code was typed and never 
     Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "submit_failed" })),
   );
   expect(fake.fills.map(({ page }) => page)).toEqual(["login", "unrecorded"]);
+});
+
+it("answers an unmarked box named otpInput, whose letters p, i, n make no word of their own", async () => {
+  const fake = fakeSite({
+    unrecorded: [codeForm('name="otpInput" inputmode="numeric" maxlength="6"')],
+  });
+  const { ask, asked } = owner();
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(fake.fills).toEqual([
+    { page: "login", values: [account.username, account.password] },
+    { page: "unrecorded", values: [code] },
+  ]);
 });

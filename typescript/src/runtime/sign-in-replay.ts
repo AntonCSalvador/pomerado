@@ -468,6 +468,21 @@ const otherWords = [
   "area",
   "year",
 ];
+/**
+ * Words of `otherWords` that count only as a word of their own, so "pin" rules out pinCode,
+ * card_pin and cardPin but not otpInput or spinner. A word ends at the start or end, a non-letter,
+ * or a change from lower to upper case.
+ */
+const wholeOtherWords = ["pin"];
+
+/** Whether an unmarked field's name, id or autocomplete holds one of `wholeOtherWords`. */
+const namesWholeOtherWord = (field: AutofillInspection["screen"]["fields"][number]) =>
+  field.autocomplete?.toLowerCase() !== "one-time-code" &&
+  [field.name, field.id, field.autocomplete].some((value) =>
+    (value ?? "")
+      .split(/[^A-Za-z]+|(?<=[a-z])(?=[A-Z])/u)
+      .some((word) => wholeOtherWords.includes(word.toLowerCase())),
+  );
 
 /**
  * A one-time-code field the recipe never recorded and its form's submit, matched
@@ -476,7 +491,8 @@ const otherWords = [
  * phone-digits input is one when its name or id holds `oneTimeCodeWords`, or holds `codeWords` on
  * a short numeric box (`inputmode="numeric"`, or a number or phone input, with a `maxlength` of 4
  * to 8), unless its name, id or autocomplete holds `otherWords` or its autocomplete starts with
- * `tel` or `cc-`. A false match types a code where none belongs, so it matches narrowly.
+ * `tel` or `cc-`. A false match types a code where none belongs, so it matches narrowly. The
+ * selector leaves `wholeOtherWords` to `namesWholeOtherWord`, which CSS cannot tell apart.
  */
 const unrecordedCodeStep = ((): AutofillStep => {
   const anyOf = (selectors: readonly string[]) => selectors.join(", ");
@@ -488,12 +504,13 @@ const unrecordedCodeStep = ((): AutofillStep => {
     `:is(${anyOf([4, 5, 6, 7, 8].map((length) => `[maxlength="${length}"]`))})`,
   ].join("");
   const typed = anyOf([":not([type])", '[type="text" i]', '[type="number" i]', '[type="tel" i]']);
+  const substrings = otherWords.filter((word) => !wholeOtherWords.includes(word));
   const codeLike = [
     `input:is(${typed})`,
     `:is(${named(oneTimeCodeWords)}, :is(${named(codeWords)})${shortNumeric})`,
     `:not(${anyOf([
-      named(otherWords),
-      ...otherWords.map((word) => `[autocomplete*="${word}" i]`),
+      named(substrings),
+      ...substrings.map((word) => `[autocomplete*="${word}" i]`),
       '[autocomplete^="tel" i]',
       '[autocomplete^="cc-" i]',
     ])})`,
@@ -550,6 +567,8 @@ const unrecordedCode = <E>(replay: Replay<E>, probe: { screen?: string | undefin
     if ("outcome" in inspected) return "none" as const;
     const at = originOf(inspected.page);
     if (at === undefined || !replay.signInOrigins.has(at)) return "none" as const;
+    const field = inspected.screen.fields[0];
+    if (field !== undefined && namesWholeOtherWord(field)) return "none" as const;
     const submitted = progress.ran.at(-1);
     if (submitted !== undefined && (yield* stillShows(input.browser, submitted)))
       return "none" as const;
