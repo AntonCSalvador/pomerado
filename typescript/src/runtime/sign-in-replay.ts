@@ -470,20 +470,13 @@ const otherWords = [
  * Words of `otherWords` that count only as a word of their own, so "pin" rules out pinCode,
  * card_pin and cardPin but not otpInput or spinner. A word ends at the start or end, a non-letter,
  * or a change from lower to upper case. "pincode" and "PINCode" hold no such word, so "pincode"
- * counts anywhere. A name or id that also holds `oneTimeCodeWords`, as totpPin does, names a code,
- * and pin doesn't rule it out.
+ * counts anywhere.
  */
 const wholeOtherWords = ["pin"];
 
-/**
- * Whether an unmarked field's name, id or autocomplete holds one of `wholeOtherWords`, while its
- * name and id hold none of `oneTimeCodeWords`.
- */
+/** Whether an unmarked field's name, id or autocomplete holds one of `wholeOtherWords`. */
 const namesWholeOtherWord = (field: AutofillInspection["screen"]["fields"][number]) =>
   field.autocomplete?.toLowerCase() !== "one-time-code" &&
-  ![field.name, field.id].some((value) =>
-    oneTimeCodeWords.some((word) => (value ?? "").toLowerCase().includes(word)),
-  ) &&
   [field.name, field.id, field.autocomplete].some((value) =>
     (value ?? "")
       .split(/[^A-Za-z]+|(?<=[a-z])(?=[A-Z])/u)

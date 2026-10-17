@@ -880,18 +880,6 @@ it("answers only the marked one-time-code field on a page that has one, never an
   ]);
 });
 
-for (const attributes of ['name="totpPin"', 'id="otpPin"'])
-  it(`answers a box with ${attributes}, whose otp counts over pin as a word of its own`, async () => {
-    const fake = fakeSite({ unrecorded: [codeForm(attributes)] });
-    const { ask, asked } = owner();
-    expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
-    expect(kinds(asked)).toEqual(["credential:missing_credentials", "code"]);
-    expect(fake.fills).toEqual([
-      { page: "login", values: [account.username, account.password] },
-      { page: "unrecorded", values: [code] },
-    ]);
-  });
-
 for (const [where, accountOrigin] of [
   ["its own origin", origin],
   ["another origin of the site", `https://accounts.${site}`],
