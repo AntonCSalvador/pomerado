@@ -3241,14 +3241,20 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               instruction:
                 "Nothing changed, and the build continues under the current task. Revise the update using the rationale and call mint_update again, or continue without it.",
             });
-          if (decision.outcome === "clarify")
+          // Guardian's new_mint on the minter's same-task update asks the caller first: they asked
+          // for this task, and only the minter's own recommendation writes a new build's request.
+          if (
+            decision.outcome === "clarify" ||
+            (decision.outcome === "new_mint" && submitted.recommend === "update")
+          )
             return taskUpdateAnswer("clarification_required", {
               source: "guardian",
               rationale,
               instruction:
                 "Nothing changed. Ask the caller with request_input about what the rationale says is unconfirmed, naming the change plainly, then call mint_update again naming the questions they answered in confirmedBy.",
             });
-          if (decision.outcome === "new_mint" || submitted.recommend === "new_mint")
+          // Only the minter's own recommendation ends the build, so it carries its suggested request.
+          if (submitted.recommend === "new_mint")
             return yield* recommendNewMint(
               update,
               decision.outcome === "new_mint" ? "guardian" : "minter",
