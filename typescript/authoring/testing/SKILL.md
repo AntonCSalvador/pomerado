@@ -36,15 +36,15 @@ cases builds most often add late: no results, one broad query, page two, and one
 selectable variant the schema offers, such as a second store or seller. Run a no-results query
 once and see what the site shows before you write its expectation: some sites answer it with a
 fallback grid or a "no exact matches" view rather than an empty list. Every free-text input, one
-the caller types rather than picks, gets three cases of its own in a build and a repair alike: a
-blank value (`invalid_input` when the input is required; an optional one may treat it as left
-out), an over-long value and a made-up value the site has no match for. The over-long value
-expects `invalid_input` too, refused by the input schema (caller-input skill). The made-up value
-expects what the caller-input skill says: `invalid_input` naming the field, `empty` for a search
-query, or a labeled `result` for a location the site won't apply. None of the three may end in
-another throw. Skip the made-up value for an input that takes a person's, account's or record's
-name, number or code. Beyond those, consider each of these where the site has it; none is
-required, and one case may serve several:
+the caller types rather than picks, gets three cases of its own in a build: a blank value
+(`invalid_input` when the input is required; an optional one may treat it as left out), an
+over-long value and a made-up value the site has no match for; a repair adds only the made-up one.
+The over-long value expects `invalid_input` too, refused by the input schema (caller-input skill).
+The made-up value expects what the caller-input skill says: `invalid_input` naming the field,
+`empty` for a search query, or a labeled `result` for a location the site won't apply. None of the
+three may end in another throw. Skip the made-up value for an input that takes a person's,
+account's or record's name, number or code. Beyond those, consider each of these where the site has
+it; none is required, and one case may serve several:
 - every input, alone and together with the others. Each input needs a case that uses it, or
   changes it from its default, and that case covers it: its other values, such as each order a
   sort offers, need no case or `notTested` entry of their own unless one opens a page with a
@@ -94,9 +94,10 @@ About 10 to 20 cases is typical. Write them in `test/cases.json`:
 `purpose` says in a sentence what the case establishes. `expect` is `result`, `empty`,
 `invalid_input` or `error`: a loud refusal the tool throws on purpose, `InputNotApplied`; any
 other throw is a bug and fails the case. Expect `empty`, `invalid_input` or `error` only for an
-input the site really has no results for, does not offer or cannot apply; an input that tailors
-the answer and that the site won't apply expects `result`, labeled with the applied value. Apart
-from the made-up, blank and over-long cases, use real values the site offers, which you saw while
+input the site really has no results for, does not offer or cannot apply, or a blank or over-long
+value the input schema refuses; an input that tailors the answer and that the site won't apply
+expects `result`, labeled with the applied value. Apart from the made-up, blank and over-long
+cases, use real values the site offers, which you saw while
 exploring: listed options, places, dates, counts, records and retailers the site lists. Never use
 a person's, account's or record's name, number or code, and never the caller's own values beyond
 the example's input. List under `notTested` anything the tool claims that you chose not to test,
