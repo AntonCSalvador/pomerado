@@ -740,7 +740,7 @@ it("renders the pinned standalone authoring", async () => {
     ...skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name]),
     ...[...guide.files].map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["f98524410192451bcaaea8b1fea3f4c70b53126216dc77129830639f88f428d1", "core"],
+    ["bb8bf1c577624590042cdbb7e788a31f80a6cda3ead7f57d348186792df12b88", "core"],
     ["0adaf6002bad034a70f753ac36d60bc15053a22f11972b612f9500a9e7c1c58f", "search"],
     ["26a2397035b3b493bd7201dcbcb0ee8108cf1e0a18d3b81f989374d6bd7f48f4", "auth"],
     ["e9ca2e802db42d1ea80c53d23f15fa1052579ea51cedbe68df4a8a27ccc5c825", "testing"],
