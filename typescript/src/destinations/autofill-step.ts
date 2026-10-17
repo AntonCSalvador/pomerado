@@ -411,8 +411,8 @@ const hostTrusts = (predicate: ((url: URL) => boolean) | undefined, value: strin
  * form actions and link destination are, naming only `named` origins once anything was typed. A
  * field for a part of a payment card may also sit in a frame on one of `paymentFrameOrigins`,
  * exactly; no other field ever counts one as trusted. A sign-in step's controls may also sit and
- * submit on an address the host's own `trustSignInUrl` trusts, within `trustableSignInUrl`; a
- * card-fill step's never do.
+ * submit on an address the host's own `trustSignInUrl` trusts, within core's floor for it (see
+ * `inspectAutofillStep`); a card-fill step's never do.
  */
 export const untrustedTarget = (
   targets: typeof Targets.Type,
@@ -496,8 +496,8 @@ export const untrustedTarget = (
  * A step with a part of a payment card (a card-fill step) is refused unless the primary tab's top
  * document is on the site, and its card fields may sit in a frame on `paymentFrameOrigins`.
  * `trustSignInUrl` lets a sign-in step's controls and popup also sit on an address the host's own
- * predicate trusts, asked only about one `trustableSignInUrl` allows; the inspection keeps it, so
- * each fill call judges again by the same rule. Evidence names origins as before.
+ * predicate trusts, asked only about one core's own floor allows; the inspection keeps it, so each
+ * fill call judges again by the same rule. Evidence names origins as before.
  */
 export const inspectAutofillStep = (input: {
   readonly step: AutofillStep<FillSlot>;
@@ -509,11 +509,14 @@ export const inspectAutofillStep = (input: {
   /**
    * The host's own trust of more sign-in addresses for a sign-in step, as when its user allowed the
    * sign-in to go wherever the site sends it: asked about each address of a control or popup off
-   * the site and `authenticationOrigins` that `trustableSignInUrl` allows, never about a card-fill
-   * step's. It is also asked after typing, about addresses the page shaped, which may hold what was
-   * typed: the host must never log, keep or forward a URL it is asked about, and answers from the
-   * URL alone. A predicate that throws trusts nothing. Unset, only the site and
-   * `authenticationOrigins`.
+   * the site and `authenticationOrigins` that core's own floor allows, never about a card-fill
+   * step's. The floor: an https address with no user name or password, on a host with a
+   * registrable domain under a listed public suffix; never plain http, an IP address, localhost, a
+   * bare public suffix, a name only a private network resolves (under .localhost, .internal,
+   * .local, .test or .invalid), or a host under .arpa or .onion. It is also asked after typing,
+   * about addresses the page shaped, which may hold what was typed: the host must never log, keep
+   * or forward a URL it is asked about, and answers from the URL alone. A predicate that throws
+   * trusts nothing. Unset, only the site and `authenticationOrigins`.
    */
   readonly trustSignInUrl?: ((url: URL) => boolean) | undefined;
 }): Effect.Effect<AutofillRefusal | AutofillInspection> =>

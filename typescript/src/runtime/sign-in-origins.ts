@@ -36,7 +36,8 @@ const unsignedTopLevels = new Set(["arpa", "onion"]);
 export const trustableSignInUrl = (url: URL) => {
   if (url.protocol !== "https:" || url.username || url.password) return false;
   if (siteDomain(url.origin) === undefined) return false;
-  const topLevel = url.hostname.replace(/\.$/u, "").split(".").at(-1) ?? "";
+  // Every trailing dot, as the public suffix list's lookup ignores them all.
+  const topLevel = url.hostname.replace(/\.+$/u, "").split(".").at(-1) ?? "";
   if (unsignedTopLevels.has(topLevel)) return false;
   const { isIcann, isPrivate } = parse(url.hostname, { allowPrivateDomains: true });
   return isIcann === true || isPrivate === true;

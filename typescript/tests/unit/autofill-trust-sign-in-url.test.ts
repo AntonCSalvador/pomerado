@@ -191,6 +191,10 @@ describe("a host's own trust of sign-in addresses", () => {
     ["a .home.arpa host", "https://printer.home.arpa/u/login"],
     ["an .in-addr.arpa host", "https://7.113.0.203.in-addr.arpa/u/login"],
     ["an .onion host", "https://exampleexampleexample.onion/u/login"],
+    // Trailing dots, which the public suffix list's lookup ignores, hide no top-level label.
+    ["a .home.arpa host with a trailing dot", "https://printer.home.arpa./u/login"],
+    ["an .onion host with two trailing dots", "https://exampleexampleexample.onion../u/login"],
+    ["an .onion host with percent-encoded dots", "https://exampleexampleexample.onion%2E%2E/u/login"],
   ])(
     "still refuses a sign-in form on %s, never asking the host's predicate",
     async (_, frameUrl) => {
@@ -213,6 +217,8 @@ describe("a host's own trust of sign-in addresses", () => {
     ["https://metadata.google.internal/", false],
     ["https://printer.home.arpa/", false],
     ["https://exampleexampleexample.onion/", false],
+    ["https://exampleexampleexample.onion../", false],
+    ["https://printer.home.arpa./", false],
   ])("lets a host trust %s: %s", (value, trustable) => {
     expect(trustableSignInUrl(new URL(value))).toBe(trustable);
   });
@@ -248,6 +254,16 @@ describe("a host's own trust of sign-in addresses", () => {
     });
     expect(report).toMatchObject({ outcome: "refused", reason: "credential_target_refused" });
     expect(refusedCheck(report)).toMatchObject({ check: "destination", part: "frame" });
+  });
+
+  it("refuses a sign-in popup on another site's host when the predicate asked about it throws", async () => {
+    const report = await inspect(`${site}/sign-in`, {
+      step: { ...signInStep, popup: { opener: "primary", origin: signInHost } },
+      trustSignInUrl: () => {
+        throw new Error("synthetic predicate failure");
+      },
+    });
+    expect(refusedCheck(report)).toMatchObject({ check: "destination", part: "popup" });
   });
 
   it.each([
