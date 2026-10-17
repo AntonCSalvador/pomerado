@@ -130,7 +130,7 @@ export const detailNavigation = defineOperation(
     if (!answer.success)
       throw new errors.OperationFailure(String(answer.error), { stderr: answer.stderr });
     const result = Schema.decodeUnknownSync(Detail)(answer.result);
-    if ("refused" in result) throw new errors.InvalidInput(result.refused);
+    if ("refused" in result) throw new errors.InvalidInput(result.refused, { field: "record_id" });
     if ("failure" in result) throw new errors.OperationFailure(result.failure);
     return { record_id: input.record_id, title: result.title };
   },
@@ -163,7 +163,9 @@ export const detailFromUrl = defineOperation(
         : url.protocol === "https:" &&
           (url.hostname === siteDomain || url.hostname.endsWith(`.${siteDomain}`));
     if (requested === null || requested.protocol !== "https:" || !onSite(requested))
-      throw new errors.InvalidInput("record_url must be an https page on this site");
+      throw new errors.InvalidInput("record_url must be an https page on this site", {
+        field: "record_url",
+      });
     // The record the link names, as the site's own links name it; the page must show the same one.
     const expected = requested.pathname.split("/").at(-1) ?? "";
     const answer = await kernel.browsers.playwright.execute(sessionId, {
@@ -212,7 +214,7 @@ export const detailFromUrl = defineOperation(
     if (!answer.success)
       throw new errors.OperationFailure(String(answer.error), { stderr: answer.stderr });
     const result = Schema.decodeUnknownSync(Detail)(answer.result);
-    if ("refused" in result) throw new errors.InvalidInput(result.refused);
+    if ("refused" in result) throw new errors.InvalidInput(result.refused, { field: "record_url" });
     if ("failure" in result) throw new errors.OperationFailure(result.failure);
     return { record_id: expected, title: result.title };
   },
