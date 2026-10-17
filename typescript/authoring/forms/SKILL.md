@@ -168,8 +168,8 @@ when the input alone breaks it, and when the site refuses the date. Start the me
 "Caller input error:" when the refusal is obvious, and count a date as past only when it is
 before today in the site's time zone, both as the core skill says. A site with places in
 several time zones uses the place's zone when the tool knows it before any site action.
-Otherwise refuse only a date that is past in every time zone, such as one before yesterday in
-UTC.
+When it doesn't know the zone, refuse only a date that is past in every time zone, such as one
+before yesterday in UTC.
 
 Date ranges, calendar-only pickers, validation messages, uploads, staged forms and
 autosave need site-specific semantic checks. A date field that takes typing goes

@@ -123,10 +123,10 @@ pomerado:section core.execute-calls:end -->
   starting "Caller input error:" and naming the field and the rule. A date is past when it is
   before today in the site's time zone. UTC's date can be a day ahead or behind. A site with
   places in several time zones uses the place's zone, such as a restaurant's or a departure
-  airport's, when the tool knows it before any site action. Otherwise refuse only a date that
-  is past in every time zone, such as one before yesterday in UTC. Hold in the input schema
-  every rule it can express. The caller-input skill, "Validate it, and fail with the right error", lists the
-  rules and when to throw each error.
+  airport's, when the tool knows it before any site action. When it doesn't know the zone,
+  refuse only a date that is past in every time zone, such as one before yesterday in UTC. Hold
+  in the input schema every rule it can express. The caller-input skill, "Validate it, and
+  fail with the right error", lists the rules and when to throw each error.
 - When the page does not apply a valid value the caller supplied, such as a filter, sort or
   date it ignored, reset or replaced with its own (on a write, a location or store too), after
   the tool's bounded retries, throw
