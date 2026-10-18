@@ -79,7 +79,7 @@ describe("forms of a value", () => {
   const value = 'p a+ss"w\\rd';
   const forms = observedForms(value);
 
-  it("lists the form, percent, query and base64 encodings and JSON escape first, in that order", () => {
+  it("lists the value, its percent, form and base64 encodings and JSON escape first", () => {
     expect(forms.slice(0, 5)).toEqual([
       value,
       encodeURIComponent(value),
@@ -90,7 +90,7 @@ describe("forms of a value", () => {
   });
 
   it.each([
-    ["as Chromium writes it into a URL's query", 'p%20a+ss%22w\\rd'],
+    ["as Chromium writes it into a URL's query", "p%20a+ss%22w\\rd"],
     ["as Chromium writes it into a URL's path", "p%20a+ss%22w/rd"],
     ["percent-encoded in lowercase hex", "p%20a%2bss%22w%5crd"],
   ])("adds the value %s", (_, shown) => {
