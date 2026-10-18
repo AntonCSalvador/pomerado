@@ -341,6 +341,8 @@ const handleTerminalMessage = (
           message.tag,
           message.inputIssues,
           {
+            // A host request still out may yet reach the page, so this is no final report.
+            ...(pending.size === 0 ? {} : { reported: false }),
             ...(message.sessionLoss === undefined ? {} : { sessionLoss: message.sessionLoss }),
             ...(message.refusal === undefined ? {} : { refusal: message.refusal }),
             ...(message.unapplied === undefined ? {} : { unapplied: message.unapplied }),
