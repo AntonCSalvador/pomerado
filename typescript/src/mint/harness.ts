@@ -3283,6 +3283,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           }).pipe(Effect.as("none" as const)),
         ),
       );
+      /**
+       * The task revision at which Guardian's new_mint on a same-task update went back to the
+       * minter to ask the caller. A takeover forgets it, so the caller may be asked once more.
+       */
+      let newBuildAskedAt: number | undefined;
       /** Guardian's review of a confirmed update, then the host's application of an allowed one. */
       const reviewAndApplyTaskUpdate = (submitted: TaskUpdateRequest) =>
         Effect.gen(function* () {
@@ -3323,6 +3328,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               json: (value) => dependencies.projection.json(value),
             },
           );
+          // Screening can lengthen the suggested request past what the ending keeps, which would
+          // end the build with nothing for the caller to send, so the minter shortens it first.
+          if (
+            submitted.recommend === "new_mint" &&
+            update.suggestedRequest !== undefined &&
+            update.suggestedRequest.length > blockedExplanationLimit
+          )
+            return taskUpdateAnswer("update_invalid", {
+              reason: "suggested_request_too_long",
+              instruction:
+                "Private values in suggestedRequest made it longer than 500 characters once screened. Shorten it, leave private values out, and call mint_update again.",
+            });
           const decision = yield* review({ update, current: taskState });
           yield* reviewCompleted;
           yield* active("publication");
@@ -3342,18 +3359,21 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               correlation: dependencies.reportCorrelation ?? "process",
             },
           );
-          if (decision.outcome === "reword")
+          // Guardian's new_mint on the minter's same-task update asks the caller first: they asked
+          // for this task, and only the minter's own recommendation writes a new build's request.
+          // Another one before an update applies is the same change, which the caller was already
+          // asked about, so the minter rewords it instead of asking them again.
+          const sameTaskNewBuild =
+            decision.outcome === "new_mint" && submitted.recommend === "update";
+          const askedBefore = sameTaskNewBuild && newBuildAskedAt === taskState.revision;
+          if (sameTaskNewBuild) newBuildAskedAt = taskState.revision;
+          if (decision.outcome === "reword" || askedBefore)
             return taskUpdateAnswer("reword", {
               rationale,
               instruction:
                 "Nothing changed, and the build continues under the current task. Revise the update using the rationale and call mint_update again, or continue without it.",
             });
-          // Guardian's new_mint on the minter's same-task update asks the caller first: they asked
-          // for this task, and only the minter's own recommendation writes a new build's request.
-          if (
-            decision.outcome === "clarify" ||
-            (decision.outcome === "new_mint" && submitted.recommend === "update")
-          )
+          if (decision.outcome === "clarify" || sameTaskNewBuild)
             return taskUpdateAnswer("clarification_required", {
               source: "guardian",
               rationale,
