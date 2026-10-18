@@ -476,6 +476,11 @@
       "import": "./dist/typescript/src/privacy/credential-policy.js",
       "default": "./dist/typescript/src/privacy/credential-policy.js"
     },
+    "./core/privacy/known-values": {
+      "types": "./dist/typescript/src/privacy/known-values.d.ts",
+      "import": "./dist/typescript/src/privacy/known-values.js",
+      "default": "./dist/typescript/src/privacy/known-values.js"
+    },
     "./core/privacy/secret-keys": {
       "types": "./dist/typescript/src/privacy/secret-keys.d.ts",
       "import": "./dist/typescript/src/privacy/secret-keys.js",
