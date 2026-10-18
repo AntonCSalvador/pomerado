@@ -4611,11 +4611,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                           : refusalRecovery(reason, buildEffect === "write"),
               };
               // The host's own publication checks refused it, as a sign-in that fails on a new
-              // browser: neither Guardian's decision nor an outage.
+              // browser: neither Guardian's decision nor an outage. An output the example could not
+              // make available is an infrastructure gap, and a one-time login URL is advice the
+              // host gives once: finishing again with the same URL publishes it.
               if (
                 publication._tag === "Left" &&
                 publication.left.code === "PublicationUnavailable" &&
-                !publicationOutage(publication.left)
+                !publicationOutage(publication.left) &&
+                publication.left.reason !== "example_output_unavailable" &&
+                publication.left.reason !== "login_url_one_time"
               )
                 hostRefused = true;
               if (publication._tag === "Right" || reviewDecided(publication.left)) {

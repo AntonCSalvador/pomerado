@@ -5,7 +5,7 @@ import {
   readAllow,
 } from "../support/mint-fixtures.js";
 import { Usage } from "@openai/agents";
-import type { ModelResponse } from "@openai/agents";
+import type { ModelRequest, ModelResponse } from "@openai/agents";
 import { Deferred, Effect, Fiber } from "effect";
 import { afterEach, expect, it } from "vitest";
 import { MintFailure } from "../../src/mint/contracts.js";
@@ -250,30 +250,56 @@ const guardianCorrection = new MintFailure({
     findings: [],
   },
 });
-const publicationOutage = new MintFailure({ code: "Unavailable" });
+const publicationOutage = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "registry_unavailable",
+});
+/** Advice the host gives once: finishing again with the same login URL publishes it. */
+const oneTimeLoginUrl = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "login_url_one_time",
+});
+/** An infrastructure gap: the example's output was not available to publish. */
+const outputUnavailable = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "example_output_unavailable",
+});
+
+/** The result of the request's last call, as the minter reads it. */
+const lastResult = (request: ModelRequest | undefined) =>
+  JSON.stringify(Array.isArray(request?.input) ? request.input.at(-1) : request?.input);
 
 // A host check that refused a step the build needs, such as publication's own sign-in check,
 // left the minter only a policy block, and its caller read that a safety review ruled the request
 // out. It ends as host_refused, which stands only on a refusal the host itself recorded in this
-// attempt: never on Guardian's denial or an outage.
+// attempt: never on Guardian's denial, an outage, an infrastructure gap or advice the host gives
+// once. Each refusal is a publish's, in order; an outage holds every blocked report back until a
+// review completes, so its case finishes again and Guardian's correction completes one.
 it.each([
-  { basis: "a host check", publish: hostCheckRefused, ends: true },
-  { basis: "Guardian", publish: guardianCorrection, ends: false },
-  { basis: "an outage", publish: publicationOutage, ends: false },
+  { basis: "a host check", publish: [hostCheckRefused], ends: true },
+  { basis: "Guardian", publish: [guardianCorrection], ends: false },
+  { basis: "an outage", publish: [publicationOutage, guardianCorrection], ends: false },
+  { basis: "one-time login URL advice", publish: [oneTimeLoginUrl], ends: false },
+  { basis: "an unavailable output", publish: [outputUnavailable], ends: false },
 ])("ends as host_refused after $basis refused publication: $ends", async ({ publish, ends }) => {
   const explanation = "Publication's sign-in check failed on a new browser, so no tool was published.";
+  let published = 0;
   const f = await fixture(
     (_request, index) =>
       [
         call("report_blocked", { reason: "host_refused", explanation }, "before"),
         call("execute", pureExample),
-        call("finish_build", finishBuild),
+        ...publish.map((_, n) => call("finish_build", finishBuild, `finish_${n}`)),
         call("report_blocked", { reason: "host_refused", explanation }, "after"),
       ][index] ?? prose("Stopping."),
-    { publish: () => Effect.fail(publish) },
+    {
+      publish: () => Effect.fail(publish[published++] ?? guardianCorrection),
+      // After an unavailable output, a repeatable read may run a fresh example: the build goes on.
+      repeatableRead: publish[0] === outputUnavailable,
+    },
   );
   const outcome = await f.run();
-  expect(JSON.stringify(f.requests[1]?.input)).toContain("host_not_refused");
+  expect(lastResult(f.requests[1])).toContain("host_not_refused");
   if (ends)
     expect(outcome).toMatchObject({
       build: "incomplete",
@@ -281,8 +307,8 @@ it.each([
       stopReason: "host_refused",
     });
   else {
-    expect(JSON.stringify(f.requests[4]?.input)).toContain("host_not_refused");
     expect(outcome).not.toHaveProperty("blocked");
+    expect(lastResult(f.requests[3 + publish.length])).toContain("host_not_refused");
   }
 });
 
