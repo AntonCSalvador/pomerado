@@ -169,6 +169,185 @@ it("keeps a policy block that stands on a Guardian refusal", async () => {
   });
 });
 
+const pureExample = {
+  purpose: "example",
+  target: "pureFiles",
+  entrypoint: "src/tool.ts",
+  fixtureRefs: [],
+  caseFilter: [],
+  maxWorkers: 1,
+  timeoutSeconds: 30,
+};
+
+// Guardian's refusal of an execution often names a fix, such as removing a click or adding a site
+// guard, yet any refusal let the minter end the build as a policy block, and its caller read that a
+// safety review ruled the request out. Only a refusal Guardian marked final, or one from a
+// reviewer that marks none, as before, lets the build end as policy.
+it.each([
+  { refusal: "correctable", ends: false },
+  { refusal: "final", ends: true },
+  { refusal: undefined, ends: true },
+] as const)(
+  "lets an execution refusal marked $refusal end the build as policy: $ends",
+  async ({ refusal, ends }) => {
+    const explanation = "Guardian refused the only way to reach the requested page.";
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("execute", pureExample),
+          call("report_blocked", { reason: "policy", explanation }),
+        ][index] ?? prose("Stopping."),
+      {
+        reviewAndExecute: () =>
+          Effect.fail(
+            new MintFailure({
+              code: "ReviewDenied",
+              review: {
+                outcome: "deny",
+                reviewId: "review_denied",
+                rationale: "Remove the extra click before the read.",
+                ...(refusal === undefined ? {} : { refusal }),
+              },
+            }),
+          ),
+      },
+    );
+    const outcome = await f.run();
+    if (ends)
+      expect(outcome).toMatchObject({
+        blocked: { reason: "policy", explanation },
+        stopReason: "policy",
+      });
+    else {
+      expect(outcome).not.toHaveProperty("blocked");
+      expect(JSON.stringify(f.requests[2]?.input)).toContain("policy_not_refused");
+    }
+    // The minter reads the refusal's kind beside Guardian's rationale.
+    const rejected = JSON.stringify(f.requests[1]?.input);
+    if (refusal === undefined) expect(rejected).not.toContain("refusal\\\":");
+    else expect(rejected).toContain(`\\"refusal\\":\\"${refusal}\\"`);
+  },
+);
+
+const finishBuild = {
+  entrypoint: "src/tool.ts",
+  executionId: "execution_one",
+  metadata: { name: "read_public", description: "Read public data" },
+  coverage: "One actual example.",
+};
+const hostCheckRefused = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "autofill_recipe_not_verified",
+});
+const guardianCorrection = new MintFailure({
+  code: "ReviewDenied",
+  review: {
+    outcome: "deny",
+    reason: "source_correction",
+    reviewId: "review_correction",
+    rationale: "Read the price from the result row.",
+    findings: [],
+  },
+});
+const publicationOutage = new MintFailure({ code: "Unavailable" });
+
+// A host check that refused a step the build needs, such as publication's own sign-in check,
+// left the minter only a policy block, and its caller read that a safety review ruled the request
+// out. It ends as host_refused, which stands only on a refusal the host itself recorded in this
+// attempt: never on Guardian's denial or an outage.
+it.each([
+  { basis: "a host check", publish: hostCheckRefused, ends: true },
+  { basis: "Guardian", publish: guardianCorrection, ends: false },
+  { basis: "an outage", publish: publicationOutage, ends: false },
+])("ends as host_refused after $basis refused publication: $ends", async ({ publish, ends }) => {
+  const explanation = "Publication's sign-in check failed on a new browser, so no tool was published.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("report_blocked", { reason: "host_refused", explanation }, "before"),
+        call("execute", pureExample),
+        call("finish_build", finishBuild),
+        call("report_blocked", { reason: "host_refused", explanation }, "after"),
+      ][index] ?? prose("Stopping."),
+    { publish: () => Effect.fail(publish) },
+  );
+  const outcome = await f.run();
+  expect(JSON.stringify(f.requests[1]?.input)).toContain("host_not_refused");
+  if (ends)
+    expect(outcome).toMatchObject({
+      build: "incomplete",
+      blocked: { reason: "host_refused", explanation },
+      stopReason: "host_refused",
+    });
+  else {
+    expect(JSON.stringify(f.requests[4]?.input)).toContain("host_not_refused");
+    expect(outcome).not.toHaveProperty("blocked");
+  }
+});
+
+const moveSite = [
+  call("request_input", {
+    questions: [{ id: "move", type: "confirm", prompt: "May the build move to the sister site?" }],
+  }),
+  call(
+    "mint_update",
+    {
+      summary: "Build on the sister site.",
+      changes: [{ setting: "site", origin: "https://other.example.test" }],
+      confirmedBy: ["move"],
+      recommend: "update",
+      intent: "The owner confirmed the task lives on the sister site.",
+    },
+    "update",
+  ),
+];
+
+// The host's refusal to start a sign-in or to apply a task update is on record too, and a policy
+// report that stands only on a host refusal is refused with the way to host_refused.
+it.each([
+  {
+    basis: "a sign-in",
+    steps: [call("execute", { ...pureExample, purpose: "authenticate", target: "liveBrowser" })],
+  },
+  { basis: "a site change", steps: moveSite },
+])("ends as host_refused after the host refused $basis", async ({ steps }) => {
+  const explanation = "A Pomerado check refused the step this build needs.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        ...steps,
+        call("report_blocked", { reason: "policy", explanation }, "policy"),
+        call("report_blocked", { reason: "host_refused", explanation }, "host"),
+      ][index] ?? prose("Stopping."),
+    {
+      preflight: (submitted) =>
+        Effect.succeed(
+          submitted.purpose === "authenticate"
+            ? { supported: false as const, reason: "The host cannot use this login page." }
+            : { supported: true as const },
+        ),
+      askInput: () => Effect.succeed({ move: { type: "confirm", value: { confirmed: true } } }),
+      reviewTaskUpdate: () =>
+        Effect.succeed({ outcome: "allow" as const, rationale: "Same task.", reviewId: "r1" }),
+      applyTaskUpdate: () =>
+        Effect.succeed({
+          outcome: "refused" as const,
+          reason: "change_unsupported",
+          notice: "This build cannot move to that site.",
+        }),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
+  const outcome = await f.run();
+  const policy = JSON.stringify(f.requests[steps.length + 1]?.input);
+  expect(policy).toContain("policy_not_refused");
+  expect(policy).toContain("Use host_refused");
+  expect(outcome).toMatchObject({
+    blocked: { reason: "host_refused", explanation },
+    stopReason: "host_refused",
+  });
+});
+
 // A minter that stops answering with tools says why in its last answer. Its caller reads that
 // answer only after the pipeline a blocked explanation takes: host-private values removed and
 // Guardian's review of a blocked outcome allowing it.
