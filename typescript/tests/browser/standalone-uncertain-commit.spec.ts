@@ -41,6 +41,14 @@ async ({kernel,sessionId,enteringCommit}) => {
   await kernel.browsers.playwright.execute(sessionId,{code:"await page.locator('#save').click(); await page.waitForFunction(() => document.title === 'Saved'); return true;",timeout_sec:5});
   await new Promise(() => undefined);
 });`;
+/** A write step that declares its commit mark, reads the page without entering it, then fails. */
+const lookThenFail = `import { Schema } from "effect";
+import { defineOperation } from "../runtime/index.js";
+export default defineOperation({name:"save",input:Schema.Unknown,output:Schema.Unknown,write:{confirmation:"readback",commits:["save"]}},
+async ({kernel,sessionId}) => {
+  await kernel.browsers.playwright.execute(sessionId,{code:"return await page.title();",timeout_sec:5});
+  throw new Error("Failed before the save");
+});`;
 /** A write step that only reads the save back and records it. */
 const readBack = `import { Schema } from "effect";
 import { defineOperation } from "../runtime/index.js";
@@ -92,14 +100,19 @@ test("a failed act step that posted tells the minter to verify before any furthe
     });
     expect(fixture.writes()).toBe(1);
     const receipt = toolResult(last, "save");
-    // The journal saw a browser call, so the step may have sent its write: the receipt says to
-    // read back first. The host counts no requests, so it lists none.
+    // Guardian labelled the failed step a write and it declares no commit step, so it may have
+    // committed: the receipt says to read back first. The host counts no requests, so it lists
+    // none.
     expect(receipt).toMatchObject({ status: "failed", effect: "possible" });
     const notice = observationsOf(receipt)?.writeSession?.notice;
     expect(observationsOf(receipt)?.writeSession?.verifyFirst).toBe(true);
-    expect(notice).toContain(verifyFirst("the page sent requests the host could not count"));
+    expect(notice).toContain(verifyFirst("Guardian labelled it a write"));
+    expect(notice).toContain(
+      "When this step's stateChangingRequests shows its commit request to the site returned 2xx or 3xx, that step may read only the page as it stands:",
+    );
     expect(notice).toContain("The host never resubmits a write for you.");
-    expect(JSON.stringify(receipt)).not.toContain("stateChangingRequests");
+    // The notice names the field a host that records requests adds; this host adds none.
+    expect(observationsOf(receipt)).not.toHaveProperty("stateChangingRequests");
   } finally {
     await site.close();
   }
@@ -226,7 +239,7 @@ test("a completed act step that posted carries no list of state-changing request
   }
 });
 
-test("a failed act step that never called the browser carries no read-back notice", async () => {
+test("a failed act step Guardian labelled a write asks for a read-back, though it never called the browser", async () => {
   test.setTimeout(90_000);
   const fixture = saveSite();
   const site = await fixture.start();
@@ -243,6 +256,34 @@ test("a failed act step that never called the browser carries no read-back notic
     });
     const receipt = toolResult(last, "early");
     expect(receipt).toMatchObject({ status: "failed", effect: "not_sent" });
+    // Its script declares no commit step, so only Guardian's label speaks to the write.
+    expect(observationsOf(receipt)?.writeSession?.verifyFirst).toBe(true);
+    expect(observationsOf(receipt)?.writeSession?.notice).toContain(
+      verifyFirst("Guardian labelled it a write"),
+    );
+    expect(fixture.writes()).toBe(0);
+  } finally {
+    await site.close();
+  }
+});
+
+test("a failed act step whose marks show no commit step entered carries no read-back notice, though it called the browser", async () => {
+  test.setTimeout(90_000);
+  const fixture = saveSite();
+  const site = await fixture.start();
+  const guardian = recordingGuardian();
+  try {
+    const { last } = await mint({
+      effect: "write",
+      url: site.url,
+      guardian,
+      turns: [
+        () => patch({ "src/look.mjs": lookThenFail }),
+        () => [call("execute", act("src/look.mjs"), "look")],
+      ],
+    });
+    const receipt = toolResult(last, "look");
+    expect(receipt).toMatchObject({ status: "failed", effect: "possible" });
     expect(JSON.stringify(receipt)).not.toContain("writeSession");
     expect(fixture.writes()).toBe(0);
   } finally {

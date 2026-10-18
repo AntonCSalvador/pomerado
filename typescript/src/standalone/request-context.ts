@@ -336,7 +336,11 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
             {
               ...turn,
               allowedEffects: publication.allowedEffects,
-              publication: publicationScope(publication.files, publication.evidence),
+              publication: publicationScope(
+                publication.files,
+                publication.evidence,
+                publication.references === undefined ? {} : { references: publication.references },
+              ),
             },
             readSource,
           )

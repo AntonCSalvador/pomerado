@@ -207,6 +207,34 @@ test("a build with nothing to recover refuses inspect and residual before review
   }
 });
 
+test("a step whose entrypoint does not parse is refused before review, naming only the position", async () => {
+  test.setTimeout(90_000);
+  const fixture = saveSite();
+  const site = await fixture.start();
+  const guardian = recordingGuardian();
+  try {
+    const { last } = await mint({
+      effect: "write",
+      url: site.url,
+      guardian,
+      turns: [
+        () => patch({ "src/broken.mjs": "export default ); // private-canary" }),
+        () => [call("execute", act("src/broken.mjs"), "broken")],
+      ],
+    });
+    const receipt = toolResult(last, "broken");
+    expect(receipt).toMatchObject({ status: "unsupported", effect: "not_sent" });
+    expect(JSON.stringify(receipt)).toContain(
+      "Submitted entrypoint has invalid source syntax at line 1, column 16. Correct the source before execution. No code was executed.",
+    );
+    expect(JSON.stringify(receipt)).not.toContain("private-canary");
+    expect(executions(guardian.reviews)).toEqual([]);
+    expect(fixture.writes()).toBe(0);
+  } finally {
+    await site.close();
+  }
+});
+
 test("a write session refuses an authenticate step that would run the agent's own source", async () => {
   test.setTimeout(90_000);
   const fixture = saveSite();
