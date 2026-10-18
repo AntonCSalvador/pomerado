@@ -72,7 +72,7 @@ const reviewFields: Record<ReviewKind, readonly string[]> = {
   recovery: [],
   question: [],
   update: [],
-  publication: ["reason", "findings"],
+  publication: ["reason", "findings", "publicReason"],
   host: ["label"],
 };
 
@@ -95,6 +95,8 @@ export const guardianDecisionFormat: AgentOutputType = {
       reason: {
         anyOf: [{ type: "null" }, { type: "string", enum: [...publicationReasons] }],
       },
+      // A publication denial's short reason for the caller, apart from the private rationale.
+      publicReason: { anyOf: [{ type: "null" }, { type: "string" }] },
       // A host-defined kind's finite code, one its policy lists; the host checks it.
       label: { anyOf: [{ type: "null" }, { type: "string" }] },
       // An execution review's label of what the code does on the website.
@@ -108,7 +110,8 @@ export const guardianDecisionFormat: AgentOutputType = {
               type: "object",
               properties: {
                 path: { type: "string" },
-                // The exact text at fault; the host finds its byte range in the file.
+                // A line or two copied from the text at fault; the host places it at its first
+                // occurrence, or on the whole file.
                 quote: { type: "string" },
                 category: {
                   type: "string",
@@ -141,7 +144,7 @@ export const guardianDecisionFormat: AgentOutputType = {
         ],
       },
     },
-    required: ["outcome", "rationale", "reason", "findings", "label", "action"],
+    required: ["outcome", "rationale", "reason", "findings", "publicReason", "label", "action"],
     additionalProperties: false,
   },
 };
@@ -207,6 +210,28 @@ export const sourceChunkOf = (observation: unknown): SourceChunk | undefined => 
     : undefined;
 };
 
+/**
+ * The source chunks one `read_source` result carries: its chunk, or each file's chunk of a
+ * several-file call.
+ */
+const sourceChunksOf = (observation: string | undefined): readonly SourceChunk[] => {
+  if (observation === undefined) return [];
+  const single = sourceChunkOf(observation);
+  if (single !== undefined) return [single];
+  let value: unknown;
+  try {
+    value = JSON.parse(observation);
+    // error-reporting-allow: parse-predicate a result that is not JSON carries no chunk
+  } catch {
+    return [];
+  }
+  if (typeof value !== "object" || value === null) return [];
+  const files: unknown = Reflect.get(value, "files");
+  return Reflect.get(value, "kind") === "untrusted_sources" && Array.isArray(files)
+    ? files.flatMap((file) => sourceChunkOf(file) ?? [])
+    : [];
+};
+
 const resultText = (output: unknown): string | undefined => {
   if (typeof output === "string") return output;
   if (typeof output !== "object" || output === null) return undefined;
@@ -222,9 +247,9 @@ const resultText = (output: unknown): string | undefined => {
 export type SourceLedger = ReadonlyMap<string, ReadonlyMap<number, string>>;
 
 /**
- * What Guardian already read in a conversation: every source chunk a `read_source` result or a
- * request's included entrypoint carries. A session's history starts at its last compaction, so
- * this is what Guardian read since then.
+ * What Guardian already read in a conversation: every source chunk a `read_source` result, each
+ * file of a several-file one included, or a request's included entrypoint carries. A session's
+ * history starts at its last compaction, so this is what Guardian read since then.
  */
 export const sourceLedger = (history: readonly unknown[]): SourceLedger => {
   const ledger = new Map<string, Map<number, string>>();
@@ -238,7 +263,7 @@ export const sourceLedger = (history: readonly unknown[]): SourceLedger => {
     if (typeof item !== "object" || item === null) continue;
     const type: unknown = Reflect.get(item, "type");
     if (type === "function_call_result" && Reflect.get(item, "name") === "read_source")
-      keep(sourceChunkOf(resultText(Reflect.get(item, "output"))));
+      for (const chunk of sourceChunksOf(resultText(Reflect.get(item, "output")))) keep(chunk);
     else if (Reflect.get(item, "role") === "user") {
       const request = sourceChunkRequest(resultText(Reflect.get(item, "content")));
       keep(request);

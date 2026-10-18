@@ -270,8 +270,11 @@ it("ends the build as sign_in_unavailable once a failed sign-in leaves none, nev
   expect(outcome).toMatchObject({
     build: "incomplete",
     recoveryReason: "sign_in_unavailable",
-    summary: expect.stringContaining("flow_failed") as unknown,
+    stopReason: "sign_in_failed",
   });
+  // The root cause's code stays in the diagnostics; the owner's summary is plain words.
+  expect(outcome.summary).not.toContain("flow_failed");
+  expect(outcome.diagnostics.join("\n")).toContain("flow_failed");
   // The two sign-ins, and the run ended with the second: no third call, no continuation prompt.
   expect(signIns).toBe(2);
   expect(f.requests).toHaveLength(2);
@@ -750,7 +753,9 @@ it.each([
   expect(review.publications()).toBe(2);
 });
 
-it("ends a policy block once the owner answered no", async () => {
+// The owner's no is their decision, not a safety refusal: a policy report that stands only on it
+// ends as owner_declined, so the caller is never told a safety rule stopped the build.
+it("ends a policy report that stands on the owner's no as owner_declined", async () => {
   const explanation = "The owner declined the only way to finish this task.";
   const f = await fixture(
     (_request, index) =>
@@ -766,13 +771,15 @@ it("ends a policy block once the owner answered no", async () => {
   );
   expect(await f.run()).toMatchObject({
     build: "incomplete",
-    blocked: { reason: "policy", explanation },
+    blocked: { reason: "owner_declined", explanation },
+    stopReason: "owner_declined",
   });
 });
 
 // No answer is no consent, so a write build whose confirmation went unanswered may stop safely
-// with a policy block instead of being steered on past what it asked, and nothing runs on the site.
-it("ends a write build with a policy block once its confirmation went unanswered, running nothing", async () => {
+// instead of being steered on past what it asked, and nothing runs on the site. It ends as
+// question_unanswered, never as a policy block.
+it("ends a write build as question_unanswered once its confirmation went unanswered, running nothing", async () => {
   const explanation = "The owner did not confirm submitting the form, so this build stops.";
   const f = await fixture(
     (_request, index) =>
@@ -788,7 +795,8 @@ it("ends a write build with a policy block once its confirmation went unanswered
   );
   expect(await f.run()).toMatchObject({
     build: "incomplete",
-    blocked: { reason: "policy", explanation },
+    blocked: { reason: "question_unanswered", explanation },
+    stopReason: "question_unanswered",
   });
   // Before the question went unanswered nothing refused this, so the first report was refused.
   expect(JSON.stringify(f.requests[1]?.input)).toContain("policy_not_refused");
@@ -814,6 +822,9 @@ it("records a blocked ending without its explanation when the review stays unava
   );
   const outcome = await f.run();
   expect(outcome.blocked).toEqual({ reason: "site_lacks_capability" });
+  // The unreviewed explanation reaches no caller through the summary either.
+  expect(outcome.summary).not.toContain("555-0100");
+  expect(outcome.stopReason).toBe("site_lacks_capability");
   expect(f.requests).toHaveLength(1);
 });
 
@@ -1158,8 +1169,11 @@ it("ends a build holding a retained receipt as sign_in_unavailable at the first 
   expect(outcome).toMatchObject({
     build: "incomplete",
     recoveryReason: "sign_in_unavailable",
-    summary: expect.stringContaining("flow_failed") as unknown,
+    stopReason: "sign_in_failed",
   });
+  // The root cause's code stays in the diagnostics; the owner's summary is plain words.
+  expect(outcome.summary).not.toContain("flow_failed");
+  expect(outcome.diagnostics.join("\n")).toContain("flow_failed");
   // The example, the sign-in, the final answer: no continuation prompt followed it.
   expect(f.requests).toHaveLength(3);
   expect(outcome.diagnostics.join("\n")).not.toContain("repeated_final_without_tool");
@@ -1607,7 +1621,11 @@ it.each(["authentication", "reword"] as const)(
       { siteOrigin: "https://site.invalid" },
     );
     await f.run();
-    expect(reviewed).toEqual([ask("What is your password?")]);
+    // The question's own review; a later one only reviews the minter's last answer for its caller.
+    expect(reviewed[0]).toEqual(ask("What is your password?"));
+    expect(reviewed.slice(1)).toEqual([
+      { questions: [{ id: "blocked", type: "text", prompt: "I stopped before publication." }] },
+    ]);
     const feedback = JSON.stringify(f.requests[1]?.input);
     expect(feedback).toContain(
       outcome === "authentication" ? "login_request" : "question_rejected",

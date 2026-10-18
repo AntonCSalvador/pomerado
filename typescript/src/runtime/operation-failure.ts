@@ -38,7 +38,8 @@ export const maximumRefusalChoiceLength = 200;
 /**
  * Which input a refusal names and every choice the page offers for it, exactly as shown. A host
  * tells the caller the choices, so the caller can pick one; a host that repairs has nothing to
- * check when the page listed them.
+ * check when the page listed them. An empty list beside the field says the page offers nothing
+ * for that input.
  */
 export interface InputRefusalDetail {
   readonly field?: string;
@@ -79,6 +80,13 @@ export const boundedRefusalDetail = (detail: unknown): InputRefusalDetail => {
   };
 };
 
+/** Whether a refusal's detail lists no choice at all: an array with no entries, not a missing one. */
+const offersNone = (detail: unknown) => {
+  const available: unknown =
+    typeof detail === "object" && detail !== null ? Reflect.get(detail, "available") : undefined;
+  return Array.isArray(available) && available.length === 0;
+};
+
 /**
  * The site refused a caller's value, such as a past date or an unknown airport code. It is the
  * caller's to correct, so the run fails as `InvalidInput`. Scripts throw it as
@@ -88,7 +96,9 @@ export const boundedRefusalDetail = (detail: unknown): InputRefusalDetail => {
  * picks one of them, so nothing asks it for a replacement. A message that starts
  * "Caller input error:" marks an obvious refusal: the input alone breaks a rule of the task,
  * checked before any site action, or the page refused the value in its own words, which the
- * message quotes. A host may end such a run at once, with no repair and no question. A refusal
+ * message quotes. A host may end such a run at once, with no repair and no question. An empty
+ * list beside the field, `{ field, available: [] }`, says the page offers nothing for that input:
+ * the error keeps it, though `boundedRefusalDetail` and the local host carry none. A refusal
  * without choices, of a free-form value the page lists no options for, may be checked by a host
  * that repairs, which asks the caller only when its check leaves real doubt.
  */
@@ -103,6 +113,7 @@ class InputRejected extends Error {
     const bounded = boundedRefusalDetail(detail);
     if (bounded.field !== undefined) this.field = bounded.field;
     if (bounded.available !== undefined) this.available = bounded.available;
+    else if (bounded.field !== undefined && offersNone(detail)) this.available = [];
     if (bounded.kind !== undefined) this.kind = bounded.kind;
   }
 }

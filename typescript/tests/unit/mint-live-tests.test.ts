@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Usage } from "@openai/agents";
 import type { ModelProvider, ModelRequest, ModelResponse } from "@openai/agents";
@@ -655,16 +655,34 @@ const emptyList = {
   output: { results: [], has_next_page: false, next_cursor: null },
 };
 
-it("never excuses a failure by a case that changed its expectation to what the tool returned", async () => {
+// The review excuses a relabeled failure only when the captures show the site giving the new
+// answer for that input, so the host names the passing case for it and excuses nothing itself.
+it("never excuses a failure by a case that changed its expectation, and names that case for the review", async () => {
   // The second store's results come back empty; the agent relabels the case to expect that.
   const record = await batchesThenPublish({ "other-store": emptyList }, [
     { "src/tool.ts": toolSource, "test/cases.json": otherStore("result") },
     { "test/cases.json": otherStore("empty") },
   ]);
   expect(record.retired).toEqual([
-    expect.objectContaining({ id: "other-store", lastVerdict: "fail", expect: "result" }),
+    expect.objectContaining({
+      id: "other-store",
+      lastVerdict: "fail",
+      expect: "result",
+      changedExpectationBy: "other-store",
+    }),
   ]);
   expect(record.retired[0]).not.toHaveProperty("excusedBy");
+});
+
+it("names no case for a changed expectation that does not pass", async () => {
+  const record = await batchesThenPublish({ "other-store": emptyList }, [
+    { "src/tool.ts": toolSource, "test/cases.json": otherStore("result") },
+    { "test/cases.json": otherStore("invalid_input") },
+  ]);
+  expect(record.retired).toEqual([
+    expect.objectContaining({ id: "other-store", lastVerdict: "fail", expect: "result" }),
+  ]);
+  expect(record.retired[0]).not.toHaveProperty("changedExpectationBy");
 });
 
 it("excuses a failure only by a case passing its input and expectation after the code changed", async () => {
@@ -1224,6 +1242,106 @@ it("leaves a ruled-out HTTP version's results out of the publication record", as
   expect(published.seen[0]?.coverage).not.toContain("HTTP version");
 });
 
+// An HTTP version the minter deleted after its batch failed does not ship either, so the record
+// leaves it out as it does a ruled-out one: a version listed without its file would draw coverage
+// findings no test can clear.
+it("leaves a deleted HTTP version's results out of the publication record", async () => {
+  const { host } = liveTestHost((batch) =>
+    batch === 0
+      ? { nothing: emptyResults }
+      : { "repeat-1": httpFailure, "sort-price": httpFailure, nothing: httpFailure, "page-2": httpFailure },
+  );
+  const published = publications();
+  let root = "";
+  const f = await fixture(
+    async (_request, index) => {
+      // The agent deletes the HTTP version after its batch failed, then publishes.
+      if (index === 3) await rm(join(root, "src/tool-http.mjs"));
+      return (
+        [
+          call("execute", example, "example"),
+          call("live_tests", runAll, "run_playwright"),
+          call("live_tests", runHttp, "run_http"),
+          call("finish_build", finish, "finish"),
+        ][index] ?? prose()
+      );
+    },
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/tool-http.mjs": httpSource,
+    "test/cases.json": JSON.stringify(cases),
+  });
+  const outcome = await f.run();
+  expect(outcome.build).toBe("published");
+  const record = published.seen[0]?.liveTests as { versions: { version: string }[] };
+  expect(record.versions.map((entry) => entry.version)).toEqual(["playwright"]);
+  expect(published.seen[0]?.coverage).not.toContain("HTTP version");
+});
+
+// The latest HTTP batch ran a scratch file, while src/tool-http.mjs still ships: the record lists
+// the HTTP version by its conventional file, whether the minter deleted the scratch file, rather
+// than dropping it, or kept it, rather than naming a file that does not ship.
+it.each([
+  { scratch: "deleted", remove: true },
+  { scratch: "kept", remove: false },
+])(
+  "lists a shipping HTTP version by its file when its latest batch ran a scratch file, $scratch",
+  async ({ remove }) => {
+    const { host } = liveTestHost((batch) =>
+      batch === 0
+        ? { nothing: emptyResults }
+        : { "repeat-1": httpFailure, "sort-price": httpFailure, nothing: httpFailure, "page-2": httpFailure },
+    );
+    const published = publications();
+    let root = "";
+    const f = await fixture(
+      async (_request, index) => {
+        if (index === 3 && remove) await rm(join(root, "src/scratch-http.mjs"));
+        return (
+          [
+            call("execute", example, "example"),
+            call("live_tests", runAll, "run_playwright"),
+            call("live_tests", { ...runHttp, entrypoint: "src/scratch-http.mjs" }, "run_scratch"),
+            call("finish_build", finish, "finish"),
+          ][index] ?? prose()
+        );
+      },
+      {
+        liveTests: host,
+        deadline: Deadline.after(30 * 60_000),
+        reviewAndExecute: completedExample,
+        publish: published.publish,
+      },
+      read,
+    );
+    root = (f.workspace as unknown as { root: string }).root;
+    await writeWorkspace(root, {
+      "src/tool.ts": toolSource,
+      "src/tool-http.mjs": httpSource,
+      "src/scratch-http.mjs": httpSource,
+      "test/cases.json": JSON.stringify(cases),
+    });
+    const outcome = await f.run();
+    expect(outcome.build).toBe("published");
+    const record = published.seen[0]?.liveTests as {
+      versions: { version: string; entrypoint?: string }[];
+    };
+    expect(record.versions.map((entry) => [entry.version, entry.entrypoint])).toEqual([
+      ["playwright", "src/tool.ts"],
+      ["http", "src/tool-http.mjs"],
+    ]);
+  },
+);
+
 // A sign-in counts only on the site it happened on: after an update moves the build to another
 // site, the read has not signed in there, so it is a read signed out and runs its live tests.
 it("runs live tests after an update moves a signed-in read to a site it has not signed in to", async () => {
@@ -1373,4 +1491,118 @@ it("never restores the HTTP version's results as the Playwright version's after 
   expect(statuses(resultOf(after.requests[2], "plan_http"))).toEqual(
     Object.fromEntries(ids.map((id) => [id, "not_run"])),
   );
+});
+
+// Guardian's review of a blocked report read only the latest publication refusals' codes. The
+// earlier denials it had to check the report against lived only in its own compacted
+// conversation, so it rejected a true report as not established by the evidence. What a failing
+// case threw is the agent's own tool code speaking, so the ledger keeps it apart from host facts.
+it("shows the blocked-explanation review the build's denials and failing cases", async () => {
+  const toolMessage = "The site demands a human check on every request; automation cannot continue";
+  const { host } = liveTestHost({
+    "sort-price": {
+      status: "failed",
+      errorClass: "SiteRequiresHumanVerification",
+      message: toolMessage,
+      frame: "src/tool.ts:12",
+    },
+    "page-2": { status: "failed", errorClass: "E".repeat(400) },
+    nothing: { status: "completed", output: { results: [], has_next_page: false, next_cursor: null } },
+  });
+  const explore = { ...example, purpose: "explore" };
+  const executionRationale = "The submitted call creates server-side session state, so it is a write.";
+  const publicationRationale = "The source reads a field the captures never show.";
+  const findingExplanation = "The price field is read from a selector absent from every capture.";
+  const reviewed: Parameters<NonNullable<MintDependencies["reviewQuestion"]>>[1][] = [];
+  let root = "";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", explore, "explore"),
+        call("execute", example, "example"),
+        call("live_tests", runAll, "run"),
+        call("finish_build", finish, "finish"),
+        call("report_blocked", {
+          reason: "policy",
+          explanation: "Guardian refused the call that creates the session state the site requires.",
+        }),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: (input, beforeDispatch) =>
+        input.purpose === "explore"
+          ? Effect.fail(
+              new MintFailure({
+                code: "ReviewDenied",
+                review: { outcome: "deny", reviewId: "review_explore", rationale: executionRationale },
+              }),
+            )
+          : completedExample(input, beforeDispatch),
+      publish: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: {
+              outcome: "deny",
+              reason: "source_correction",
+              reviewId: "review_publication",
+              rationale: publicationRationale,
+              findings: [findingExplanation, "Second.", "Third.", "Fourth.", "Fifth."].map(
+                (explanation) => ({
+                  path: "src/tool.ts",
+                  byteStart: 0,
+                  byteEnd: 10,
+                  category: "schema_mismatch" as const,
+                  explanation,
+                }),
+              ),
+            },
+          }),
+        ),
+      reviewQuestion: (_request, options) =>
+        Effect.sync(() => {
+          reviewed.push(options);
+          return { outcome: "allow_business" as const, rationale: "Consistent with the ledger." };
+        }),
+    },
+    read,
+  );
+  root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+  const outcome = await f.run();
+  expect(outcome.blocked).toMatchObject({ reason: "policy" });
+  expect(reviewed).toHaveLength(1);
+  expect(reviewed[0]).toMatchObject({
+    blockedOutcome: true,
+    decisionLedger: {
+      denials: [
+        {
+          review: "execution",
+          outcome: "deny",
+          reviewId: "review_explore",
+          rationale: executionRationale,
+        },
+        {
+          review: "publication",
+          outcome: "deny",
+          reason: "source_correction",
+          reviewId: "review_publication",
+          rationale: publicationRationale,
+          findings: [findingExplanation, "Second.", "Third.", "Fourth."],
+          omittedFindings: 1,
+        },
+      ],
+      testCounts: { pass: 2, fail: 2, inconclusive: 0 },
+    },
+  });
+  const failures = reviewed[0]?.decisionLedger?.testFailures ?? [];
+  // The verdict is the host's; the error class and message are only what the tool reported.
+  expect(failures[0]).toEqual({
+    caseId: "sort-price",
+    entrypoint: "src/tool.ts",
+    verdict: "fail",
+    toolReported: { errorClass: "SiteRequiresHumanVerification", message: toolMessage },
+  });
+  expect(failures[1]?.toolReported?.errorClass?.length).toBeLessThanOrEqual(120);
 });

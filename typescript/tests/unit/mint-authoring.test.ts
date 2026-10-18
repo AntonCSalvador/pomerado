@@ -189,6 +189,12 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "auth",
     "After a step whose submit the host clicked, its result names `captures/after-submit/<step>.json` (`nextScreen`)",
   ],
+  // A run on a saved session can start past a chooser that shows right after sign-in, so the build
+  // exercises a chooser step from both starts.
+  [
+    "auth",
+    "Record an authorized choice and its following Continue as separate steps. Prefer exercising a chooser step from both starts in the build, right after a sign-in and from a saved session already past the chooser.",
+  ],
   [
     "caller-input",
     "Use a published input instead whenever the value is stable and the caller can supply it up front",
@@ -247,6 +253,12 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "Read this before your first `finish_build`. `finish_build` asks the host to review the current source and publish it against an execution that already ran",
   ],
   ["publication", "Guardian reports what it finds in rounds, and each round costs minutes"],
+  // A builder that skipped the request's own rules met them again as one refusal per round, so the
+  // checks before `finish_build` open with them.
+  [
+    "publication",
+    "## Check before `finish_build` Before your first `finish_build`, prefer checking the tool against each rule the request states for its inputs, outputs and refusals.",
+  ],
   [
     "publication",
     "- Published files are all of `src/`, the named entrypoints and any `explore/`, `test/` or `scratch/` module they import",
@@ -289,18 +301,20 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "ending, and the build goes on. Before ending blocked because a value the request gave is unavailable or invalid on the site, such as a time slot the site does not offer that day, a date outside its calendar or a name it does not list, ask the owner with `request_input` to revise it or stop, as the key rules say. End blocked only when they stop or their answer cannot be met either. In maintenance, follow the intake screen instead. Give the evidence in `intent`",
   ],
   // Only what the caller asked for decides whether a tool books or refuses, every listed option
-  // gets read, a repair fixes a broken input but keeps a caller's documented design decision, and
-  // a format read from one sample breaks on the next value, so the minter reads it off the page.
+  // gets read, a repair fixes a broken input but keeps a caller's documented design decision, a
+  // fix covers every required control the input has no value for rather than the one that
+  // failed, and a format read from one sample breaks on the next value, so the minter reads it
+  // off the page.
   [
     "core",
-    "never just the example's value. The example's values are one case, never limits. - Prefer keying only on what the caller asked for. A detail that changes from one listing to the next, such as a seating label or a room name, shouldn't decide whether the tool books or refuses unless the caller chose it. - Read results for every option the schema lists. When an option leads to a page with a different structure (other fields or sections), handle that layout too, and on a read signed out run it live as a test case (testing skill); an option that only reorders or filters the same rows needs no case of its own. Never return results for another option in its place. - A repair that finds a declared input broken, never applied or always reported unsupported fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract means every input and output it declares works, not leaving a broken one as it was. An input whose description starts \"By design:\" is applied in the use it records, a caller's decision: keep that use and its description word for word, and change them only after asking the same design question again (the input schema, \"Inputs that tailor the answer\"). - Never derive a format from one sample: not an input format, an element key, a selector, a URL path or a label. A key the page showed for the example's value says nothing about the next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read the format off the page for the value you need, such as the day cell whose visible label or accessible name is the caller's date, or a key the page itself lists, never a key rebuilt from the one you saw. - Inputs are values a caller knows",
+    "never just the example's value. The example's values are one case, never limits. - Prefer keying only on what the caller asked for. A detail that changes from one listing to the next, such as a seating label or a room name, shouldn't decide whether the tool books or refuses unless the caller chose it. - Read results for every option the schema lists. When an option leads to a page with a different structure (other fields or sections), handle that layout too, and on a read signed out run it live as a test case (testing skill); an option that only reorders or filters the same rows needs no case of its own. Never return results for another option in its place. - A repair that finds a declared input broken, never applied or always reported unsupported fixes it in the same repair, whether or not a caller is waiting. Keeping a tool's contract means every input and output it declares works, not leaving a broken one as it was. An input whose description starts \"By design:\" is applied in the use it records, a caller's decision: keep that use and its description word for word, and change them only after asking the same design question again (the input schema, \"Inputs that tailor the answer\"). - Prefer fixing the whole class of a failure over its one instance: when the page requires a control the input has no value for, prefer making every such control a declared caller question with the page's live options over throwing for it. - Never derive a format from one sample: not an input format, an element key, a selector, a URL path or a label. A key the page showed for the example's value says nothing about the next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read the format off the page for the value you need, such as the day cell whose visible label or accessible name is the caller's date, or a key the page itself lists, never a key rebuilt from the one you saw. - Inputs are values a caller knows",
   ],
   // The minter reads the never-loosened needed values, the facts a caller could use, typed output
   // and kept rows before it writes the schema and the parser, so a fact the code could not read
   // fails the output check.
   [
     "core",
-    "**Never loosen a value the request needs.** The values the request needs are each value it names, the record's identifier as the site shows it, and the context those depend on as the page shows it, such as dates, a party size or a location. Make each one required and non-null, typed so a value the code could not read fails the output check (`Schema.NonEmptyString` for text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the request's wording or a description says. A run whose output fails its schema goes to repair. - The one exception is a record whose own page genuinely does not show the value, such as an item that is sold out and shows no amount, or a listing that shows no date yet. Then the value may be null only together with a field that says why, such as its availability, and both descriptions say so. - Null never covers a value the page shows that the code failed to read: that throws `OperationFailure` naming it. Never turn a read that found nothing into null (`?.innerText ?? null`); a missing element is a failure, not an absence. - Before your first example, list the needed values. If the page may not show one, settle it then: find where the site shows it, on every layout its records use, or ask the owner. **Output fields.** Design the output for what a caller could use, and lean toward more fields and more information rather than the minimum: include the facts about each record or result that a caller could reasonably use to identify, choose, compare or act on it, not only the values the request names. Leave out what is unrelated to the tool's purpose or of no use to a caller. - Keep each value's full displayed text. Read the element that holds the whole value, never a shorter or secondary one. When the page splits one value across elements, such as a maker line above a linked name or an author line above a title, return each part in its own field. Never drop either part. - Prefer a separate typed field for each fact over folding it into another field's text. Never derive a value the page does not show. - A field that is not a needed value is nullable when records on this site can lack it, and it is null exactly when this record does not show it. - Never declare a field the code does not read. A field that is always null, empty or fixed is not a disclosed limit: read it from the page, or leave the field out.",
+    "**Never loosen a value the request needs.** The values the request needs are each value it names, the record's identifier as the site shows it, and the context those depend on as the page shows it, such as dates, a party size or a location. Make each one required and non-null, typed so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the request's wording or a description says. A run whose output fails its schema goes to repair. - Type each output field as strictly as its value: required text is non-empty and trimmed (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports an input's value reuses that input's enum or pattern. Make one optional or nullable only where the page may genuinely not show the value. - The one exception is a record whose own page genuinely does not show the value, such as an item that is sold out and shows no amount, or a listing that shows no date yet. Then the value may be null only together with a field that says why, such as its availability, and both descriptions say so. - Null never covers a value the page shows that the code failed to read: that throws `OperationFailure` naming it. Never turn a read that found nothing into null (`?.innerText ?? null`); a missing element is a failure, not an absence. - Before your first example, list the needed values. If the page may not show one, settle it then: find where the site shows it, on every layout its records use, or ask the owner. **Output fields.** Design the output for what a caller could use, and lean toward more fields and more information rather than the minimum: include the facts about each record or result that a caller could reasonably use to identify, choose, compare or act on it, not only the values the request names. Leave out what is unrelated to the tool's purpose or of no use to a caller. - Keep each value's full displayed text. Read the element that holds the whole value, never a shorter or secondary one. When the page splits one value across elements, such as a maker line above a linked name or an author line above a title, return each part in its own field. Never drop either part. - Prefer a separate typed field for each fact over folding it into another field's text. Never derive a value the page does not show. - A field that is not a needed value is nullable when records on this site can lack it, and it is null exactly when this record does not show it. - Never declare a field the code does not read. A field that is always null, empty or fixed is not a disclosed limit: read it from the page, or leave the field out.",
   ],
   // A list returns one page per call and a cursor to the next.
   [
@@ -340,6 +354,12 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   [
     "forms",
     'Prefer matching an existing record by a fuzzy match on its name (core skill), and prefer never picking an "Add new" row when an existing record matches.',
+  ],
+  // A build has no question that takes a file, so a task that needs one the request doesn't carry
+  // ends with a report that names the file for the next build.
+  [
+    "workspace/AGENTS.md",
+    "A build can't ask for a file. When the task needs one the request doesn't carry, say so in report_blocked, naming the file the owner should attach when they build again.",
   ],
 ];
 
@@ -726,17 +746,17 @@ it("renders the pinned standalone authoring", async () => {
     ...skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name]),
     ...[...guide.files].map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["66d79d6d10bb68d36b1f6d77722fdf3993d9c75d48b0296da3d2cf909b2fc3e6", "core"],
+    ["f0e612fcff845baa3bad0d6da70eb72083063d374f7f515dc8f6b681f369838f", "core"],
     ["0adaf6002bad034a70f753ac36d60bc15053a22f11972b612f9500a9e7c1c58f", "search"],
-    ["883a4b0d8cab78affbcc312706cd31e217e545a221b29ec1598189916a7d299b", "auth"],
-    ["9f4ceaa15f2b86d82bf075dde9c70e7854340bc2a753b9dd59cff96675850b53", "testing"],
-    ["8390f0b93676105632e8e71a7e49c52baa4ba166db642b097c41e0d9211a34f4", "pagination"],
-    ["27bd71d51c8f5b3d4988fa8e0025a8beab0e008f0e2515f4c131b13b44923a8b", "forms"],
-    ["de8003a16c4c8f98cde9343c7f451eb3cd0a36a2988322342220b9f2db6b2d9f", "writes"],
-    ["0bc4d6c765154139547ec2e4500d14bbd1d086995fdd6b385b8f53f4e7ae7255", "cart"],
-    ["bc41516483534bb879e2f9548218bbe8ed3e8cf825cfb7c7b7e9ff21fe73ba99", "caller-input"],
-    ["25977e8469cd13d988648365920a4a5a92b80a4fbed542c8b31bb342424014fe", "publication"],
-    ["72a0e902922c505de8016296652673303adb7da35d22eb7468a63cf223ef567e", "workspace/AGENTS.md"],
+    ["26a2397035b3b493bd7201dcbcb0ee8108cf1e0a18d3b81f989374d6bd7f48f4", "auth"],
+    ["03c44d2b4b7e998d3fe1b86d110702d49ca27e3527b63abb69e41fe167056e54", "testing"],
+    ["fc4707b0cd5692efe8cc9b96be4ec88b1f8807451348056eb13dfc3d88486b0f", "pagination"],
+    ["7e39ab2d515b817c3d42070922a575f6d3cd5b8427d3c97a4af151cec7a32656", "forms"],
+    ["906e1c0881ce2c605496ffd821d7bdc90c671988c0ef583a1f9eb2119b5d129f", "writes"],
+    ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
+    ["0aca7854f5eaa1d8f8f1a8a447aa62e145b6063e7ad37921c3a5cb2e1b808305", "caller-input"],
+    ["4145b8ee6c3a7e8ef8783845b98b5ccf73f4df251b8e020fe652e3f17ddddbfc", "publication"],
+    ["b2987fe71d6b763dec94ac64f1602cbdaa4d88d9e090ad066e694ff43836b2da", "workspace/AGENTS.md"],
     ["e023d1b6f7bc3673118d4310d9813cfa878c554b68a353413e73592054d2704d", "workspace/README.md"],
   ]);
 });

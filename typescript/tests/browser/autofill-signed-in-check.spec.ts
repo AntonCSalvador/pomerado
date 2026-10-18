@@ -182,6 +182,27 @@ test("the signed-in check with no sign-in field to go by counts any password fie
   });
 });
 
+// A page without the marker says too whether the sign-in's own password field shows there, so a
+// sign-in form that came back reads signed out where a screen such as an account picker can't tell.
+test("the signed-in check without the marker says whether the sign-in's own password field shows", async ({
+  page,
+}) => {
+  const form = `<form action="/session" method="post"><label>Password<input id="password" type="password"></label><button>Sign in</button></form>`;
+  expect(await checkPage(page, form, null, screens, "/session-ended")).toEqual({
+    signedIn: false,
+    failed: "indicator_not_visible",
+    url: `${site}/session-ended`,
+    passwordFieldVisible: true,
+  });
+  await page.unrouteAll();
+  const chooser = `<h1>Select an account</h1><ul><li><button>Account one</button></li><li><button>Account two</button></li></ul>`;
+  expect(await checkPage(page, chooser, null, screens, "/choose-account")).toEqual({
+    signedIn: false,
+    failed: "indicator_not_visible",
+    url: `${site}/choose-account`,
+  });
+});
+
 test("an account search form containing the signed-in marker does not look like unfinished authentication", async ({ page }) => {
   const account = '<form action="/account/search"><p id="identity">Signed in</p><label>Search<input name="search"></label><button>Search</button></form>';
   expect(await checkPage(page, account, null, screens)).toEqual({

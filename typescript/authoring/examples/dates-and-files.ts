@@ -89,7 +89,7 @@ export default defineOperation(
       document: FileInput.annotations({ description: "The document to attach" }),
     }),
     output: Schema.Struct({
-      name: Schema.String.annotations({ description: "Name of the file the field now holds" }),
+      name: Schema.NonEmptyTrimmedString.annotations({ description: "Name of the file the field now holds" }),
       size: Schema.Number.annotations({ description: "Size of that file in bytes" }),
     }),
   },
