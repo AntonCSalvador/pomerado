@@ -1834,8 +1834,8 @@ const HarnessTerminal = Schema.Struct({
   hostFailure: Schema.optionalWith(Schema.Literal(...mintHostFailures), { exact: true }),
   // Optional, and dropped as an excess field by an older worker's decode, so a rollout's old and
   // new workers each restore the other's checkpoint, except a terminal whose blocked reason is
-  // one an older worker does not know (`owner_declined`, `question_unanswered`, `site_declined`):
-  // that one does not decode there.
+  // one an older worker does not know (`owner_declined`, `question_unanswered`, `site_declined`,
+  // `host_refused`): that one does not decode there.
   blocked: Schema.optionalWith(BuildBlockedOutcome, { exact: true }),
   // Optional, and dropped by an older worker's decode.
   stopReason: Schema.optionalWith(MintStopReason, { exact: true }),
