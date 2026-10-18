@@ -239,12 +239,15 @@ export const reviewFailureOf = (error: ReviewFailure, dispatch?: "not_sent") =>
   });
 
 /**
- * Guardian denied or escalated the step: a refusal the agent reads with its rationale, and a
- * publication review's reason and findings.
+ * Guardian denied or escalated the step: a refusal the agent reads with its rationale, an
+ * execution review's refusal kind, and a publication review's reason and findings.
  */
 export const reviewDenied = (
   reviewId: string,
-  decision: Pick<GuardianDecision, "rationale" | "reason" | "findings" | "publicReason"> & {
+  decision: Pick<
+    GuardianDecision,
+    "rationale" | "reason" | "findings" | "publicReason" | "refusal"
+  > & {
     readonly outcome: "deny" | "escalate";
   },
 ) =>
@@ -257,5 +260,6 @@ export const reviewDenied = (
       reviewId,
       ...(decision.findings === undefined ? {} : { findings: decision.findings }),
       ...(decision.publicReason === undefined ? {} : { publicReason: decision.publicReason }),
+      ...(decision.refusal === undefined ? {} : { refusal: decision.refusal }),
     },
   });

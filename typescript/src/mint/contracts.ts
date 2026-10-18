@@ -86,6 +86,7 @@ import {
   GuardianAction,
   PublicationFinding,
   PublicationReason,
+  type GuardianRefusal,
 } from "../guardian/review-contracts.js";
 import {
   OutcomeWrite,
@@ -439,6 +440,11 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
      * the harness screens it before a build's result carries it (`PublicationDenial`).
      */
     readonly publicReason?: string;
+    /**
+     * An execution review's refusal kind (`GuardianRefusal`). Absent from an older reviewer, it
+     * counts as `final`, as every execution refusal did before.
+     */
+    readonly refusal?: GuardianRefusal;
   };
 }> {}
 
@@ -1021,13 +1027,16 @@ export type PublicationRequest = typeof PublicationRequest.Type;
  * - `site_lacks_capability`: the site does not offer what the task needs.
  * - `site_declined`: the site offers what the task needs but declines this example's own facts,
  *   such as an applicant it will not quote; the explanation names the reason the site gave.
- * - `policy`: Guardian denied or escalated an execution, or refused a publication for a reason no
- *   correction gets past (`publicationRefusalUnfixable`), in this attempt, and nothing within
- *   authority gets past it.
+ * - `policy`: Guardian refused an execution with refusal `final`, or refused a publication for a
+ *   reason no correction gets past (`publicationRefusalUnfixable`), in this attempt, and nothing
+ *   within authority gets past it. An execution refusal Guardian marked `correctable` is never one.
  * - `owner_declined`: the owner explicitly said no to a step the build needs: a confirm question
  *   answered no, or a login request declined.
  * - `question_unanswered`: a question the build needed went unanswered, and the build cannot go
  *   on without its answer.
+ * - `host_refused`: a host check, not Guardian and not the site, refused a step the build needs in
+ *   this attempt, such as a publication, a sign-in form or a site change, and nothing left in the
+ *   attempt can fix it. The host records those refusals itself.
  * The host refuses each ending without its basis on record. A `policy` report whose only basis is
  * the owner's no or an unanswered question ends as `owner_declined` or `question_unanswered`. A
  * target on another registrable domain is never a reason by itself: Guardian reviews such work.
@@ -1040,6 +1049,7 @@ export const BuildBlocked = Schema.Struct({
     "policy",
     "owner_declined",
     "question_unanswered",
+    "host_refused",
   ),
   explanation: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(blockedExplanationLimit)),
 });
@@ -1058,6 +1068,7 @@ export const BlockedReport = Schema.Struct({
     "policy",
     "owner_declined",
     "question_unanswered",
+    "host_refused",
     "host_unavailable",
   ),
   explanation: BuildBlocked.fields.explanation,
@@ -1266,8 +1277,8 @@ export type PublicationDenial = typeof PublicationDenial.Type;
  * - `account_locked`: the site said the account is locked, suspended or disabled.
  * - `question_unanswered`: a question the build needed went unanswered.
  * - `owner_declined`: the owner said no to a step the build needs.
- * - `site_lacks_capability`, `site_declined`, `policy`: the minter's blocked ending of the same
- *   name.
+ * - `site_lacks_capability`, `site_declined`, `policy`, `host_refused`: the minter's blocked ending
+ *   of the same name.
  * - `host_unavailable`: the host, not the task, ended the build.
  */
 export const mintStopReasons = [
@@ -1281,6 +1292,7 @@ export const mintStopReasons = [
   "site_lacks_capability",
   "site_declined",
   "policy",
+  "host_refused",
   "host_unavailable",
 ] as const;
 export const MintStopReason = Schema.Literal(...mintStopReasons);
@@ -1683,11 +1695,20 @@ export interface MintHarnessSnapshot {
    */
   readonly blockedReviewUnavailable?: true;
   /**
-   * Guardian denied or escalated an execution, or refused a publication for a reason no
-   * correction gets past (`publicationRefusalUnfixable`), in this attempt: the refusal a `policy`
-   * block needs. A publication denial that names a correction never sets it.
+   * Guardian refused an execution with a refusal it did not mark `correctable`, or refused a
+   * publication for a reason no correction gets past (`publicationRefusalUnfixable`), in this
+   * attempt: the refusal a `policy` block needs. A publication denial that names a correction, or
+   * an execution refusal marked `correctable`, never sets it. A checkpoint from an older worker
+   * set it on any execution refusal, which a newer one restores as it is.
    */
   readonly guardianRefused?: true;
+  /**
+   * A host check refused a step the build needs in this attempt: a publication its checks refused,
+   * a sign-in the host refused, or a task update the host refused. The refusal a `host_refused`
+   * block needs. Optional, so an older worker ignores it and a newer one
+   * restores an older checkpoint.
+   */
+  readonly hostRefused?: true;
   /**
    * Unanswered questions handed back to the minter as no answer in this build, which a
    * `question_unanswered` block stands on. Optional so a rollout's old and new workers each restore the other's
@@ -1862,6 +1883,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   ),
   blockedReviewUnavailable: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   guardianRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  hostRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   noAnswerHandBacks: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
   loginHeld: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   loginDeclined: Schema.optionalWith(LoginDecline, { exact: true }),

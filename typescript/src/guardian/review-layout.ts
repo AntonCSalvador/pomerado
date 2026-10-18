@@ -3,6 +3,7 @@ import type { AgentOutputType } from "@openai/agents";
 import { Effect } from "effect";
 import {
   guardianActions,
+  guardianRefusals,
   publicationFindingCategories,
   publicationReasons,
   routePointerParts,
@@ -68,7 +69,7 @@ export const outcomeAccepted = (pending: PendingExecution, raw: unknown): boolea
 
 /** The decision fields besides outcome and rationale that each kind uses. */
 const reviewFields: Record<ReviewKind, readonly string[]> = {
-  execution: ["action"],
+  execution: ["action", "refusal"],
   recovery: [],
   question: [],
   update: [],
@@ -101,6 +102,8 @@ export const guardianDecisionFormat: AgentOutputType = {
       label: { anyOf: [{ type: "null" }, { type: "string" }] },
       // An execution review's label of what the code does on the website.
       action: { anyOf: [{ type: "null" }, { type: "string", enum: [...guardianActions] }] },
+      // An execution deny or escalate's refusal kind: final or correctable.
+      refusal: { anyOf: [{ type: "null" }, { type: "string", enum: [...guardianRefusals] }] },
       findings: {
         anyOf: [
           { type: "null" },
@@ -144,7 +147,16 @@ export const guardianDecisionFormat: AgentOutputType = {
         ],
       },
     },
-    required: ["outcome", "rationale", "reason", "findings", "publicReason", "label", "action"],
+    required: [
+      "outcome",
+      "rationale",
+      "reason",
+      "findings",
+      "publicReason",
+      "label",
+      "action",
+      "refusal",
+    ],
     additionalProperties: false,
   },
 };

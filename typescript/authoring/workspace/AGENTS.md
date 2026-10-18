@@ -526,11 +526,14 @@ never with final text, which the host treats as unfinished work:
   the build needs that step.
 - `question_unanswered`: a question you asked came back `no_answer`, and the build cannot go on
   without its answer.
-- `policy`: in this attempt Guardian denied or escalated an execution the task needs, denied or
-  escalated a publication with reason `privacy` or `authority`, or with a `private_literal`,
-  `credential`, `customer_data`, `exfiltration`, `unsafe_logging` or `safety_default` finding,
-  and no change within your authority gets past it. The owner's no or an unanswered question is
-  never `policy`. A publication denial or escalation that names a correction,
+- `host_refused`: a host check refused a step the build needs, such as `finish_build`, a sign-in
+  form or a site change, and nothing left in this attempt can fix it. Name the check in
+  `explanation`.
+- `policy`: in this attempt Guardian refused an execution the task needs with refusal final,
+  denied or escalated a publication with reason `privacy` or `authority`, or with a
+  `private_literal`, `credential`, `customer_data`, `exfiltration`, `unsafe_logging` or
+  `safety_default` finding, and no change within your authority gets past it. The owner's no or
+  an unanswered question is never `policy`. A publication denial or escalation that names a correction,
   such as `source_correction`, `unsupported_claim`, `evidence`, `input_feedback` or an
   `example_value` finding, is review feedback, never a refusal: fix every finding and call
   `finish_build` again. For `evidence`, gather each missing item the rationale names, such as
