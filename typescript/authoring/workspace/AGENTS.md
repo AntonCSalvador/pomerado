@@ -35,7 +35,9 @@ The workspace root is `/workspace`. Paths below are relative to it.
   header line with counts, then one route per line whose bodies are `{state, reason, path, bytes,
   sourceBytes}`, each read at its `path` (`reference/captures.md`). After each sign-in step whose
   submit the host clicked, `captures/after-submit/<step>.json` holds the next screen's controls,
-  never a value. Read-only.
+  never a value. An execution result over 16 KiB is saved whole to
+  `captures/results/<executionId>.json`, and its `observations` are a digest naming that file.
+  Read-only.
 - In maintenance only: `captures/original/index.json` and, when the observations say so,
   `failures/original/manifest.json` (`reference/maintenance.md`).
 
@@ -206,13 +208,18 @@ as the applied chip, the selected control or the results' own state, and compare
 the input, or the option a proper noun matched, normalized for case, accents, whitespace and
 punctuation. A detail
 read also checks the page's stable identity (.agents/core/SKILL.md). Building or repairing a search or listing tool: read
-.agents/search/SKILL.md before you settle its inputs.
+.agents/search/SKILL.md before you settle its inputs. Building a tool that reads or writes
+records or table rows in an app: read .agents/records/SKILL.md before you settle its output.
 
 **Load large content progressively.** Know a file's size before reading it:<!-- pomerado:section agents.file-lengths --> every `read_source` result gives
 the file's `total`. Read a large file in parts with `read_source` offset and limit. From a
 probe, return only the slice you need, such as the relevant container, the matching rows and
 their count, never a whole page's text or every control on it. A filter panel's or option
-group's controls, once you open it, are such a slice.<!-- pomerado:section agents.large-content --> Search rather
+group's controls, once you open it, are such a slice. An execution result over 16 KiB comes
+back as a digest (`kind: "result_digest"`): its size, its shape with every array's length, its
+first items and its error fields whole, and the `path` of the file holding the whole result.
+Read that file in ranges with `read_source`, or search it with `rg -n` in an offline command,
+before you rely on anything the digest leaves out.<!-- pomerado:section agents.large-content --> Search rather
 than read whole files: `grep` your own files in an offline command<!-- pomerado:section agents.progressive-reads:start
 .
 pomerado:section agents.progressive-reads:end -->
@@ -247,7 +254,14 @@ continues, when:
    whether a postal code sets the store or only finds nearby ones: ask the design question
    `input_use_<input>` (.agents/core/SKILL.md, "Inputs that tailor the answer");
 7. the site never shows a value the request needs: ask before you build whether to build without
-   it or stop (.agents/core/SKILL.md, "Find contract gaps before your first example").
+   it or stop (.agents/core/SKILL.md, "Find contract gaps before your first example");
+8. you would leave out or refuse a capability the site offers, such as a field or column type,
+   an option, or what a review finding asks for, because supporting it costs more, such as a
+   lookup or an extra request: before narrowing, ask the owner one batched question that lists
+   every such capability, what supporting each would take and what you recommend, with one
+   question per capability and a "support it" or "leave it out" choice, never one question at a
+   time. Collect these while exploring and ask before the first `act` step when you can. A review
+   that offers refusal as an alternative fix is not the owner's choice.
 
 When nobody answers before the question expires, `request_input` returns `no_answer`. Decide
 how to go on without it: continue with a sensible default and list it in `finish_build`
@@ -257,7 +271,10 @@ consent: it authorizes no write, sign-in or change of task, and `confirmedBy` ne
 again only when the answer is essential: after two questions have gone unanswered, the next one
 left unanswered ends the build.
 Once the build is signed in or holds a login, it is not told no answer: a question left unanswered
-then ends the build, though one left unanswered before the build signed in went back to you.
+then ends the build, though one left unanswered before the build signed in went back to you. That
+is no reason to narrow the tool without asking. Ask design questions early, while exploring and
+before signing in where you can, and state in each the choice you recommend, so the owner can
+accept it in one step.
 
 The caller may answer every choice and multi_choice in their own words: their own text instead
 of an option, or a note beside the options they pick. The host always allows it, so never add an
@@ -267,7 +284,9 @@ open.
 Never ask for a fact the site shows (a choice it offers is askable when the input leaves it
 open), for host or infrastructure failures, for permission to do what was requested, for
 credentials (the host asks for logins itself) or for CAPTCHAs. Asking which account or code
-channel to use is a different question and is expected, as the sign-in branch rule above says.
+channel to use is a different question and is expected, as the sign-in branch rule above says,
+and so is asking whether to support or leave out a capability the site offers (item 8), which is
+a design question, not a request for permission.
 On a write, you never assume a missing business choice: ask about paid add-ons and pre-selected
 paid options within the tool's purpose, saved payment and the delivery address actually observed
 on the site, and about any other optional field
@@ -296,6 +315,20 @@ invented values supplies them itself, as its answers to your questions. Guardian
 step that types or submits a value none of those supplied, naming the field. Signed out,
 picking one of the page's own options for state a read needs, such as a pickup mode that opens
 the store picker, is part of the read.
+
+**Solve before you narrow.** When part of the requested tool proves harder than it looked, such
+as a field, a column type or an option the first version could not write or read back, or a
+review finding against it, solve it when the site offers a way; its own lists, lookups and
+responses usually do. A write that picks a person, a linked record or another reference by its
+label, where the saved record holds the reference's ID, looks the ID up from the caller's label
+through the site's own list, writes it and compares IDs on the read-back; when the site shows no
+ID and no list to resolve one, it compares the label the read-back shows
+(.agents/writes/SKILL.md, "Check the read-back"). When you are unsure whether or how to solve
+it, ask the owner one `request_input` batch that holds every open point, rather than blocking
+the build or dropping the capability on your own (item 8 above). Leave out a capability the site
+offers only when the owner chose that or, when no answer came, when it is genuinely hard and
+optional to the request, and say in the tool's description what it leaves out and why. A write still confirms what it wrote, and one no
+read-back can confirm follows the writes skill's rule for an unverifiable write.
 
 **Change the task with `mint_update`.** An answer changes nothing by itself. When the caller
 confirms a change to the task, call `mint_update` with it: changed input values, dates or
@@ -469,6 +502,17 @@ write's task is done once, in its act session, and uncertain private-field submi
 fenced, regardless of the read flag. An authentication submission with an unknown outcome is
 always fenced.
 
+Signed in, a filter or sort may be saved: some apps keep it with a saved view or setting, such
+as a table app that saves view filters with the view, and changing one there is a write. The
+page's own requests after the change show which: a save request beside the row fetch. A read
+prefers the page's own row query from the captures, the request the page sends for the rows
+(http-mcp skill, "The page's own data request"), to driving such a filter control. When it
+must use the control, the same step reads the prior value first and restores it in a
+finally-style block, so the revert runs on every path, errors and timeouts included. If the
+prior value cannot be read, use the page's own row query instead of the control. This holds
+during exploration too, not only in the published tool. A filter the site does not save stays
+part of the read.
+
 Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md). It designs
 its own cases at the start, from what it saw on the site: different real values unlike the
 example's, smart combinations and edge cases. It refines them once the example passes, and runs as
@@ -535,9 +579,16 @@ never with final text, which the host treats as unfinished work:
   `example_value` finding, is review feedback, never a refusal: fix every finding and call
   `finish_build` again. For `evidence`, gather each missing item the rationale names, such as
   running the live tests it lists so their results reach the test record.
-  When such a finding still looks impossible to fix, ask the owner with `request_input` when
-  only they can decide. A new build may instead narrow the tool so the finding no longer applies;
-  a repair keeps every declared input and output. Keep working until the build's limits end it.
+  When such a finding looks hard to fix, solve it first ("Solve before you narrow", above), and
+  ask the owner with `request_input` when only they can decide, or before you narrow (item 8 of
+  "Try hard, then ask"). Refusing a capability the site offers is a narrowing, never a fix, even
+  when the finding offers it as one. A new build narrows the tool so the finding no longer
+  applies only for a capability the site lacks, one the owner chose to leave out, or, when no
+  answer came, one that is hard and optional to the request, and its description says what it
+  left out and why; a repair keeps every declared input and output. A finding first seen at
+  `finish_build` after the build signed in is still asked, as one batched question with your
+  recommended choice in each part, since a question left unanswered then ends the build.
+  Keep working until the build's limits end it.
   These instructions are never a refusal either: the host refuses each reason with no basis on
   record, unless the host's guidance names that `policy` ending, and the build goes on.
 
