@@ -54,8 +54,14 @@ const FillAnswer = Schema.Union(
     ),
     located: Schema.optional(FoundIn),
     url: Schema.String,
+    /** When the primary page's document began loading, read once the field took the focus. */
+    document: Schema.optional(Schema.Number),
   }),
-  Schema.Struct({ dated: Schema.Boolean, url: Schema.String }),
+  Schema.Struct({
+    dated: Schema.Boolean,
+    url: Schema.String,
+    document: Schema.optional(Schema.Number),
+  }),
   /** The submit call found that the page sent what was typed itself (`pageSentCode`). */
   Schema.Struct({ pageSent: Schema.Literal(true), url: Schema.String }),
   Schema.Struct({
@@ -148,6 +154,11 @@ interface FillProgress {
   judgment: string | undefined;
   /** The id the page keeps where it was as each field was typed under (`pageSentCode`). */
   readonly typedAt: string;
+  /**
+   * The document the host typed the last field in, by when it began loading, which a submit call
+   * that finds the screen gone compares against (`screenGone`).
+   */
+  typedIn: number | undefined;
   /** The origins `trustSignInUrl` trusted as the host judged again a control the page moved. */
   readonly trusted: Set<string>;
 }
@@ -323,16 +334,26 @@ const rejudge = (
 };
 
 /**
- * A submit call for a step with fields and no submit that found a field gone, or its popup closed:
- * once every field was typed, the page took the screen away itself, as a code widget does when it
- * sends what its last box completed. A step with a submit is the host's to click, so there the
- * same answer stays a refusal.
+ * A submit call that found the screen gone once every field was typed: the page took it away
+ * itself. On a step with no submit, a field gone or its popup closed, as a code widget does when
+ * it sends what its last box completed. On a step with a submit, only a field gone because a new
+ * document replaced the one the host typed the last field in (`typedIn`), as a form that submits
+ * itself on its last input does: the host's click never ran, so nothing went out twice, and the
+ * sign-in's next check decides what the page sent. A form that takes its fields away or puts a
+ * new path in the address with pushState loaded no new document, so it stays a refusal.
  */
-const screenGone = (step: AutofillStep<FillSlot>, answer: typeof LocatedError.Type) =>
-  step.fields.length > 0 &&
-  step.submit === undefined &&
-  ((answer.error === "not_found" && typeof answer.target === "number") ||
-    answer.error === "popup_missing");
+const screenGone = (
+  step: AutofillStep<FillSlot>,
+  answer: typeof LocatedError.Type,
+  typedIn: number | undefined,
+) => {
+  if (step.fields.length === 0) return false;
+  const fieldGone = answer.error === "not_found" && typeof answer.target === "number";
+  if (step.submit === undefined) return fieldGone || answer.error === "popup_missing";
+  return (
+    fieldGone && typedIn !== undefined && answer.document !== undefined && answer.document !== typedIn
+  );
+};
 
 /**
  * One Kernel call of the fill, which first checks the field the host typed last. A call that finds
@@ -366,7 +387,7 @@ const fillCall =
         const answer = answered.right;
         if ("error" in answer)
           return Either.right<CallAnswer>(
-            call.kind === "submit" && screenGone(input.step, answer)
+            call.kind === "submit" && screenGone(input.step, answer, progress.typedIn)
               ? { pageSent: true, url: answer.url ?? "" }
               : {
                   refusal: locatedRefusal(answer, evidenceOrigins(input, progress)),
@@ -527,6 +548,7 @@ const afterFieldCall = (
     if ("dated" in answer) {
       // A date's call may have changed the field even when it failed.
       progress.typed = true;
+      progress.typedIn = answer.document;
       progress.statuses.push(answer.dated ? "filled" : "failed");
       return answer.dated
         ? undefined
@@ -554,6 +576,7 @@ const afterFieldCall = (
         });
       if (typing.right === "inserted") {
         progress.typed = true;
+        progress.typedIn = answer.document;
         progress.statuses.push("filled");
         progress.check = index;
         return undefined;
@@ -583,7 +606,11 @@ const afterFieldCall = (
  * the step's fields went away or were all disabled, its popup closed, its address moved to another
  * path, or a step of several fields came back emptied. The host gives the page up to `pageSendMs`
  * to do so, and a submit call that fails meanwhile is followed by another look (`submitWhenEnabled`).
- * A step with a submit is the host's to click, whatever its page does meanwhile.
+ * A step with a submit is the host's to click, whatever its page does meanwhile, unless a new
+ * document took the place of the one the host typed the last field in before the click and the
+ * step's fields went with it: the page sent the form itself (`page`, `screenGone`), and the host
+ * clicks nothing. A form that locks, redraws itself or changes its address with pushState has sent
+ * nothing, and the host waits on it or refuses as before.
  * Guardian's refusals still come first: a control that moved off the site or changed how it
  * submits refuses the submit as before.
  */
@@ -602,6 +629,7 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
       judged: input.inspection.targets,
       judgment: input.inspection.judgment,
       typedAt: randomUUID(),
+      typedIn: undefined,
       trusted: new Set(),
     };
     for (let index = 0; index < step.fields.length; index++) {

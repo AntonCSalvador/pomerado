@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "playwright";
 import { Effect } from "effect";
 import {
+  checkAutofillSignedIn,
   inspectAutofillStep,
   type AutofillPage,
   type AutofillStep,
@@ -562,3 +563,82 @@ test("a sign-in form with a button that draws itself again, empty, once the pass
   expect(maySend(report)).toBe(false);
   expect(posted).toEqual([]);
 });
+
+/**
+ * A code screen of one field and a "Continue" button whose own script submits its form once the
+ * field holds six digits, so the page leaves for the site's answer before the host clicks. `leaves`
+ * names what the page does then: `submits` loads the answer as a new document; `pushes` puts a new
+ * path in the address with pushState and draws a "Verifying" line in place of the form, and
+ * `redraws` only draws that line, so neither loads a new document or sends anything.
+ */
+type Leaves = "submits" | "pushes" | "redraws";
+const leaving: Record<Leaves, string> = {
+  submits: "form.submit();",
+  pushes: `history.pushState(null, "", "/verify/sent"); form.replaceWith(Object.assign(document.createElement("p"), { id: "verifying", textContent: "Verifying" }));`,
+  redraws: `form.replaceWith(Object.assign(document.createElement("p"), { id: "verifying", textContent: "Verifying" }));`,
+};
+const selfSubmitting = (leaves: Leaves) =>
+  `<form id="code-form" action="/verify/code" method="post"><label>Code<input id="code" name="code" maxlength="6" inputmode="numeric" autocomplete="one-time-code"></label><button id="continue">Continue</button></form><script>
+const form = document.getElementById("code-form");
+document.getElementById("code").addEventListener("input", (event) => {
+  if (/^[0-9]{6}$/.test(event.target.value)) { ${leaving[leaves]} }
+});
+</script>`;
+const continueStep: AutofillStep = { fields: [{ selector: "#code", slot: "code" }], submit: "#continue" };
+
+/** The host's calls, its submit call made only once the page shows `shown`. */
+const submitOnceShown =
+  (page: Page, shown: string) =>
+  (host: AutofillPage): AutofillPage => ({
+    ...host,
+    execute: (script, timeout) =>
+      script.includes("guardCall")
+        ? Effect.promise(() => expect(page.locator(shown)).toBeVisible()).pipe(
+            Effect.zipRight(host.execute(script, timeout)),
+          )
+        : host.execute(script, timeout),
+  });
+
+test("a code screen with a button whose form submits itself on its last input is reported sent by the page, never clicked, and signs in", async ({
+  page,
+}) => {
+  const { sent, posted } = await serve(page, selfSubmitting("submits"));
+  const report = await fill(page, continueStep, [code], { wrap: submitOnceShown(page, "#account") });
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: [{ slot: "code", status: "filled" }],
+    submit: "page",
+  });
+  expect(maySend(report)).toBe(true);
+  expect(report).not.toHaveProperty("clicked");
+  expect(report).not.toHaveProperty("failureDetail");
+  expect(posted.map((received) => received.get("code"))).toEqual([code]);
+  expect(sent).toEqual([]);
+  const signedIn = await Effect.runPromise(
+    checkAutofillSignedIn({
+      indicator: { selector: "#account" },
+      page: await hostPage(page),
+      siteOrigin: site,
+      screens: [continueStep],
+    }),
+  );
+  expect(signedIn).toMatchObject({ signedIn: true });
+});
+
+for (const leaves of ["pushes", "redraws"] as const)
+  test(`a code screen with a button whose script ${leaves === "pushes" ? "puts a new path in the address and takes" : "takes"} its form away on its last input, with no new document, is refused`, async ({
+    page,
+  }) => {
+    const { sent, posted } = await serve(page, selfSubmitting(leaves));
+    const report = await fill(page, continueStep, [code], {
+      wrap: submitOnceShown(page, "#verifying"),
+    });
+    expect(report).toMatchObject({
+      outcome: "filled",
+      fields: [{ slot: "code", status: "filled" }],
+      submit: "refused",
+    });
+    expect(maySend(report)).toBe(false);
+    expect(posted).toEqual([]);
+    expect(sent).toEqual([]);
+  });
