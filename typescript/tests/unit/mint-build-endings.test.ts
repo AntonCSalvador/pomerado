@@ -10,6 +10,7 @@ import { Deferred, Effect, Fiber } from "effect";
 import { afterEach, expect, it } from "vitest";
 import { MintFailure } from "../../src/mint/contracts.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
+import { autofillRefusalFailure } from "../../src/mint/sign-in-failure.js";
 import { portableMintProjection } from "../support/portable-mint.js";
 
 /*
@@ -385,6 +386,58 @@ const makeWrite = call(
   },
   "update",
 );
+
+/** The host refused to type a field of the sign-in screen, by its `check`. */
+const autofillRefused = (check: string) =>
+  autofillRefusalFailure(
+    { check, field: 0, slot: "password", screen: { fields: ["#password"], submit: "#sign-in" } },
+    { nothingSubmitted: true },
+  );
+
+// A sign-in the host refused because the login would go where credentials may not is a host check
+// refusing a step the build needs. A selector the fill could not use, such as a field it did not
+// find or one that matched twice, is the minter's to correct: it grants no host_refused ending.
+it.each([
+  {
+    basis: "an unverified destination",
+    failure: new MintFailure({
+      code: "Unavailable",
+      authentication: { phase: "credential_submit", code: "CredentialTargetUnverified" },
+    }),
+    ends: true,
+  },
+  { basis: "the fill's destination check", failure: autofillRefused("destination"), ends: true },
+  { basis: "a field it did not find", failure: autofillRefused("not_found"), ends: false },
+  {
+    basis: "a selector that matched twice",
+    failure: autofillRefused("ambiguous_match"),
+    ends: false,
+  },
+])("ends as host_refused after a sign-in refused for $basis: $ends", async ({ failure, ends }) => {
+  const explanation = "A Pomerado check refused the sign-in this build needs.";
+  const f = await fixture(
+    (_request, index) =>
+      [signIn, giveUpSignIn, call("report_blocked", { reason: "host_refused", explanation })][
+        index
+      ] ?? prose("Stopping."),
+    {
+      reviewAndExecute: () => Effect.fail(failure),
+      abandonSignIn: () => Effect.succeed({ outcome: "abandoned" as const }),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
+  const outcome = await f.run();
+  expect(JSON.stringify(f.requests[2]?.input)).toContain("sign_in_abandoned");
+  if (ends)
+    expect(outcome).toMatchObject({
+      blocked: { reason: "host_refused", explanation },
+      stopReason: "host_refused",
+    });
+  else {
+    expect(outcome).not.toHaveProperty("blocked");
+    expect(JSON.stringify(f.requests[3]?.input)).toContain("host_not_refused");
+  }
+});
 
 // The harness's own refusal of a task update, such as a site change in a build with no site or a
 // write build made a write again, refuses the minter's request, which it can fix. Only a change

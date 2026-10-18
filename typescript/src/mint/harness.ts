@@ -419,14 +419,16 @@ const hostRefusalDecision = (
   failedChecks: [reason],
   recovery: refusalRecovery(reason, write),
 });
-/** Sign-ins the host itself refused: it typed nothing where its checks did not allow it. */
-const hostSignInRefusals: ReadonlySet<string> = new Set([
-  "AutofillRefused",
-  "CredentialTargetRefused",
-  "CredentialTargetUnverified",
-]);
+/**
+ * Sign-ins the host itself refused: it typed nothing where the login would go somewhere
+ * credentials may not, or somewhere it could not verify. An autofill refusal of another check,
+ * such as a field the selector did not find or matched twice, is the minter's to correct.
+ */
 const hostSignInRefusal = (error: MintFailure) =>
-  error.authentication !== undefined && hostSignInRefusals.has(error.authentication.code);
+  error.authentication?.code === "CredentialTargetRefused" ||
+  error.authentication?.code === "CredentialTargetUnverified" ||
+  (error.authentication?.code === "AutofillRefused" &&
+    error.authentication.hostRefusal?.check === "destination");
 /**
  * A failure's code as diagnostics and publication evidence name it. A review whose outcome
  * Guardian kept refusing fails as `ReviewUnavailable`, but it is a verdict that did not form, not
