@@ -12,7 +12,7 @@ import {
   makeFileJobStore,
   type LocalJobStore,
 } from "../runtime/local-job-store.js";
-import { siteInput, standard } from "../mcp/schema.js";
+import { nestedInput, readHints, standard, writeHints } from "../mcp/schema.js";
 import { canonicalSchema } from "../registry/schema-references.js";
 import { InputAnswers } from "../runtime/input-request.js";
 import { fileFormat } from "../runtime/files.js";
@@ -129,6 +129,7 @@ const helperTools = (
       description:
         'Answer the current job questions using its request_id and answers keyed by question ID. A choice is an option id; with allowOther, {"other": text} instead; with allowNote, {"option": id, "note": text}. A multi_choice is an array of option ids, or {"options": [ids]} with "other" (allowOther) or "note" (allowNote). Secret answers sent here are visible to your MCP client and model; ask the user before sending them. No login or secret is saved.',
       inputSchema: standard(ProvideInput),
+      annotations: writeHints,
     },
     (input, context) =>
       toolResponse(
@@ -143,6 +144,7 @@ const helperTools = (
       description:
         "Cancel a local job and wait for resource cleanup. A website action already dispatched may have taken effect. Cancellation never retries it.",
       inputSchema: standard(JobId),
+      annotations: writeHints,
     },
     (input, context) =>
       toolResponse(
@@ -186,6 +188,7 @@ export const makePomeradoMcp = (options: PomeradoMcpOptions) =>
         description:
           "Mint a local, directly hostable MCP integration from a website and task. Choose read or write explicitly; ask the user before choosing write. name is a lowercase directory name using underscores within the configured output root. Starts once and returns a job ID; use get_job and provide_input to continue it.",
         inputSchema: standard(MintRequest),
+        annotations: writeHints,
       },
       (input, context) =>
         toolResponse(
@@ -276,7 +279,7 @@ const businessInput = (
             ? { $defs: canonical.definitions }
             : {}),
           properties: {
-            input: siteInput(name, canonical),
+            input: nestedInput(name, canonical),
             ...(write ? { idempotency_key: idempotencyKey } : {}),
           },
           required: ["input"],
@@ -337,12 +340,7 @@ export const makeIntegrationMcp = (options: IntegrationMcpOptions) =>
       {
         description: `${deployment.description}\nReturns the operation result, or a job ID when input or more time is needed. Continue that job with get_job/provide_input; never repeat a possible write to poll it.${write ? `\n${writeRetry}` : ""}`,
         inputSchema,
-        annotations: {
-          readOnlyHint: deployment.request.effect === "read",
-          openWorldHint: true,
-          idempotentHint: false,
-          destructiveHint: deployment.request.effect === "write",
-        },
+        annotations: write ? writeHints : readHints,
       },
       (input, context) =>
         toolResponse(
@@ -366,9 +364,13 @@ export const makeIntegrationMcp = (options: IntegrationMcpOptions) =>
             );
             const view = yield* jobs.get(started.job_id, waitMs);
             // A rejoined job that finished before a restart has no output to answer with.
-            return view.status === "completed" && "output" in view
-              ? completedResult(view.output)
-              : jobResult(started.rejoined === true ? { ...view, rejoined: true } : view);
+            const result =
+              view.status === "completed" && "output" in view
+                ? completedResult(view.output)
+                : jobResult(started.rejoined === true ? { ...view, rejoined: true } : view);
+            // A run that failed, a write that may have applied included, is never a success, so
+            // it is an error result whose job tells the client whether to resubmit.
+            return view.status === "failed" ? { ...result, isError: true } : result;
           }),
           context.mcpReq.signal,
           "run",

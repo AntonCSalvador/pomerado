@@ -1891,7 +1891,9 @@ if(!result.success||result.result!==true)throw new Error("Save not reached");ret
         name: "save_fixture",
         arguments: { input: {} },
       });
-      expect(result.isError, JSON.stringify(result) + connection.stderr()).toBeFalsy();
+      // A failed run, a write that may have applied included, is never a success: an error result
+      // whose job still tells the client whether to resubmit.
+      expect(result.isError, JSON.stringify(result) + connection.stderr()).toBe(true);
       expect(result.structuredContent).toEqual({
         job_id: expect.any(String),
         status: "failed",
