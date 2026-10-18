@@ -4,6 +4,7 @@ import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.j
 import { Deadline } from "../../src/runtime/deadline.js";
 import {
   CaptureUnavailable,
+  InvalidInput,
   maximumInputIssuePath,
   maximumInputIssues,
 } from "../../src/runtime/errors.js";
@@ -218,7 +219,7 @@ const issuesFor = async <A, I>(input: Schema.Schema<A, I>, value: unknown) => {
       ),
     ),
   );
-  if (failure._tag !== "InvalidInput")
+  if (!(failure instanceof InvalidInput))
     throw new Error(`Expected InvalidInput, got ${failure._tag}`);
   return failure.issues;
 };

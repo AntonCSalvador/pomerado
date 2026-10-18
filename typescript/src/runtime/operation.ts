@@ -1,4 +1,4 @@
-import { Effect, JSONSchema, Schema } from "effect";
+import { Effect, JSONSchema, Option, Schema } from "effect";
 import type { Scope } from "effect";
 import { ExecutionContext, finishCaptureAsEvidence } from "./context.js";
 import type { EffectJournal } from "./context.js";
@@ -10,6 +10,7 @@ import {
   WriteConfirmationRefused,
 } from "./errors.js";
 import type { CaptureUnavailable, EventUnavailable } from "./errors.js";
+import { operationErrors } from "./operation-failure.js";
 import type { WebsiteAuthenticationFailed } from "./authentication.js";
 import type { ScriptQuestionDeclarations } from "./script-input.js";
 import type { KernelOperation, KernelOperationContext } from "./kernel-operation.js";
@@ -157,6 +158,7 @@ export const executeOperation = <Input, EncodedInput, Output, EncodedOutput, Err
   Output,
   | Error
   | InvalidInput
+  | InstanceType<typeof operationErrors.InvalidInput>
   | InvalidOutput
   | DeadlineExceeded
   | CaptureUnavailable
@@ -203,6 +205,14 @@ export const executeOperation = <Input, EncodedInput, Output, EncodedOutput, Err
           : context.journal;
       const runInput = options.list === undefined ? input : withListHost(input, options.list);
       const output = yield* Effect.suspend(() => operation.run(runInput)).pipe(
+        // A runtime helper the run calls outside an Effect, such as `startList` refusing its
+        // cursor, throws the caller's input refusal: the run fails with it, as a Kernel script's
+        // does, rather than dying.
+        Effect.catchSomeDefect((defect) =>
+          defect instanceof operationErrors.InvalidInput
+            ? Option.some(Effect.fail(defect))
+            : Option.none(),
+        ),
         Effect.provideService(ExecutionContext, { ...context, journal }),
       );
       const validated = yield* Schema.validate(operation.output)(output).pipe(
