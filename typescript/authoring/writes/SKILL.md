@@ -81,11 +81,13 @@ During the session:
   may have saved something, and that is honest. Still mark that earlier step.
 - When one of those checks rules the task out, such as a total over the caller's limit, an
   item out of stock or a variant the page does not offer, the script refuses before the mark
-  with `InvalidInput` (the caller-input skill, "Throw the error that matches what happened").
-  Never return a refusal as the output. Prefer throwing over returning when a write stops
-  before its last commit step. A report of the form's fields, its validation messages or the
-  options to pick from is a refusal (`InvalidInput` with `available`) or a failure
-  (`OperationFailure`), not the write's output. While building, a limit the session meets is the
+  with `InvalidInput` (the caller-input skill, "Throw the error that matches what happened"),
+  or returns a refusal its output schema declares before its first mark (below). Never return
+  a refusal in an output shape the schema does not declare. Apart from such a declared
+  refusal, prefer throwing over returning when a write stops before its last commit step. A
+  report of the form's fields, its validation messages or the options to pick from is a
+  refusal (`InvalidInput` with `available`) or a failure (`OperationFailure`), not the write's
+  output. While building, a limit the session meets is the
   owner's to settle first: ask them to revise or stop, and end with `report_blocked` when they
   stop, as the cart skill's "Minimums and refusals" says.
 - A pop-up, banner or interstitial on the path, such as an upsell, is conditional unless the
@@ -209,7 +211,8 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   id, its column header or a `data-` attribute over its cell's position. Read only that record,
   and the view's other rows only where the before-and-after check or another skill, such as
   the cart skill, compares them. Read another page, in that same step before `verified()`,
-  only for a field the view did not show and the tool's output promises.
+  only for a field the view did not show and the tool's output promises. A reference the site
+  saves as an ID follows "Check the read-back" below.
 - State from before the write never matches. Require something only the finished write can
   show: the number or reference it produced, or a value it changed from what you read before
   it, such as a status that now reads Sent or a row that was not there. A list still showing
@@ -238,9 +241,38 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   A step that never calls `verified` does not end a session.
 
 Once the session has started, a live `explore` or `test` is refused, and a write
-build never runs a live `example`. The session is the one run that proves the write: design
-no tests and build no offline test suite for it. Its HTTP version gets one offline replay of
+build never runs a live `example`: read what the composed script will need, such as a lookup's
+list, in an `act` step that changes nothing. The session is the one run that proves the write:
+design no tests and build no offline test suite for it. Its HTTP version gets one offline replay of
 the session (http-mcp skill), and the testing skill is not for a write.
+
+## Check the read-back
+
+The read-back, as the session's rules above describe it, compares what the site saved with what
+the caller asked for, in the form the site saves it.
+
+- A reference, such as a person, an assignee, a linked record or a linked row, is often saved as
+  the referenced record's ID while the page shows its label. Take the caller's label or ID as the
+  input. Before the commit, look the ID up through the site's own list: the picker's options, the
+  member list or the linked table's rows, which a read of the same site often already returns.
+  Since nothing runs live after the session, prove the lookup in it: read the list in an `act`
+  step that changes nothing, before the commit step, or from the response of the site's own
+  lookup request in the session's captures. When a `not_published` asks for a lookup the session
+  did not run, prove it in an `act` step that only reads, while the session is open (below),
+  never by committing again.
+  When no entry matches, throw `InvalidInput` with `field` and `available`; when several match
+  equally, ask the caller (core skill, the input schema). Write that ID or pick that entry, and
+  compare the read-back by ID, never a label against an ID. Return the reference as
+  `{ id, label }` (records skill). Do not drop a reference field only because the site saves an
+  ID: the lookup is the fix. When the site shows no ID and offers no list to resolve one, compare
+  the label the read-back shows with the caller's, normalized as above. When neither can tell,
+  ask the owner in the build's one bundled `request_input` question, or follow the rules above:
+  never call `verified()` on a read-back that cannot tell, and publish the write `unverifiable`
+  when no read-back can.
+- When the write changed state that already existed, compare values, not object identity or the
+  order of an object's keys: the same person or record returned as a new object is unchanged. A
+  field the site itself maintains on every save, such as an updated-at time, a version counter or
+  an edit history, is not an unrequested change; a field the caller can set still counts.
 
 ## Compose and publish
 
@@ -350,7 +382,13 @@ pomerado:section writes.unverifiable-status:end --> too, and nothing repairs it.
 A script that throws `errors.InvalidInput` (core skill) fails as the caller's input; with
 `available`, the host ends the run at once with those choices. Before any commit
 mark is entered, the run reports that it changed nothing, so throw a refusal before the
-mark: returned as output, or thrown after the mark, it reports a possible change.
+mark. A write may instead declare its refusals in its output schema: a branch that requires
+`status` `"refused"` and a `reason` from a listed set of stable lowercase codes, such as
+`over_price_limit`, beside the values the caller needs, such as the total and the limit, with
+no other branch whose `status` could be `"refused"`. Returned before the first commit mark, a
+declared refusal completes the run with that output and reports the write not applied. A
+refusal returned in a shape the schema does not declare, or returned or thrown after a mark,
+reports a possible change.
 
 See `references/write-session.ts` for two steps and the composed script, and
 `references/write-readback.ts` for a write confirmed from its own commit request.
