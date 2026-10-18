@@ -231,7 +231,7 @@ const diagnosticUrlSpans = (text: string) => {
  */
 const legacyUrlSpans = (text: string): UrlSpan[] => {
   const reaches = urlReaches(text);
-  if (!text.startsWith("/") || text.startsWith("//")) return reaches;
+  if (!text.startsWith("/")) return reaches;
   const separator = text.search(/[\s"'<>`]/);
   const routeEnd = separator === -1 ? text.length : separator;
   return [{ start: 0, end: routeEnd }, ...reaches.filter((span) => span.start >= routeEnd)];
