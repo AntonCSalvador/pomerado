@@ -52,10 +52,8 @@ export const sessionSignInAllowance = (
     ? "allowed"
     : "session_not_kept";
 
-const pathOf = (value: string) => {
-  const path = URL.parse(value, "https://login.invalid")?.pathname;
-  return path === undefined ? undefined : path.length > 1 ? path.replace(/\/$/u, "") : path;
-};
+/** A path without its trailing slash, the root `/` kept. */
+const pathOf = (path: string) => (path.length > 1 ? path.replace(/\/$/u, "") : path);
 
 /** A recorded screen's page, which a signed-out page lands back on. */
 const placeOf = (page: string) => {
@@ -74,12 +72,17 @@ const markerFailure = (failed: string) =>
   failed === "path_mismatch" ||
   failed === "password_field_visible";
 
-/** A marker that names a path reads signed out only on that path. */
-const onMarkerPath = (url: string | undefined, urlPath: string) => {
+/**
+ * A marker that names a path reads signed out only on that path. A missing marker matches the path
+ * with or without a trailing slash. A marker that showed (`path_mismatch`) matches only the exact
+ * path, since the sign-in check compares paths exactly: on a path that differs only by a trailing
+ * slash the page may well be signed in, so it says nothing.
+ */
+const onMarkerPath = (url: string | undefined, urlPath: string, failed: string) => {
   const here = url === undefined ? undefined : URL.parse(url)?.pathname;
-  return here !== undefined && pathOf(here) === pathOf(urlPath)
-    ? ("signed_out" as const)
-    : ("unknown" as const);
+  if (here === undefined) return "unknown" as const;
+  const same = failed === "path_mismatch" ? here === urlPath : pathOf(here) === pathOf(urlPath);
+  return same ? ("signed_out" as const) : ("unknown" as const);
 };
 
 /** What a session check reads of a recorded sign-in: its screens and its marker's path. */
@@ -111,7 +114,7 @@ export const sessionOnPage = (
   if (check.failed === "off_site") return signInScreen ? "signed_out" : "unknown";
   if (!markerFailure(check.failed)) return "unknown";
   const { urlPath } = recipe.signedIn;
-  if (urlPath !== undefined) return onMarkerPath(check.url, urlPath);
+  if (urlPath !== undefined) return onMarkerPath(check.url, urlPath, check.failed);
   const formShown = check.failed === "password_field_visible" || check.passwordFieldVisible === true;
   return formShown || signInScreen ? "signed_out" : "unknown";
 };

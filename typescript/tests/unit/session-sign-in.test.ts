@@ -180,7 +180,7 @@ it("normalizes non-root trailing slashes on recorded screens and marker paths", 
   // Recorded sign-in screen /login, observed URL /login/
   expect(markerCantTell(missing("https://example.test/login/"), recipe)).toBe(false);
 
-  // Recorded sign-in screen /login/, observed URL /login
+  // Recorded sign-in screen /auth/, observed URL /auth
   expect(markerCantTell(missing("https://example.test/auth"), recipe)).toBe(false);
 
   // Configured marker path /account, observed URL /account/
@@ -204,6 +204,22 @@ it("normalizes non-root trailing slashes on recorded screens and marker paths", 
   // An unrecorded intermediate post-login page still retains the intended unknown / markerCantTell behavior
   expect(markerCantTell(missing("https://example.test/choose-account"), recipe)).toBe(true);
   expect(sessionOnPage(missing("https://example.test/choose-account"), recipe)).toBe("unknown");
+});
+
+it("reads a marker that showed on a path differing only by a trailing slash as can't tell", () => {
+  const recipe = {
+    steps: [{ page: "https://example.test/login" }],
+    signedIn: { urlPath: "/account" },
+  };
+  // The marker showed at /account/, and the sign-in check compares the path exactly, so it failed
+  // with path_mismatch on a page that is signed in.
+  const shown = { signedIn: false, url: "https://example.test/account/", failed: "path_mismatch" } as const;
+  expect(sessionOnPage(shown, recipe)).toBe("unknown");
+  expect(markerCantTell(shown, recipe)).toBe(true);
+  // On the exact path a path_mismatch still reads signed out.
+  expect(
+    sessionOnPage({ ...shown, url: "https://example.test/account" }, recipe),
+  ).toBe("signed_out");
 });
 
 it("preserves origin matching so trailing-slash normalization does not match across origins", () => {
