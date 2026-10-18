@@ -2369,3 +2369,241 @@ it("returns a call whose arguments do not parse to the model as a tool error and
   expect(resultsFor(f.requests[1])).toContain("unparsed");
   expect(f.counts().executed).toBe(1);
 });
+
+/** The receipt each purpose's step returns: an explore step does not succeed, the rest do. */
+const exploreFails = (outcome: "failed" | "review_denied" | "may_have_dispatched") => {
+  const ran: string[] = [];
+  const reviewAndExecute: MintDependencies["reviewAndExecute"] = (
+    input,
+    beforeDispatch = () => Effect.void,
+  ) =>
+    Effect.suspend((): ReturnType<MintDependencies["reviewAndExecute"]> => {
+      ran.push(input.purpose);
+      if (input.purpose !== "explore")
+        return beforeDispatch(fixtureAllow(input.purpose)).pipe(
+          Effect.as({
+            executionId: "execution_one",
+            status: "completed" as const,
+            effect: "verified" as const,
+            resultRef: "protected_result",
+            observations: { value: "public" },
+          }),
+        );
+      if (outcome === "review_denied")
+        return Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: { outcome: "deny", reviewId: "review_denied", rationale: "Not allowed." },
+          }),
+        );
+      if (outcome === "may_have_dispatched")
+        return beforeDispatch(fixtureAllow(input.purpose)).pipe(
+          Effect.zipRight(Effect.fail(new MintFailure({ code: "Unavailable" }))),
+        );
+      return beforeDispatch(fixtureAllow(input.purpose)).pipe(
+        Effect.as({
+          executionId: "execution_explore",
+          status: "failed" as const,
+          effect: "not_sent" as const,
+          resultRef: "protected_result",
+          observations: { error: "The page did not load." },
+        }),
+      );
+    });
+  return { ran, reviewAndExecute };
+};
+
+const readCall = (path: string, callId: string) =>
+  call("read_source", { path, offset: null, limit: null, paths: null }, callId);
+
+it.each(["failed", "review_denied", "may_have_dispatched"] as const)(
+  "runs no later call of a response after an execute that did not succeed: %s",
+  async (outcome) => {
+    const host = exploreFails(outcome);
+    const f = await fixture(
+      (_request, index) =>
+        [
+          together(
+            readCall("src/tool.ts", "read_before"),
+            call("execute", { ...execution, purpose: "explore" }, "explore_page"),
+            call("execute", execution, "run_example"),
+            readCall("src/tool.ts", "read_after"),
+          ),
+          call("execute", execution, "run_example_again"),
+          call("finish_build", publication),
+        ][index] ?? prose(),
+      { reviewAndExecute: host.reviewAndExecute },
+    );
+    expect(await f.run()).toMatchObject({ build: "published" });
+    // The example ran once, when the model sent it again after reading the failed step's result.
+    expect(host.ran).toEqual(["explore", "example"]);
+    expect(resultOf(f.requests[1], "read_before")).toContain("export default");
+    expect(resultOf(f.requests[1], "explore_page")).not.toContain("not_run");
+    expect(resultOf(f.requests[1], "run_example")).toContain("not_run");
+    expect(resultOf(f.requests[1], "read_after")).toContain("not_run");
+    expect(resultOf(f.requests[1], "read_after")).not.toContain("export default");
+  },
+);
+
+it("applies no edit of a response after an execute that did not succeed", async () => {
+  const host = exploreFails("failed");
+  const f = await fixture(
+    (_request, index) =>
+      [
+        together(
+          call("execute", { ...execution, purpose: "explore" }, "explore_page"),
+          stepPatch("write_step"),
+        ),
+        call("execute", execution),
+        call("finish_build", publication),
+      ][index] ?? prose(),
+    { reviewAndExecute: host.reviewAndExecute },
+  );
+  expect(await f.run()).toMatchObject({ build: "published" });
+  expect(await f.workspace.readFile!({ path: "src/tool.ts" })).not.toContain("step: 2");
+  const edit = (Array.isArray(f.requests[1]?.input) ? f.requests[1].input : []).find(
+    (item) => item.type === "apply_patch_call_output" && item.callId === "write_step",
+  );
+  expect(edit).toMatchObject({ status: "failed" });
+  expect(JSON.stringify(edit)).toContain("not_run");
+});
+
+it.each([
+  { exitCode: 3, held: true },
+  { exitCode: 0, held: false },
+])("runs a response's later call after a command only when it exited 0: $exitCode", async ({
+  exitCode,
+  held,
+}) => {
+  const ran: string[] = [];
+  const f = await fixture(
+    (_request, index) =>
+      [
+        together(
+          call("exec_command", { cmd: "node test/check.mjs" }, "command"),
+          call("execute", { ...execution, purpose: "explore" }, "explore_page"),
+        ),
+        call("execute", execution, "run_example"),
+        call("finish_build", publication),
+      ][index] ?? prose(),
+    {
+      // As a host runs a command: its receipt fails when the command exits other than 0.
+      reviewAndExecute: (input, beforeDispatch = () => Effect.void) =>
+        beforeDispatch(fixtureAllow(input.purpose)).pipe(
+          Effect.zipRight(Effect.sync(() => ran.push(input.purpose))),
+          Effect.as({
+            executionId: input.purpose === "command" ? "execution_command" : "execution_one",
+            status: input.purpose === "command" && exitCode !== 0 ? "failed" : "completed",
+            effect: input.purpose === "command" ? "not_sent" : "verified",
+            resultRef: "protected_result",
+            observations: { value: "public" },
+          } as const),
+        ),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({ build: "published" });
+  expect(resultOf(f.requests[1], "command")).not.toContain("not_run");
+  if (held) expect(resultOf(f.requests[1], "explore_page")).toContain("not_run");
+  else expect(resultOf(f.requests[1], "explore_page")).not.toContain("not_run");
+  expect(ran).toEqual(held ? ["command", "example"] : ["command", "explore", "example"]);
+});
+
+it("runs no call of a response after report_blocked ends the build", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        together(
+          call("execute", { ...execution, purpose: "explore" }, "explore_page"),
+          call("report_blocked", {
+            reason: "site_lacks_capability",
+            explanation: "The site offers no online form for this request.",
+          }),
+          call("execute", execution, "run_example"),
+          call("request_input", ask("Which store?"), "ask_store"),
+        ),
+      ][index] ?? prose(),
+  );
+  expect(await f.run()).toMatchObject({
+    build: "incomplete",
+    blocked: { reason: "site_lacks_capability" },
+  });
+  expect(f.counts()).toEqual({ executed: 1, published: 0, asked: 0 });
+  expect(f.requests).toHaveLength(1);
+});
+
+it("runs no call of a response after finish_build publishes", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", execution),
+        together(call("finish_build", publication), call("execute", execution, "run_again")),
+      ][index] ?? prose(),
+  );
+  expect(await f.run()).toMatchObject({ build: "published" });
+  expect(f.counts()).toEqual({ executed: 1, published: 1, asked: 0 });
+  expect(f.requests).toHaveLength(2);
+});
+
+it("holds a response's later calls after a step whose failed result a takeover replays", async () => {
+  const ran: string[] = [];
+  // As a host's recovery replays a step the previous worker ran: its retained result comes back
+  // and nothing runs again.
+  const recoveryFactory: MintRecoveryFactory = () =>
+    Effect.succeed({
+      model: (_state, _counters, invoke) => invoke,
+      tool: (call, invoke) =>
+        call.callId === "command"
+          ? Effect.succeed(
+              JSON.stringify({
+                executionId: "execution_command",
+                status: "failed",
+                effect: "not_sent",
+                observations: "{}",
+              }),
+            )
+          : invoke,
+    });
+  const responses = [
+    together(
+      call("exec_command", { cmd: "node test/check.mjs" }, "command"),
+      call("execute", { ...execution, purpose: "explore" }, "explore_page"),
+    ),
+    call("execute", execution),
+    call("finish_build", publication),
+  ];
+  const requests: ModelRequest[] = [];
+  const f = await fixture(() => prose(), {
+    model: makeOpenAIMinter(
+      {
+        getModel: () => ({
+          getResponse: async (request) => {
+            requests.push(request);
+            return responses[requests.length - 1] ?? prose();
+          },
+          getStreamedResponse: () => {
+            throw new Error("Unused stream");
+          },
+        }),
+      },
+      "medium",
+      {},
+      { recoveryFactory },
+    ),
+    reviewAndExecute: (input, beforeDispatch = () => Effect.void) =>
+      beforeDispatch(fixtureAllow(input.purpose)).pipe(
+        Effect.zipRight(Effect.sync(() => ran.push(input.purpose))),
+        Effect.as({
+          executionId: "execution_one",
+          status: "completed" as const,
+          effect: "verified" as const,
+          resultRef: "protected_result",
+          observations: { value: "public" },
+        }),
+      ),
+    agentRecovery: { save: () => Effect.void },
+  });
+  expect(await f.run()).toMatchObject({ build: "published" });
+  expect(resultOf(requests[1], "explore_page")).toContain("not_run");
+  expect(ran).toEqual(["example"]);
+});
