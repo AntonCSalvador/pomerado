@@ -2044,7 +2044,7 @@ it("runs a response's calls in the model's order around its write", async () => 
   expect(f.requests).toHaveLength(2);
 });
 
-it("returns a second execute in one response unrun, so the minter reads the first result before it", async () => {
+it("runs a response's actions one at a time in the model's order, then its host tool", async () => {
   let f: Awaited<ReturnType<typeof fixture>> | undefined;
   const review = reviewingSource(() => f!.workspace.readFile!({ path: "src/tool.ts" }));
   f = await fixture(
@@ -2053,18 +2053,50 @@ it("returns a second execute in one response unrun, so the minter reads the firs
         together(
           call("execute", { ...execution, purpose: "explore" }, "explore_page"),
           call("execute", execution, "run_example"),
+          call("finish_build", publication, "publish"),
         ),
-        call("execute", execution, "run_example_again"),
-        call("finish_build", publication),
       ][index] ?? prose(),
     { reviewAndExecute: review.reviewAndExecute },
   );
+  // The publication needs the example's receipt, so it ran after the example finished.
   expect(await f.run()).toMatchObject({ build: "published" });
   expect(review.reviewed.map((entry) => entry.purpose)).toEqual(["explore", "example"]);
-  const unrun = (f.requests[1]?.input as AgentInputItem[]).find(
-    (item) => item.type === "function_call_result" && item.callId === "run_example",
+  expect(f.requests).toHaveLength(1);
+});
+
+it("runs reads sent together at the same time", async () => {
+  let reading = 0;
+  let most = 0;
+  // Each read waits, for a bounded number of event loop turns, until the other read starts.
+  const readRetainedCapture = (path: string) =>
+    Effect.promise(async () => {
+      if (!path.startsWith("captures/")) return undefined;
+      reading++;
+      most = Math.max(most, reading);
+      for (let turn = 0; turn < 200 && reading < 2; turn++)
+        await new Promise((resolve) => setImmediate(resolve));
+      reading--;
+      return JSON.stringify({ kind: "synthetic_capture", path });
+    });
+  const read = (path: string, callId: string) =>
+    call("read_source", { path, offset: null, limit: null, paths: null }, callId);
+  const f = await fixture(
+    (_request, index) =>
+      [
+        together(
+          read("captures/first.json", "read_first"),
+          read("captures/second.json", "read_second"),
+        ),
+        call("execute", execution),
+        call("finish_build", publication),
+      ][index] ?? prose(),
+    { readRetainedCapture },
   );
-  expect(JSON.stringify(unrun)).toContain("not_run");
+  expect(await f.run()).toMatchObject({ build: "published" });
+  // Both reads were in flight at once, and each result went back to its own call.
+  expect(most).toBe(2);
+  expect(resultOf(f.requests[1], "read_first")).toContain("captures/first.json");
+  expect(resultOf(f.requests[1], "read_second")).toContain("captures/second.json");
 });
 
 /** The model's result for one call, as its next request carries it. */
@@ -2139,35 +2171,45 @@ it("runs nothing held behind an edit the model sent after it", async () => {
 it.each([
   { first: "request_input", later: "execute" },
   { first: "execute", later: "request_input" },
-] as const)("runs only the first host action in one response: $first, then $later", async ({
-  first,
-  later,
-}) => {
-  let f: Awaited<ReturnType<typeof fixture>> | undefined;
-  const review = reviewingSource(() => f!.workspace.readFile!({ path: "src/tool.ts" }));
+] as const)("runs a question and an action of one response in the model's order: $first, then $later", async ({ first, later }) => {
+  const ran: string[] = [];
   const hostCall = (name: "request_input" | "execute") =>
     name === "execute"
       ? call("execute", { ...execution, purpose: "explore" }, `paired_${name}`)
       : call("request_input", ask("Which store?"), `paired_${name}`);
-  f = await fixture(
+  const f = await fixture(
     (_request, index) =>
       [
         together(hostCall(first), hostCall(later)),
         call("execute", execution),
         call("finish_build", publication),
       ][index] ?? prose(),
-    { reviewAndExecute: review.reviewAndExecute },
+    {
+      askInput: () =>
+        Effect.sync(() => {
+          ran.push("request_input");
+          return { report: { type: "text" as const, value: "The main store" } };
+        }),
+      reviewAndExecute: (input, beforeDispatch = () => Effect.void) =>
+        Effect.sync(() => ran.push(input.purpose === "explore" ? "execute" : input.purpose)).pipe(
+          Effect.zipRight(beforeDispatch(fixtureAllow(input.purpose))),
+          Effect.as({
+            executionId: "execution_one",
+            status: "completed" as const,
+            effect: "verified" as const,
+            resultRef: "protected_result",
+            observations: { value: "public" },
+          }),
+        ),
+    },
   );
   expect(await f.run()).toMatchObject({ build: "published" });
-  expect(resultOf(f.requests[1], `paired_${later}`)).toContain("not_run");
+  expect(ran).toEqual([first, later, "example"]);
   expect(resultOf(f.requests[1], `paired_${first}`)).not.toContain("not_run");
-  expect(f.counts().asked).toBe(first === "request_input" ? 1 : 0);
-  expect(review.reviewed.map((entry) => entry.purpose)).toEqual(
-    first === "execute" ? ["explore", "example"] : ["example"],
-  );
+  expect(resultOf(f.requests[1], `paired_${later}`)).not.toContain("not_run");
 });
 
-it("counts only a host action that ran as the response's first", async () => {
+it("runs a step after its edits when an earlier call of the response did not parse", async () => {
   let f: Awaited<ReturnType<typeof fixture>> | undefined;
   const review = reviewingSource(() => f!.workspace.readFile!({ path: "src/tool.ts" }));
   f = await fixture(
