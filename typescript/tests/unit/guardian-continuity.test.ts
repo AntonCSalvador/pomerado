@@ -648,6 +648,55 @@ it("compacts a conversation at the threshold with the previous request plus a tr
   });
 });
 
+it("sends the request unchanged when compaction fails, and does not try compacting again", async () => {
+  const requests: ModelRequest[] = [];
+  const isTrigger = (request: ModelRequest) =>
+    Array.isArray(request.input) &&
+    JSON.stringify(request.input.at(-1)).includes("compaction_trigger");
+  setDefaultModelProvider({
+    getModel: () => ({
+      getResponse: async (request) => {
+        requests.push(request);
+        if (isTrigger(request)) throw new Error("Synthetic provider rejected the request");
+        return {
+          usage: new Usage({
+            input_tokens: 236_000,
+            output_tokens: 1_000,
+            total_tokens: 237_000,
+            input_tokens_details: { cached_tokens: 0 },
+          }),
+          output: [message()],
+        };
+      },
+      getStreamedResponse: () => {
+        throw new Error("Unused stream");
+      },
+    }),
+  });
+  const guardian = makeGuardian(
+    makeOpenAIReviewer("Synthetic policy {{ tenant_policy_config }}", false, native),
+    undefined,
+    {},
+  );
+  const big = "x".repeat(48_000);
+  for (const [index, observations] of ["first", `second ${big}`, `third ${big}`].entries()) {
+    const reviewed = await Effect.runPromise(
+      guardian.review(
+        { ...pending, attemptId: `attempt-${index}`, screenedObservations: observations },
+        readCurrent,
+      ),
+    );
+    expect(reviewed.decision.outcome).toBe("allow");
+  }
+  // One failed compaction attempt, then each review's own request goes out unchanged.
+  expect(requests.filter(isTrigger)).toHaveLength(1);
+  expect(requests.filter((request) => !isTrigger(request))).toHaveLength(3);
+  expect(guardian.session?.compactions()).toBe(0);
+  const third = requests.at(-1)?.input;
+  expect(JSON.stringify(third)).toContain("third");
+  expect(JSON.stringify(third)).toContain("first");
+});
+
 it("serializes concurrent reviews without forking the conversation", async () => {
   const requests: ModelRequest[] = [];
   provide([[call("first")], [reason, message()], [call("second")], [message()]], requests);

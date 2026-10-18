@@ -339,9 +339,11 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
           catch: providerError,
         }),
       );
-      // A failed compaction leaves the request as it was, for the provider-side backstop.
+      // A failed compaction leaves the request as it was, for the provider-side backstop, and
+      // stops further attempts, so a persistent failure is not retried on every request.
       if (outcome._tag === "Left") {
         if (sent.signal?.aborted === true) return yield* Effect.fail(outcome.left);
+        triggerUnsupported = true;
         return { sent };
       }
       const item = outcome.right.output.findLast((entry) => entry.type === "compaction");
