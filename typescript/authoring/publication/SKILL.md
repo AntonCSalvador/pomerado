@@ -112,7 +112,7 @@ first:
 - **Coverage.** `coverage` says what exercised each behavior: live (the example or the act
   session, and a read signed out's live tests, with the input each ran, such as page 1 of one
   query), offline only where a read signed out ran such checks (fixture<!-- pomerado:section publication.saved-http --> and parser tests, synthetic cases such as page boundaries included) and untested (such as
-  a later page, a query with no results or another layout, live). Name each exposed input under
+  a later page or another layout, live). Name each exposed input under
   the run that set it, or under untested (testing skill). An offline or synthetic check never
   stands in for a live one. For a read signed out, the host adds its own line from its record of
   your live test cases and gives the review that record (`publication/tests.json`): each case's
