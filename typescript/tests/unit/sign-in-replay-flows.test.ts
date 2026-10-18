@@ -475,6 +475,85 @@ it("never fills a password a later screen asks for again after it went out", asy
   expect(fake.fills.map(({ page }) => page)).toEqual(["login"]);
 });
 
+// A site that asks for the password again with a one-time code: the first password submit is
+// answered with a screen that shows the password field empty beside a code field.
+const lateCodeStep = {
+  page: `${origin}/login-code`,
+  fields: [
+    { selector: "#password", slot: "password" as const },
+    { selector: "#code", slot: "code" as const },
+  ],
+  refills: ["password" as const],
+  submit: "#sign-in",
+};
+const lateCodeRecipe = (...steps: SignInRecipe["steps"][number][]): SignInRecipe => ({
+  version: 5,
+  steps: steps as SignInRecipe["steps"],
+  signedIn: { selector: "#account" },
+});
+const lateCodeSite = (codeScreen: readonly string[] = ["#password", "#code", "#sign-in"]) =>
+  scriptedSite({
+    entry: "login",
+    screens: { login: loginScreen, "login-code": codeScreen, account: [] },
+    fill: (page, values) => {
+      if (page === "login") return signedLogin(values) ? { next: "login-code" } : {};
+      if (values[0] === login.password && values[1] === code)
+        return { next: "account", signIn: true };
+      return { markers: ["#code-error"] };
+    },
+  });
+
+it("enters the password again with the code on a screen the recipe records as asking for both", async () => {
+  const fake = lateCodeSite();
+  const { result } = await signIn(lateCodeRecipe(loginStep, lateCodeStep), fake);
+  expect(result).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(fake.filled("login")).toEqual([[login.username, login.password]]);
+  expect(fake.filled("login-code")).toEqual([[login.password, code]]);
+});
+
+it("never sends the password a third time when the code the screen took with it is rejected", async () => {
+  const fake = lateCodeSite();
+  const marked = {
+    ...lateCodeStep,
+    rejectedMarkers: [{ slot: "code" as const, selector: "#code-error" }],
+  };
+  const { result } = await signIn(lateCodeRecipe(loginStep, marked), fake, {
+    codes: ["111111", code],
+  });
+  expect(Either.isLeft(result)).toBe(true);
+  const passwords = fake.fills.flatMap(({ values }) =>
+    values.filter((value) => value === login.password),
+  );
+  expect(passwords).toHaveLength(2);
+});
+
+it("refuses a recorded refill on a screen whose second factor already went out", async () => {
+  const fake = scriptedSite({
+    entry: "login",
+    screens: {
+      login: loginScreen,
+      code: ["#code", "#verify"],
+      "login-code": ["#password", "#code", "#sign-in"],
+      account: [],
+    },
+    fill: (page, values) =>
+      page === "login"
+        ? { next: "code" }
+        : page === "code"
+          ? { next: "login-code" }
+          : values[0] === login.password
+            ? { next: "account", signIn: true }
+            : {},
+  });
+  const { result } = await signIn(lateCodeRecipe(loginStep, codeStep, lateCodeStep), fake, {
+    codes: [code, "222222"],
+  });
+  expect(result).toEqual(
+    Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "credential_already_filled" })),
+  );
+  expect(fake.fills.map(({ page }) => page)).toEqual(["login", "code"]);
+});
+
 it("asks and fills no third code after two fresh codes were rejected", async () => {
   const fake = scriptedSite({
     entry: "login",

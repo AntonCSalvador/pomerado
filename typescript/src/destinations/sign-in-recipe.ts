@@ -6,6 +6,7 @@ import {
   LegacyAutofillRecipe,
   PopupAutofillRecipe,
   publishedAutofillRecipe,
+  RefillAutofillRecipe,
   WorkspaceAutofillRecipe,
   type AutofillRecipeOrigins,
   type AutofillRecipeStep,
@@ -46,22 +47,23 @@ export const SignInRecipeV3 = Schema.Struct({
   ),
 );
 /**
- * A recipe this host reads: version 1, 2 or 4 as every host writes it, or this host's version 3.
+ * A recipe this host reads: version 1, 2, 4 or 5 as every host writes it, or this host's version 3.
  */
 export const SignInRecipe = Schema.Union(
   LegacyAutofillRecipe,
   PopupAutofillRecipe,
   SignInRecipeV3,
   WorkspaceAutofillRecipe,
+  RefillAutofillRecipe,
 );
 export type SignInRecipe = typeof SignInRecipe.Type;
 export type SignInRecipeStep = AutofillRecipeStep;
 
-const knownVersions: readonly unknown[] = [1, 2, 3, 4];
+const knownVersions: readonly unknown[] = [1, 2, 3, 4, 5];
 
 /**
  * A published recipe file read back: the recipe, `unknown_version` for a version this host does
- * not know, else `invalid`. Version 1, 2 and 4 decode as every host reads them; version 3 is
+ * not know, else `invalid`. Version 1, 2, 4 and 5 decode as every host reads them; version 3 is
  * read only here.
  */
 export const decodeSignInRecipe = (text: string): SignInRecipe | "invalid" | "unknown_version" => {
@@ -95,6 +97,8 @@ export interface RecordedSignInStep {
   readonly submittedBy?: "host" | "minter" | undefined;
   /** A two-factor method choice's recorded methods. */
   readonly methods?: AutofillStep["methods"];
+  /** The secrets an earlier screen took that this one asks for again with a second factor. */
+  readonly refills?: SignInRecipeStep["refills"];
   /** The page the step ran on, origin and path only. */
   readonly page: string;
 }
@@ -138,13 +142,14 @@ const inStepOrder = (step: SignInRecipeStep): SignInRecipeStep => ({
             : { questionSelector: field.questionSelector }),
         },
   ),
+  ...(step.refills === undefined ? {} : { refills: step.refills }),
   ...(step.submit === undefined ? {} : { submit: step.submit }),
   ...(step.submittedBy === undefined ? {} : { submittedBy: step.submittedBy }),
   ...(step.methods === undefined ? {} : { methods: step.methods }),
 });
 
 /**
- * A recipe as `auth-fill.json` holds it: `version`, then version 4's `workspace`, then each
+ * A recipe as `auth-fill.json` holds it: `version`, then version 4's or 5's `workspace`, then each
  * screen in `recipeStep`'s key order (a workspace screen's `origin` first), indented two spaces,
  * with no final newline. The same recipe is the same bytes from any
  * host that writes it this way.
@@ -153,7 +158,7 @@ export const signInRecipeText = (recipe: SignInRecipe) =>
   JSON.stringify(
     {
       version: recipe.version,
-      ...(recipe.version !== 4 || recipe.workspace === undefined
+      ...((recipe.version !== 4 && recipe.version !== 5) || recipe.workspace === undefined
         ? {}
         : { workspace: { parent: recipe.workspace.parent } }),
       steps: recipe.steps.map(inStepOrder),
