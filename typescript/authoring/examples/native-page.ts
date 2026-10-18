@@ -8,7 +8,7 @@ export default defineOperation(
     name: "read_invoice_heading",
     input: Schema.Struct({}),
     output: Schema.Struct({
-      heading: Schema.NonEmptyString.annotations({ description: "The invoice list's heading" }),
+      heading: Schema.NonEmptyTrimmedString.annotations({ description: "The invoice list's heading" }),
     }),
   },
   async ({ kernel, sessionId, siteOrigin, siteDomain, errors }) => {

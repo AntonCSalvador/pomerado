@@ -58,41 +58,74 @@ const placeOf = (page: string) => {
   return url === null ? undefined : `${url.origin}${url.pathname}`;
 };
 
+/** Whether the page is one of the recorded sign-in screens. */
+const onSignInScreen = (url: string | undefined, steps: readonly { readonly page: string }[]) => {
+  const here = url === undefined ? undefined : placeOf(url);
+  return here !== undefined && steps.some((step) => placeOf(step.page) === here);
+};
+
 const markerFailure = (failed: string) =>
   failed === "indicator_not_visible" ||
   failed === "path_mismatch" ||
   failed === "password_field_visible";
 
 /** A marker that names a path reads signed out only on that path. */
-const onMarkerPath = (url: string | undefined, urlPath: string | undefined) => {
-  if (urlPath === undefined) return "signed_out" as const;
+const onMarkerPath = (url: string | undefined, urlPath: string) => {
   const here = url === undefined ? undefined : URL.parse(url);
   return here?.pathname === urlPath ? ("signed_out" as const) : ("unknown" as const);
 };
 
+/** What a session check reads of a recorded sign-in: its screens and its marker's path. */
+export interface SessionCheckRecipe {
+  readonly steps: readonly { readonly page: string }[];
+  readonly signedIn: { readonly urlPath?: string | undefined };
+}
+
 /**
- * What the marker check on the current page says about the session. A missing marker, or the
- * sign-in's own password field showing again, means signed out only on the marker's own page:
- * the recorded path, or any page when the marker names none. A marker recorded on another path
- * says nothing here (a site's login page may show its form to a signed-in browser too), nor does
- * a page the check could not read or an unsupported selector. An off-site page is signed out only
- * when it is one of the recorded sign-in screens (a sign-in origin the site sends to).
+ * What the marker check on the current page says about the session. A missing marker alone can't
+ * tell: a site may show a screen of its own between its sign-in and its pages, such as an account
+ * or workspace picker, a "remember this device" prompt or its terms, and show the marker only past
+ * it. So a page reads signed out only on the sign-in's own evidence:
+ * - a marker that names a path, missing on that path. Elsewhere it says nothing, the password
+ *   field included (a site's login page may show its form to a signed-in browser too);
+ * - a marker that names no path, missing where the sign-in's own password field shows again or
+ *   on one of the recorded sign-in screens;
+ * - an off-site page that is one of the recorded sign-in screens (a sign-in origin the site sends
+ *   to).
+ * A page the check could not read, an unsupported selector or a recorded challenge that still
+ * shows says nothing either.
  */
 export const sessionOnPage = (
   check: AutofillSignedInCheck,
-  recipe: {
-    readonly steps: readonly { readonly page: string }[];
-    readonly signedIn: { readonly urlPath?: string | undefined };
-  },
+  recipe: SessionCheckRecipe,
 ): "signed_in" | "signed_out" | "unknown" => {
   if (check.signedIn) return "signed_in";
-  if (markerFailure(check.failed)) return onMarkerPath(check.url, recipe.signedIn.urlPath);
-  if (check.failed !== "off_site" || check.url === undefined) return "unknown";
-  const here = placeOf(check.url);
-  return here !== undefined && recipe.steps.some((step) => placeOf(step.page) === here)
-    ? "signed_out"
-    : "unknown";
+  const signInScreen = onSignInScreen(check.url, recipe.steps);
+  if (check.failed === "off_site") return signInScreen ? "signed_out" : "unknown";
+  if (!markerFailure(check.failed)) return "unknown";
+  const { urlPath } = recipe.signedIn;
+  if (urlPath !== undefined) return onMarkerPath(check.url, urlPath);
+  const formShown = check.failed === "password_field_visible" || check.passwordFieldVisible === true;
+  return formShown || signInScreen ? "signed_out" : "unknown";
 };
+
+/**
+ * Whether the page a sign-in ended on can't tell, once the sign-in sent every value it filled and
+ * no rejection showed: the check read the page, found the marker missing or the page off the site,
+ * and `sessionOnPage` does not read it signed out. A check with no address says nothing of where
+ * the sign-in ended, so it is no can't tell. A sign-in that ends on one of its own recorded
+ * screens, or where its password field shows, did not get past them, whatever path the marker
+ * names. A sign-in that can't tell counts as signed in, and the operation that runs next proves it.
+ */
+export const markerCantTell = (check: AutofillSignedInCheck, recipe: SessionCheckRecipe) =>
+  !check.signedIn &&
+  check.url !== undefined &&
+  (check.failed === "indicator_not_visible" ||
+    check.failed === "path_mismatch" ||
+    check.failed === "off_site") &&
+  check.passwordFieldVisible !== true &&
+  !onSignInScreen(check.url, recipe.steps) &&
+  sessionOnPage(check, recipe) === "unknown";
 
 /**
  * The host may fill a login into the browser of a running execution only while that execution

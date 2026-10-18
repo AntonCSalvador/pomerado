@@ -7,10 +7,14 @@
  * Some checks block publication (`blockingOutputChecks`): code, styles, markup and template
  * leftovers in a string are never what a page shows a person. The rest are flags for the reviewer:
  * a value read while collapsed or cut short, a field that never varies or is always empty,
- * repeated entries or records, very long strings, and one field that restates its siblings (a
+ * repeated entries, records or item IDs, very long strings, and one field restating its siblings (a
  * whole card's text). Every finding is a lead, never a verdict: when a flagged value is correct as
  * returned, such as code on a tool that returns code or page text that only resembles code, the
  * minter names its path and check with the reason as an override, and the reviewer sees both.
+ *
+ * `lintSchemas` adds two advisory checks of the declared schemas rather than the values
+ * (`loose_text`, `looser_than_input`). `lintOutput` never reports them, so a run's checks and
+ * telemetry stay as they were.
  */
 
 export const outputChecks = [
@@ -28,6 +32,8 @@ export const outputChecks = [
   "duplicate_records",
   "constant_field",
   "empty_field",
+  "loose_text",
+  "looser_than_input",
 ] as const;
 export type OutputCheck = (typeof outputChecks)[number];
 
@@ -77,11 +83,73 @@ export interface OutputLintOptions {
   readonly controlLabels?: readonly string[];
   /** Adds one short sample per finding. Off for telemetry, which never carries page text. */
   readonly samples?: boolean;
+  /**
+   * The `fieldFill` of each other tested run of the same tool on the same source, such as its live
+   * test cases. A field empty in this output and in all of them, at least one of which holds it,
+   * is flagged `empty_field`: outside a list, such as a detail record's, even in one record; in a
+   * list, once the runs hold three of its records. Without them, only the per-list check runs.
+   */
+  readonly alsoTested?: readonly FieldFill[];
 }
+
+/**
+ * For each field of an output, by the path `lintOutput` names it, how many records held its key
+ * and how many of those held a value that is not empty. It carries no value, so a host can keep
+ * one for each tested run.
+ */
+export type FieldFill = Readonly<
+  Record<string, { readonly records: number; readonly filled: number }>
+>;
 
 type Json = Readonly<Record<string, unknown>>;
 const isRecord = (value: unknown): value is Json =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+const isEmpty = (value: unknown) =>
+  value === undefined ||
+  value === null ||
+  (typeof value === "string" && value.trim() === "") ||
+  (Array.isArray(value) && value.length === 0);
+
+/** A path for a record's field, `$` being the whole output. */
+const fieldPath = (path: string, key: string) => (path === "$" ? key : `${path}.${key}`);
+
+/** An output's `FieldFill`: its records' fields at any depth, array positions as `[]`. */
+export const fieldFill = (output: unknown): FieldFill => {
+  const fill = new Map<string, { records: number; filled: number }>();
+  const visit = (value: unknown, path: string, depth: number) => {
+    if (depth > 32) return;
+    if (Array.isArray(value)) for (const item of value) visit(item, `${path}[]`, depth + 1);
+    else if (isRecord(value))
+      for (const [key, child] of Object.entries(value)) {
+        const at = fieldPath(path, key);
+        const entry = fill.get(at) ?? { records: 0, filled: 0 };
+        entry.records++;
+        if (!isEmpty(child)) entry.filled++;
+        fill.set(at, entry);
+        visit(child, at, depth + 1);
+      }
+  };
+  visit(output, "$", 0);
+  return Object.fromEntries(fill);
+};
+
+/** The paging fields every list tool returns (`listOutputFields`), null by design on a last page. */
+const listPagingFields = new Set([
+  "next_cursor",
+  "next_cursor_expires_at",
+  "has_more",
+  "total_results",
+  "list_changed",
+  "next_cursor_unavailable",
+]);
+
+/**
+ * A record's own key: its ID, SKU, product code or link, as `id`, `sku`, `url`, `product_id` or
+ * `listingUrl`. A related record's ID, such as a seller's, and an image's link are not.
+ */
+const itemKey =
+  /^(?:id|sku|upc|gtin|ean|isbn|mpn|url|link|href|permalink|(?:item|product|listing|offer|result)(?:id|sku|url|link|href|number|code))$/u;
+const isItemKey = (key: string) => itemKey.test(key.toLowerCase().replace(/[\s_-]/gu, ""));
 
 const sampleLength = 80;
 /** Sibling comparisons the whole-card check makes in one output, about a tenth of a second. */
@@ -312,6 +380,9 @@ const schemaResolver = (root: unknown) => {
   };
   return {
     root: resolve(root),
+    /** The node a local `$ref` names, resolved; undefined when there is none. */
+    reference: (node: Json): Json | undefined =>
+      typeof node["$ref"] === "string" ? resolve({ $ref: node["$ref"] }) : undefined,
     property: (node: Json | undefined, key: string) =>
       branches(node)
         .map((branch) => (isRecord(branch["properties"]) ? branch["properties"][key] : undefined))
@@ -397,7 +468,10 @@ const endsWithExpandPhrase = (text: string) => {
 /**
  * Every finding in `output`. Paths fold array positions to `[]`, so one finding covers a field in
  * every record. Field checks (constant, empty, duplicate records, whole-card text) need a list of
- * at least three records, so a single record is never judged on them.
+ * at least three records, so a single record is never judged on them, with two exceptions: an item
+ * ID that repeats is flagged in a list of two, and a field empty in every record of this output
+ * and of the other tested runs in `alsoTested` that hold it is flagged outside a list even in one
+ * record, as a detail field read wrong on every run.
  */
 export const lintOutput = (output: unknown, options: OutputLintOptions = {}): OutputFinding[] => {
   const schema = schemaResolver(options.outputSchema);
@@ -441,6 +515,9 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
   // skips the remaining values and reports what it found as partial.
   let stringBudget = repeatCheckBudget;
   let repeatsPartial = false;
+  // Paths where `duplicate_entries` reports a repeated item ID, which the word budget never cuts
+  // short.
+  const idPaths = new Set<string>();
 
   const lintString = (text: string, path: string, node: Json | undefined, inRow: boolean) => {
     const mediaType = schema.annotation(node, "contentMediaType");
@@ -486,6 +563,29 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
   };
 
   const lintRecords = (records: readonly Json[], path: string, node: Json | undefined) => {
+    if (records.length < 2) return;
+    // The same item twice in one list, such as a sponsored copy of an organic result.
+    for (const key of new Set(records.flatMap((record) => Object.keys(record)))) {
+      if (!isItemKey(key)) continue;
+      const ids = new Set<string>();
+      let repeated = 0;
+      let sample: string | undefined;
+      for (const record of records) {
+        const value = record[key];
+        if (typeof value !== "string" && typeof value !== "number") continue;
+        const id = String(value).trim();
+        if (id === "") continue;
+        if (ids.has(id)) {
+          repeated++;
+          sample ??= id;
+        } else ids.add(id);
+      }
+      // Reported as `duplicate_entries`, a check every release's records already decode.
+      if (repeated > 0) {
+        idPaths.add(`${path}[].${key}`);
+        flag(`${path}[].${key}`, "duplicate_entries", sample, repeated);
+      }
+    }
     if (records.length < 3) return;
     const seen = new Set<string>();
     let repeated = 0;
@@ -499,14 +599,9 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
     const itemNode = schema.items(node);
     for (const key of keys) {
       const values = records.map((record) => record[key]);
-      const fieldPath = `${path}[].${key}`;
-      const empty = (value: unknown) =>
-        value === undefined ||
-        value === null ||
-        (typeof value === "string" && value.trim() === "") ||
-        (Array.isArray(value) && value.length === 0);
-      if (values.every(empty)) {
-        flag(fieldPath, "empty_field");
+      const rowField = `${path}[].${key}`;
+      if (values.every(isEmpty)) {
+        flag(rowField, "empty_field");
         continue;
       }
       const declared = schema.property(itemNode, key);
@@ -517,7 +612,7 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
         (value) => typeof value === "string" || typeof value === "number",
       );
       if (scalar && !closedSet && new Set(values).size === 1)
-        flag(fieldPath, "constant_field", String(values[0]));
+        flag(rowField, "constant_field", String(values[0]));
     }
     // One string field that holds the values of three or more of its siblings, and most of them,
     // is the record's whole text beside its typed fields. Links and paths are not compared. Each
@@ -610,7 +705,7 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
       for (const [key, child] of Object.entries(value))
         visit(
           child,
-          path === "$" ? key : `${path}.${key}`,
+          fieldPath(path, key),
           schema.property(node, key),
           inRow,
           depth + 1,
@@ -618,11 +713,337 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
   };
 
   visit(output, "$", schema.root, false, 0);
+  // A field empty in every record this output and the tool's other tested runs hold, judged only
+  // when another tested run holds the field too: outside a list, one record per run is enough; in
+  // a list, three records across the runs. One run alone is no evidence a read is wrong.
+  const others = options.alsoTested ?? [];
+  const own = others.length === 0 ? {} : fieldFill(output);
+  for (const [path, mine] of Object.entries(own)) {
+    if (mine.filled > 0 || listPagingFields.has(path) || found.has(`empty_field\u0000${path}`))
+      continue;
+    let records = mine.records;
+    let filled = 0;
+    let elsewhere = 0;
+    for (const fill of others) {
+      const entry = Object.hasOwn(fill, path) ? fill[path] : undefined;
+      elsewhere += entry?.records ?? 0;
+      filled += entry?.filled ?? 0;
+    }
+    records += elsewhere;
+    if (elsewhere > 0 && filled === 0 && (!path.includes("[]") || records >= 3))
+      flag(path, "empty_field");
+  }
   return [...found.values()].map((entry) => ({
     ...entry,
-    ...(repeatsPartial && entry.check === "duplicate_entries" ? { partial: true as const } : {}),
+    ...(repeatsPartial && entry.check === "duplicate_entries" && !idPaths.has(entry.path)
+      ? { partial: true as const }
+      : {}),
     blocking: entry.override === undefined && blockingOutputChecks.has(entry.check),
   }));
+};
+
+/**
+ * One way a schema node can be satisfied, its keywords merged from the node, its local `$ref`
+ * target and its `allOf` branches. `types` undefined accepts any type.
+ */
+interface SchemaShape {
+  readonly types: ReadonlySet<string> | undefined;
+  readonly minLength: number;
+  readonly maxLength: number | undefined;
+  readonly patterns: readonly string[];
+  readonly enum: readonly unknown[] | undefined;
+  readonly format: boolean;
+  readonly properties: ReadonlyMap<string, readonly unknown[]>;
+  readonly required: ReadonlySet<string>;
+  readonly items: readonly unknown[];
+}
+
+/** The most alternatives one node expands to, so a schema of many unions costs a bounded time. */
+const shapeLimit = 32;
+/** The most fields one schema's walk records, so a very large schema costs a bounded time. */
+const fieldLimit = 2_000;
+
+const ownShape = (node: Json): SchemaShape => {
+  const type = node["type"];
+  const values = Array.isArray(node["enum"])
+    ? node["enum"]
+    : "const" in node
+      ? [node["const"]]
+      : undefined;
+  return {
+    types:
+      typeof type === "string"
+        ? new Set([type])
+        : Array.isArray(type)
+          ? new Set(type.filter((entry): entry is string => typeof entry === "string"))
+          : undefined,
+    minLength: typeof node["minLength"] === "number" ? node["minLength"] : 0,
+    maxLength: typeof node["maxLength"] === "number" ? node["maxLength"] : undefined,
+    patterns: typeof node["pattern"] === "string" ? [node["pattern"]] : [],
+    enum: values,
+    format: typeof node["format"] === "string",
+    properties: new Map(
+      Object.entries(isRecord(node["properties"]) ? node["properties"] : {}).map(
+        ([key, child]) => [key, [child]] as const,
+      ),
+    ),
+    required: new Set(
+      Array.isArray(node["required"])
+        ? node["required"].filter((key): key is string => typeof key === "string")
+        : [],
+    ),
+    items: "items" in node ? [node["items"]] : [],
+  };
+};
+
+/** Both shapes' constraints at once, as `allOf` holds them. */
+const bothShapes = (left: SchemaShape, right: SchemaShape): SchemaShape => {
+  const properties = new Map(left.properties);
+  for (const [key, nodes] of right.properties)
+    properties.set(key, [...(properties.get(key) ?? []), ...nodes]);
+  return {
+    types:
+      left.types === undefined
+        ? right.types
+        : right.types === undefined
+          ? left.types
+          : new Set([...left.types].filter((type) => right.types?.has(type))),
+    minLength: Math.max(left.minLength, right.minLength),
+    maxLength:
+      left.maxLength === undefined
+        ? right.maxLength
+        : Math.min(left.maxLength, right.maxLength ?? left.maxLength),
+    patterns: [...left.patterns, ...right.patterns],
+    enum:
+      left.enum === undefined
+        ? right.enum
+        : right.enum === undefined
+          ? left.enum
+          : left.enum.filter((value) => right.enum?.includes(value)),
+    format: left.format || right.format,
+    properties,
+    required: new Set([...left.required, ...right.required]),
+    items: [...left.items, ...right.items],
+  };
+};
+
+const compiledPatterns = new Map<string, RegExp | undefined>();
+/** A JSON Schema pattern as a regular expression; undefined when it does not compile here. */
+const compiledPattern = (pattern: string) => {
+  if (!compiledPatterns.has(pattern)) {
+    let compiled: RegExp | undefined;
+    for (const flags of ["u", ""])
+      try {
+        compiled = new RegExp(pattern, flags);
+        break;
+      } catch {
+        compiled = undefined;
+      }
+    compiledPatterns.set(pattern, compiled);
+  }
+  return compiledPatterns.get(pattern);
+};
+
+const isNullShape = (shape: SchemaShape) =>
+  shape.types !== undefined && shape.types.size === 1 && shape.types.has("null");
+const isStringShape = (shape: SchemaShape) =>
+  shape.types !== undefined && shape.types.size === 1 && shape.types.has("string");
+/** Whether a string shape surely accepts `text`. A pattern that does not compile here never does. */
+const acceptsText = (shape: SchemaShape, text: string) =>
+  !shape.format &&
+  text.length >= shape.minLength &&
+  (shape.maxLength === undefined || text.length <= shape.maxLength) &&
+  (shape.enum === undefined || shape.enum.includes(text)) &&
+  shape.patterns.every((pattern) => compiledPattern(pattern)?.test(text) === true);
+
+/** A field as its schema declares it: whether its key is required, and its shapes. */
+interface DeclaredField {
+  readonly path: string;
+  readonly key: string | undefined;
+  readonly required: boolean;
+  readonly nullable: boolean;
+  /** The shapes other than null. */
+  readonly shapes: readonly SchemaShape[];
+}
+
+/**
+ * Every field a JSON Schema declares, at any depth, with the paths `lintOutput` names: properties
+ * by name from `$`, array items as `[]`. An array's item is always required.
+ */
+const declaredFields = (root: unknown): DeclaredField[] => {
+  const schema = schemaResolver(root);
+  /** The local `$ref` names a node or its unions and intersections use, not its properties'. */
+  const referencesOf = (node: unknown, depth = 0): string[] =>
+    !isRecord(node) || depth > 16
+      ? []
+      : [
+          ...(typeof node["$ref"] === "string" ? [node["$ref"]] : []),
+          ...[node["allOf"], node["anyOf"], node["oneOf"]]
+            .filter(Array.isArray)
+            .flatMap((branches: unknown[]) =>
+              branches.flatMap((branch) => referencesOf(branch, depth + 1)),
+            ),
+        ];
+  /** `seen` holds the references being expanded, so a definition that refers to itself stops. */
+  const expand = (node: unknown, seen: ReadonlySet<string>): SchemaShape[] => {
+    if (!isRecord(node) || seen.size > 16) return [ownShape({})];
+    let shapes = [ownShape(node)];
+    const combine = (alternatives: readonly SchemaShape[]) => {
+      shapes = shapes
+        .flatMap((shape) => alternatives.map((alternative) => bothShapes(shape, alternative)))
+        .slice(0, shapeLimit);
+    };
+    const reference = node["$ref"];
+    const target = schema.reference(node);
+    if (target !== undefined && typeof reference === "string" && !seen.has(reference))
+      combine(expand(target, new Set([...seen, reference])));
+    if (Array.isArray(node["allOf"]))
+      for (const branch of node["allOf"]) combine(expand(branch, seen));
+    const union = [node["anyOf"], node["oneOf"]].find(Array.isArray);
+    if (union !== undefined) combine(union.flatMap((branch: unknown) => expand(branch, seen)));
+    return shapes;
+  };
+  const fields: DeclaredField[] = [];
+  /**
+   * `references` holds the definitions on the path from the root. A field whose schema names one
+   * of them again is recorded but not entered, so a recursive schema is walked once.
+   */
+  const visit = (
+    nodes: readonly unknown[],
+    path: string,
+    key: string | undefined,
+    required: boolean,
+    depth: number,
+    references: ReadonlySet<string>,
+  ) => {
+    if (depth > 32 || fields.length >= fieldLimit) return;
+    const own = nodes.flatMap((node) => referencesOf(node));
+    const repeats = own.some((reference) => references.has(reference));
+    const all = expand({ allOf: nodes }, new Set());
+    const nullable = all.some(
+      (shape) => shape.types?.has("null") === true || shape.enum?.includes(null) === true,
+    );
+    // Null is recorded once, as `nullable`; the shapes keep the other types and values, and a
+    // shape that allowed only null is gone.
+    const shapes = all
+      .filter((shape) => !isNullShape(shape))
+      .map((shape) => ({
+        ...shape,
+        types:
+          shape.types === undefined
+            ? undefined
+            : new Set([...shape.types].filter((type) => type !== "null")),
+        enum: shape.enum?.filter((value) => value !== null),
+      }))
+      .filter((shape) => shape.enum === undefined || shape.enum.length > 0);
+    fields.push({ path, key, required, nullable, shapes });
+    if (repeats) return;
+    const inner = new Set([...references, ...own]);
+    const children = new Map<string, { nodes: unknown[]; required: boolean }>();
+    for (const shape of shapes)
+      for (const [name, childNodes] of shape.properties) {
+        const child = children.get(name);
+        if (child === undefined)
+          children.set(name, { nodes: [...childNodes], required: shape.required.has(name) });
+        else {
+          child.nodes.push(...childNodes);
+          child.required &&= shape.required.has(name);
+        }
+      }
+    for (const [name, child] of children)
+      visit(
+        child.nodes,
+        path === "$" ? name : `${path}.${name}`,
+        name,
+        child.required,
+        depth + 1,
+        inner,
+      );
+    const items = shapes.flatMap((shape) => shape.items);
+    if (items.length > 0) visit(items, `${path}[]`, undefined, true, depth + 1, inner);
+  };
+  if (isRecord(root)) visit([root], "$", undefined, true, 0, new Set());
+  return fields;
+};
+
+/**
+ * Plain words, which a free-text pattern accepts and a format's pattern does not. The test misses
+ * a limited-charset pattern that still accepts plain words, such as letters and spaces only; that
+ * is acceptable, since the check is advisory.
+ */
+const freeText = "plain words";
+/** Text a person would read as nothing: empty, or whitespace alone. */
+const blankTexts = ["", " ", "\t", "\n"];
+
+/** Whether every shape is a string, so the text checks apply. */
+const textField = (field: DeclaredField) =>
+  field.shapes.length > 0 && field.shapes.every(isStringShape);
+
+/** How `output` is looser than `input`, the input field of the same name. */
+const looserThan = (output: DeclaredField, input: DeclaredField) => {
+  if (input.required && !input.nullable && (!output.required || output.nullable)) return true;
+  if (!textField(input) || !textField(output)) return false;
+  // An enum is held when the output's values are all the input's; a format's pattern when the
+  // output repeats it or takes an enum instead. A pattern written another way is a lead to check.
+  const inputValues = input.shapes.every((shape) => shape.enum !== undefined)
+    ? new Set(input.shapes.flatMap((shape) => shape.enum ?? []))
+    : undefined;
+  const outputEnum = output.shapes.every((shape) => shape.enum !== undefined);
+  if (
+    inputValues !== undefined &&
+    !(outputEnum && output.shapes.every((shape) => shape.enum?.every((value) => inputValues.has(value))))
+  )
+    return true;
+  // Only a pattern that holds a format, such as a date or a code, must carry over: one that
+  // takes plain words, such as one refusing whitespace alone, leaves the field free text.
+  const inputPatterns = input.shapes.map((shape) =>
+    shape.patterns.filter((pattern) => compiledPattern(pattern)?.test(freeText) === false),
+  );
+  if (
+    inputValues === undefined &&
+    inputPatterns.every((patterns) => patterns.length > 0) &&
+    !output.shapes.every(
+      (shape) =>
+        shape.enum !== undefined ||
+        inputPatterns.some((patterns) => patterns.every((pattern) => shape.patterns.includes(pattern))),
+    )
+  )
+    return true;
+  const least = (field: DeclaredField) => Math.min(...field.shapes.map((shape) => shape.minLength));
+  return least(output) < least(input);
+};
+
+/**
+ * Advisory checks of a tool's declared JSON Schemas, never of its values, apart from `lintOutput`
+ * so a run's output checks and telemetry are unchanged. `loose_text`: a required output string
+ * whose schema accepts an empty string or whitespace alone, such as one with no minLength and no
+ * pattern. `looser_than_input`: an output field looser than the input field of the same name,
+ * found by property name at any depth when only one input field has it: an enum dropped or
+ * widened, a format's pattern (one that refuses plain words) neither repeated nor replaced by an
+ * enum, a smaller minLength, or optional
+ * or nullable where the input is required. Neither blocks: whether a field holds a needed value
+ * is the publication review's judgment.
+ */
+export const lintSchemas = (inputSchema: unknown, outputSchema: unknown): OutputFinding[] => {
+  const inputs = new Map<string, DeclaredField | undefined>();
+  for (const field of declaredFields(inputSchema))
+    if (field.key !== undefined)
+      inputs.set(field.key, inputs.has(field.key) ? undefined : field);
+  // One finding per path and check, however often a schema reaches the field.
+  const findings = new Map<string, OutputFinding>();
+  const flag = (path: string, check: OutputCheck) =>
+    findings.set(`${check}\u0000${path}`, { path, check, count: 1, blocking: false });
+  for (const field of declaredFields(outputSchema)) {
+    if (
+      field.required &&
+      textField(field) &&
+      field.shapes.some((shape) => blankTexts.some((text) => acceptsText(shape, text)))
+    )
+      flag(field.path, "loose_text");
+    const input = field.key === undefined ? undefined : inputs.get(field.key);
+    if (input !== undefined && looserThan(field, input)) flag(field.path, "looser_than_input");
+  }
+  return [...findings.values()];
 };
 
 /** A finding as the reviewer reads it: with the minter's reason when it overrode it. */
@@ -663,10 +1084,16 @@ export const outputCheckMeaning: Readonly<Record<OutputCheck, string>> = {
   collapsed_text:
     "ends in an ellipsis or holds the label of a control that expands text on its page, so it may have been read collapsed",
   card_text: "repeats most of its sibling fields' values, a whole card's text",
-  duplicate_entries: "repeats an entry or a run of words",
+  duplicate_entries:
+    "repeats an entry or a run of words, or, on a record's ID, SKU or link field, the same item within one list, such as a sponsored copy of an organic result",
   duplicate_records: "repeats a whole record",
   constant_field: "has the same value in every record",
-  empty_field: "is empty or null in every record",
+  empty_field:
+    "is empty or null in every record checked, this run's and, when given, the tool's other tested runs', so the read may never find it",
+  loose_text:
+    "is a required string whose declared schema accepts an empty string or whitespace alone",
+  looser_than_input:
+    "is declared looser than the input field of the same name: its enum or format pattern dropped, a smaller minLength, or optional or nullable where the input is required",
 };
 
 /**
@@ -682,5 +1109,5 @@ export const outputChecksNotice = (findings: readonly OutputFinding[]) =>
           meaning: outputCheckMeaning[finding.check],
         })),
         instruction:
-          "The host checked every value this run returned. Check each finding against the page. Fix a wrong value at the read in source: read rendered text with visibleText, visibleTexts or readRows, expand collapsed text before reading it and read it back, and scope rows to the main list; never clean a string afterwards. A check can be wrong: when a value is correct as it is, such as code the tool is meant to return or the page's own text that only resembles code, name its path and check with the reason in finish_build's outputOverrides. A field that holds code or markup on purpose can declare its contentMediaType instead; its findings then name that type and never block. Blocking findings (script, css, markup, template_residue) refuse finish_build until fixed or overridden; the others never block. The publication reviewer reads every finding and every override with its reason.",
+          "The host checked every value this run returned. Check each finding against the page. Fix a wrong value at the read in source: read rendered text with visibleText, visibleTexts or readRows, expand collapsed text before reading it and read it back, and scope rows to the main list; never clean a string afterwards. A repeated item ID is often a sponsored copy of an organic result: first check whether the rows are variants or line items that share an ID on purpose, and return a copy once only when it is the same item (pagination skill). A field empty in every record of every tested run was usually read from a collapsed section or a guessed key: check it against a record whose page shows it, then read it from the page's embedded record data or the opened section, or remove it. A check can be wrong: when a value is correct as it is, such as code the tool is meant to return or the page's own text that only resembles code, name its path and check with the reason in finish_build's outputOverrides. A field that holds code or markup on purpose can declare its contentMediaType instead; its findings then name that type and never block. Blocking findings (script, css, markup, template_residue) refuse finish_build until fixed or overridden; the others never block. loose_text and looser_than_input judge the declared schema, not a value: type a needed value's field as strictly as the core skill says, and keep a field loose only where the page may genuinely not show its value. The publication reviewer reads every finding and every override with its reason.",
       };

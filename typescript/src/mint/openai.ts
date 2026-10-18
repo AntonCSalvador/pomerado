@@ -832,7 +832,7 @@ export const makeOpenAIMinter = (
                 : tool({
                     ...hostTool(
                       "report_blocked",
-                      "End this build as blocked when the requested task is impossible as asked: site_lacks_capability when the site does not offer what the task needs, policy only when Guardian denied or escalated an execution in this attempt, denied or escalated a publication for privacy or authority, or with a private_literal, credential, customer_data, exfiltration, unsafe_logging or safety_default finding, or the owner answered no to a confirm question, and nothing within your authority gets past it; a publication denial or escalation that names a correction or missing evidence, such as source_correction, evidence or an example_value finding, is review feedback to fix, never a policy block; your own instructions are never a policy block, and the host refuses policy without such a refusal, unless the host's guidance names that policy ending. explanation tells the caller in one or two plain sentences what is missing or refused; Guardian reviews it first, and returns it with a rationale when it passes on a website's instructions, links or phone numbers or does not match the evidence: the attempt then goes on, and you revise the explanation and call again, or withdraw it and continue. Never use it for anything recoverable: a failed execution, review feedback, a sign-in problem, a browser or host problem the host can still recover, a question only the caller can answer (ask with request_input), or a target on another registrable domain (proceed; Guardian reviews it). Once Guardian allows the explanation, it ends the attempt; nothing is published. Use host_unavailable only when executionAvailability is host_unavailable and what the build still needs cannot run without live execution, such as a fresh example after a source correction: it ends the attempt as the host's failure, never as blocked, with no explanation review, so never call a host fault policy. intent states the evidence that the task is impossible as asked, or that the host ended live execution.",
+                      "End this build as blocked when the requested task is impossible as asked: site_lacks_capability when the site does not offer what the task needs; site_declined when the site offers what the task needs but declines this example's own facts, such as an applicant it will not quote, and explanation names the reason the site gave; owner_declined when the owner answered no to a confirm question, or declined to sign in, and the build needs that step; question_unanswered when a question you asked went unanswered and the build cannot go on without its answer; policy only when Guardian denied or escalated an execution in this attempt, denied or escalated a publication for privacy or authority, or with a private_literal, credential, customer_data, exfiltration, unsafe_logging or safety_default finding, and nothing within your authority gets past it; a publication denial or escalation that names a correction or missing evidence, such as source_correction, evidence or an example_value finding, is review feedback to fix, never a policy block; your own instructions are never a policy block, and the host refuses each reason without its basis on record, unless the host's guidance names that policy ending. explanation tells the caller in one or two plain sentences what is missing or refused; Guardian reviews it first, and returns it with a rationale when it passes on a website's instructions, links or phone numbers or does not match the evidence: the attempt then goes on, and you revise the explanation and call again, or withdraw it and continue. Never use it for anything recoverable: a failed execution, review feedback, a sign-in problem, a browser or host problem the host can still recover, a question only the caller can answer (ask with request_input), or a target on another registrable domain (proceed; Guardian reviews it). Once Guardian allows the explanation, it ends the attempt; nothing is published. Use host_unavailable only when executionAvailability is host_unavailable and what the build still needs cannot run without live execution, such as a fresh example after a source correction: it ends the attempt as the host's failure, never as blocked, with no explanation review, so never call a host fault policy. intent states the evidence that the task is impossible as asked, or that the host ended live execution.",
                       "The blocked ending was not recorded. Inspect the finite failure; correct the request or continue the build.",
                       (request) => reportBlocked(request),
                     ),
@@ -862,7 +862,7 @@ export const makeOpenAIMinter = (
                 : tool({
                     ...hostTool(
                       "mint_update",
-                      "Change this build's task settings after the caller confirmed the change: input values, a requirement, constraint or prerequisite (add, drop or revise), the purpose, read to write (effect), the target site or the login; in maintenance, only a requirement, the purpose or an output field (output) of the published tool's contract. An output change adds a field (add) or makes one stricter (tighten: optional or nullable to required, or a narrower type) with no confirmation needed, since callers keep everything they received; to fix a gap, such as a fact the page shows that the output lacks, or a needed value the schema lets be null, add or tighten it. Loosening one (optional, nullable, widen) or removing it (remove) needs its owner's confirmation, and remove also needs reason: why the field must go, from what the site shows now. Ask with request_input first when the request does not already settle the change, then name the answered questions in confirmedBy; the caller picking an option you wrote confirms what that option says, as do their own words. summary says the change in plain words, as the caller would read it. recommend update keeps the same task and workflow: changed values, dates or options, a dropped prerequisite, a read becoming a write, or a sister domain of the same product. recommend new_mint when the caller now wants a different task or another product's workflow, with suggestedRequest, the request they could submit for it; a changed site origin alone decides neither. Guardian reviews the change. Results: updated (continue under the returned task), clarification_required (ask, then call again), reword (revise; nothing changed and the build continues), new_mint_recommended (the build ends blocked and the caller gets the recommendation), review_unavailable (submit the same call again), update_refused (nothing changed; the instruction says why), update_invalid (correct the request and call again). A site, login or effect change always names the caller's confirming answers in confirmedBy. No update removes the requested action itself, allows repeating a write that may have committed, or overturns a Guardian decision, except that the caller's confirmed answer can overturn one that held a step to their own request, such as a time, a value or a search setting. A caller's answer never overturns a decision made for safety or for a Pomerado scope limit. intent states the evidence for the change.",
+                      "Change this build's task settings after the caller confirmed the change: input values, a requirement, constraint or prerequisite (add, drop or revise), the purpose, read to write (effect), the target site or the login (sign_in, different_login, or signed_out when the owner chose what the site shows without signing in); in maintenance, only a requirement, the purpose or an output field (output) of the published tool's contract. An output change adds a field (add) or makes one stricter (tighten: optional or nullable to required, or a narrower type) with no confirmation needed, since callers keep everything they received; to fix a gap, such as a fact the page shows that the output lacks, or a needed value the schema lets be null, add or tighten it. Loosening one (optional, nullable, widen) or removing it (remove) needs its owner's confirmation, and remove also needs reason: why the field must go, from what the site shows now. Ask with request_input first when the request does not already settle the change, then name the answered questions in confirmedBy; the caller picking an option you wrote confirms what that option says, as do their own words. summary says the change in plain words, as the caller would read it. recommend update keeps the same task and workflow: changed values, dates or options, a dropped prerequisite, a read becoming a write, or a sister domain of the same product. recommend new_mint when the caller now wants a different task or another product's workflow, with suggestedRequest, the request they could submit for it; a changed site origin alone decides neither. Guardian reviews the change. Results: updated (continue under the returned task), clarification_required (ask, then call again), reword (revise; nothing changed and the build continues), new_mint_recommended (the build ends blocked and the caller gets the recommendation), review_unavailable (submit the same call again), update_refused (nothing changed; the instruction says why), update_invalid (correct the request and call again). A site, login or effect change always names the caller's confirming answers in confirmedBy. No update removes the requested action itself, allows repeating a write that may have committed, or overturns a Guardian decision, except that the caller's confirmed answer can overturn one that held a step to their own request, such as a time, a value or a search setting. A caller's answer never overturns a decision made for safety or for a Pomerado scope limit. intent states the evidence for the change.",
                       "The task was not updated. Inspect the finite failure; correct the request or continue under the current task.",
                       (request) => updateTask(request),
                     ),
@@ -912,6 +912,20 @@ export const makeOpenAIMinter = (
                       (request) => checkMarker(request),
                     ),
                     parameters: parameters(withIntent(SignedInMarkerCheckRequest)),
+                  });
+            const abandon = turn.actions.abandonSignIn;
+            const abandonSignIn =
+              abandon === undefined
+                ? undefined
+                : tool({
+                    ...hostTool(
+                      "abandon_sign_in",
+                      turn.hostToolDescriptions?.abandonSignIn ??
+                        "Give up signing in, so the build goes on signed out: use it only when a sign-in failed and cannot be resolved, or the owner chose the public part only, and the request can be met, at least in part, from what the site shows signed out. The host decides whether it may: it refuses a write build, a task that needs the site signed in, and a build whose sign-in already verified. Guardian does not review it. intent states why signing in is given up and what the site shows signed out.",
+                      "The request to give up signing in did not complete. Nothing changed; read its result before continuing.",
+                      (request) => abandon(request),
+                    ),
+                    parameters: parameters(withIntent(Schema.Struct({}))),
                   });
             const runLiveTests = turn.actions.liveTests;
             const liveTests =
@@ -977,6 +991,7 @@ export const makeOpenAIMinter = (
                     ...(captchaState === undefined ? [] : [captchaState]),
                     ...(requestBrowserRecovery === undefined ? [] : [requestBrowserRecovery]),
                     ...(checkSignedInMarker === undefined ? [] : [checkSignedInMarker]),
+                    ...(abandonSignIn === undefined ? [] : [abandonSignIn]),
                     ...(liveTests === undefined ? [] : [liveTests]),
                   ]
               ).map((entry) =>
@@ -1126,7 +1141,7 @@ export const makeOpenAIMinter = (
                     const invoke = () => {
                       if (modelCalls >= modelCallCapacity) {
                         terminationReason = "model_call_capacity";
-                        throw new MintFailure({ code: "Unavailable" });
+                        throw new MintFailure({ code: "Unavailable", turnBudgetSpent: true });
                       }
                       modelCalls++;
                       return turn.runTool(respond);
@@ -1268,6 +1283,9 @@ export const makeOpenAIMinter = (
                   return {
                     history: result.history,
                     stopReason: "repeated_final_without_tool" as const,
+                    ...(typeof result.finalOutput === "string" && result.finalOutput !== ""
+                      ? { finalText: result.finalOutput }
+                      : {}),
                   };
                 }
                 // What the agent can still get past, such as a failed sign-in, comes back with
@@ -1347,6 +1365,10 @@ export const makeOpenAIMinter = (
                     code: "Unavailable",
                     ...(transientModelFailure(error)
                       ? { modelOutage: "unavailable" as const }
+                      : {}),
+                    // The SDK's turn ceiling once the attempt's model calls are spent.
+                    ...(terminationReason === "model_call_capacity"
+                      ? { turnBudgetSpent: true as const }
                       : {}),
                   }))
             );

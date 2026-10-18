@@ -46,12 +46,18 @@ export const runOperation = (
     const signIn =
       artifact.signIn === undefined
         ? undefined
-        : makeRunSignIn(session, artifact.signIn, siteOrigin, [
-            ...new Set([
-              ...(request.authenticationOrigins ?? []),
-              ...(artifact.signIn.authenticationOrigins ?? []),
-            ]),
-          ]);
+        : makeRunSignIn(
+            session,
+            artifact.signIn,
+            siteOrigin,
+            [
+              ...new Set([
+                ...(request.authenticationOrigins ?? []),
+                ...(artifact.signIn.authenticationOrigins ?? []),
+              ]),
+            ],
+            request.effect,
+          );
     if (signIn !== undefined) yield* signIn.before;
     // A run starts at the site root, as its example did. It clears nothing: the CLI and each
     // served call run in a new browser context, and a library caller's scope keeps its session.

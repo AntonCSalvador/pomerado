@@ -2,10 +2,10 @@ import { Schema } from "effect";
 import { defineOperation, timeoutDefaults } from "../../src/browser/index.js";
 
 const SavedTask = Schema.Struct({
-  id: Schema.NonEmptyString.annotations({ description: "ID the site gave the saved task" }),
+  id: Schema.NonEmptyTrimmedString.annotations({ description: "ID the site gave the saved task" }),
 });
 const Outcome = Schema.Union(
-  Schema.Struct({ id: Schema.NonEmptyString }),
+  Schema.Struct({ id: Schema.NonEmptyTrimmedString }),
   Schema.Struct({ failure: Schema.Literal("form_changed", "not_submitted", "not_saved") }),
 );
 
@@ -16,8 +16,8 @@ export default defineOperation(
   {
     name: "create_task",
     input: Schema.Struct({
-      title: Schema.NonEmptyString.annotations({ description: "Title of the new task" }),
-      assignee: Schema.NonEmptyString.annotations({
+      title: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({ description: "Title of the new task" }),
+      assignee: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({
         description: "Who the task is assigned to, as the form's Assignee field takes it",
       }),
     }),
@@ -58,8 +58,8 @@ export default defineOperation(
         const siteDomain = ${JSON.stringify(siteDomain ?? null)};
         const onSite = (url) => siteDomain === null ? url.origin === ${JSON.stringify(siteOrigin)}
           : url.protocol === "https:" && (url.hostname === siteDomain || url.hostname.endsWith("." + siteDomain));
-        const title = ${JSON.stringify(input.title)};
-        const assignee = ${JSON.stringify(input.assignee)};
+        const title = ${JSON.stringify(input.title.trim())};
+        const assignee = ${JSON.stringify(input.assignee.trim())};
         const callDeadline = Date.now() + ${timeoutSec * 1_000 - callReserveMs};
         const timeLeft = () => Math.floor(callDeadline - Date.now());
         const actionTimeout = (maximum) => {

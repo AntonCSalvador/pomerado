@@ -149,6 +149,14 @@ When an overlay such as a cookie or consent banner covers the target, dismiss it
 control that declines optional cookies, such as Reject all or Necessary only, when the banner
 shows one, and otherwise with any of its controls, accept included.
 
+Decide whether each pop-up, banner or interstitial is conditional or always triggered. A
+conditional one shows only for some accounts, states or visits, such as a cookie banner, a
+one-time promotion or a membership upsell shown only to non-members: check for it, resolve it
+when it shows, and continue without error when it does not, as one outcome beside the page's
+next state. Never wait for it or require it. One the page always opens in answer to an action,
+such as a confirmation dialog a button always opens, may be expected. A pop-up the session met
+once is conditional unless the page shows it always follows that action.
+
 Type each date-only input and output as the runtime's `CalendarDate`, imported beside
 `formControlsCode`, never a bare `YYYY-MM-DD` pattern, which accepts `2026-02-30`. It checks
 the format and that the date exists, the check `fillDate` makes, so the host refuses an
@@ -157,8 +165,11 @@ narrow it to the example's date or a guessed window. A rule of the task or the s
 a range that ends before it starts, a past date or a booking limit, is the tool's own check:
 fail as `InvalidInput` with a message naming the field and the rule, before any site action
 when the input alone breaks it, and when the site refuses the date. Start the message with
-"Caller input error:" when the refusal is obvious, as the core skill says, and count a date as
-past only when it is before yesterday in UTC.
+"Caller input error:" when the refusal is obvious, and count a date as past only when it is
+before today in the site's time zone, both as the core skill says. A site with places in
+several time zones uses the place's zone when the tool knows it before any site action.
+When it doesn't know the zone, refuse only a date that is past in every time zone, such as one
+before yesterday in UTC.
 
 Date ranges, calendar-only pickers, validation messages, uploads, staged forms and
 autosave need site-specific semantic checks. A date field that takes typing goes

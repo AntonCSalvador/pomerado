@@ -100,7 +100,8 @@ an earlier stage. The host acts only on the observed recorded screen. It skips a
 only when a later recorded page or distinct credential fields prove progression, or the published
 signed-in check verifies the session. A missing control, a timeout or a coincident Continue button
 on the same page does not prove an account choice happened. Record an authorized choice and its
-following Continue as separate steps.
+following Continue as separate steps. Prefer exercising a chooser step from both starts in the
+build, right after a sign-in and from a saved session already past the chooser.
 
 Call `execute` with purpose `authenticate`, target `liveBrowser` and a `signInStep` for the screen in
 front of you. Pass the site's own sign-in link as you clicked it (above) as `loginUrl` on the first
@@ -224,6 +225,27 @@ at most two correction questions per rejected field per sign-in. Only submitted,
 fields consume their counters; `username` and the saved login's matching primary identifier share one
 counter. Worker takeover preserves these counters and rejected-value history.
 
+If, once the login was sent, the site says the account itself is locked, suspended, disabled or
+closed, no field is wrong and no correction helps: send
+`signInStep: { rejected: { account: "locked", selector: "<the visible message>" } }`, or
+`account: "suspended"` for a suspended, disabled or closed account, naming the visible element
+whose text says so; the host checks it shows. The build then ends as `account_locked`; never send
+`rejected.slot` for it, retry the sign-in or ask for another login.
+
+When the owner declines a login request (`login_declined`, or `login_request` with `declined`), they
+have no account or want only what the site shows signed out. Never ask for a login or
+authenticate again in that build. Build the part of the request the site shows signed out; when
+that part is missing or much less than asked, ask with `request_input` before you build, naming
+what the site shows without signing in, whether to continue with it or stop. When they stop, or
+nothing useful is public, end with `report_blocked` reason `owner_declined`.
+
+When a sign-in failed and nothing in your authority resolves it, or the owner chose the public
+part, and the request can still be met, at least in part, signed out: where the host offers
+`abandon_sign_in`, call it, or record the owner's confirmed choice with `mint_update` change
+`login` `signed_out`. Either way the build goes on signed out, and you never authenticate again.
+The host refuses `abandon_sign_in` for a write build, a task that needs the account, or a sign-in
+that already verified.
+
 A rejected code permits at most two fresh-code corrections within the remaining sign-in time.
 This does not extend the unchanged password's limit of two sends, including sends before worker
 takeover. If a further known code correction would need a third unchanged-password send, the host
@@ -328,8 +350,7 @@ shows.
   showed the sign-in form, the site keeps its session only in page memory or session storage, and
   the host signs in automatically at each operation start; the marker must still be site-wide.
 
-The published tool records the check with its screens, and each run decides whether its sign-in
-worked by that check alone: a run whose check fails requests sign-in repair before its operation.
+The published tool records the check with its screens.
 
 ## A sign-in refusal found by operation code
 

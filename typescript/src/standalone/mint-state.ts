@@ -39,7 +39,7 @@ import {
   makeRejectableLogin,
   mintSessionSignInFailure,
 } from "./session-sign-in.js";
-import type { KeptScriptAnswer } from "./script-answer-reuse.js";
+import type { KeptScriptAnswer } from "../mint/script-answer-reuse.js";
 import type { StandaloneSession } from "./session.js";
 import type { RequestContext } from "./request-context.js";
 import type { PomeradoRequest } from "./contracts.js";
@@ -283,6 +283,7 @@ export const mintState = (
         });
         const recorder = yield* makeSignInRecorder<Error>({
           browser: signInBrowser,
+          markerVisible: signInBrowser.markerVisible,
           login: login.login,
           values,
           // The screen may show a value the caller gave, such as the typed email on a password
@@ -359,6 +360,9 @@ export const mintState = (
           limits: mintSessionSignIns,
           scope: "check",
           spent: signInsSpent,
+          // Only a read build's sign-in may end on a page that can't tell; a write's, one a task
+          // update made a write since, or one whose effect the build decides, needs its marker.
+          allowCantTell: () => request.effect === "read" && context.buildEffect === "read",
         });
         /**
          * The origins a signed-in check found the login sent only to, off the site and its sign-in

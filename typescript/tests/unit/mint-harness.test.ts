@@ -679,6 +679,128 @@ it("ends as the host's failure when the minter reports the host gone", async () 
   expect(questionReviews).toBe(0);
 });
 
+// The blocked explanation's decision ledger stays bounded however many denials the attempt had:
+// the latest ones, each rationale capped, and a count of the rest.
+it("bounds the decision ledger a blocked explanation's review reads", async () => {
+  const ledgers: unknown[] = [];
+  let denials = 0;
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        for (let index = 0; index < 15; index++)
+          yield* turn.actions.execute({ ...execution, purpose: "explore" });
+        const reportBlocked = turn.actions.reportBlocked;
+        if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+        yield* reportBlocked({ reason: "policy", explanation: "Guardian refused every attempt." });
+      }),
+    {
+      reviewAndExecute: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: { outcome: "deny", rationale: `Denial ${++denials}. ${"x".repeat(2_000)}` },
+          }),
+        ),
+      reviewQuestion: (_request, options) =>
+        Effect.sync(() => {
+          ledgers.push(options?.decisionLedger);
+          return { outcome: "allow_business" as const, rationale: "Consistent." };
+        }),
+    },
+  );
+  await f.run();
+  const ledger = ledgers[0] as {
+    denials: { rationale: string }[];
+    omittedDenials?: number;
+  };
+  expect(ledger.omittedDenials).toBe(3);
+  expect(ledger.denials).toHaveLength(12);
+  expect(ledger.denials[0]?.rationale.startsWith("Denial 4.")).toBe(true);
+  expect(ledger.denials.at(-1)?.rationale.startsWith("Denial 15.")).toBe(true);
+  expect(Math.max(...ledger.denials.map(({ rationale }) => rationale.length))).toBeLessThanOrEqual(
+    800,
+  );
+});
+
+/**
+ * The decision ledger a takeover's blocked review reads after its predecessor's execution was
+ * denied, from the predecessor's checkpoint as `edit` leaves it.
+ */
+const ledgerAfterTakeover = async (edit: (checkpoint: Record<string, unknown>) => void) => {
+  let capture: (() => MintHarnessSnapshot) | undefined;
+  const first = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        yield* turn.actions.execute({ ...execution, purpose: "explore" });
+      }),
+    {
+      reviewAndExecute: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: { outcome: "deny", rationale: "The call creates server-side state." },
+          }),
+        ),
+      agentRecovery: {
+        bindHarness: (bound) =>
+          Effect.sync(() => {
+            capture = bound;
+          }),
+        save: () => Effect.void,
+      },
+    },
+  );
+  await first.run();
+  const checkpoint = JSON.parse(JSON.stringify(capture?.())) as Record<string, unknown>;
+  edit(checkpoint);
+  const harness = Schema.decodeUnknownSync(MintHarnessSnapshot)(checkpoint);
+  const ledgers: unknown[] = [];
+  const takeover = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        const reportBlocked = turn.actions.reportBlocked;
+        if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+        yield* reportBlocked({ reason: "policy", explanation: "Guardian refused the call." });
+      }),
+    {
+      reviewQuestion: (_request, options) =>
+        Effect.sync(() => {
+          ledgers.push(options?.decisionLedger);
+          return { outcome: "allow_business" as const, rationale: "Consistent." };
+        }),
+      agentRecovery: { initial: { agent: freshAgent, harness }, save: () => Effect.void },
+    },
+  );
+  await takeover.run();
+  return ledgers;
+};
+
+// A takeover's blocked review read an empty ledger as host evidence that nothing was denied,
+// though its predecessor's execution was.
+it("keeps the decision ledger's denials across a takeover", async () => {
+  const ledgers = await ledgerAfterTakeover(() => undefined);
+  expect(ledgers).toEqual([
+    {
+      denials: [
+        expect.objectContaining({
+          review: "execution",
+          outcome: "deny",
+          rationale: "The call creates server-side state.",
+        }),
+      ],
+      testFailures: [],
+    },
+  ]);
+});
+
+// A checkpoint from an older worker kept no ledger, so a missing denial there proves nothing.
+it("marks the decision ledger partial after a takeover from a checkpoint without one", async () => {
+  const ledgers = await ledgerAfterTakeover((checkpoint) => {
+    delete checkpoint["decisionLedger"];
+  });
+  expect(ledgers).toEqual([{ partial: true, denials: [], testFailures: [] }]);
+});
+
 // A takeover in the middle of a blocked explanation's review outage keeps it resubmittable, so the
 // build can still end blocked instead of looping on the refusal until it runs out of calls.
 it("ends blocked after a takeover during a blocked explanation's review outage", async () => {
@@ -2082,6 +2204,149 @@ it("has Guardian review the effect question, which the owner may answer in their
   ]);
   expect(asked).toBe(0);
   expect(logins).toBe(0);
+});
+
+// Guardian rejected the read-or-write question as redundant, and the host told the agent it could
+// withdraw it. The turn offers no other tool, so withdrawing ended the build with nothing, and the
+// agent could never change the host's own answer labels Guardian also objected to.
+it("tells the agent to ask a rejected read-or-write question again, never to withdraw it", async () => {
+  const responses: unknown[] = [];
+  let reviews = 0;
+  const effectChoice = {
+    questions: [
+      {
+        id: "effect",
+        type: "choice" as const,
+        prompt: "Should this tool only look up your orders, or also cancel one?",
+        options: [
+          { id: "read", label: "read" },
+          { id: "write", label: "write" },
+        ],
+      },
+    ],
+  };
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        responses.push(
+          JSON.parse(yield* turn.actions.requestInput(effectChoice)),
+          JSON.parse(yield* turn.actions.requestInput(effectChoice)),
+        );
+      }),
+    {
+      reviewQuestion: () =>
+        Effect.succeed(
+          reviews++ === 0
+            ? { outcome: "reword" as const, rationale: "The request already says read-only." }
+            : { outcome: "authentication" as const, rationale: "It may ask for a login." },
+        ),
+    },
+  );
+  await f.run({ ...request, effect: "ask" });
+  const instruction =
+    "Reword the question using the rationale and call request_input again. This read-or-write question is required, and no other tool opens until the person answers it. The host sets its two answer labels, so change only the prompt.";
+  expect(responses).toEqual([
+    {
+      status: "question_rejected",
+      rationale: "The request already says read-only.",
+      userInputRequired: false,
+      instruction,
+    },
+    {
+      status: "question_rejected",
+      rationale: "It may ask for a login.",
+      userInputRequired: false,
+      instruction,
+    },
+  ]);
+});
+
+it("keeps the reword-or-withdraw instruction for a rejected question other than read-or-write", async () => {
+  const responses: unknown[] = [];
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        responses.push(
+          JSON.parse(yield* turn.actions.requestInput(textQuestion("Which account type?"))),
+        );
+      }),
+    {
+      reviewQuestion: () =>
+        Effect.succeed({ outcome: "reword" as const, rationale: "The site shows the types." }),
+    },
+  );
+  await f.run();
+  expect(responses).toEqual([
+    {
+      status: "question_rejected",
+      rationale: "The site shows the types.",
+      userInputRequired: false,
+      instruction:
+        "Reword the question using the rationale, or withdraw it and continue. Do not ask again for a value you were already given or that the site shows. A reworded question is reviewed again.",
+    },
+  ]);
+});
+
+// The question review didn't know a build was a write build, so it rejected the true statement
+// that a write build does the task once, for real, before it publishes.
+it.each(["read", "write"] as const)(
+  "gives a %s build's question and blocked report reviews the build's effect",
+  async (effect) => {
+    const reviewed: unknown[] = [];
+    const f = await fixture(
+      (turn) =>
+        Effect.gen(function* () {
+          yield* turn.actions.requestInput(textQuestion("Which account type?"));
+          const reportBlocked = turn.actions.reportBlocked;
+          if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+          yield* reportBlocked(blockedReport);
+        }),
+      {
+        reviewQuestion: (_submitted, options) =>
+          Effect.sync(() => {
+            reviewed.push(options);
+            return { outcome: "allow_business" as const, rationale: "Plain." };
+          }),
+      },
+    );
+    await f.run({ ...request, effect });
+    expect(reviewed).toEqual([
+      expect.objectContaining({ buildEffect: effect }),
+      expect.objectContaining({ blockedOutcome: true, buildEffect: effect }),
+    ]);
+  },
+);
+
+it("gives the read-or-write question's review no build effect, since none is decided", async () => {
+  const reviewed: unknown[] = [];
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        yield* turn.actions.requestInput({
+          questions: [
+            {
+              id: "effect",
+              type: "choice" as const,
+              prompt: "Should this tool only look up your orders, or also cancel one?",
+              options: [
+                { id: "read", label: "read" },
+                { id: "write", label: "write" },
+              ],
+            },
+          ],
+        });
+      }),
+    {
+      reviewQuestion: (_submitted, options) =>
+        Effect.sync(() => {
+          reviewed.push(options);
+          return { outcome: "reword" as const, rationale: "Say what it would cancel." };
+        }),
+    },
+  );
+  await f.run({ ...request, effect: "ask" });
+  expect(reviewed).toHaveLength(1);
+  expect(reviewed[0]).not.toHaveProperty("buildEffect");
 });
 
 it("publishes without assumptions when the build lists none", async () => {
