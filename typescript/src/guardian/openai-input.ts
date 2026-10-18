@@ -36,8 +36,8 @@ export const guardianReviewInput = (
         ? {}
         : { unchangedSources: turn.sources.unchangedSources }),
     },
+    // The intent is in the instructions (trusted_request), the same for every review of a build.
     trusted_authority: {
-      intent: turn.pending.screenedIntent,
       allowedOrigins: turn.pending.allowedOrigins,
       // Derived from the screened origins, so no new text reaches the model.
       allowedSites: turn.pending.allowedOrigins.flatMap((origin) => {

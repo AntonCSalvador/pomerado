@@ -152,7 +152,8 @@ A site-relative URL such as `/api/search?q=...` resolves against the site origin
 in replay. `http.siteOrigin` is that origin, and each response's `requestUrl` is the
 absolute URL requested, so build other URLs from them, never from a sponsored link, a
 canonical tag or other page text, and never write the site's hostname as a literal (the core
-skill). A request may go to a sibling host on the site's registrable domain, such as
+skill). When the site signs each account in to its own workspace host, `http.siteOrigin` is
+that workspace's origin at run time, so an API on the workspace host is reached from it. A request may go to a sibling host on the site's registrable domain, such as
 `api.shop.example` or `data.shop.example` for `www.shop.example`, which many sites serve their
 data from. A host on another
 registrable domain is a third party: call it only with an https read that matches a call
@@ -267,7 +268,15 @@ refuses literal tokens.
 - **Write:** the real write is the act session, which runs the Playwright version; the
   host refuses an act step or residual whose entrypoint is `*-http.mjs`. Write the HTTP
   version from the session's state-changing requests and captures, and never run a
-  second write to compare. Check it once, against the session: replay it offline with target
+  second write to compare. When the captures show a commit request's body unavailable, have the
+  `act` step that waits on its response return that request's method, path and the shape of its
+  body: each field's name and value type, read with `response.request().postDataJSON()` (or
+  `postData()` for a body that is not JSON), so the HTTP version has evidence, or the body with
+  every field that holds a personal value left out. Never read a body that can carry a
+  credential, a secret handle, a one-time code, a card or other payment data, even one typed in
+  an earlier step: no sign-in, recovery or payment submit, and no step after the caller's card
+  was asked for (caller-input skill). Check it once, against the session: replay it offline with
+  target
   `savedHTTP`, selecting the session's capture (`capture.json`) or its response bodies as
   `fixtureRefs`, and `SiteHttp` replays the recorded exchanges. Fix and replay again until it
   passes; design no other tests. A passing replay is the only evidence a write's HTTP version

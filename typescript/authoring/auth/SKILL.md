@@ -42,6 +42,13 @@ Such a URL was made for one sign-in; a run that replays it starts from spent val
 A login link often redirects through an identity provider and lands on an authorize URL with
 one-time parameters: record the link you clicked, not the page you landed on.
 
+On a site that signs each account in to its own workspace host (sign in at `app.example.com`,
+work at `acme.example.com`), record `loginUrl` on the shared sign-in host. Never type or hard-code
+a workspace or tenant host or slug in a page address, selector or source: the host records a
+workspace screen itself, and each run's sign-in goes to that account's own workspace. Its
+`loginUrl` carries no return address: no other URL, host or path to go to after sign-in in its
+query, fragment or path, since a host refuses such a link for a workspace site.
+
 # Discover the entry before authenticating
 
 1. Submit a bounded, anonymous, read-only `explore` with target `liveBrowser` on the authorized site
@@ -115,6 +122,22 @@ Use `slot: "private_answer"` for each observed security-question answer field. W
 question has one visible match in that field's frame, supply its stable `questionSelector`, never
 its text. The host rereads the question before privately filling the answer. No answer reaches
 you, Guardian, generated code or the recipe. One-time and recovery codes keep their own slots.
+
+Every selector a `signInStep` sends, in `fields`, `submit`, `methods`, `questionSelector`,
+`rejectedMarkers` and `signedIn`, is a Playwright selector string, not a locator call as probes and
+the examples write. Prefer a stable `#id`, `[name=...]` or `data-testid=` selector. A role selector
+writes its options as attributes:
+
+- `role=button[name="Sign in"]` and `role=button[name="Sign in" s]` match that whole name, case
+  included: the string form of `getByRole("button", { name: "Sign in", exact: true })`.
+- `role=button[name="sign in" i]` matches the whole name ignoring case.
+- `role=button[name=/sign in/i]` matches a pattern.
+
+`exact` is an option of `getByRole` and `getByLabel`, never a selector attribute: `[exact]` or
+`[exact=true]` fails as an unknown attribute, and `[name="Sign in" exact]` fails to parse.
+`getByLabel` and `getByText` have no string form the host runs, since their `internal:` forms are
+refused: name such a field by its role and name, its `id`, its `name` or another stable
+attribute.
 
 - `fields`: each field the screen asks for, as a Playwright selector with exactly one visible match.
   A selector never reaches into another frame (no `>>` chains or `internal:` engines): the host finds
@@ -333,6 +356,11 @@ shows.
 
 - Prefer stable attributes and names (`aria-label`, a role, visible text, a test id) over
   generated class names such as `css-1q2w3e`.
+- Send the marker as a selector string, as every sign-in step's selector is (above), such as
+  `role=link[name="Sign out"]`, never with `exact`. The signed-out check reads CSS (with
+  `:has-text()`, `:text-is()` and `:visible`), `text=`, `data-testid=` and `role=` with `name`,
+  and `level` for a heading; it cannot read other attributes. A selector that crosses frames
+  (`>>`, `internal:`) is refused.
 - Never send a `urlPath` alone on a single-page app, or for a page the site also serves signed
   out; never the login page's path.
 - Test it with `check_signed_in_marker` and choose another until every check passes:

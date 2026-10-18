@@ -8,6 +8,7 @@ import {
   executionIdOf,
   headingOperation,
   html,
+  intentOf,
   objects,
   patch,
   probe,
@@ -756,7 +757,7 @@ test("a confirmed update turns a read build into a write build, and later review
     expect(contextOf(act!)?.["repeatableRead"]).toBe(false);
     expect(effectsOf(act)[0]).toMatch(/^The caller's requested task, done once/u);
     // The write is reviewed under the effective task: the intent and the accepted update.
-    expect(authorityOf(act!)["intent"]).toBe("Read the fixture heading");
+    expect(intentOf(act!)).toBe("Read the fixture heading");
     expect(authorityOf(act!)["taskUpdates"]).toEqual([
       {
         revision: 1,
