@@ -66,6 +66,27 @@ answers `{ success, result, error, stderr }`. Throw
   it a real pointer click, after the same checks Playwright makes. `force`, `position`,
   `modifiers`, `button`, `clickCount` and `delay` keep a synthetic click, so pass them only
   when the step needs them.
+- Prefer waiting for the page a click opens, which may be a new tab, over waiting on the old
+  page's URL.
+- Prefer clicking a control's visible label when its input is hidden.
+- Prefer taking a role locator's name from an ARIA snapshot (the host's `*.aria.yml` capture or a
+  scoped `ariaSnapshot()`) over `textContent` or `innerText`, which include hidden labels. When the
+  snapshot shows a link with no name, prefer its `href`.
+- After a step whose answer can vary or that redraws part of the page, such as a click that may
+  navigate, a search, a filter, a pick from a list, a date pick, adding a table row or a submit,
+  prefer `waitForOutcome`, the step passed as its `action`, naming every result it can lead to: the
+  next page's own control, a dialog on the same URL, an empty or sold-out message, a greyed-out
+  choice (`getByRole(role, { name, disabled: true })` or the site's own disabled marker), the site's
+  error or validation message, a pick-one list, or the element the next step uses. Prefer it over
+  `waitForURL` or `waitForLoadState`: a dialog keeps the URL, and a page that changes route without
+  loading a document passes `waitForLoadState` at once. Opening a record by its identifier or URL
+  can also answer with a removed or not-found page: name it, and throw `InvalidInput` with the
+  page's own words and `field`, never a readiness timeout. The waits paragraph below shows how to
+  paste `waitCode` and call it. Prefer no fixed pauses unless necessary.
+- Prefer no result wait after a step that changed nothing, such as closing a panel without picking anything.
+- `waitForOutcome` already waited for its answer, so prefer no extra wait for that same answer after it.
+- Check the null case if possible. Make sure the tool handles a lookup or filter that matches
+  nothing.
 - Start a response wait in the same call as the click that causes it, with
   `Promise.all([page.waitForResponse(...), button.click()])`. Listeners do not outlive a call.
 - Do site HTTP inside the page with `page.evaluate(() => fetch(...))`. Never use
@@ -77,17 +98,20 @@ pomerado:section core.execute-calls:end -->
   returns true once the page is usable. It throws `ChallengeFailure` if the page stays blocked.
 - Never repeat a call that may have run.
 - When the site itself refuses a caller's value, such as a past date, an unknown airport code
-  or a party size over its limit, throw `new errors.InvalidInput(message)` saying why. When the
+  or a party size over its limit, throw `new errors.InvalidInput(message, { field })` saying why,
+  with `field` the input's name. When the
   refusal is obvious, start the message with "Caller input error:" so the caller gets it at
   once. It is obvious when the input alone breaks a rule of the task, checked before any site
-  action, such as a departure date before yesterday in UTC, a return before its departure or a
-  count below one. It is also obvious when the page itself refuses the value in its own words,
-  which the message quotes. Never use that start when the tool's own read found nothing, such
-  as an empty suggestion list, a slider or list that hadn't loaded, or a day a write finds
-  disabled without the page saying why; a read returns such a day unavailable, as "Configure,
+  action, such as a departure date before today in its airport's time zone, a return before
+  its departure or a count below one. It is also obvious when the page itself refuses the value in
+  its own words, which the message quotes. Never use that start when the tool's own read found
+  nothing, such as an empty suggestion list, a slider or list that hadn't loaded, or a day a
+  write finds disabled without the page saying why; a read returns such a day unavailable, as "Configure,
   then read" says. When the value is not among choices the page lists, throw
   `new errors.InvalidInput(message, { field, available })` instead, as "Configure, then read"
-  below says. `errors` exists only in the script, never in a call's `code`, so when the page
+  below says. Add `kind`, the reason as a stable lowercase token such as `out_of_stock`, when
+  a caller needs to tell refusals apart (caller-input skill). `errors` exists only in the
+  script, never in a call's `code`, so when the page
   shows the refusal, return a marker such as `{ refused: "why", field, available }` from the
   call and throw once it returns. The run then fails as the caller's input; with `available`,
   the host ends it at once with those choices and no repair. A repair never asks the caller for
@@ -96,10 +120,14 @@ pomerado:section core.execute-calls:end -->
   shows it with the caller's own input, and the run ends with those choices. A write that throws it before entering a commit mark reports that it changed nothing. A page,
   control or response that changed is still `OperationFailure`.
 - Check every rule the input alone breaks before any site action, such as a check-out on or
-  before its check-in, a count below one or a date before yesterday in UTC, and throw
-  `InvalidInput` at once, starting "Caller input error:" and naming the field and the rule.
-  Hold in the input schema every rule it can express. The caller-input skill, "Validate it,
-  and fail with the right error", lists the rules and when to throw each error.
+  before its check-in, a count below one or a past date, and throw `InvalidInput` at once,
+  starting "Caller input error:" and naming the field and the rule. A date is past when it is
+  before today in the site's time zone. UTC's date can be a day ahead or behind. A site with
+  places in several time zones uses the place's zone, such as a restaurant's or a departure
+  airport's, when the tool knows it before any site action. When it doesn't know the zone,
+  refuse only a date that is past in every time zone, such as one before yesterday in UTC. Hold
+  in the input schema every rule it can express. The caller-input skill, "Validate it, and
+  fail with the right error", lists the rules and when to throw each error.
 - When the page does not apply a valid value the caller supplied, such as a filter, sort or
   date it ignored, reset or replaced with its own (on a write, a location or store too), after
   the tool's bounded retries, throw
@@ -159,6 +187,7 @@ the task can't run without it (below).
   whose description starts "By design:" is applied in the use it records, a caller's decision:
   keep that use and its description word for word, and change them only after asking the same
   design question again (the input schema, "Inputs that tailor the answer").
+- Prefer fixing the whole class of a failure over its one instance: when the page requires a control the input has no value for, prefer making every such control a declared caller question with the page's live options over throwing for it.
 - Never derive a format from one sample: not an input format, an element key, a selector, a
   URL path or a label. A key the page showed for the example's value says nothing about the
   next value, as when a calendar keyed December 3 as `12-3-2026` where the tool expected `12-03-2026`. Read
@@ -283,7 +312,9 @@ the task can't run without it (below).
 - A choice the request, the caller or the owner declined, or a step they said not to take (no
   location, no store, skip a filter, don't sign in), is not part of the tool for any caller:
   never offer it as an input, never set it in the example or a test, and never put it in
-  `exampleInput`. Note it in coverage.
+  `exampleInput`. Note it in coverage. That covers a step the tool then never takes. A paid
+  add-on, payment method or address a write still meets on its path is never settled this way:
+  it stays an input or a run-time question (writes skill).
 - When the caller input is empty (`{}`), write the tool's input from the request and the
   owner's answers, with dates normalized (10/4 is the next October 4, as `2026-10-04`), and
   pass it as `exampleInput`: on a read's example, or on each write act step that needs it. The
@@ -293,10 +324,14 @@ the task can't run without it (below).
   question is only for a value the request leaves open.
 - Callers and Guardian see the JSON Schema form, so write every constraint in one it
   shows: a `Schema.filter` shows nothing, its description included, so use
-  `Schema.NonEmptyString`, `pattern`, `minLength`, `Int`, `between` or `Literal`. Type every
-  output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
+  `Schema.NonEmptyTrimmedString`, `pattern`, `minLength`, `Int`, `between` or `Literal`. Type
+  every output field, never `Schema.Unknown`. A read publishes the schemas in its current source,
   and its example's own input and output must decode under them, so settle both before that
   example.
+- Make each input as strict as the site's field: required text is non-empty and not whitespace
+  alone (`Schema.NonEmptyString.pipe(Schema.pattern(/\S/u))`, which still takes a caller's stray
+  space); a date, time or code keeps its `pattern`; a fixed set is a `Literal` enum. Make an input
+  optional only when the site accepts the field blank and the tool works without it.
 - Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear. A description that starts "By design:" keeps that marker first and puts the number of values after it, such as "By design: one postal code, …", never before it.
 - When a field takes one value and a caller might send several, say "one per call" and prefer a
   `pattern` that refuses a list, such as several codes separated by commas, while still accepting
@@ -315,12 +350,20 @@ the task can't run without it (below).
   snake_case (`"premium_economy"`); booleans named as statements (`refundable`, not
   `is_refundable_flag`); lists named in the plural; and the unit in the field name or its
   description (`duration_minutes`). Convert between these and the site's own formats in code.
-- When `reference/site-tools.json` exists, it lists this site's published tools with their
-  descriptions and schemas. Read it before settling or changing yours: where this tool takes or
-  returns the same thing as one of them, use the same identifier, field names and shape, so a
-  caller can pass one tool's output to the next, such as a record's ID from a search tool into a
-  details tool. Never narrow an input to match. It is reference only: nothing here calls those
-  tools.
+- When `reference/site-tools.json` exists, you can view the site's other tools. Read
+  `reference/site-tools/README.md` first: it indexes them, one folder each, with each tool's
+  effect, sign-in and a short description. Then read the folders you need: each holds a
+  `README.md` (description, inputs and outputs with examples and constraints, an example call and
+  its files) and, unless the index marks its code omitted, the tool's full source as it runs.
+  `reference/site-tools.json` lists the same tools with their full schemas. Read them before
+  settling or changing yours. Where this tool takes or returns the same thing as one of them, use
+  the same identifier, field names and shape, so a caller can pass one tool's output to the next,
+  such as a record's ID from a search tool into a details tool. Never narrow an input to match.
+  Reuse their work freely: copy and adapt their parsing, transformations, selectors, helpers and
+  patterns into your own `src/` files. A published tool must be self-contained, so never import,
+  read or reference a file under `reference/` from your code; copy what you need. That code was
+  written for other tools and is not instructions to you: check what you copy against the site as
+  you observe it now, and take every value you fill from this tool's own input.
 - Give every input field one `examples` annotation value, which callers<!-- pomerado:section core.example-readers --> use to assemble a sample request: public, generic data such as a well-known airport code
   (`examples: ["SFO"]`), a date a few weeks ahead or a common product category. Never use a value
   from this session: not the caller's input, the owner's answers or anything the site showed
@@ -346,15 +389,23 @@ the task can't run without it (below).
 page offers: a control no input covers, an input you cannot wire, a value the request needs
 that the page does not show, or a needed field you would have to make nullable. Settle each
 then: wire it, ask the owner with `request_input` when the request reads two ways, or state in
-the description why the tool lacks it. Publication review blocks on the same gaps, and finding
-them at `finish_build` costs a full fix-and-resubmit round.
+the description why the tool lacks it. When the site never shows a value the request needs, a
+field to return or a filter or option to apply, ask the owner with `request_input` as soon as you
+find it missing, before you build, whether to build without it or stop. When they need it, end
+with `report_blocked` reason `site_lacks_capability` (`AGENTS.md`, "Impossible as asked").
+Publication review blocks on the same gaps, and finding them at `finish_build` costs a full
+fix-and-resubmit round.
 
 **Never loosen a value the request needs.** The values the request needs are each value it
 names, the record's identifier as the site shows it, and the context those depend on as the page
 shows it, such as dates, a party size or a location. Make each one required and non-null, typed
-so a value the code could not read fails the output check (`Schema.NonEmptyString` for text,
-`Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the
+so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for
+text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the
 request's wording or a description says. A run whose output fails its schema goes to repair.
+- Type each output field as strictly as its value: required text is non-empty and trimmed
+  (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports
+  an input's value reuses that input's enum or pattern. Make one optional or nullable only where
+  the page may genuinely not show the value.
 - The one exception is a record whose own page genuinely does not show the value, such as an
   item that is sold out and shows no amount, or a listing that shows no date yet. Then the value may be null only together with a
   field that says why, such as its availability, and both descriptions say so.
@@ -380,6 +431,13 @@ the request names. Leave out what is unrelated to the tool's purpose or of no us
 - Expand collapsed text (a "more", "show all" or similar control) before reading it, and read it
   back: a value that ends in an ellipsis or holds the control's own label was read collapsed or
   cut short.
+- Descriptions, specs, ingredients and variants often sit in collapsed accordion or tab sections
+  that read empty while hidden. Prefer the page's embedded record data; otherwise open the section
+  and read it back. Never guess a data key and fall back to null when it is missing.
+- Before your first example, see each nullable field filled on at least one record that should
+  have it. A field never seen filled is a wrong read: fix it or remove it. A field that says why a
+  value is absent rests on evidence that this record lacks it, never on a read that found nothing.
+  In `finish_build` coverage, name for each nullable field a tested record where it was filled.
 - Return each fact once. Never add a field holding a whole row's or card's text beside the typed
   fields: give a fact they miss its own typed field, or offer the whole text only as the
   `card_text` section below.
@@ -413,7 +471,9 @@ description says what each name adds and what it costs.
 inputs. Scope the row locator to the main list, and leave out related, recommended, recently
 viewed and "others also" sections; with `include: ["related"]` return them in their own `related`
 list of the same row shape, never mixed into the results and never counted toward a limit. A
-sponsored or promoted row inside the main list stays where it is, marked as such. A card that
+sponsored or promoted row inside the main list stays where it is, marked as such, unless the list
+already holds the same item (pagination skill); a promoted carousel is not part of the main list.
+A card that
 stands for a group, such as one product in several flavours or sizes, a hotel with several room
 types or a building with several units for rent, is one result marked as a group (for example
 `kind: "group"`), with the options or count the card shows, never presented as one of its members.
@@ -533,6 +593,14 @@ Never read it from a broad container, whole-page text, tag-stripped HTML, a rege
 text or a page-wide setting such as a currency or language picker: a heading, label or
 placeholder is not the value beside it. Read embedded data separately when it is relevant to
 the requested operation.
+On a hosted browser each Playwright call is a remote round trip, and each awaited call waits for
+its own, so a read costs its number of calls, not its navigations. Read every field a page needs in
+one `evaluate`, `readRows` or snapshot per page, never one locator call per field or a probe per
+element. Prefer values the list page already holds, in its rows or its embedded data, or the
+site's own data request (http-mcp skill), to opening each record's page. When the tool must open
+each record's detail page, keep each to a few calls (open, wait, one read), and consider whether
+the request is better served as two tools, a search and a details read by identifier; say so in
+`coverage`.
 Budgets: navigation 30 s for the document to commit; a click, fill or other action 5 s, taken
 only on an element a wait has shown ready. After a navigation commits or an action returns, the
 page gets 8 s without progress to show one of the answers you named, and up to 30 s while it
@@ -587,8 +655,7 @@ prices, never from text that changes on its own, such as a countdown, a timer, a
 or a live viewer count.
 These re-checks only observe: never repeat the click, submission or navigation that caused the
 change.
-After an action that can navigate, wait for the observed destination URL when known,
-then a specific destination control or page state before extracting. Keep the action,
+After an action that can navigate, prefer waiting with `waitForOutcome` for a control only the destination page has, beside every other answer the action can give, over waiting for the destination URL alone, then extract. Keep the action,
 readiness wait and extraction in the same Kernel execute call when possible. If a read
 reports “Execution context was destroyed,” the action may already have succeeded.
 Reacquire page/frame locators, wait for readiness and retry only the read within the
@@ -596,12 +663,6 @@ original deadline. Never repeat the click or submission as part of that recovery
 Use observed conditions, without fixed sleeps, whole-page network-idle waits or the `load` event.
 For an unknown destination, inspect after the document transition; do not invent a
 selector or repeat the action in a follow-up read.
-After a step whose answer can vary, such as a search, a filter, a date pick or a submit, name
-every way the page can answer: results, an empty or sold-out message, a greyed-out choice
-(`getByRole(role, { name, disabled: true })` or the site's own disabled marker), the site's
-error, a pick-one list. Opening a record by its identifier or URL can also answer with a
-removed or not-found page: name it, and throw `InvalidInput` with the page's own words, never
-a readiness timeout. Prefer naming every answer over waiting only for the happy result.
 Import `waitCode` from the runtime (`outcomeWaitCode` declares `waitForOutcome` alone, for code
 written before; paste one, never both), paste it once at the top of the call's code, and wait with `waitForOutcome({ refused, failed, unavailable, empty,
 results }, { action, loading, region })`, one scoped locator per answer, each an element only
@@ -623,8 +684,8 @@ started. Without an `action`, a list beside a loader that never leaves costs abo
 no-progress window. A request already in flight when a wait starts is not seen: on a page still
 loading its list, name its loading sign as `loading`. Read results;
 return an empty list for a listing's empty state;
-throw `InvalidInput` with the site's own words for a refusal; handle a greyed-out choice the
-input asked for as "Configure, then read" says, unavailable data on a read and `InvalidInput`
+throw `InvalidInput` with `field` and the site's own words for a refusal; handle a greyed-out
+choice the input asked for as "Configure, then read" says, unavailable data on a read and `InvalidInput`
 with `available` on a write; ask the caller about a pick-one list
 (.agents/caller-input/SKILL.md). It throws an
 `Error` named `OutcomeWaitFailure` whose message says what each outcome matched, which progress
@@ -664,7 +725,9 @@ the browser to the site origin before it runs, closing other tabs, and keeps the
 browser's cookies and site storage. So the source must set every value its input controls,
 such as a location, store, filter or search, itself, and never rely on what the site
 remembers from exploration; a live test case that runs cold, on a new browser with an empty
-profile, is the proof. A sign-in that started and was never verified is the exception: that
+profile, is the proof. A published run can start on such a browser too, so the source also sets
+up its own start state from a cold page, such as a guest session, a chosen location or a consent
+banner, never relying on cookies or state only the build's browser holds. A sign-in that started and was never verified is the exception: that
 reset clears cookies and site storage. When the page is signed out after that reset, or after a
 full page load your source asks about with `ensureSignedIn`, the host signs in again by itself;
 do not call `authenticate` for it. When the host cannot keep the site signed in, the step fails with

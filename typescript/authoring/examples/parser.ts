@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import { defineOperation } from "../../src/browser/index.js";
 
 const Invoice = Schema.Struct({
-  id: Schema.NonEmptyString.annotations({ description: "The site's invoice ID" }),
+  id: Schema.NonEmptyTrimmedString.annotations({ description: "The site's invoice ID" }),
   total_minor: Schema.Int.annotations({ description: "Invoice total in minor units (cents)" }),
   currency: Schema.Literal("USD").annotations({ description: "Currency of the total" }),
 });

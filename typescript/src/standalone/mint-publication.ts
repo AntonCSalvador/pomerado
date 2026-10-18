@@ -16,6 +16,7 @@ import {
 } from "../mint/publication-review.js";
 import { contractExtractionNote } from "../mint/review-context.js";
 import { outputNotes, outputNotesPath } from "../mint/output-notes.js";
+import { skillReferenceFiles } from "../mint/skills.js";
 import { oneTimeLoginUrlParameters, refuseCredentialParts } from "../mint/login-url.js";
 import { holdsSecretHandle } from "../mint/secret-handles.js";
 import { holdsFileHandle } from "../mint/file-handles.js";
@@ -301,12 +302,16 @@ export const mintPublication =
               const notes = outputNotes({
                 output: sample.output,
                 outputSchema: result.schemas.output,
+                inputSchema: result.schemas.input,
                 ...(sample.controlLabels === undefined
                   ? {}
                   : { controlLabels: sample.controlLabels }),
                 ...(publication.outputOverrides === undefined
                   ? {}
                   : { overrides: publication.outputOverrides }),
+                ...(hostEvidence?.testedFields === undefined
+                  ? {}
+                  : { alsoTested: hostEvidence.testedFields }),
               });
               if (notes.blocking.length > 0)
                 return yield* new MintFailure({
@@ -355,6 +360,7 @@ export const mintPublication =
         ...("baseline" in judged ? { baseline: judged.baseline } : {}),
         notes: `${judged.note} Coverage: ${secrets.redact(publication.coverage)}`,
         inputSchema: result.schemas.input,
+        references: skillReferenceFiles(state.authoring.skills),
         ...(judged.intentDerivedInput === undefined
           ? {}
           : { intentDerivedInput: judged.intentDerivedInput }),

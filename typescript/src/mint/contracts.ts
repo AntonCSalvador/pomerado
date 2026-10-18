@@ -7,7 +7,7 @@ import type { CapabilityReview } from "../capabilities/review-contracts.js";
 import { IntakeReasonCode } from "../capabilities/intake-contracts.js";
 import type { FailureDetail } from "../runtime/failure-detail.js";
 import type { InputIssue } from "../runtime/errors.js";
-import { outputChecks, type OutputFinding } from "../runtime/output-lint.js";
+import { outputChecks, type FieldFill, type OutputFinding } from "../runtime/output-lint.js";
 import type { DestinationPrivateCandidateReason } from "../destinations/private-candidate.js";
 import type { SignedInMarkerCheck } from "../destinations/signed-in-marker.js";
 import type { DestinationReason } from "./destination-reason.js";
@@ -65,6 +65,7 @@ import {
 } from "../guardian/task-update.js";
 import {
   ConfirmQuestion,
+  LoginDecline,
   ProposedChoiceQuestion,
   ProposedMultiChoiceQuestion,
   SecretQuestion,
@@ -180,6 +181,14 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
    * expired deadline end the attempt as the agent's own outcome.
    */
   readonly modelOutage?: "unavailable" | "quota_exhausted";
+  /** The attempt spent the model calls it may make: the build ends `turn_budget_spent`. */
+  readonly turnBudgetSpent?: true;
+  /**
+   * The owner declined the login a sign-in asked for: they have no account on the site
+   * (`no_account`), or want only what the site shows signed out (`public_only`). The minter
+   * hears it as a result and builds the public part of the request without signing in.
+   */
+  readonly loginDeclined?: LoginDecline;
   /** The session's `decideDialog` step names a `confirm_action_unmatched` refusal names. */
   readonly confirmActionIds?: readonly string[];
   /** Where the input schema rejected the input a `contract_input_mismatch` refusal names. */
@@ -426,6 +435,11 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
     readonly reviewId?: string;
     readonly rationale: string;
     readonly findings?: readonly PublicationFinding[];
+    /**
+     * A publication review's short reason its caller may read, apart from the private rationale;
+     * the harness screens it before a build's result carries it (`PublicationDenial`).
+     */
+    readonly publicReason?: string;
   };
 }> {}
 
@@ -527,8 +541,22 @@ export const SignInStep = Schema.Union(
   ),
   Schema.Struct({ approval: AutofillApproval, popup: Schema.optional(AutofillPopup) }),
   // The site showed that the login's password or code was wrong: the host asks the owner
-  // for a correction in place and never sends the rejected value again.
-  Schema.Struct({ rejected: Schema.Struct({ slot: CredentialRejectedField }) }),
+  // for a correction in place and never sends the rejected value again. Or, once the login was
+  // sent, it showed the account itself locked or suspended (`account`), at the visible element
+  // `selector` names, which the host checks shows: no correction gets past that, and the build
+  // ends `account_locked`.
+  Schema.Struct({
+    rejected: Schema.Union(
+      Schema.Struct({ slot: CredentialRejectedField }),
+      Schema.Struct({
+        account: Schema.Literal("locked", "suspended"),
+        selector: SignInSelector.annotations({
+          description:
+            "The visible element whose text says the account is locked or suspended (disabled or closed counts as suspended)",
+        }),
+      }),
+    ),
+  }),
   Schema.Struct({
     signedIn: Schema.Struct({
       selector: Schema.optional(SignInSelector),
@@ -991,26 +1019,48 @@ export type PublicationRequest = typeof PublicationRequest.Type;
 
 /**
  * How the minter ends a build its task makes impossible as asked:
- * `site_lacks_capability`, the site does not offer what the task needs; `policy`, Guardian
- * denied or escalated an execution, or refused a publication for a reason no correction gets past
- * (`publicationRefusalUnfixable`), in this attempt, or the owner answered no or left a question
- * unanswered, and nothing within authority gets past it. The host refuses `policy` without such a
- * refusal or unanswered question on record. A target on
- * another registrable domain is never a reason by itself: Guardian reviews such work.
+ * - `site_lacks_capability`: the site does not offer what the task needs.
+ * - `site_declined`: the site offers what the task needs but declines this example's own facts,
+ *   such as an applicant it will not quote; the explanation names the reason the site gave.
+ * - `policy`: Guardian denied or escalated an execution, or refused a publication for a reason no
+ *   correction gets past (`publicationRefusalUnfixable`), in this attempt, and nothing within
+ *   authority gets past it.
+ * - `owner_declined`: the owner explicitly said no to a step the build needs: a confirm question
+ *   answered no, or a login request declined.
+ * - `question_unanswered`: a question the build needed went unanswered, and the build cannot go
+ *   on without its answer.
+ * The host refuses each ending without its basis on record. A `policy` report whose only basis is
+ * the owner's no or an unanswered question ends as `owner_declined` or `question_unanswered`. A
+ * target on another registrable domain is never a reason by itself: Guardian reviews such work.
  */
 export const blockedExplanationLimit = 500;
 export const BuildBlocked = Schema.Struct({
-  reason: Schema.Literal("site_lacks_capability", "policy"),
+  reason: Schema.Literal(
+    "site_lacks_capability",
+    "site_declined",
+    "policy",
+    "owner_declined",
+    "question_unanswered",
+  ),
   explanation: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(blockedExplanationLimit)),
 });
 /**
  * What the minter sends `report_blocked`: a blocked ending's reason, or `host_unavailable` when the
  * host has ended live execution and what the build still needs, such as a fresh example a review
  * asked for, cannot run without it. That one ends the attempt as the host's failure, never as a
- * block: nothing about the task is impossible, so the caller never reads it as one.
+ * block: nothing about the task is impossible, so the caller never reads it as one. Once sign-in
+ * is unavailable in the build, any report, `policy` included, ends the build with the sign-in's
+ * own result instead of the reason it names.
  */
 export const BlockedReport = Schema.Struct({
-  reason: Schema.Literal("site_lacks_capability", "policy", "host_unavailable"),
+  reason: Schema.Literal(
+    "site_lacks_capability",
+    "site_declined",
+    "policy",
+    "owner_declined",
+    "question_unanswered",
+    "host_unavailable",
+  ),
   explanation: BuildBlocked.fields.explanation,
 });
 /**
@@ -1071,11 +1121,12 @@ export type TaskUpdateRequest = typeof TaskUpdateRequest.Type;
 /**
  * Every `status` a `mint_update` result carries:
  * - `updated`: Guardian allowed it and the host applied it; the result carries the effective task.
- * - `clarification_required`: Guardian found the caller's confirmation missing or ambiguous, or the
- *   host needs something only the caller has, such as a login for the new site. Nothing changed.
+ * - `clarification_required`: Guardian found the caller's confirmation missing or ambiguous, or
+ *   found a `recommend: "update"` a new build, or the host needs something only the caller has,
+ *   such as a login for the new site. Nothing changed.
  * - `reword`: Guardian's feedback; nothing changed and the build continues.
- * - `new_mint_recommended`: the change belongs in a new build. This build ends blocked with the
- *   recommendation and a suggested request.
+ * - `new_mint_recommended`: the minter recommended a new build and Guardian did not object. This
+ *   build ends blocked with the recommendation and its suggested request.
  * - `review_unavailable`: the review did not complete; resubmit within the review outage budget.
  * - `update_refused`: the harness or host cannot apply this change to this build, such as a site
  *   change once the build cannot run another live example. Nothing changed.
@@ -1189,12 +1240,52 @@ const mintHostFailures = [
 ] as const;
 type MintHostFailure = (typeof mintHostFailures)[number];
 
-/** Guardian's finite reason for denying a publication, as a build's result carries it. */
+/** The characters Guardian's public reason for a publication denial may hold once screened. */
+export const publicReasonLimit = 300;
+/**
+ * Guardian's finite reason for denying a publication, as a build's result carries it, and its
+ * short public reason when it wrote one: a sentence its caller may read, screened like any text
+ * that reaches the caller. Its rationale stays private.
+ */
 export const PublicationDenial = Schema.Struct({
   reason: Schema.optionalWith(PublicationReason, { exact: true }),
   category: Schema.optionalWith(PublicationFinding.fields.category, { exact: true }),
+  publicReason: Schema.optionalWith(
+    Schema.String.pipe(Schema.minLength(1), Schema.maxLength(publicReasonLimit)),
+    { exact: true },
+  ),
 });
 export type PublicationDenial = typeof PublicationDenial.Type;
+
+/**
+ * Why an unpublished build stopped, as one typed code, so a host never reads every ending as a
+ * missing publication:
+ * - `final_text_without_tool`: the minter answered without a tool call three times in a row.
+ * - `turn_budget_spent`: the attempt spent the model calls it may make.
+ * - `model_quota_exhausted`: the model provider refused a call because the quota is spent.
+ * - `sign_in_failed`: the site could not be signed in, or rejected the login.
+ * - `account_locked`: the site said the account is locked, suspended or disabled.
+ * - `question_unanswered`: a question the build needed went unanswered.
+ * - `owner_declined`: the owner said no to a step the build needs.
+ * - `site_lacks_capability`, `site_declined`, `policy`: the minter's blocked ending of the same
+ *   name.
+ * - `host_unavailable`: the host, not the task, ended the build.
+ */
+export const mintStopReasons = [
+  "final_text_without_tool",
+  "turn_budget_spent",
+  "model_quota_exhausted",
+  "sign_in_failed",
+  "account_locked",
+  "question_unanswered",
+  "owner_declined",
+  "site_lacks_capability",
+  "site_declined",
+  "policy",
+  "host_unavailable",
+] as const;
+export const MintStopReason = Schema.Literal(...mintStopReasons);
+export type MintStopReason = typeof MintStopReason.Type;
 
 export type MintOutcome = {
   readonly rejectedCredential?: typeof CredentialRejectedField.Type;
@@ -1236,6 +1327,17 @@ export type MintOutcome = {
   readonly publicationDenial?: PublicationDenial;
   /** Site defaults the build took instead of asking, as screened entries without private data. */
   readonly assumptions?: readonly BuildAssumption[];
+  /**
+   * Set by the harness on an unpublished build whose ending it can name; see `mintStopReasons`.
+   * Absent on a published build, and on an ending none of them names.
+   */
+  readonly stopReason?: MintStopReason;
+  /**
+   * The minter's last answer when it stopped without a tool call (`final_text_without_tool`),
+   * screened for credentials and host-private values and kept only when Guardian's question
+   * review allowed its caller to read it, as a blocked explanation is.
+   */
+  readonly stopExplanation?: string;
   /** Host-only references: preserve first execution independently of build success. */
   readonly example?: ExecutionEvidence;
   readonly currentInvocation?: CurrentInvocation;
@@ -1248,6 +1350,17 @@ export type MintOutcome = {
   readonly summary: string;
   readonly diagnostics: readonly string[];
 };
+
+/** The host's answer to `abandon_sign_in` (`MintDependencies.abandonSignIn`). */
+export type AbandonSignInResult =
+  | { readonly outcome: "abandoned" }
+  | {
+      readonly outcome: "refused";
+      /** Such as `write_build`, `sign_in_required` or `signed_in`. */
+      readonly reason: "write_build" | "sign_in_required" | "signed_in" | (string & {});
+      /** What the minter reads about the refusal; screened before it does. */
+      readonly notice?: string;
+    };
 
 /** One site default a build took instead of asking. */
 export interface BuildAssumption {
@@ -1327,6 +1440,8 @@ export interface MintActions {
   readonly checkSignedInMarker?: (input: unknown) => Effect.Effect<string, MintFailure>;
   /** A read's planned live tests (`LiveTestsRequest`); absent where the host runs none. */
   readonly liveTests?: (input: unknown) => Effect.Effect<string, MintFailure>;
+  /** Gives up signing in, so the build goes on signed out; absent where the host has no hook. */
+  readonly abandonSignIn?: (input: unknown) => Effect.Effect<string, MintFailure>;
 }
 
 /**
@@ -1337,6 +1452,7 @@ export interface HostToolDescriptions {
   readonly captchaState?: string;
   readonly requestBrowserRecovery?: string;
   readonly checkSignedInMarker?: string;
+  readonly abandonSignIn?: string;
 }
 
 export interface MintTurn {
@@ -1393,6 +1509,8 @@ export interface MintModel {
       readonly history: readonly AgentInputItem[];
       /** The model kept giving final answers with no tool call, so the loop stopped. */
       readonly stopReason?: "repeated_final_without_tool";
+      /** With `stopReason`: the model's last final answer, unscreened. */
+      readonly finalText?: string;
     },
     MintFailure
   >;
@@ -1455,6 +1573,36 @@ export interface ExampleJournal {
   readonly stopped: Effect.Effect<void, MintFailure>;
 }
 
+/**
+ * One Guardian denial or escalation in this build: which review decided it, its outcome and
+ * reason, and the rationale and finding explanations Guardian wrote, screened as they are for the
+ * minter and capped.
+ */
+export interface LedgerDenial {
+  readonly review: "execution" | "live_tests" | "publication";
+  /** When the harness received it, in epoch milliseconds. */
+  readonly decidedAt: number;
+  readonly outcome?: "deny" | "escalate";
+  /** A publication review's finite reason. */
+  readonly reason?: string;
+  readonly reviewId?: string;
+  readonly rationale: string;
+  readonly findings?: readonly string[];
+  /** Findings past the ledger's bound, left out. */
+  readonly omittedFindings?: number;
+}
+
+export const LedgerDenial: Schema.Schema<LedgerDenial> = Schema.Struct({
+  review: Schema.Literal("execution", "live_tests", "publication"),
+  decidedAt: Schema.NonNegativeInt,
+  outcome: Schema.optionalWith(Schema.Literal("deny", "escalate"), { exact: true }),
+  reason: Schema.optionalWith(Schema.String, { exact: true }),
+  reviewId: Schema.optionalWith(Schema.String, { exact: true }),
+  rationale: Schema.String,
+  findings: Schema.optionalWith(Schema.Array(Schema.String), { exact: true }),
+  omittedFindings: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
+});
+
 export interface MintHarnessSnapshot {
   readonly executions: readonly ExecutionEvidence[];
   /**
@@ -1499,6 +1647,8 @@ export interface MintHarnessSnapshot {
     | "recoveryReason"
     | "hostFailure"
     | "rejectedCredential"
+    | "stopReason"
+    | "stopExplanation"
   > & {
     /** Only the minter's blocked ending; the intake refusal ends a build before any harness. */
     readonly blocked?: BuildBlockedOutcome;
@@ -1520,6 +1670,15 @@ export interface MintHarnessSnapshot {
    */
   readonly invalidOutcomes?: number;
   /**
+   * The decision ledger's denials so far. Optional, so a rollout's old and new workers each
+   * restore the other's checkpoint; one restored without it marks the ledger partial.
+   */
+  readonly decisionLedger?: {
+    readonly denials: readonly LedgerDenial[];
+    readonly omittedDenials?: number;
+    readonly partial?: true;
+  };
+  /**
    * The current review outage is a blocked explanation's, which `report_blocked` resubmits.
    * Optional, so an older worker ignores it and a newer one restores an older checkpoint.
    */
@@ -1527,13 +1686,12 @@ export interface MintHarnessSnapshot {
   /**
    * Guardian denied or escalated an execution, or refused a publication for a reason no
    * correction gets past (`publicationRefusalUnfixable`), in this attempt: the refusal a `policy`
-   * block needs unless the owner answered no. A publication denial that names a correction never
-   * sets it.
+   * block needs. A publication denial that names a correction never sets it.
    */
   readonly guardianRefused?: true;
   /**
-   * Unanswered questions handed back to the minter as no answer in this build, which a `policy`
-   * block also stands on. Optional so a rollout's old and new workers each restore the other's
+   * Unanswered questions handed back to the minter as no answer in this build, which a
+   * `question_unanswered` block stands on. Optional so a rollout's old and new workers each restore the other's
    * checkpoint.
    */
   readonly noAnswerHandBacks?: number;
@@ -1542,6 +1700,17 @@ export interface MintHarnessSnapshot {
    * question left unanswered after it ends the build. Optional for the same reason.
    */
   readonly loginHeld?: true;
+  /**
+   * The owner declined a login request (`LoginDecline`): no sign-in runs in this build, and an
+   * `owner_declined` block may stand on it. Optional for the same reason.
+   */
+  readonly loginDeclined?: LoginDecline;
+  /**
+   * The build gave up signing in (`abandon_sign_in`, or an applied `login` `signed_out` update):
+   * no sign-in runs and no login is asked for until an accepted `login` `sign_in` or
+   * `different_login` update. Optional for the same reason.
+   */
+  readonly signInAbandoned?: true;
   readonly destinationEvidenceRefusals: number;
   readonly inputFeedbackRounds: number;
   readonly inputFeedbackPublicTool: boolean;
@@ -1644,8 +1813,13 @@ const HarnessTerminal = Schema.Struct({
   ),
   hostFailure: Schema.optionalWith(Schema.Literal(...mintHostFailures), { exact: true }),
   // Optional, and dropped as an excess field by an older worker's decode, so a rollout's old and
-  // new workers each restore the other's checkpoint.
+  // new workers each restore the other's checkpoint, except a terminal whose blocked reason is
+  // one an older worker does not know (`owner_declined`, `question_unanswered`, `site_declined`):
+  // that one does not decode there.
   blocked: Schema.optionalWith(BuildBlockedOutcome, { exact: true }),
+  // Optional, and dropped by an older worker's decode.
+  stopReason: Schema.optionalWith(MintStopReason, { exact: true }),
+  stopExplanation: Schema.optionalWith(Schema.String, { exact: true }),
 });
 
 export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.Struct({
@@ -1679,10 +1853,20 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   }),
   reviewOutageStartedAt: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
   invalidOutcomes: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
+  decisionLedger: Schema.optionalWith(
+    Schema.Struct({
+      denials: Schema.Array(LedgerDenial),
+      omittedDenials: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
+      partial: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+    }),
+    { exact: true },
+  ),
   blockedReviewUnavailable: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   guardianRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   noAnswerHandBacks: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
   loginHeld: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  loginDeclined: Schema.optionalWith(LoginDecline, { exact: true }),
+  signInAbandoned: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   destinationEvidenceRefusals: Schema.NonNegativeInt,
   inputFeedbackRounds: Schema.NonNegativeInt,
   inputFeedbackPublicTool: Schema.Boolean,
@@ -1775,6 +1959,48 @@ export interface PublicationDecisionLog {
   readonly list: Effect.Effect<readonly PublicationDecision[], MintFailure>;
 }
 
+/**
+ * A live test case whose latest result did not pass. The verdict is the host's judgment; what the
+ * case threw is only what the agent's tool code reported, screened and capped.
+ */
+export interface LedgerTestFailure {
+  /** The agent's own name for the case. */
+  readonly caseId: string;
+  /** The entrypoint the case ran, which names its version. */
+  readonly entrypoint?: string;
+  readonly verdict: "fail" | "inconclusive";
+  /** The host's reading of a result the tool returned or the host stopped, when it threw nothing. */
+  readonly got?: string;
+  /** The error class and message the tool threw: the tool's account, never a host fact. */
+  readonly toolReported?: { readonly errorClass?: string; readonly message?: string };
+  /** A failure the minter replaced by changing the case, or that passed when run again. */
+  readonly retired?: true;
+}
+
+/**
+ * The harness's own record of what this build's reviews decided and its live tests showed, for
+ * the review of a blocked explanation, so the review does not depend on what Guardian's
+ * conversation still holds. Bounded: the latest denials and failing cases, with counts of what
+ * the bound left out.
+ */
+export interface DecisionLedger {
+  readonly denials: readonly LedgerDenial[];
+  readonly omittedDenials?: number;
+  /**
+   * The attempt restored a checkpoint that kept no ledger, so earlier denials may be missing: an
+   * absent denial proves nothing.
+   */
+  readonly partial?: true;
+  /** Each case's latest verdict, counted over both versions. */
+  readonly testCounts?: {
+    readonly pass: number;
+    readonly fail: number;
+    readonly inconclusive: number;
+  };
+  readonly testFailures: readonly LedgerTestFailure[];
+  readonly omittedTestFailures?: number;
+}
+
 export interface MintDependencies {
   readonly agentRecovery?: {
     readonly initial?: { readonly agent: MintAgentSnapshot; readonly harness: MintHarnessSnapshot };
@@ -1862,6 +2088,18 @@ export interface MintDependencies {
        * what the host refused instead of the agent's account of it. Absent when there are none.
        */
       readonly publicationDecisions?: readonly PublicationDecision[];
+      /**
+       * A blocked explanation's review only: the build's Guardian denials and failing live test
+       * cases, already screened. A host that forwards it lets the review judge the report against
+       * them; an older host leaves it out.
+       */
+      readonly decisionLedger?: DecisionLedger;
+      /**
+       * The build's effect from the harness's own task state, once decided: absent on the
+       * read-or-write question's turn. A host that forwards it lets the review know a write build
+       * does the task once, for real, before it publishes; an older host leaves it out.
+       */
+      readonly buildEffect?: "read" | "write";
     },
   ) => Effect.Effect<QuestionDecision & { readonly reviewId?: string }, MintFailure>;
   /**
@@ -1887,7 +2125,7 @@ export interface MintDependencies {
    * has a login; `unavailable` means this job may not ask for one. The model never sees values.
    */
   readonly requestLogin?: () => Effect.Effect<
-    "supplied" | "held" | "unavailable" | "in_use" | "inspect",
+    "supplied" | "held" | "unavailable" | "in_use" | "inspect" | LoginDecline,
     MintFailure
   >;
   /** Records the owner's answer to the effect question on the build, once. */
@@ -1949,14 +2187,20 @@ export interface MintDependencies {
   readonly deadline?: Deadline;
   /** How long reviews may stay unavailable before the attempt ends; 15 minutes by default. */
   readonly reviewOutageBudgetMs?: number;
+  /**
+   * How long Guardian's review of the minter's last answer (`stopExplanation`) may take before
+   * the build ends without it; one minute by default.
+   */
+  readonly stopExplanationReviewMs?: number;
   readonly exampleClaimed?: boolean;
   /** Host-bound accepted/registered read authority; source still requires Guardian approval. */
   readonly repeatableRead?: boolean;
   /**
    * Whether the host's own guidance names this `policy` ending, so it needs no refusal on record,
    * such as a repair's verdict that the caller's input caused its run's failure. It gets the
-   * screened explanation. Without it, `policy` needs a Guardian deny or escalation, the owner's
-   * no to a confirm question, or a question handed back unanswered, in the attempt.
+   * screened explanation. Without it, `policy` needs a Guardian deny or escalation in the
+   * attempt; a report that stands only on the owner's no or an unanswered question takes that
+   * ending's own name.
    */
   readonly policyBlockAllowed?: (explanation: string) => boolean;
   /** Trusted registered invocation receipt, loaded from its durable recovery record. */
@@ -2010,6 +2254,14 @@ export interface MintDependencies {
    * no live_tests tool, and a read signed out tests one input at a time with execute.
    */
   readonly liveTests?: LiveTestHost;
+  /**
+   * The minter's `abandon_sign_in`: it gives up signing in, so the build goes on signed out. The
+   * host decides whether it may: it refuses a write build, a task that needs the site signed in
+   * and a build whose sign-in already verified, with a reason and a notice. Guardian does not
+   * review it. On `abandoned` the harness drops the unresolved sign-in, so explore, the example,
+   * live tests and publication go on signed out. Absent, the minter is offered no such tool.
+   */
+  readonly abandonSignIn?: () => Effect.Effect<AbandonSignInResult, MintFailure>;
   /** The host's own descriptions of its optional tools, in place of the generic ones. */
   readonly hostToolDescriptions?: HostToolDescriptions;
   readonly projection: MintProjection;
@@ -2058,8 +2310,10 @@ export interface MintDependencies {
      * Host evidence for the publication review. `liveTests` is the harness's record of a read's
      * live tests on the source it publishes: the host gives it to the review as the host-owned,
      * unpublished file `publication/tests.json`. Never a reason to refuse publication by itself.
+     * `testedFields` holds each of those cases' output fields as paths and counts, no value: the
+     * host passes them to `outputNotes` as `alsoTested`, so a field no tested run filled is noted.
      */
-    hostEvidence?: { readonly liveTests?: object },
+    hostEvidence?: { readonly liveTests?: object; readonly testedFields?: readonly FieldFill[] },
   ) => Effect.Effect<MintCompletion, MintFailure>;
   /** Absent when this host never publishes past unresolved input feedback. */
   readonly inputFeedbackFallback?: InputFeedbackFallback;
