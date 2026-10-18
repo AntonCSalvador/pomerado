@@ -5,6 +5,7 @@ import {
   keepingAcceptedConfirms,
   makeDialogDecider,
   makeRunDialogDecider,
+  watchingUnanswered,
 } from "../../src/inputs/dialog.js";
 import { expectedConfirmDigest, type ObservedConfirm } from "../../src/browser/dialogs/expected.js";
 import { noIncidents, type DialogIncident } from "../../src/runtime/incidents.js";
@@ -242,4 +243,31 @@ it("keeps the confirms the owner accepts while building, as the page showed them
     keepingAcceptedConfirms(makeDialogDecider(dismissing.ask, String), none)(report("confirm")),
   );
   expect(none).toEqual([]);
+});
+
+// A run's report needs to know a pop-up's question went unanswered; a cancel is the owner's choice.
+it.each([
+  {
+    case: "a question left unanswered",
+    error: new InputRequestFailure({ code: "NoResponse" }),
+    unanswered: true,
+  },
+  {
+    case: "the owner's cancel",
+    error: new OwnerCancelled({ code: "NoResponse" }),
+    unanswered: false,
+  },
+  {
+    case: "an unavailable question",
+    error: new InputRequestFailure({ code: "Unavailable" }),
+    unanswered: false,
+  },
+])("watches the asker for $case", ({ error, unanswered }) => {
+  const dialogs = watchingUnanswered(() => Effect.fail(error));
+  expect(dialogs.unanswered()).toBe(false);
+  const asked = Effect.runSync(
+    Effect.either(dialogs.ask({ id: "dialog-1", source: "system", questions: [] })),
+  );
+  expect(asked).toEqual(Either.left(error));
+  expect(dialogs.unanswered()).toBe(unanswered);
 });

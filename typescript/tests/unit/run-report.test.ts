@@ -178,6 +178,20 @@ describe("a write whose output failed its schema", () => {
     expect(failure.message).not.toMatch(readBack);
   });
 
+  // This host keeps no log of what the page sent after a pop-up's question went unanswered.
+  it("keeps the drifted output of a write after an unanswered pop-up, possibly applied", () => {
+    const settled = Effect.runSync(
+      Effect.either(returnedRun("write", drifted(commitNotEntered, declaration), true)),
+    );
+    if (Either.isRight(settled)) throw new Error("Expected a failed run");
+    expect(settled.left.outcome).toMatchObject({
+      code: "outcome_unknown",
+      writeStatus: "may_have_applied",
+      possibleCommit: true,
+    });
+    expect(settled.left.unconfirmed).toEqual({ output: { saved: "yes" } });
+  });
+
   // Any other run's drifted output is no result: it fails as its invalid output always did.
   it.each([
     {
@@ -204,6 +218,38 @@ describe("a write whose output failed its schema", () => {
         ),
       ),
     );
+  });
+});
+
+// A pop-up's question the caller left unanswered was dismissed and the run went on. This host
+// keeps no log of what the page sent, so a failure after it is no_response, as the hosted runner
+// reports it, and the commit marks prove nothing.
+describe("a run that failed after its caller left a pop-up's question unanswered", () => {
+  const fail = (error: unknown) => runOutcomeFailure("write", "operation", true)(error);
+
+  it.each([
+    {
+      case: "a script error whose commit was never entered",
+      error: new LocalOperationFailure("The save button was missing", commitNotEntered),
+      outcome: { code: "no_response", writeStatus: "may_have_applied", possibleCommit: true },
+    },
+    {
+      case: "a refused input whose commit was never entered",
+      error: new LocalOperationFailure("No such seat", commitNotEntered, "InvalidInput"),
+      outcome: { code: "no_response", writeStatus: "may_have_applied", possibleCommit: true },
+    },
+    {
+      case: "a failure with no journal",
+      error: new Error("Local operation child did not exit after result"),
+      outcome: { code: "no_response", writeStatus: "may_have_applied", possibleCommit: true },
+    },
+    {
+      case: "a script error before it called the browser",
+      error: new LocalOperationFailure("The cart was empty", nothingSent),
+      outcome: { code: "no_response", writeStatus: "not_attempted", possibleCommit: false },
+    },
+  ])("reports $case as no_response", ({ error, outcome }) => {
+    expect(fail(error).outcome).toMatchObject(outcome);
   });
 });
 

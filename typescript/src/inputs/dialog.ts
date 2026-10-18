@@ -92,6 +92,25 @@ export const keepingAcceptedConfirms =
     );
 
 /**
+ * `ask`, watched for a question its caller left unanswered, the owner's cancel aside. A run hands
+ * it to `makeRunDialogDecider`, which dismisses that dialog and goes on. This host keeps no log of
+ * what the page sent, so `unanswered()` tells the run's report that a failure after it can't show
+ * the write changed nothing.
+ */
+export const watchingUnanswered = (ask: InputAsker) => {
+  let seen = false;
+  const watched: InputAsker = (request, bounds) =>
+    ask(request, bounds).pipe(
+      Effect.tapError((cause) =>
+        Effect.sync(() => {
+          if (unanswered(cause)) seen = true;
+        }),
+      ),
+    );
+  return { ask: watched, unanswered: () => seen };
+};
+
+/**
  * A run's native dialogs. A write's confirm that its build accepted, with the same message on the
  * same page origin at the same step, is accepted without asking, once per record. Any other
  * confirm in a write's run asks the caller one yes or no question (`askDialogCaller`), showing

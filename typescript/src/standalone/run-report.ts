@@ -79,18 +79,20 @@ const unconfirmedLead = {
  * A write's output that failed its schema (`outputDrift`) was produced after the write, so it is
  * returned as drift: as the result of a confirmed write or one that sent nothing, and as the
  * unconfirmed output of one that may have applied. One whose declared commit steps all stayed
- * unsent changed nothing and fails as invalid output. Any other run's drifted output is no
- * result: it fails as the `InvalidOutput` it is, with what its journal shows.
+ * unsent changed nothing and fails as invalid output, unless the caller left a pop-up's question
+ * unanswered during the run (`unanswered`). Any other run's drifted output is no result: it fails
+ * as the `InvalidOutput` it is, with what its journal shows.
  */
 export const returnedRun = (
   declared: DeclaredEffect,
   result: LocalOperationOutput,
+  unanswered = false,
 ): Effect.Effect<unknown, RunOutcomeFailure> => {
   const revision = revisionOf(declared ?? "read", result.write);
   const drift = result.outputDrift === true;
   if (drift && revision.effect === "read")
     return Effect.fail(
-      runOutcomeFailure(declared, "operation")(
+      runOutcomeFailure(declared, "operation", unanswered)(
         new LocalOperationFailure("InvalidOutput", journalOf(result), "InvalidOutput"),
       ),
     );
@@ -111,7 +113,7 @@ export const returnedRun = (
   const effect =
     revision.effect === "read"
       ? "verified"
-      : refusal !== undefined || (drift && unenteredWrite(journaled, commits.marks))
+      : refusal !== undefined || (drift && !unanswered && unenteredWrite(journaled, commits.marks))
         ? "rejected"
         : journaled;
   const evidence: RunEvidence = {
@@ -147,10 +149,12 @@ const operationReasons: Readonly<Record<string, string>> = {
  * write that may have dispatched and whose child reported every declared commit step unsent
  * changed nothing (`unenteredWrite`), and a recorded confirmation keeps it applied. Only the
  * child's own final report proves that. A failure the host raised without it (its deadline, a
- * child that exited, a result with host requests pending) keeps the write possibly applied, as
- * does a question left unanswered: this host keeps no request log to show what the page sent
- * before it. A refused input or login, or a run that couldn't sign in again, with no commit step
- * entered also changed nothing. A failure with no journal may have dispatched anything.
+ * child that exited, an error or a result sent with host requests pending) keeps the write
+ * possibly applied, as does a question left unanswered: this host keeps no request log to show
+ * what the page sent before it. A run that fails after the caller left a pop-up's question
+ * unanswered (`unanswered`) fails as that, as when the script's own question went unanswered.
+ * A refused input or login, or a run that couldn't sign in again, with no commit step entered
+ * also changed nothing. A failure with no journal may have dispatched anything.
  *
  * A run that couldn't sign in again (the host refused the sign-in a script waited for, as when
  * its sign-ins were spent or the sign-in failed) reports the sign-in unavailable, to retry with
@@ -159,13 +163,18 @@ const operationReasons: Readonly<Record<string, string>> = {
  * marks unreadably, whatever the request says. A write that may have applied keeps the outcome
  * its journal shows, so a retry can't repeat it.
  */
-const operationEvidence = (declared: DeclaredEffect, error: unknown): RunEvidence => {
+const operationEvidence = (
+  declared: DeclaredEffect,
+  error: unknown,
+  unanswered: boolean,
+): RunEvidence => {
   if (!(error instanceof LocalOperationFailure))
     return {
       status: "completed",
       effect: declared === "read" ? "not_started" : "may_have_dispatched",
       output: "failed",
       tool_effect: declared,
+      ...(unanswered ? { failure_reason: "no_response" } : {}),
     };
   const { journal } = error;
   const tool = declared ?? (journal.commits.length > 0 ? "write" : undefined);
@@ -177,10 +186,15 @@ const operationEvidence = (declared: DeclaredEffect, error: unknown): RunEvidenc
   const commits = report.evidence;
   const unentered = base === "may_have_dispatched" && commits === "not_entered";
   const signedOut =
+    !unanswered &&
     error.sessionLoss === "session_not_kept" &&
     (commits === "not_entered" || commits === "undeclared") &&
     (base === "not_started" || unentered);
-  const reason = signedOut ? "login_check_unavailable" : operationReasons[error.code ?? ""];
+  const reason = unanswered
+    ? "no_response"
+    : signedOut
+      ? "login_check_unavailable"
+      : operationReasons[error.code ?? ""];
   const refused = signedOut || reason === "invalid_input" || reason === "credentials_rejected";
   // The child's own report, never one the host kept from the stream, and never past a question
   // left unanswered.
@@ -245,15 +259,15 @@ const beforeOperationEvidence = (declared: DeclaredEffect, error: unknown): RunE
 /**
  * The failure a run reports for `error`, raised before its operation started (site checks,
  * sign-in questions, the start page) or during it. An outcome already classified passes through
- * unchanged.
+ * unchanged. `unanswered` says the caller left a pop-up's question unanswered during the run.
  */
 export const runOutcomeFailure =
-  (declared: DeclaredEffect, stage: "before_operation" | "operation") =>
+  (declared: DeclaredEffect, stage: "before_operation" | "operation", unanswered = false) =>
   (error: unknown): RunOutcomeFailure => {
     if (error instanceof RunOutcomeFailure) return error;
     const outcome = failedRunOutcome(
       stage === "operation"
-        ? operationEvidence(declared, error)
+        ? operationEvidence(declared, error, unanswered)
         : beforeOperationEvidence(declared, error),
     );
     return new RunOutcomeFailure({
