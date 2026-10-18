@@ -217,7 +217,7 @@ export const shownForms = (value: string): (readonly [string, boolean])[] => {
     value,
     value.trim(),
     value
-      .replace(/[​­]/gu, "")
+      .replace(/[\u200b\u00ad]/gu, "")
       .trim()
       .replace(/\s+/gu, " "),
   ];
