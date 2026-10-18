@@ -2168,6 +2168,14 @@ export interface MintDependencies {
     application: TaskUpdateApplication,
   ) => Effect.Effect<TaskUpdateHostResult, MintFailure>;
   /**
+   * The host can't move a build to another site: `applyTaskUpdate` would refuse every `site`
+   * change. The harness then refuses a `site` change as `site_move_unsupported` when the minter
+   * proposes it, before any confirmation or review, and points it to a new build; every update
+   * review reads it as a host fact (`PendingTaskUpdate.siteMoveUnsupported`). Absent, a `site`
+   * change is confirmed and reviewed, and the host applies or refuses it, as before.
+   */
+  readonly siteMoveUnsupported?: true;
+  /**
    * In maintenance, who can confirm a `mint_update` to the published tool's registered contract:
    * `owner` when the person the repair's questions reach may manage the tool, otherwise `none`.
    * The harness asks it before review; `none`, a failure or an absent hook refuses the update as
