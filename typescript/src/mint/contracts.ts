@@ -1120,11 +1120,12 @@ export type TaskUpdateRequest = typeof TaskUpdateRequest.Type;
 /**
  * Every `status` a `mint_update` result carries:
  * - `updated`: Guardian allowed it and the host applied it; the result carries the effective task.
- * - `clarification_required`: Guardian found the caller's confirmation missing or ambiguous, or the
- *   host needs something only the caller has, such as a login for the new site. Nothing changed.
+ * - `clarification_required`: Guardian found the caller's confirmation missing or ambiguous, or
+ *   found a `recommend: "update"` a new build, or the host needs something only the caller has,
+ *   such as a login for the new site. Nothing changed.
  * - `reword`: Guardian's feedback; nothing changed and the build continues.
- * - `new_mint_recommended`: the change belongs in a new build. This build ends blocked with the
- *   recommendation and a suggested request.
+ * - `new_mint_recommended`: the minter recommended a new build and Guardian did not object. This
+ *   build ends blocked with the recommendation and its suggested request.
  * - `review_unavailable`: the review did not complete; resubmit within the review outage budget.
  * - `update_refused`: the harness or host cannot apply this change to this build, such as a site
  *   change once the build cannot run another live example. Nothing changed.
@@ -2092,6 +2093,12 @@ export interface MintDependencies {
        * them; an older host leaves it out.
        */
       readonly decisionLedger?: DecisionLedger;
+      /**
+       * The build's effect from the harness's own task state, once decided: absent on the
+       * read-or-write question's turn. A host that forwards it lets the review know a write build
+       * does the task once, for real, before it publishes; an older host leaves it out.
+       */
+      readonly buildEffect?: "read" | "write";
     },
   ) => Effect.Effect<QuestionDecision & { readonly reviewId?: string }, MintFailure>;
   /**

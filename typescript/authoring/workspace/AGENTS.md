@@ -556,6 +556,7 @@ feedback you can act on, a sign-in problem (a passkey-only sign-in is not one:
 .agents/auth/SKILL.md), a browser<!-- pomerado:section agents.report-blocked --> or host problem, a choice or fact
 only the caller knows (ask with `request_input`), or a timeout. A target on another
 registrable domain is not a reason by itself: proceed, and Guardian reviews that work.
+A build can't ask for a file. When the task needs one the request doesn't carry, say so in report_blocked, naming the file the owner should attach when they build again.
 
 `report_blocked` also takes `host_unavailable`, which is not a block: `executionAvailability` is
 `host_unavailable` and what the build still needs cannot run without live execution, such as the
