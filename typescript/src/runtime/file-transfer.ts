@@ -2,7 +2,13 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { Effect, Either, Ref, Schema } from "effect";
 import type { BrowserExecute } from "./browser-execution.js";
-import { acceptsSource, bytesMatchType, isProgram, sniffedType } from "./file-types.js";
+import {
+  acceptsSource,
+  contentRefusal,
+  declaredRefusal,
+  isProgram,
+  sniffedType,
+} from "./file-types.js";
 import {
   defaultFileLimits,
   FileField,
@@ -214,8 +220,12 @@ export const makeRunFiles = (options: {
         );
         if (bytes.byteLength !== source.size) return yield* refuse("unavailable");
         const name = safeName(source.name, "file");
-        if (isProgram(bytes, name)) return yield* refuse("executable");
-        if (!bytesMatchType(bytes, source.media_type)) return yield* refuse("type_mismatch");
+        // A program, by name, declared type or bytes, is refused; so is a type the host does not
+        // take, or bytes that are not the declared type.
+        const typeRefusal =
+          declaredRefusal(name, source.media_type) ?? contentRefusal(source.media_type, bytes);
+        if (typeRefusal === "executable") return yield* refuse("executable");
+        if (typeRefusal !== undefined) return yield* refuse("type_mismatch");
         const path = yield* options.hook
           .writeToBrowser({ name, bytes })
           .pipe(Effect.mapError(() => new FileRefused({ reason: "unavailable" })));
