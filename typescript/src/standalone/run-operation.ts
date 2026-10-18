@@ -46,12 +46,18 @@ export const runOperation = (
     const signIn =
       artifact.signIn === undefined
         ? undefined
-        : makeRunSignIn(session, artifact.signIn, siteOrigin, [
-            ...new Set([
-              ...(request.authenticationOrigins ?? []),
-              ...(artifact.signIn.authenticationOrigins ?? []),
-            ]),
-          ]);
+        : makeRunSignIn(
+            session,
+            artifact.signIn,
+            siteOrigin,
+            [
+              ...new Set([
+                ...(request.authenticationOrigins ?? []),
+                ...(artifact.signIn.authenticationOrigins ?? []),
+              ]),
+            ],
+            request.effect,
+          );
     if (signIn !== undefined) yield* signIn.before;
     // A tool whose sign-in moved to the login's own workspace runs there: its start page, its
     // script's siteOrigin and its relative URLs. The tool's site origin stays its identity.

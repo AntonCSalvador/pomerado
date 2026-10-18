@@ -16,7 +16,7 @@ import {
 } from "../../src/guardian/execution-policy.js";
 import { guardianActions } from "../../src/guardian/review-contracts.js";
 import { guardianOutcomes } from "../../src/guardian/review-layout.js";
-import { makeGuardian } from "../../src/guardian/review.js";
+import { makeGuardian, ReviewFailure as ReviewFailureClass } from "../../src/guardian/review.js";
 import { workspaceOriginReview } from "../../src/guardian/sign-in-origin-reviews.js";
 import type {
   GuardianDiagnostics,
@@ -351,4 +351,91 @@ it.each([
       ? { _tag: "Right", right: { decision: raw } }
       : { _tag: "Left", left: { code: "InvalidDecision" } },
   );
+});
+
+it("gives an outcome, a decode and two read corrections in one review, and no more", async () => {
+  // The host's own read of the entrypoint fails, so an allow needs Guardian's read, which the
+  // scripted model never does.
+  let hostRead = true;
+  const reader = () =>
+    Effect.suspend(() => {
+      const host = hostRead;
+      hostRead = false;
+      return host
+        ? Effect.fail(new ReviewFailureClass({ code: "SourceUnavailable" }))
+        : readSource();
+    });
+  const requests = scripted([
+    decision("reword"),
+    // An execution allow without an action label does not decode.
+    decision("allow"),
+    decision("allow", "read"),
+    decision("allow", "read"),
+    decision("allow", "read"),
+    decision("allow", "read"),
+  ]);
+  const { names, diagnostics } = recording();
+  const result = await Effect.runPromise(
+    Effect.either(guardianWith(diagnostics).review(pending, reader)),
+  );
+  expect(result).toMatchObject({ _tag: "Left", left: { code: "EntrypointNotRead" } });
+  expect(requests).toHaveLength(5);
+  expect(names.filter((name) => name === "guardian.started")).toHaveLength(1);
+  expect(names).not.toContain("guardian.review_retried");
+});
+
+it("reviews a private host kind's undecodable decision once more, with no follow-up", async () => {
+  const labelled = (label: string): ModelResponse["output"] => [
+    {
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [
+        {
+          type: "output_text",
+          text: JSON.stringify({
+            outcome: "allow",
+            rationale: "Synthetic allow.",
+            reason: null,
+            findings: null,
+            label,
+            action: null,
+          }),
+        },
+      ],
+    },
+  ];
+  const request: HostReview = {
+    kind: "synthetic_private_kind",
+    policy: "Synthetic private policy.",
+    evidence: {},
+    outcomes: ["allow", "deny"],
+    labels: ["synthetic_label_a", "synthetic_label_b"],
+    private: true,
+  };
+  const run = async (responses: readonly ModelResponse["output"][]) => {
+    const requests = scripted(responses);
+    const { names, diagnostics } = recording();
+    const result = await Effect.runPromise(
+      Effect.either(guardianWith(diagnostics).reviewHostKind(pending, request, readSource)),
+    );
+    return { requests, names, result };
+  };
+  const recovered = await run([labelled("synthetic_label_c"), labelled("synthetic_label_a")]);
+  expect(recovered.result).toMatchObject({
+    _tag: "Right",
+    right: { decision: { label: "synthetic_label_a" } },
+  });
+  expect(recovered.names.filter((name) => name === "guardian.started")).toHaveLength(2);
+
+  // A third response the host would accept: a second retry would reach it.
+  const failed = await run([
+    labelled("synthetic_label_c"),
+    labelled("synthetic_label_c"),
+    labelled("synthetic_label_a"),
+  ]);
+  expect(failed.result).toMatchObject({ _tag: "Left", left: { code: "InvalidDecision" } });
+  expect(failed.requests).toHaveLength(2);
+  expect(failed.names.filter((name) => name === "guardian.started")).toHaveLength(2);
+  expect(failed.names.filter((name) => name === "guardian.review_retried")).toHaveLength(1);
 });

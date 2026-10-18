@@ -46,14 +46,25 @@ import { runtimeSourceEntry } from "../execution/runtime-sources.js";
 const operationPrefix = "operation/";
 /** The SDK's package path, as an import names it and as the staged package holds it. */
 const runtimePackagePaths = new Set(["pomerado/runtime", "node_modules/pomerado/runtime.js"]);
-/** A trusted SDK path: the package path reads the module it names. */
+/** The folder Guardian's publication policy names the SDK's modules under, `pomerado/`. */
+const packageFolder = "pomerado/";
+/**
+ * A trusted SDK path: the package path reads the module it names, a module under `pomerado/`
+ * reads the same module from the source root, and a TypeScript spelling, `.ts` or `.d.ts`,
+ * reads the same-named JavaScript the SDK runs.
+ */
 const trustedPath = (path: string) =>
-  runtimePackagePaths.has(path) ? runtimeSourceEntry : path;
+  runtimePackagePaths.has(path)
+    ? runtimeSourceEntry
+    : (path.startsWith(packageFolder) ? path.slice(packageFolder.length) : path).replace(
+        /(?:\.d)?\.ts$/u,
+        ".js",
+      );
 /**
  * Guardian's source reads: the review's own file at the path, else the trusted SDK's. Authored
  * source imports the SDK from inside `operation/`, as `../../runtime/index.js` from `src/`, so a
  * path there that no authored file holds reads the SDK file at the rest of the path. A bare
- * `pomerado/runtime` reads the module that package path names.
+ * `pomerado/runtime` reads the module that package path names (see `trustedPath`).
  */
 export const sourceInspector = (
   session: Pick<StandaloneSession, "trustedSources" | "secrets">,
@@ -307,7 +318,9 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
           ),
           input,
           note: publication.notes,
+          // References are readable but stay out of the index below.
           evidence: new Map([
+            ...(publication.references ?? []),
             ...[...(publication.baseline ?? [])].map(
               ([path, text]) => [`executed/${path}`, text] as const,
             ),

@@ -4,8 +4,8 @@ import { defineOperation, timeoutDefaults } from "../../src/browser/index.js";
 const Results = Schema.Struct({
   items: Schema.Array(
     Schema.Struct({
-      id: Schema.NonEmptyString.annotations({ description: "The site's record ID" }),
-      name: Schema.String.annotations({ description: "Record name as the site lists it" }),
+      id: Schema.NonEmptyTrimmedString.annotations({ description: "The site's record ID" }),
+      name: Schema.NonEmptyTrimmedString.annotations({ description: "Record name as the site lists it" }),
     }),
   ).annotations({ description: "Matching records, in the site's order" }),
   complete: Schema.Boolean.annotations({
@@ -23,7 +23,7 @@ export default defineOperation(
   {
     name: "search_records",
     input: Schema.Struct({
-      query: Schema.NonEmptyString.annotations({ description: "Text to search records for" }),
+      query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({ description: "Text to search records for" }),
     }),
     output: Results,
   },

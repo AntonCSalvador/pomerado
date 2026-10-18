@@ -12,7 +12,7 @@ export default defineOperation(
       code: AirportCode.annotations({
         description: "Code of the airport to choose, one to four capital letters",
       }),
-      query: Schema.NonEmptyString.annotations({
+      query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({
         description: "Text to type into the airport search, such as a city name",
       }),
     }),
@@ -26,7 +26,7 @@ export default defineOperation(
       code: `
         ${waitCode}
         const code = ${JSON.stringify(input.code)};
-        const query = ${JSON.stringify(input.query)};
+        const query = ${JSON.stringify(input.query.trim())};
         const combobox = page.getByRole("combobox", { name: "Airport", exact: true });
         await waitForOutcome({ combobox });
         // Search only inside the listbox this control owns, never the whole page.

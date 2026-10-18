@@ -223,6 +223,11 @@ export const makeLocalSessionSignIn = (options: {
   readonly timing?: SignInReplayTiming;
   /** The login's workspace origin under a recipe's workspace relation; each sign-in updates it. */
   readonly workspace?: RunWorkspace;
+  /**
+   * Whether a sign-in again may end on a page that can't tell, as a read's may, asked at each
+   * sign-in, since a build's effect may change from read to write between them.
+   */
+  readonly allowCantTell?: () => boolean;
 }) => {
   const spent = options.spent ?? { attempt: 0, scope: 0 };
   const replayBrowser = (bound: SessionSignInBound | undefined) =>
@@ -250,6 +255,7 @@ export const makeLocalSessionSignIn = (options: {
         site: options.site,
         siteOrigin: options.siteOrigin,
         ...(options.timing === undefined ? {} : { timing: options.timing }),
+        ...(options.allowCantTell?.() === true ? { allowCantTell: true } : {}),
         ...(options.workspace?.origin === undefined
           ? {}
           : { workspaceOrigin: options.workspace.origin }),
@@ -435,15 +441,18 @@ export const mintSessionSignInFailure = (failed: SessionSignInFailed): MintFailu
  * A run's sign-in with its artifact's recorded sign-in: `before` signs in before the operation
  * runs, as every signed-in run does, and `hook` signs in again on the same browser whenever the
  * script's `ensureSignedIn` finds the page signed out, with the login `before` read. A run never
- * restores a saved session, so it saves none. `workspace` holds the workspace origin the run's
- * sign-in learned, for this run only.
+ * restores a saved session, so it saves none. Only a read's sign-in may end on a page that can't
+ * tell: a write's needs its marker, as nothing checks the session again before the write commits.
+ * `workspace` holds the workspace origin the run's sign-in learned, for this run only.
  */
 export const makeRunSignIn = (
   session: StandaloneSession,
   signIn: RecordedSignIn,
   siteOrigin: string,
   authenticationOrigins: readonly string[],
+  effect?: "read" | "write",
 ) => {
+  const allowCantTell = effect === "read";
   const { browser, ask, secrets } = session;
   // The site as the owner's questions name it: its host, without `www.`.
   const site = new URL(siteOrigin).hostname.replace(/^www\./u, "");
@@ -471,6 +480,7 @@ export const makeRunSignIn = (
     carries: secrets.carries,
     site,
     siteOrigin,
+    allowCantTell,
   }).pipe(
     Effect.tap((signedIn) =>
       Effect.sync(() => {
@@ -490,6 +500,7 @@ export const makeRunSignIn = (
     limits: runSessionSignIns,
     scope: "attempt",
     workspace,
+    allowCantTell: () => allowCantTell,
   });
   return { before, hook: again.hook, workspace };
 };

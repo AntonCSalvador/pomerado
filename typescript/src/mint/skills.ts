@@ -222,6 +222,25 @@ export const loadAuthoringSkills = (
   });
 
 /**
+ * Each skill's text at the path the minter reads it, `.agents/<name>/SKILL.md`, for a review that
+ * may read the skills the minter followed. A skill whose content is not inline text is left out.
+ */
+export const skillReferenceFiles = (
+  skills: readonly SkillDescriptor[],
+): ReadonlyMap<string, string> =>
+  new Map(
+    skills.flatMap(({ name, content }) => {
+      const text =
+        typeof content === "string"
+          ? content
+          : content instanceof Uint8Array
+            ? new TextDecoder().decode(content)
+            : undefined;
+      return text === undefined ? [] : [[`.agents/${name}/SKILL.md`, text] as const];
+    }),
+  );
+
+/**
  * The local host's authoring: standalone text, with the hosted features its minter is to ignore on
  * top of `AGENTS.md`, both as instructions and as the workspace file.
  */

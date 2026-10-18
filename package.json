@@ -111,6 +111,11 @@
       "import": "./dist/typescript/src/destinations/autofill-fill.js",
       "default": "./dist/typescript/src/destinations/autofill-fill.js"
     },
+    "./core/destinations/autofill-marker": {
+      "types": "./dist/typescript/src/destinations/autofill-marker.d.ts",
+      "import": "./dist/typescript/src/destinations/autofill-marker.js",
+      "default": "./dist/typescript/src/destinations/autofill-marker.js"
+    },
     "./core/destinations/autofill-locate-code": {
       "types": "./dist/typescript/src/destinations/autofill-locate-code.d.ts",
       "import": "./dist/typescript/src/destinations/autofill-locate-code.js",
@@ -165,6 +170,11 @@
       "types": "./dist/typescript/src/destinations/login-fields.d.ts",
       "import": "./dist/typescript/src/destinations/login-fields.js",
       "default": "./dist/typescript/src/destinations/login-fields.js"
+    },
+    "./core/destinations/marker-settle": {
+      "types": "./dist/typescript/src/destinations/marker-settle.d.ts",
+      "import": "./dist/typescript/src/destinations/marker-settle.js",
+      "default": "./dist/typescript/src/destinations/marker-settle.js"
     },
     "./core/destinations/payment-frames": {
       "types": "./dist/typescript/src/destinations/payment-frames.d.ts",
@@ -381,6 +391,11 @@
       "import": "./dist/typescript/src/mint/file-readback.js",
       "default": "./dist/typescript/src/mint/file-readback.js"
     },
+    "./core/mint/script-answer-reuse": {
+      "types": "./dist/typescript/src/mint/script-answer-reuse.d.ts",
+      "import": "./dist/typescript/src/mint/script-answer-reuse.js",
+      "default": "./dist/typescript/src/mint/script-answer-reuse.js"
+    },
     "./core/mint/secret-handles": {
       "types": "./dist/typescript/src/mint/secret-handles.d.ts",
       "import": "./dist/typescript/src/mint/secret-handles.js",
@@ -506,6 +521,11 @@
       "import": "./dist/typescript/src/runtime/context.js",
       "default": "./dist/typescript/src/runtime/context.js"
     },
+    "./core/runtime/credential-prompts": {
+      "types": "./dist/typescript/src/runtime/credential-prompts.d.ts",
+      "import": "./dist/typescript/src/runtime/credential-prompts.js",
+      "default": "./dist/typescript/src/runtime/credential-prompts.js"
+    },
     "./core/runtime/deadline": {
       "types": "./dist/typescript/src/runtime/deadline.d.ts",
       "import": "./dist/typescript/src/runtime/deadline.js",
@@ -600,6 +620,11 @@
       "types": "./dist/typescript/src/runtime/list-page.d.ts",
       "import": "./dist/typescript/src/runtime/list-page.js",
       "default": "./dist/typescript/src/runtime/list-page.js"
+    },
+    "./core/runtime/login-values": {
+      "types": "./dist/typescript/src/runtime/login-values.d.ts",
+      "import": "./dist/typescript/src/runtime/login-values.js",
+      "default": "./dist/typescript/src/runtime/login-values.js"
     },
     "./core/runtime/kernel-operation": {
       "types": "./dist/typescript/src/runtime/kernel-operation.d.ts",

@@ -31,7 +31,19 @@ them for you in parallel. Testing is your job, not the caller's: never wait to b
 Design the tests yourself. You saw the site: its controls, the values it offers and the ways its
 pages differ. Choose the cases that would show the tool works for callers other than this one,
 not mechanical variations of the example's input. Start as soon as you know the page and its
-inputs, and refine the cases once the example passes. Consider each of these where the site has
+inputs, and refine the cases once the example passes; run no batch before then. Plan up front the
+cases builds most often add late: no results, one broad query, page two, and one case per
+selectable variant the schema offers, such as a second store or seller. Run a no-results query
+once and see what the site shows before you write its expectation: some sites answer it with a
+fallback grid or a "no exact matches" view rather than an empty list. Every free-text input, one
+the caller types rather than picks, gets three cases of its own in a build: a blank value
+(`invalid_input` when the input is required; an optional one may treat it as left out), an
+over-long value and a made-up value the site has no match for; a repair adds only the made-up one.
+The over-long value expects `invalid_input` too, refused by the input schema (caller-input skill).
+The made-up value expects what the caller-input skill says: `invalid_input` naming the field,
+`empty` for a search query, or a labeled `result` for a location the site won't apply. None of the
+three may end in another throw. Skip the made-up value for an input that takes a person's,
+account's or record's name, number or code. Beyond those, consider each of these where the site has
 it; none is required, and one case may serve several:
 - every input, alone and together with the others. Each input needs a case that uses it, or
   changes it from its default, and that case covers it: its other values, such as each order a
@@ -46,7 +58,8 @@ it; none is required, and one case may serve several:
   category, a record whose page is laid out differently (a single option, grouped options, a
   multi-item page, sold out); for other reads, another route, date range or region, another
   category of listing, or a document or order page of another kind. Find them on the site, in a
-  listing or picker you opened; never invent them;
+  listing or picker you opened; never invent them. Prefer trying other records as one batch of
+  live cases rather than one probe at a time, so they're reviewed together;
 - edge cases: a value the site does not list at all (`invalid_input`, with the page's choices
   listed), a query or filter with no results (`empty`, never a throw), and an option the page lists
   but greys out, such as a sold-out size, which a read returns as unavailable data;
@@ -81,9 +94,10 @@ About 10 to 20 cases is typical. Write them in `test/cases.json`:
 `purpose` says in a sentence what the case establishes. `expect` is `result`, `empty`,
 `invalid_input` or `error`: a loud refusal the tool throws on purpose, `InputNotApplied`; any
 other throw is a bug and fails the case. Expect `empty`, `invalid_input` or `error` only for an
-input the site really has no results for, does not offer or cannot apply; an input that tailors
-the answer and that the site won't apply expects `result`, labeled with the applied value. Use
-real values the site offers, which you saw while
+input the site really has no results for, does not offer or cannot apply, or a blank or over-long
+value the input schema refuses; an input that tailors the answer and that the site won't apply
+expects `result`, labeled with the applied value. Apart from the made-up, blank and over-long
+cases, use real values the site offers, which you saw while
 exploring: listed options, places, dates, counts, records and retailers the site lists. Never use
 a person's, account's or record's name, number or code, and never the caller's own values beyond
 the example's input. List under `notTested` anything the tool claims that you chose not to test,
@@ -100,7 +114,13 @@ error with the source line that threw. Name cases in action `plan` to read their
 and check what they mean, not just pass or fail: every item matches the filters, the order follows
 the sort, the applied location is the one asked for or labeled as another, page 2 differs from
 page 1. A failing case is a bug in the tool: fix the code at that line. Never drop the input, narrow the schema or change a
-case's expectation to match what it returned to make it pass; fix the code. While a fix is in
+case's expectation to match what it returned to make it pass; fix the code. The one exception
+is a case that expected an answer the site itself does not give for that input, such as `result`
+where the site shows its own no-results page: confirm it in a capture of a page reached through
+the site's own controls or a URL they produce, that reads back the input as the site applied it
+and shows the site's no-results state, never a challenge, error, sign-in, blocked or loading
+page. Then change the expectation to what the site shows, and name that capture in the case's
+`purpose` and in `coverage`; review accepts the change only against it. While a fix is in
 progress, prefer rerunning only the failing cases, all of them together in one batch named in
 `cases`, not one batch each: a batch of every case waits on its slowest case, each batch waits on
 its own review, and the cases that passed run again once after your last edit. A
@@ -137,6 +157,7 @@ add any case that catches a real risk. A tool that returns a list runs page two 
 cursor page one returned, and reaches a last page (pagination skill).
 
 Results count only for the version, the source and the case as they ran: an edit makes them stale.
+After an edit, rerun only the cases it can affect, never the whole suite after each small change.
 Finish in this order: make your last edit, run every case once more (`cases` null) on each
 version you ship, run the example last, then call `finish_build`. Publication review reads the
 host's record of your cases (`publication/tests.json`), not your account of them, and judges

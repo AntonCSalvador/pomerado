@@ -2072,6 +2072,9 @@ export default defineOperation({name:"tenant_title",input:Schema.Struct({}),outp
           .filter((item) => "submitted_call" in item)
           .at(-1);
         if (current === undefined) throw new Error("Missing original Guardian execution input");
+        // The review of the minter's last answer for its caller decides nothing here.
+        if ("question_review" in current)
+          return [message(JSON.stringify({ outcome: "reword", rationale: "Not needed." }))];
         if (!inspected) {
           inspected = true;
           const submitted = Schema.decodeUnknownSync(Schema.Struct({ entrypoint: Schema.String }))(

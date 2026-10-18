@@ -1,15 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { Cause, Effect, Exit } from "effect";
 import type { AutofillPopup, RejectedMarker } from "../destinations/autofill-contracts.js";
-import {
-  identifierPreference,
-  type AutofillField,
-  type AutofillSlot,
-  type AutofillStep,
-  type AutofillStepRequest,
-  type IdentifierKind,
+import type {
+  AutofillField,
+  AutofillSlot,
+  AutofillStep,
+  AutofillStepRequest,
+  IdentifierKind,
 } from "../destinations/autofill-step.js";
-import { parseDateOfBirth, wholeDateLayouts } from "../destinations/login-field-formats.js";
+import { wholeDateLayouts } from "../destinations/login-field-formats.js";
 import {
   Unanswered,
   type PrivateQuestion,
@@ -20,23 +19,23 @@ import {
 } from "../destinations/sign-in-recipe.js";
 import type { CredentialRejectedField, WebsiteCredentials } from "./authentication.js";
 import type { InputAsker, Question } from "./input-request.js";
+import {
+  chosenKind,
+  heldField,
+  kindNames,
+  parsedAnswer,
+  type AnsweredLoginField,
+  type AnsweredLoginFields,
+  type Asked,
+  type Kept,
+  type LoginIdentifierKind,
+} from "./login-values.js";
 
-/** An identifier a site may ask for besides the username: it picks which account signs in. */
-type LoginIdentifierKind = "email" | "phone" | "account_number";
-/** A field the owner may be asked for during a sign-in: an identifier, a date of birth or a ZIP. */
-type AnsweredLoginField = LoginIdentifierKind | "date_of_birth" | "zip";
-/** The fields the owner gave in this build. */
-export type AnsweredLoginFields = Partial<Record<AnsweredLoginField, string>>;
+export type { AnsweredLoginFields } from "./login-values.js";
+
 /** A field whose rejected value the site may get a correction for. */
 export type CorrectionField = AnsweredLoginField | "recovery_code";
 
-const kindNames = {
-  email: "email address",
-  phone: "phone number",
-  account_number: "account number",
-} as const;
-/** What the host asks the owner for: identifiers of the kinds a field accepts, or one secret. */
-type Asked = readonly LoginIdentifierKind[] | "code" | "recovery_code" | "date_of_birth" | "zip";
 /** The question for a value the login does not hold. */
 const question = (asked: Asked, site: string, notice?: string): Question => {
   if (asked === "code")
@@ -73,52 +72,6 @@ const question = (asked: Asked, site: string, notice?: string): Question => {
     maxLength: 320,
     prompt: `What's the ${asked.map((kind) => kindNames[kind]).join(" or ")} for your ${site} account?`,
   };
-};
-
-const emailShaped = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value.trim());
-const phoneShaped = (value: string) =>
-  /^\+?[\d\s().-]+$/u.test(value.trim()) && value.replace(/\D/gu, "").length >= 7;
-
-/**
- * The kind of an answer to the kinds a field accepts: an email-shaped answer is an email address,
- * one shaped like a number a phone number when the field takes one, and anything else an account
- * number when it takes one. An answer of no accepted shape has no kind, so the owner is asked
- * again.
- */
-const answeredKind = (
-  value: string,
-  kinds: readonly LoginIdentifierKind[],
-): LoginIdentifierKind | undefined => {
-  if (kinds.length === 1 && kinds[0] !== "phone") return kinds[0];
-  if (kinds.includes("email") && emailShaped(value)) return "email";
-  if (kinds.includes("phone") && phoneShaped(value)) return "phone";
-  if (kinds.includes("account_number")) return "account_number";
-  return kinds.includes("email") ? "email" : undefined;
-};
-
-/** A ZIP or postal code the owner typed, trimmed; undefined if it cannot be one. */
-const parseZip = (value: string) => {
-  const zip = value.trim();
-  return zip.length >= 3 && zip.length <= 10 ? zip : undefined;
-};
-
-type Kept = "code" | "recovery_code" | AnsweredLoginField;
-/** An answer as the field keeps it, and its kind; undefined when it is none the field takes. */
-const parsedAnswer = (
-  asked: Asked,
-  value: string,
-): { readonly slot: Kept; readonly value: string } | undefined => {
-  if (asked === "code" || asked === "recovery_code") return { slot: asked, value };
-  if (asked === "date_of_birth") {
-    const date = parseDateOfBirth(value);
-    return date === undefined ? undefined : { slot: asked, value: date };
-  }
-  if (asked === "zip") {
-    const zip = parseZip(value);
-    return zip === undefined ? undefined : { slot: asked, value: zip };
-  }
-  const kind = answeredKind(value, asked);
-  return kind === undefined ? undefined : { slot: kind, value };
 };
 
 /**
@@ -238,15 +191,6 @@ export const askingValueHooks = (input: {
   };
 };
 
-/** Where an answered field's own value sits in a login. */
-const loginFieldKeys = {
-  email: "email",
-  phone: "phone",
-  account_number: "accountNumber",
-  date_of_birth: "dateOfBirth",
-  zip: "zip",
-} as const satisfies Record<AnsweredLoginField, keyof WebsiteCredentials>;
-
 /**
  * Whether a login's username is a username of its own. A login kept without one keeps its primary
  * identifier, an email address, phone number or account number, as its username and under its own
@@ -257,32 +201,6 @@ const separateUsername = (login: WebsiteCredentials) =>
   login.username !== login.email &&
   login.username !== login.phone &&
   login.username !== login.accountNumber;
-
-/**
- * A field the login holds: its own value, the owner's answer in this build, or, for an email
- * address, an email-shaped username (a site whose usernames are emails). A username of digits is
- * never taken as the phone number: it is as often a member number.
- */
-const heldField = (
-  field: AnsweredLoginField,
-  credentials: WebsiteCredentials,
-  given: AnsweredLoginFields,
-) =>
-  credentials[loginFieldKeys[field]] ??
-  given[field] ??
-  (field === "email" && emailShaped(credentials.username) ? credentials.username : undefined);
-
-/**
- * The kind the host sends into an identifier field: the first it accepts that the login holds, by
- * `identifierPreference`; else the kind the owner is asked for.
- */
-const chosenKind = (
-  accepts: readonly IdentifierKind[],
-  held: (kind: IdentifierKind) => boolean,
-): IdentifierKind =>
-  identifierPreference.find((kind) => accepts.includes(kind) && held(kind)) ??
-  accepts.find((kind) => kind !== "username") ??
-  "username";
 
 /** What one step's values need besides the login. */
 export interface StepValueContext {

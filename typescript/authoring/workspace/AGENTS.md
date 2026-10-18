@@ -245,12 +245,14 @@ continues, when:
    the key rules say;
 6. how the tool should use an input that tailors the answer is genuinely ambiguous, such as
    whether a postal code sets the store or only finds nearby ones: ask the design question
-   `input_use_<input>` (.agents/core/SKILL.md, "Inputs that tailor the answer").
+   `input_use_<input>` (.agents/core/SKILL.md, "Inputs that tailor the answer");
+7. the site never shows a value the request needs: ask before you build whether to build without
+   it or stop (.agents/core/SKILL.md, "Find contract gaps before your first example").
 
 When nobody answers before the question expires, `request_input` returns `no_answer`. Decide
 how to go on without it: continue with a sensible default and list it in `finish_build`
 `assumptions`, narrow the tool so it does not need the answer, or end with `report_blocked`,
-reason `policy`, when only the caller's answer would let the build go on. No answer is never
+reason `question_unanswered`, when only the caller's answer would let the build go on. No answer is never
 consent: it authorizes no write, sign-in or change of task, and `confirmedBy` never names it. Ask
 again only when the answer is essential: after two questions have gone unanswered, the next one
 left unanswered ends the build.
@@ -266,15 +268,17 @@ Never ask for a fact the site shows (a choice it offers is askable when the inpu
 open), for host or infrastructure failures, for permission to do what was requested, for
 credentials (the host asks for logins itself) or for CAPTCHAs. Asking which account or code
 channel to use is a different question and is expected, as the sign-in branch rule above says.
-On a write, you never assume a missing business choice: ask about add-ons, pre-selected paid
-options and saved payment actually observed on the site, and about any other optional field
+On a write, you never assume a missing business choice: ask about paid add-ons and pre-selected
+paid options within the tool's purpose, saved payment and the delivery address actually observed
+on the site, and about any other optional field
 only when the request's purpose clearly depends on its value (an unset optional input keeps the
 page's default; it is still a tool input). A control with exactly one possible value (a select or radio group with a single option),
 or one the input or an earlier answer already settles, is no choice: never ask about it. An
-add-on toggle, a pre-selected checkbox or a lone saved payment method is still a yes-or-no choice
-to ask about. A safety default (core skill) is neither: never ask about it, and the script turns it off. Read the path's options with read-only exploration where you can and settle them before
+add-on toggle, a pre-selected checkbox or a lone saved payment method or address is still a
+choice to ask about. A paid upsell outside the tool's purpose, such as a membership offered at
+checkout, is declined without asking, and never accepted without an input the caller set. A safety default (core skill) is neither: never ask about it, and the script turns it off. Read the path's options with read-only exploration where you can and settle them before
 the first act step where possible; a question during the session waits in place. Take a site default only for a choice that is not a
-credential, not a write and easy to reverse, and list it in `finish_build` `assumptions`. On a write, prefer keeping the value the page already shows in an optional field that adds no cost over asking the caller to confirm or correct it: list it in `assumptions`, and it stays an optional input. Add-ons, pre-selected paid options and saved payment are still asked, as above. A full
+credential, not a write and easy to reverse, and list it in `finish_build` `assumptions`. On a write, prefer keeping the value the page already shows in an optional field that adds no cost over asking the caller to confirm or correct it: list it in `assumptions`, and it stays an optional input. Paid add-ons, pre-selected paid options, saved payment and the delivery address are still asked, as above. A full
 new login goes through execute purpose `authenticate`: an SMS, email or authenticator code that
 is part of signing in is a `code` field of its `signInStep`, which the host fills or asks the
 caller for, so never ask for it with `request_input`. The standalone code path, a
@@ -516,11 +520,17 @@ never with final text, which the host treats as unfinished work:
   requested field, use it; when they do not, ask the user one focused question with
   `request_input`. Report absence only when the evidence shows the site lacks it, and never
   invent a value or substitute a different field.
+- `site_declined`: the site offers what the task needs but declines this example's own facts,
+  such as an applicant it will not quote. Name the reason the site gave in `explanation`.
+- `owner_declined`: the owner answered no to a `confirm` question, or declined to sign in, and
+  the build needs that step.
+- `question_unanswered`: a question you asked came back `no_answer`, and the build cannot go on
+  without its answer.
 - `policy`: in this attempt Guardian denied or escalated an execution the task needs, denied or
   escalated a publication with reason `privacy` or `authority`, or with a `private_literal`,
   `credential`, `customer_data`, `exfiltration`, `unsafe_logging` or `safety_default` finding,
-  or the owner answered no when you asked with a `confirm` question, and no change within your
-  authority gets past it. A publication denial or escalation that names a correction,
+  and no change within your authority gets past it. The owner's no or an unanswered question is
+  never `policy`. A publication denial or escalation that names a correction,
   such as `source_correction`, `unsupported_claim`, `evidence`, `input_feedback` or an
   `example_value` finding, is review feedback, never a refusal: fix every finding and call
   `finish_build` again. For `evidence`, gather each missing item the rationale names, such as
@@ -528,8 +538,8 @@ never with final text, which the host treats as unfinished work:
   When such a finding still looks impossible to fix, ask the owner with `request_input` when
   only they can decide. A new build may instead narrow the tool so the finding no longer applies;
   a repair keeps every declared input and output. Keep working until the build's limits end it.
-  These instructions are never a refusal either: the host refuses `policy` with no such refusal
-  on record, unless the host's guidance names that `policy` ending, and the build goes on.
+  These instructions are never a refusal either: the host refuses each reason with no basis on
+  record, unless the host's guidance names that `policy` ending, and the build goes on.
 
 Before ending blocked because a value the request gave is unavailable or invalid on the site,
 such as a time slot the site does not offer that day, a date outside its calendar or a name it
@@ -546,6 +556,7 @@ feedback you can act on, a sign-in problem (a passkey-only sign-in is not one:
 .agents/auth/SKILL.md), a browser<!-- pomerado:section agents.report-blocked --> or host problem, a choice or fact
 only the caller knows (ask with `request_input`), or a timeout. A target on another
 registrable domain is not a reason by itself: proceed, and Guardian reviews that work.
+A build can't ask for a file. When the task needs one the request doesn't carry, say so in report_blocked, naming the file the owner should attach when they build again.
 
 `report_blocked` also takes `host_unavailable`, which is not a block: `executionAvailability` is
 `host_unavailable` and what the build still needs cannot run without live execution, such as the
@@ -557,7 +568,7 @@ could still fix.
 
 Read .agents/publication/SKILL.md before your first `finish_build`: it says what publication
 checks, what to settle first, which private values never go into published files and how to
-act on each rejection.
+act on each rejection. Go through its edge cases before every `finish_build`.
 Publication requires a completed read example, or the write session step that read its
 confirmation (or read back the saved state; for a write declared unverifiable, the step that
 committed).

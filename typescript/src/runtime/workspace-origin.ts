@@ -40,9 +40,9 @@ export const workspaceHost = (siteOrigin: string, parent: string, candidate: str
   if (domain === undefined || domain !== parent) return false;
   if (siteDomain(candidate) !== parent) return false;
   if (url.hostname === site.hostname) return false;
-  // Pending maintainer confirmation: there is deliberately no rule on the shape of the host's
-  // labels (such as accepting only one label below `parent`), so `a.b.example.com` passes like
-  // `acme.example.com`. Add such a rule here, and only here, if it is wanted.
+  // There is deliberately no rule on the shape of the host's labels (such as accepting only one
+  // label below `parent`), so `a.b.example.com` passes like `acme.example.com`. Add such a rule
+  // here, and only here, if it is wanted.
   return true;
 };
 
@@ -126,8 +126,8 @@ export type ScreenOriginAdmission =
   | { readonly admitted: false; readonly reason: ScreenOriginRefusal; readonly sibling: boolean };
 
 /**
- * Pending maintainer confirmation: an identifier-first sign-in may continue on a workspace host
- * the site sent it to once this replay submitted the login's identifier on an exact-origin screen.
+ * An identifier-first sign-in may continue on a workspace host the site sent it to once this
+ * replay submitted the login's identifier on an exact-origin screen.
  * A replay learns at most one host this way: a second, different one shown after it has no new
  * identifier behind it. Change this one predicate to tighten or drop the rule.
  */
