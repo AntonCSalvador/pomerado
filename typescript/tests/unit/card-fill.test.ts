@@ -2,7 +2,7 @@ import { Effect, Either, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { inspectAutofillStep, untrustedTarget } from "../../src/destinations/autofill-step.js";
 import type { AutofillStep, FillSlot } from "../../src/destinations/autofill-step.js";
-import { runCardFill } from "../../src/destinations/card-fill.js";
+import { makeRunCardHandles, runCardFill, scriptAnswers } from "../../src/destinations/card-fill.js";
 import type { CardFillReview } from "../../src/destinations/card-fill.js";
 import {
   isCardSlot,
@@ -501,5 +501,44 @@ describe("masking a card answer", () => {
       Effect.either(secrets.assertAbsent('const shown = "4242 4242 4242 4242";')),
     );
     expect(Either.isLeft(result)).toBe(true);
+  });
+});
+
+describe("a script's answers", () => {
+  const asked = {
+    id: "c0000000-0000-4000-8000-000000000001",
+    source: "script" as const,
+    questions: [
+      {
+        id: "card",
+        type: "secret" as const,
+        secretKind: "card_number" as const,
+        prompt: "Card number",
+      },
+      { id: "code", type: "secret" as const, secretKind: "one_time_code" as const, prompt: "Code" },
+      { id: "note", type: "text" as const, prompt: "Note" },
+    ],
+  };
+
+  it("hands the script a handle for each card answer and every other answer as given", () => {
+    const handles = makeRunCardHandles();
+    const answers = scriptAnswers(
+      asked,
+      {
+        card: { type: "secret", value: "4242424242424242" },
+        code: { type: "secret", value: "123456" },
+        note: { type: "text", value: "Leave at the door" },
+      },
+      handles,
+    );
+    expect(answers).toEqual({ card: "{{card.c1}}", code: "123456", note: "Leave at the door" });
+    expect(handles.kindOf("{{card.c1}}")).toBe("card_number");
+    expect(handles.cardValues(["{{card.c1}}"])).toEqual(["4242424242424242"]);
+  });
+
+  it("passes on an answer to a question the request does not hold", () => {
+    expect(
+      scriptAnswers(asked, { other: { type: "text", value: "kept" } }, makeRunCardHandles()),
+    ).toEqual({ other: "kept" });
   });
 });

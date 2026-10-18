@@ -19,10 +19,9 @@ import {
   type CardFillOutcome,
   type RunCardHandles,
   makeRunCardHandles,
+  scriptAnswers,
   scriptCardFillAnswer,
 } from "../destinations/card-fill.js";
-import { isCardSlot } from "../destinations/payment-frames.js";
-import type { InputRequest, ValidAnswers } from "../runtime/input-request.js";
 import type { ScriptCardFillRequest } from "../runtime/script-card-fill.js";
 import {
   sessionSignInAnswerMs,
@@ -216,24 +215,6 @@ export const answerSessionSignIn = (
     yield* settle;
     return { outcome: "refused", cause: "session_sign_in_failed" } satisfies SessionSignInAnswer;
   });
-/**
- * The answers as the script receives them: each card answer replaced by a handle this run's
- * `fillCard` names, so the card never enters the child.
- */
-const scriptAnswers = (request: InputRequest, answers: ValidAnswers, handles: RunCardHandles) =>
-  Object.fromEntries(
-    Object.entries(answers).map(([id, answer]) => {
-      const question = request.questions.find((candidate) => candidate.id === id);
-      return [
-        id,
-        question?.type === "secret" &&
-        isCardSlot(question.secretKind) &&
-        typeof answer.value === "string"
-          ? handles.issue(answer.value, question.secretKind)
-          : answer.value,
-      ];
-    }),
-  );
 const handleRequest = (
   options: LocalOperationOptions,
   deadline: Deadline,
