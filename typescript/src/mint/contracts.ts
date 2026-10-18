@@ -2170,9 +2170,10 @@ export interface MintDependencies {
   /**
    * The host can't move a build to another site: `applyTaskUpdate` would refuse every `site`
    * change. The harness then refuses a `site` change as `site_move_unsupported` when the minter
-   * proposes it, before any confirmation or review, and points it to a new build; every update
-   * review reads it as a host fact (`PendingTaskUpdate.siteMoveUnsupported`). Absent, a `site`
-   * change is confirmed and reviewed, and the host applies or refuses it, as before.
+   * proposes it, before the host asks for the caller's confirmation or Guardian reviews it, and
+   * points it to a new build; every update review reads it as a host fact
+   * (`PendingTaskUpdate.siteMoveUnsupported`). Absent, a `site` change is confirmed and reviewed,
+   * and the host applies or refuses it, as before.
    */
   readonly siteMoveUnsupported?: true;
   /**

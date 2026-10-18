@@ -1886,7 +1886,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               instruction: "An offline build has no website to move. Finish it offline.",
             };
           // A host that can't move builds would refuse the move only after the caller confirmed
-          // it and Guardian allowed it, so it is refused here, before anyone is asked.
+          // it and Guardian allowed it, so it is refused here, before the host asks for the
+          // caller's confirmation or Guardian reviews it.
           if (dependencies.siteMoveUnsupported === true)
             return {
               reason: "site_move_unsupported",
