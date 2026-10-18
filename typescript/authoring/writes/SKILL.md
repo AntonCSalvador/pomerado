@@ -232,8 +232,11 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   committed; its receipt says so under `writeSession` (`verifyFirst`). Before any
   further write, run an `act` step that only reads the page or the account. When
   `stateChangingRequests` shows the failed step's commit request went through, that
-  step may read only the page as it stands: check it for an error or validation
-  message, read what the output needs, and call `verified()` there. If the
+  step starts from the page as it stands: check it for an error or validation
+  message, read what the output needs, and call `verified()` there. When that page
+  lacks something the output needs, such as the new record's ID, the same step may
+  read it elsewhere on the site without changing anything, such as by finding the
+  record in the site's list or search, then call `verified()`. If the
   write happened, call `verified()` there and publish against that step, never
   submitting it again. If nothing happened, do the write with the
   caller's values and read its confirmation. The host refuses only an unchanged

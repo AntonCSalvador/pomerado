@@ -47,7 +47,11 @@ import {
   PublicationFinding,
   PublicationReason,
 } from "./review-contracts.js";
-import type { PublicationScope, PublicationFileBlock } from "./review-contracts.js";
+import type {
+  GuardianRefusalGround,
+  PublicationScope,
+  PublicationFileBlock,
+} from "./review-contracts.js";
 import {
   decisionForKind,
   outcomeAccepted,
@@ -618,10 +622,10 @@ const completeSession = (session?: GuardianSession) =>
 const requiredReadRounds = 2;
 
 /**
- * The most follow-up rounds one review gets: one outcome correction, one decode correction and
- * the required reads.
+ * The most follow-up rounds one review gets: one outcome correction, one decode correction, one
+ * settled-ground correction and the required reads.
  */
-export const reviewFollowUpRounds = requiredReadRounds + 2;
+export const reviewFollowUpRounds = requiredReadRounds + 3;
 
 /** The longest decode error a follow-up quotes. */
 const decodeErrorLimit = 2000;
@@ -682,12 +686,48 @@ const knownRefusal = (raw: unknown): unknown => {
 };
 
 /**
+ * The ground an execution deny or escalate rests on (`refusalGround`) when the host's own record
+ * settles it the other way: retry permission when trusted_execution_context.repeatableRead is
+ * true, since the host itself refuses before review any run it does not permit, or committing a
+ * listed write again for a step the review labels a read, which changes nothing. Undefined for
+ * any other decision.
+ */
+const settledGroundOf = (
+  pending: PendingExecution,
+  raw: unknown,
+): GuardianRefusalGround | undefined => {
+  if (reviewKindOf(pending) !== "execution" || typeof raw !== "object" || raw === null)
+    return undefined;
+  const outcome: unknown = Reflect.get(raw, "outcome");
+  if (outcome !== "deny" && outcome !== "escalate") return undefined;
+  const ground: unknown = Reflect.get(raw, "refusalGround");
+  if (ground === "retry_permission" && pending.mintContext?.repeatableRead === true) return ground;
+  if (ground === "committed_write" && Reflect.get(raw, "action") === "read") return ground;
+  return undefined;
+};
+
+/** What the host tells Guardian, once in the same review, about a refusal on a settled ground. */
+const settledGroundCorrection: Record<GuardianRefusalGround, string> = {
+  retry_permission:
+    "The host did not accept this refusal: it rests on retry permission, and trusted_execution_context.repeatableRead is true. Whether a step may run again is the host's to decide: it refuses before review any run it does not permit, and it permits this one, a corrected example included. Judge this step's own source and effects under the policy and decide again, without retry permission as a ground.",
+  committed_write:
+    "The host did not accept this refusal: it rests on committing a listed write again, and this review labels the step a read, which changes nothing and so commits nothing again. Reading back a write's result, the record it created or changed included, on any page of the authorized site, and the request's other remaining steps toward the same task stay allowed. Judge this step under the policy's other rules and decide again, without the earlier write as a ground.",
+};
+
+/**
  * An execution review's decision. An allow without an action label is malformed, so the review
  * runs again under the outage retry; a `write` allow on a step without write authority becomes a
- * denial.
+ * denial. A refusal still resting on a ground the host settled is correctable, never final, so a
+ * misread host fact never ends the build as a policy block.
  */
 const decodeExecution = (pending: PendingExecution) => (raw: unknown) =>
-  decodeDecision(knownRefusal(raw)).pipe(
+  decodeDecision(
+    knownRefusal(
+      settledGroundOf(pending, raw) === undefined
+        ? raw
+        : { ...(raw as Record<string, unknown>), refusal: "correctable" },
+    ),
+  ).pipe(
     Effect.flatMap((decision) =>
       decision.outcome !== "allow"
         ? Effect.succeed(decision)
@@ -1223,6 +1263,7 @@ export const makeGuardian = (
           !outcomeAccepted(pending, raw);
         let outcomeCorrected = false;
         let decodeCorrected = false;
+        let groundCorrected = false;
         let readRounds = 0;
         // A publication finding names one of these paths exactly.
         const indexedPaths =
@@ -1299,6 +1340,13 @@ export const makeGuardian = (
                   ? ""
                   : ` Each finding's path is one of these indexed paths exactly, with nothing added: ${indexedPaths.join(", ")}.`;
               return `The host could not decode this decision: ${invalid} Return this review's decision again in the output format, corrected.${paths}`;
+            }
+            // A refusal on a ground the host's own record settles goes back once, naming it.
+            const settled = groundCorrected ? undefined : settledGroundOf(pending, output);
+            if (settled !== undefined) {
+              groundCorrected = true;
+              followUpRounds++;
+              return settledGroundCorrection[settled];
             }
             if (!unread(output) || readRounds >= requiredReadRounds) return undefined;
             readRounds++;
