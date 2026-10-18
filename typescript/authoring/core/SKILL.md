@@ -715,6 +715,11 @@ return, such as `{ ids: { locator: rowIds, all: true } }`, with the site's own l
 `loading` when it has one.
 After a step that reloads the page, such as choosing a city, prefer typing into the search box
 again when its suggestions don't appear.
+Typing or choosing can reload part of the page once per key or choice, such as suggestions or a
+dependent list. The answers can land out of order, and the page may replace the element it
+updates. Prefer waiting until every answer has landed, then look that element up again rather
+than reading a node or handle found earlier, and check it shows the answer to the whole value.
+When it doesn't, prefer entering the value once more over waiting longer.
 <!-- pomerado:section core.site-origin -->After a probe reveals a challenge, inspect the retained Page in follow-up probes
 and wait for the intended page/control within the existing deadline and job budget;
 do not click the challenge, reload, or navigate to another route merely because
