@@ -748,7 +748,7 @@ it("renders the pinned standalone authoring", async () => {
   ]).toStrictEqual([
     ["c156faf9429ab3ce923c95d6b68c2eaeacf1209b42b55099d76eaf7b86100c26", "core"],
     ["0adaf6002bad034a70f753ac36d60bc15053a22f11972b612f9500a9e7c1c58f", "search"],
-    ["26a2397035b3b493bd7201dcbcb0ee8108cf1e0a18d3b81f989374d6bd7f48f4", "auth"],
+    ["24a1a1d434e12d0d32154bbaad8a5b92a636fcd09855f91e82e14a002e4cfcc3", "auth"],
     ["03c44d2b4b7e998d3fe1b86d110702d49ca27e3527b63abb69e41fe167056e54", "testing"],
     ["fc4707b0cd5692efe8cc9b96be4ec88b1f8807451348056eb13dfc3d88486b0f", "pagination"],
     ["7e39ab2d515b817c3d42070922a575f6d3cd5b8427d3c97a4af151cec7a32656", "forms"],

@@ -128,7 +128,9 @@ you, Guardian, generated code or the recipe. One-time and recovery codes keep th
     the step again to ask again.
   - `slot: "password"` for the password.
   - `slot: "code"` for a one-time or authenticator code. A saved authenticator seed answers it;
-    otherwise the host asks the caller for the code. Never ask for a code yourself.
+    otherwise the host asks the caller for the code. Never ask for a code yourself. A code split
+    into one-character boxes is one `code` field per box, in order, as a split date is one field
+    per part (below). The host asks once and types one character into each.
   - `slot: "date_of_birth"` for a date of birth, with `format`, how the field takes it, read from
     its placeholder, label, input mask or hint: `MM/DD/YYYY`, `DD/MM/YYYY`, `M/D/YYYY`,
     `D/M/YYYY`, `MM-DD-YYYY`, `DD-MM-YYYY`, `DD.MM.YYYY`, `YYYY-MM-DD`, `YYYY/MM/DD`, `MMDDYYYY`,
