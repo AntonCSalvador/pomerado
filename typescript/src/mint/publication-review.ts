@@ -217,6 +217,11 @@ export type PublicationReview = (request: {
   readonly notes: string;
   readonly baseline?: ReadonlyMap<string, string>;
   readonly evidence: ReadonlyMap<string, string>;
+  /**
+   * Files the review may read but that are not its evidence, such as the minter's skills at
+   * `.agents/<name>/SKILL.md`. They stay out of the publication index, so no finding names one.
+   */
+  readonly references?: ReadonlyMap<string, string>;
 }) => Effect.Effect<string, MintFailure>;
 
 /** What one finish_build would publish, and the evidence it is reviewed against. */
@@ -236,6 +241,8 @@ export interface PublicationCandidate {
   /** The agent's exampleInput the example or the write session ran because the caller sent none. */
   readonly intentDerivedInput?: Json;
   readonly write: boolean;
+  /** Files the review may read beside its evidence (see `PublicationReview`). */
+  readonly references?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -337,6 +344,7 @@ export const reviewPublication = (review: PublicationReview, candidate: Publicat
       notes: candidate.notes,
       ...(candidate.baseline === undefined ? {} : { baseline: candidate.baseline }),
       evidence: new Map([[publicDefinitionPath, candidate.definition], ...candidate.evidence]),
+      ...(candidate.references === undefined ? {} : { references: candidate.references }),
     });
     if (unlisted.length === 0) return reviewId;
     return yield* exampleInputFeedback(candidate, unlisted, reviewId);

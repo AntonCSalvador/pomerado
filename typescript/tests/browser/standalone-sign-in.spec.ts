@@ -24,6 +24,7 @@ import {
   identityHost,
   startShop,
   shopAccount,
+  shopWorkspaces,
   shopCode,
   type Shop,
 } from "./shop-fixture.js";
@@ -1408,6 +1409,7 @@ const runInNewSession = (
   artifact: MintArtifact,
   url: string,
   effect?: "read" | "write",
+  input: unknown = {},
 ) =>
   Effect.runPromise(
     Effect.either(
@@ -1417,7 +1419,7 @@ const runInNewSession = (
           return yield* service.run(artifact, {
             url,
             intent: "Read the account",
-            input: {},
+            input,
             ...(effect === undefined ? {} : { effect }),
           });
         }),
@@ -1531,6 +1533,168 @@ test("a run that stays signed in through the script signs in once and types noth
     expect(result).toEqual(Either.right({ first: true, signedInAgain: false, second: true }));
     expect(reasons(asked)).toEqual(["missing_credentials"]);
     expect(shop.state.loginPosts).toBe(1);
+  });
+});
+
+test("a run whose page signs it out and shows only a notice can't tell, so it signs in no more and its script finds the page signed out", async () => {
+  test.setTimeout(120_000);
+  await withShop(async (shop, endpoint) => {
+    shop.state.signOutOn = "/orders";
+    shop.state.signedOutShowsForm = false;
+    const asked: InputRequest[] = [];
+    const result = await runInNewSession(
+      endpoint,
+      loginAnswers(asked, []),
+      ordersReader(shop.origin),
+      `${shop.origin}/orders`,
+    );
+    // The notice shows neither the marker nor the sign-in's form and is none of its screens, so
+    // `ensureSignedIn` carries on and the script's own check is what sees the session gone.
+    expect(result).toEqual(Either.right({ first: false, signedInAgain: false, second: false }));
+    expect(reasons(asked)).toEqual(["missing_credentials"]);
+    expect(shop.state.loginPosts).toBe(1);
+  });
+});
+
+/** Picks the input's workspace on the shop's workspace picker, then reads the account it shows. */
+const readWorkspaceAccount = `import { Schema } from "effect";
+import { defineOperation } from "../runtime/index.js";
+export default defineOperation({name:"read_workspace_account",input:Schema.Struct({workspace:Schema.String}),output:Schema.Struct({account:Schema.String,workspace:Schema.String})},
+async ({kernel,sessionId,input}) => {
+  const code = "await page.goto(new URL('/choose-workspace', page.url()).href); await page.getByRole('button', { name: " + JSON.stringify(input.workspace) + ", exact: true }).click(); await page.locator('#account').waitFor(); return { account: await page.locator('#account').textContent(), workspace: await page.locator('#workspace').textContent() };";
+  const response = await kernel.browsers.playwright.execute(sessionId,{code,timeout_sec:15});
+  if(!response.success) throw new Error(String(response.error));
+  return response.result;
+});`;
+/** The one-screen sign-in and the code screen after it, as a build publishes them. */
+const codeRecipe = (origin: string) => {
+  const login = loginRecipe(origin);
+  return {
+    ...login,
+    steps: [
+      ...login.steps,
+      {
+        page: `${origin}/two-factor`,
+        fields: [{ selector: "input[name=code]", slot: "code" }],
+        submit: "button",
+        submittedBy: "host",
+      },
+    ],
+  };
+};
+
+/** The workspace reader with the code sign-in, as a build publishes it for the shop. */
+const workspaceReader = (origin: string) =>
+  ({
+    entrypoint: "src/tool.mjs",
+    files: [{ path: "src/tool.mjs", content: readWorkspaceAccount }],
+    inputSchema: { type: "object" },
+    outputSchema: { type: "object" },
+    signIn: { recipe: codeRecipe(origin), entryUrl: `${origin}/login` },
+  }) as MintArtifact;
+
+test("a read run whose sign-in lands on a workspace picker without the marker carries on, and its operation picks the workspace and reads the account", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Chromium and a sign-in that waits out the recorded marker on the picker",
+  });
+  test.setTimeout(120_000);
+  await withShop(async (shop, endpoint) => {
+    shop.state.loginCode = true;
+    shop.state.workspaceChooser = true;
+    const asked: InputRequest[] = [];
+    const workspace = shopWorkspaces[1];
+    const result = await runInNewSession(
+      endpoint,
+      answers(asked),
+      workspaceReader(shop.origin),
+      `${shop.origin}/account`,
+      "read",
+      { workspace },
+    );
+    expect(result).toEqual(Either.right({ account: shopAccount.username, workspace }));
+    // The login and the code once each: the picker never read as signed out.
+    expect(reasons(asked)).toEqual(["missing_credentials", "code"]);
+    expect(shop.state.loginPosts).toBe(1);
+    expect(shop.state.codePosts).toBe(1);
+  });
+});
+
+test("a write run whose sign-in lands on a workspace picker without the marker fails its sign-in, as a write's sign-in needs the marker", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Chromium and a sign-in that waits out the recorded marker on the picker",
+  });
+  test.setTimeout(120_000);
+  await withShop(async (shop, endpoint) => {
+    shop.state.loginCode = true;
+    shop.state.workspaceChooser = true;
+    const asked: InputRequest[] = [];
+    const result = await runInNewSession(
+      endpoint,
+      answers(asked),
+      workspaceReader(shop.origin),
+      `${shop.origin}/account`,
+      "write",
+      { workspace: shopWorkspaces[1] },
+    );
+    expect(Either.isLeft(result) ? result.left : result).toMatchObject({
+      _tag: "SignInRunFailed",
+      code: "RecipeFailed",
+      reason: "sign_in_check_failed",
+    });
+    expect(reasons(asked)).toEqual(["missing_credentials", "code"]);
+    expect(shop.state.loginPosts).toBe(1);
+  });
+});
+
+// The value-free check opens the recorded entry page, and a signed-in session lands on the picker:
+// none of the sign-in's screens shows, so the replay can't find its first one, with or without
+// the login, and the run fails before its operation, as it did before a missing marker could
+// read can't tell. Nothing more is typed.
+test("a second read run on the same session, whose sign-in page sends a signed-in visit to the workspace picker, fails before its operation without typing the login again", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Chromium and two runs whose sign-ins wait out the recorded marker on the picker",
+  });
+  test.setTimeout(180_000);
+  await withShop(async (shop, endpoint) => {
+    shop.state.loginCode = true;
+    shop.state.workspaceChooser = true;
+    shop.state.signedInLogin = "account";
+    const asked: InputRequest[] = [];
+    const [first, second] = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* createPomerado({
+            browser: { endpoint },
+            ask: answers(asked),
+            timeoutMs: 30_000,
+          });
+          const runOnce = (workspace: string) =>
+            Effect.either(
+              service.run(workspaceReader(shop.origin), {
+                url: `${shop.origin}/account`,
+                intent: "Read the account",
+                input: { workspace },
+                effect: "read",
+              }),
+            );
+          return [yield* runOnce(shopWorkspaces[0]), yield* runOnce(shopWorkspaces[1])] as const;
+        }),
+      ),
+    );
+    expect(first).toEqual(
+      Either.right({ account: shopAccount.username, workspace: shopWorkspaces[0] }),
+    );
+    expect(Either.isLeft(second) ? second.left : second).toMatchObject({
+      _tag: "SignInRunFailed",
+      code: "RecipeFailed",
+      reason: "not_found",
+    });
+    expect(reasons(asked)).toEqual(["missing_credentials", "code", "missing_credentials"]);
+    expect(shop.state.loginPosts).toBe(1);
+    expect(shop.state.codePosts).toBe(1);
   });
 });
 

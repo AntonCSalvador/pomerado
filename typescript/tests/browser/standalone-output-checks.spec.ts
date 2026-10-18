@@ -61,7 +61,7 @@ const roomSite = () =>
   );
 const roomTool = (detailsCode: string) => `import { Schema } from "effect";
 import { defineOperation, visibleTextCode } from "../runtime/index.js";
-export default defineOperation({name:"read_room",input:Schema.Struct({}),output:Schema.Struct({name:Schema.String,details:Schema.String})},
+export default defineOperation({name:"read_room",input:Schema.Struct({}),output:Schema.Struct({name:Schema.NonEmptyTrimmedString,details:Schema.NonEmptyTrimmedString})},
 async ({kernel,sessionId}) => {
   const response = await kernel.browsers.playwright.execute(sessionId,{code:visibleTextCode+${JSON.stringify(
     `\nreturn [await visibleText(page.locator('h1')), ${detailsCode}];`,
@@ -136,7 +136,7 @@ test("a value that is code on purpose publishes with the minter's override, whic
   );
   const tool = `import { Schema } from "effect";
 import { defineOperation } from "../runtime/index.js";
-export default defineOperation({name:"read_snippet",input:Schema.Struct({}),output:Schema.Struct({title:Schema.String,code:Schema.String})},
+export default defineOperation({name:"read_snippet",input:Schema.Struct({}),output:Schema.Struct({title:Schema.NonEmptyTrimmedString,code:Schema.NonEmptyTrimmedString})},
 async ({kernel,sessionId}) => {
   const response = await kernel.browsers.playwright.execute(sessionId,{code:"return [await page.locator('h1').innerText(), await page.locator('#snippet').innerText()];",timeout_sec:5});
   if(!response.success) throw new Error(String(response.error));
@@ -185,7 +185,7 @@ test("text read with its page's 'more' control in it is flagged to the minter an
   );
   const tool = `import { Schema } from "effect";
 import { defineOperation } from "../runtime/index.js";
-export default defineOperation({name:"read_room",input:Schema.Struct({}),output:Schema.Struct({name:Schema.String,about:Schema.String})},
+export default defineOperation({name:"read_room",input:Schema.Struct({}),output:Schema.Struct({name:Schema.NonEmptyTrimmedString,about:Schema.NonEmptyTrimmedString})},
 async ({kernel,sessionId}) => {
   const response = await kernel.browsers.playwright.execute(sessionId,{code:"return [await page.locator('h1').innerText(), await page.locator('#about').innerText()];",timeout_sec:5});
   if(!response.success) throw new Error(String(response.error));
@@ -233,7 +233,7 @@ test("page text that only resembles code, beside navigation links, publishes wit
   );
   const tool = `import { Schema } from "effect";
 import { defineOperation, visibleTextCode } from "../runtime/index.js";
-export default defineOperation({name:"read_shoe",input:Schema.Struct({}),output:Schema.Struct({name:Schema.String,specs:Schema.String,care:Schema.String,returns:Schema.String})},
+export default defineOperation({name:"read_shoe",input:Schema.Struct({}),output:Schema.Struct({name:Schema.NonEmptyTrimmedString,specs:Schema.NonEmptyTrimmedString,care:Schema.NonEmptyTrimmedString,returns:Schema.NonEmptyTrimmedString})},
 async ({kernel,sessionId}) => {
   const response = await kernel.browsers.playwright.execute(sessionId,{code:visibleTextCode+"\\nreturn [await visibleText(page.locator('h1')), await visibleText(page.locator('#specs')), await visibleText(page.locator('#care')), await visibleText(page.locator('#returns'))];",timeout_sec:5});
   if(!response.success) throw new Error(String(response.error));
