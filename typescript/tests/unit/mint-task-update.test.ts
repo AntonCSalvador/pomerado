@@ -790,6 +790,54 @@ it("refuses a site change while the write session is open", async () => {
   expect(updates.reviews).toEqual([]);
 });
 
+// A build that started on one site, such as a sign-in host, and needs another can't move on a host
+// that can't move builds. Asking the caller to confirm a move the host then refuses wastes the
+// build, so the host refuses the move when the minter proposes it, and the new build the minter
+// recommends next shows Guardian the host's report.
+it("refuses a site move when proposed on a host that can't move builds, and shows Guardian why", async () => {
+  const updates = updateHost(["allow"]);
+  const suggestedRequest = `Read the saved notes on ${sister}.`;
+  const asked: AgentInputRequest[] = [];
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("mint_update", { ...toSister, confirmedBy: [] }, "move"),
+        call("mint_update", toSister, "confirmed"),
+        call(
+          "mint_update",
+          { ...toSister, confirmedBy: [], recommend: "new_mint", suggestedRequest },
+          "new_build",
+        ),
+      ][index] ?? prose(),
+    {
+      ...updates.overrides,
+      siteMoveUnsupported: true,
+      askInput: (request) =>
+        Effect.sync(() => {
+          asked.push(request);
+          return {};
+        }),
+    },
+    { siteOrigin: site },
+  );
+  const outcome = await f.run();
+  for (const id of ["move", "confirmed"]) {
+    expect(resultOf(f.requests, id), id).toMatchObject({
+      status: "update_refused",
+      reason: "site_move_unsupported",
+    });
+    expect(String(resultOf(f.requests, id)?.["instruction"]), id).toContain("new_mint");
+  }
+  expect(asked).toEqual([]);
+  expect(updates.reviews).toHaveLength(1);
+  expect(updates.reviews[0]?.update).toMatchObject({
+    recommend: "new_mint",
+    siteMoveUnsupported: true,
+  });
+  expect(outcome.blocked).toMatchObject({ reason: "new_mint_recommended", suggestedRequest });
+  expect(updates.applied).toEqual([]);
+});
+
 it("asks for the caller's confirmation before a change that widens what the build may do", async () => {
   const updates = updateHost(["allow"]);
   const f = await fixture(

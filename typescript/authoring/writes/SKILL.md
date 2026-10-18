@@ -89,7 +89,9 @@ During the session:
   refusal (`InvalidInput` with `available`) or a failure (`OperationFailure`), not the write's
   output. While building, a limit the session meets is the
   owner's to settle first: ask them to revise or stop, and end with `report_blocked` when they
-  stop, as the cart skill's "Minimums and refusals" says.
+  stop, as the cart skill's "Minimums and refusals" says. When they stop, or the session cannot
+  reach the task's end, end with `report_blocked` (`site_declined` when the site refused this
+  example). A build whose session never reached the end publishes nothing.
 - A pop-up, banner or interstitial on the path, such as an upsell, is conditional unless the
   page always opens it in answer to an action: handle it as the forms skill says, so the tool
   still works for a caller who never sees it.
@@ -132,7 +134,8 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   asking only at the step the session accepted it at, so the host refuses to publish
   a composed script that drops one.
 - Mark only the step whose click saves or submits. Opening or filling an unsaved
-  form is not a commit step. Mark every such step other than a hold that expires on
+  form is not a commit step. Prefer placing the first commit mark at the first step that
+  saves on the site. Mark every such step other than a hold that expires on
   its own, including an autosave, a saved form step and a payment submission whose
   next screen is unknown. Call `enteringCommit("place-order")` right before the
   execute call that can send that change, and declare the names in order as

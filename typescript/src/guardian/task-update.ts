@@ -115,6 +115,8 @@ export interface PendingTaskUpdate {
    * and `confirmer` says who can confirm it.
    */
   readonly maintenance?: { readonly confirmer: TaskUpdateConfirmer };
+  /** Host fact: the host can't move this build to another site, so a site change needs a new build. */
+  readonly siteMoveUnsupported?: true;
 }
 
 /**
@@ -131,10 +133,13 @@ export interface ReviewedTaskUpdate {
 
 /** Projects a proposed update for review, screening every string and input value. */
 export const taskUpdateForReview = <E>(
-  update: Omit<PendingTaskUpdate, "confirmation" | "effect" | "maintenance">,
+  update: Omit<
+    PendingTaskUpdate,
+    "confirmation" | "effect" | "maintenance" | "siteMoveUnsupported"
+  >,
   facts: Pick<
     PendingTaskUpdate,
-    "confirmation" | "effect" | "publicationDecisions" | "maintenance"
+    "confirmation" | "effect" | "publicationDecisions" | "maintenance" | "siteMoveUnsupported"
   >,
   screen: {
     readonly text: (value: string) => Effect.Effect<string, E>;
@@ -178,5 +183,6 @@ export const taskUpdateForReview = <E>(
         ? {}
         : { publicationDecisions: facts.publicationDecisions }),
       ...(facts.maintenance === undefined ? {} : { maintenance: facts.maintenance }),
+      ...(facts.siteMoveUnsupported === true ? { siteMoveUnsupported: true as const } : {}),
     };
   });

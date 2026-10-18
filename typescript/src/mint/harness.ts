@@ -1970,6 +1970,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               reason: "offline_build",
               instruction: "An offline build has no website to move. Finish it offline.",
             };
+          // A host that can't move builds would refuse the move only after the caller confirmed
+          // it and Guardian allowed it, so it is refused here, before the host asks for the
+          // caller's confirmation or Guardian reviews it.
+          if (dependencies.siteMoveUnsupported === true)
+            return {
+              reason: "site_move_unsupported",
+              instruction:
+                "This host can't move this build to another site, so nothing changed. A new build is the way: call mint_update with recommend new_mint and a suggestedRequest for a build on the other site, or finish under the current site.",
+            };
           if (writeSession === "open")
             return {
               reason: "write_session_open",
@@ -3303,6 +3312,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               // fields reaches review even when nobody can.
               ...(request.mode === "maintenance"
                 ? { maintenance: { confirmer: yield* maintenanceConfirmer } }
+                : {}),
+              // So Guardian knows a site change here can only be a new build.
+              ...(dependencies.siteMoveUnsupported === true
+                ? { siteMoveUnsupported: true as const }
                 : {}),
             },
             {
