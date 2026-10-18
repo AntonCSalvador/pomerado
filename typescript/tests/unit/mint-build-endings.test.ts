@@ -259,6 +259,15 @@ const oneTimeLoginUrl = new MintFailure({
   code: "PublicationUnavailable",
   reason: "login_url_one_time",
 });
+/** Advice the host gives once: finishing again, or passing httpVersion, publishes the read. */
+const httpUntested = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "http_implementation_untested",
+});
+const httpStale = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "http_implementation_stale",
+});
 /** An infrastructure gap: the example's output was not available to publish. */
 const outputUnavailable = new MintFailure({
   code: "PublicationUnavailable",
@@ -280,6 +289,8 @@ it.each([
   { basis: "Guardian", publish: [guardianCorrection], ends: false },
   { basis: "an outage", publish: [publicationOutage, guardianCorrection], ends: false },
   { basis: "one-time login URL advice", publish: [oneTimeLoginUrl], ends: false },
+  { basis: "untested HTTP version advice", publish: [httpUntested], ends: false },
+  { basis: "stale HTTP version advice", publish: [httpStale], ends: false },
   { basis: "an unavailable output", publish: [outputUnavailable], ends: false },
 ])("ends as host_refused after $basis refused publication: $ends", async ({ publish, ends }) => {
   const explanation = "Publication's sign-in check failed on a new browser, so no tool was published.";

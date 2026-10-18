@@ -397,6 +397,15 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   // Restored inputs change the code, which needs its own example.
   "input_contract_changed",
 ]);
+/**
+ * Publication refusals the host asks about only once in an attempt: finishing again, or passing
+ * `httpVersion` for an HTTP version, publishes. They are advice, not a host check refusing a step.
+ */
+const askedOnceReasons: ReadonlySet<string> = new Set([
+  "http_implementation_untested",
+  "http_implementation_stale",
+  "login_url_one_time",
+]);
 /** How the minter goes on after a refusal that is neither an outage nor Guardian's. */
 const refusalRecovery = (reason: string | undefined, write: boolean): PublicationRecovery =>
   reason !== undefined &&
@@ -4612,14 +4621,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               };
               // The host's own publication checks refused it, as a sign-in that fails on a new
               // browser: neither Guardian's decision nor an outage. An output the example could not
-              // make available is an infrastructure gap, and a one-time login URL is advice the
-              // host gives once: finishing again with the same URL publishes it.
+              // make available is an infrastructure gap, and a refusal the host asks only once,
+              // such as a one-time login URL or an untested HTTP version, is advice: finishing
+              // again publishes.
               if (
                 publication._tag === "Left" &&
                 publication.left.code === "PublicationUnavailable" &&
                 !publicationOutage(publication.left) &&
                 publication.left.reason !== "example_output_unavailable" &&
-                publication.left.reason !== "login_url_one_time"
+                !askedOnceReasons.has(publication.left.reason ?? "")
               )
                 hostRefused = true;
               if (publication._tag === "Right" || reviewDecided(publication.left)) {
