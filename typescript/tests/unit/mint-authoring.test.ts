@@ -45,6 +45,7 @@ it("loads modular skill references and keeps auth discovery outside managed logi
     "auth",
     "testing",
     "pagination",
+    "records",
     "forms",
     "writes",
     "cart",
@@ -746,18 +747,19 @@ it("renders the pinned standalone authoring", async () => {
     ...skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name]),
     ...[...guide.files].map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["50eba593df64f86af333ad55053e530acd148516060cf1961f9c978b2a6e854e", "core"],
-    ["0adaf6002bad034a70f753ac36d60bc15053a22f11972b612f9500a9e7c1c58f", "search"],
-    ["0904a769c541b0e156e6c28275f95146725376a0698c056254861c19865cf888", "auth"],
+    ["97fa12109f26681ca98a77be459d59daf5f77c108a7eb3594b7e5440f2eacdaa", "core"],
+    ["cbf9d84d1cdc1a192ec07df90bf99192a72c7b03c0aefb89096f4f0b5bf6ef27", "search"],
+    ["5f743f347089cebdce7a6149dc87b20c9769961c1c389d10bcb10f7a90bcbedf", "auth"],
     ["03c44d2b4b7e998d3fe1b86d110702d49ca27e3527b63abb69e41fe167056e54", "testing"],
     ["fc4707b0cd5692efe8cc9b96be4ec88b1f8807451348056eb13dfc3d88486b0f", "pagination"],
+    ["3c9a5f4e12e33f5d10758225f0a233f98f9504fce618108fc93a52b5933e0048", "records"],
     ["7e39ab2d515b817c3d42070922a575f6d3cd5b8427d3c97a4af151cec7a32656", "forms"],
-    ["f44eec390513bee6452ecef40cfe4947aec360809e811371f6b695ced9890c4b", "writes"],
+    ["914aa2968ae5843788037a2d3dbbcf08ad56dabd4c7f8b7750a33f24aa7dceed", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["5e3017df8368f31f52d925062ca0d7f24f2a8badffd8da1589ba9c7860e27b7a", "caller-input"],
     ["6b731bff43e00509cc46974f62b69f7a71b6023af68fd7c5957a454abd3065d9", "publication"],
-    ["b2987fe71d6b763dec94ac64f1602cbdaa4d88d9e090ad066e694ff43836b2da", "workspace/AGENTS.md"],
-    ["e023d1b6f7bc3673118d4310d9813cfa878c554b68a353413e73592054d2704d", "workspace/README.md"],
+    ["6ce3d9b741af4ffa76aa7538b22351e0e9ae27ba51ee2d957fa08970ffe83cc6", "workspace/AGENTS.md"],
+    ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
 
