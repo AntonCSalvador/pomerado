@@ -409,7 +409,7 @@ it("grants no host_refused ending for an authenticate the preflight refused", as
   );
   const outcome = await f.run();
   expect(outcome).not.toHaveProperty("blocked");
-  expect(JSON.stringify(f.requests[2]?.input)).toContain("host_not_refused");
+  expect(lastResult(f.requests[2])).toContain("host_not_refused");
 });
 
 const makeWrite = call(
@@ -472,7 +472,7 @@ it.each([
     });
   else {
     expect(outcome).not.toHaveProperty("blocked");
-    expect(JSON.stringify(f.requests[3]?.input)).toContain("host_not_refused");
+    expect(lastResult(f.requests[3])).toContain("host_not_refused");
   }
 });
 
@@ -510,7 +510,7 @@ it.each([
     const outcome = await f.run();
     expect(JSON.stringify(f.requests[2]?.input)).toContain(`\\"reason\\":\\"${refusal}\\"`);
     expect(outcome).not.toHaveProperty("blocked");
-    expect(JSON.stringify(f.requests[3]?.input)).toContain("host_not_refused");
+    expect(lastResult(f.requests[3])).toContain("host_not_refused");
   },
 );
 
