@@ -469,6 +469,14 @@ write's task is done once, in its act session, and uncertain private-field submi
 fenced, regardless of the read flag. An authentication submission with an unknown outcome is
 always fenced.
 
+Signed in, a filter or sort may be saved: some apps keep it with a saved view or setting, such
+as a table app that saves view filters with the view, and changing one there is a write. The
+page's own requests after the change show which: a save request beside the row fetch. A read
+prefers the page's own row query from the captures, the request the page sends for the rows
+(http-mcp skill, "The page's own data request"), to driving such a filter control. When it
+must use the control, the same step reverts the filter or sort to its prior value before it
+ends. A filter the site does not save stays part of the read.
+
 Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md). It designs
 its own cases at the start, from what it saw on the site: different real values unlike the
 example's, smart combinations and edge cases. It refines them once the example passes, and runs as
