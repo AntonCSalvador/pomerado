@@ -178,25 +178,42 @@ const yamlValueEscaped = (form: string) =>
  */
 const urlPartEncoded = { query: `"#<>'`, path: '"#<>?^`{|}', fragment: '"<>`' };
 /**
- * `form` as a browser writes it into one part of a URL: without tabs and line breaks, which a
- * URL drops, with `\` turned into `/` in a path, then percent-encoded in UTF-8, uppercase hex.
+ * Each byte as one part of a URL writes it: escaped when it is a control character, space,
+ * non-ASCII byte or one of the part's `encoded` characters, in uppercase hex.
  */
-const urlPartForm = (form: string, part: keyof typeof urlPartEncoded) =>
-  percentEncoded(
-    (part === "path" ? form.replaceAll("\\", "/") : form).replace(/[\t\n\r]/gu, ""),
-    urlPartEncoded[part],
+const byteForms = (encoded: string) =>
+  Array.from({ length: 256 }, (_, byte) =>
+    byte <= 0x20 || byte >= 0x7f || encoded.includes(String.fromCharCode(byte))
+      ? `%${byte.toString(16).toUpperCase().padStart(2, "0")}`
+      : String.fromCharCode(byte),
   );
-/** `form` with each control character, space, non-ASCII byte and `encoded` character escaped. */
-const percentEncoded = (form: string, encoded: string) =>
-  [...new TextEncoder().encode(form)]
-    .map((byte) =>
-      byte <= 0x20 || byte >= 0x7f || encoded.includes(String.fromCharCode(byte))
-        ? `%${byte.toString(16).toUpperCase().padStart(2, "0")}`
-        : String.fromCharCode(byte),
-    )
-    .join("");
+const urlPartBytes = {
+  query: byteForms(urlPartEncoded.query),
+  path: byteForms(urlPartEncoded.path),
+  fragment: byteForms(urlPartEncoded.fragment),
+};
+const utf8 = new TextEncoder();
+/**
+ * `form` as a browser writes it into one part of a URL: without tabs and line breaks, which a
+ * URL drops, with `\` turned into `/` in a path, then percent-encoded in UTF-8.
+ */
+const urlPartForm = (form: string, part: keyof typeof urlPartEncoded) => {
+  const bytes = urlPartBytes[part];
+  let encoded = "";
+  for (const character of (part === "path" ? form.replaceAll("\\", "/") : form).replace(
+    /[\t\n\r]/gu,
+    "",
+  )) {
+    const code = character.charCodeAt(0);
+    if (code < 0x80) encoded += bytes[code];
+    else for (const byte of utf8.encode(character)) encoded += bytes[byte];
+  }
+  return encoded;
+};
 const lowercaseHex = (encoded: string) =>
-  encoded.replace(/%[0-9A-F]{2}/gu, (escape) => escape.toLowerCase());
+  encoded.includes("%")
+    ? encoded.replace(/%[0-9A-F]{2}/gu, (escape) => escape.toLowerCase())
+    : encoded;
 
 /**
  * Under this many characters a form is short: a host may count it in source only as a whole
@@ -224,7 +241,11 @@ export const shownForms = (value: string): (readonly [string, boolean])[] => {
       .trim()
       .replace(/\s+/gu, " "),
   ];
+  // The three shown values are usually equal, and each distinct one is encoded once.
+  const encoded = new Map<string, (readonly [string, boolean])[]>();
   const forms = shown.flatMap((form) => {
+    const known = encoded.get(form);
+    if (known !== undefined) return known;
     if (form.length === 0) return [];
     const json = JSON.stringify(form).slice(1, -1);
     const forms = [
@@ -245,7 +266,9 @@ export const shownForms = (value: string): (readonly [string, boolean])[] => {
       forms.push(...percent, ...percent.map(lowercaseHex));
     }
     const short = form.length < shortForm;
-    return forms.map((shownForm) => [shownForm, short] as const);
+    const result = forms.map((shownForm) => [shownForm, short] as const);
+    encoded.set(form, result);
+    return result;
   });
   return value.length === 0
     ? forms

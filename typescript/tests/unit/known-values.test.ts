@@ -104,6 +104,16 @@ describe("forms of a value", () => {
     expect(observedForms("  two   words ")).toContain("two words");
   });
 
+  it("writes a value outside ASCII into a URL as UTF-8 escapes", () => {
+    expect(observedForms("ñandú 😀\\x")).toEqual(
+      expect.arrayContaining([
+        "%C3%B1and%C3%BA%20%F0%9F%98%80\\x",
+        "%C3%B1and%C3%BA%20%F0%9F%98%80/x",
+        "%c3%b1and%c3%ba%20%f0%9f%98%80/x",
+      ]),
+    );
+  });
+
   it("lists each form once", () => {
     expect(new Set(forms).size).toBe(forms.length);
   });
