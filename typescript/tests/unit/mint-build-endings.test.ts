@@ -374,6 +374,56 @@ it("grants no host_refused ending for an authenticate the preflight refused", as
   expect(JSON.stringify(f.requests[2]?.input)).toContain("host_not_refused");
 });
 
+const makeWrite = call(
+  "mint_update",
+  {
+    summary: "Make the build a write.",
+    changes: [{ setting: "effect", effect: "write" }],
+    confirmedBy: ["move"],
+    recommend: "update",
+    intent: "The owner confirmed the task writes.",
+  },
+  "update",
+);
+
+// The harness's own refusal of a task update, such as a site change in a build with no site or a
+// write build made a write again, refuses the minter's request, which it can fix. Only a change
+// the host refused to apply is a host check refusing a step: these grant no host_refused ending.
+it.each([
+  { refusal: "offline_build", steps: moveSite, request: {} },
+  {
+    refusal: "already_write",
+    steps: [moveSite[0], makeWrite],
+    request: { effect: "write", siteOrigin: "https://shop.example.test" },
+  },
+] as const)(
+  "grants no host_refused ending for an update the harness refused as $refusal",
+  async ({ refusal, steps, request }) => {
+    const explanation = "A Pomerado check refused the step this build needs.";
+    const f = await fixture(
+      (_request, index) =>
+        [...steps, call("report_blocked", { reason: "host_refused", explanation })][index] ??
+        prose("Stopping."),
+      {
+        askInput: () => Effect.succeed({ move: { type: "confirm", value: { confirmed: true } } }),
+        reviewTaskUpdate: () =>
+          Effect.succeed({ outcome: "allow" as const, rationale: "Same task.", reviewId: "r1" }),
+        applyTaskUpdate: () =>
+          Effect.succeed({
+            outcome: "refused" as const,
+            reason: "change_unsupported",
+            notice: "This build cannot take that change.",
+          }),
+      },
+      request,
+    );
+    const outcome = await f.run();
+    expect(JSON.stringify(f.requests[2]?.input)).toContain(`\\"reason\\":\\"${refusal}\\"`);
+    expect(outcome).not.toHaveProperty("blocked");
+    expect(JSON.stringify(f.requests[3]?.input)).toContain("host_not_refused");
+  },
+);
+
 // A minter that stops answering with tools says why in its last answer. Its caller reads that
 // answer only after the pipeline a blocked explanation takes: host-private values removed and
 // Guardian's review of a blocked outcome allowing it.

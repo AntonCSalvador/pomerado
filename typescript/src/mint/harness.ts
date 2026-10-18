@@ -3144,12 +3144,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const taskUpdateAnswer = (
         status: TaskUpdateStatus,
         fields: Readonly<Record<string, unknown>>,
-      ): string => {
-        // The host refused the update, such as a site change, by its own check. One it could not
-        // apply after Guardian allowed it is a host failure, not a refusal.
-        if (status === "update_refused" && fields["reason"] !== "host_failed") hostRefused = true;
-        return JSON.stringify({ status, userInputRequired: false, ...fields });
-      };
+      ): string => JSON.stringify({ status, userInputRequired: false, ...fields });
       /** The task an update makes: the current one with its changes applied in order. */
       const nextTaskState = (
         changes: readonly TaskChange[],
@@ -3396,13 +3391,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               instruction:
                 "Guardian allowed the update, but the host needs something only the caller can give before it applies, so nothing changed yet. Follow the notice, then call mint_update again.",
             });
-          if (result.outcome === "refused")
+          if (result.outcome === "refused") {
+            // The host refused to apply the update, such as a site change, by its own check. The
+            // harness's refusals before review, and one the host failed to apply, are no host
+            // check refusing a step.
+            hostRefused = true;
             return taskUpdateAnswer("update_refused", {
               reason: result.reason,
               notice: yield* screenMintText(dependencies, result.notice),
               instruction:
                 "The host cannot apply this update to this build, so nothing changed. Continue under the current task, or call mint_update with recommend new_mint if the caller's change needs a new build.",
             });
+          }
           const effectChanged = next.effect === "write" && buildEffect !== "write";
           const siteChanged = next.siteOrigin !== taskState.siteOrigin;
           taskState = next;
