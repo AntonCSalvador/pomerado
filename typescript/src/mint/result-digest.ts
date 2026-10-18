@@ -3,16 +3,34 @@
  * `resultDigestThresholdBytes` comes back whole. A larger one is saved whole to a read-only
  * workspace file and comes back as a digest: its size, its shape with every array's length, its
  * first items and the file's path, which the agent reads with `read_source` or searches with `rg`.
- * A failed result's text, and every error or stack field of a completed one, stay whole up to the
- * same threshold, so a digest never hides why something failed.
+ * A failed result's text, and every error or stack field of a completed one, stay whole up to a
+ * fixed budget, so a digest rarely hides why something failed. A digest never exceeds
+ * `resultDigestMaxBytes` or the result's own size; a result it cannot shrink comes back whole.
  */
 
 /** The largest result, in UTF-8 bytes of its screened text, that comes back whole. */
 export const resultDigestThresholdBytes = 16 * 1024;
 
-/** The budget for a digest's preview of a completed result, and for its shape. */
+/**
+ * The parts of a digest and their budgets, in UTF-8 bytes: the shape, the preview, the error
+ * fields (or a failed result's excerpt) and the envelope's fixed text and path. A digest never
+ * exceeds `resultDigestMaxBytes`, which holds the parts' budgets with room to spare, and is never
+ * larger than the result it stands for.
+ */
 const previewBytes = 4 * 1024;
 const shapeBytes = 4 * 1024;
+const errorBytes = 12 * 1024;
+export const resultDigestMaxBytes = 24 * 1024;
+/**
+ * The most bytes any result reaches the agent in, whatever the path: the model provider rejects
+ * a turn that carries far more. A result that cannot be digested comes back through
+ * `boundedResult`, never whole above the threshold.
+ */
+export const resultHardCapBytes = 64 * 1024;
+/** The longest key name a shape or an error path keeps. */
+const maxKeyChars = 64;
+/** The most error fields a digest lists. */
+const maxErrorFields = 20;
 /** The most fields an object's shape or preview lists. */
 const maxFields = 40;
 /** The most array items whose shapes merge into the array's item shape. */
@@ -28,6 +46,24 @@ const cut = (text: string, bytes: number) => {
   // A character the cut splits decodes to one replacement character, which is dropped.
   const kept = new TextDecoder().decode(encoded.subarray(0, bytes)).replace(/�$/u, "");
   return `${kept}…[cut at ${bytes} of ${encoded.byteLength} bytes]`;
+};
+
+const shortKey = (key: string) =>
+  key.length <= maxKeyChars ? key : `${key.slice(0, maxKeyChars)}…`;
+
+/**
+ * A result the host could not save or digest: whole within the threshold, else its first
+ * `resultDigestThresholdBytes` bytes with its size and a note that the rest was not kept.
+ */
+export const boundedResult = (text: string) => {
+  const totalBytes = byteLength(text);
+  if (totalBytes <= resultDigestThresholdBytes) return text;
+  return JSON.stringify({
+    kind: "result_truncated",
+    totalBytes,
+    note: `This result is ${totalBytes} bytes and the full output could not be saved, so only its first ${resultDigestThresholdBytes} bytes are shown. Run again with a narrower read if you need the rest.`,
+    excerpt: cut(text, resultDigestThresholdBytes),
+  });
 };
 
 /** Where a digested result is saved: one file per execution, so a takeover rewrites the same. */
@@ -116,7 +152,7 @@ const shapeOf = (value: unknown, depth: number): Shape => {
   const keys = Object.keys(value);
   if (depth <= 0) return { type: "object", fields: {}, moreFields: keys.length };
   const fields: Record<string, Shape> = {};
-  for (const key of keys.slice(0, maxFields)) fields[key] = shapeOf(value[key], depth - 1);
+  for (const key of keys.slice(0, maxFields)) fields[shortKey(key)] = shapeOf(value[key], depth - 1);
   return {
     type: "object",
     fields,
@@ -124,13 +160,13 @@ const shapeOf = (value: unknown, depth: number): Shape => {
   };
 };
 
-/** The deepest shape that fits its budget. */
+/** The deepest shape that fits its budget; at worst the top level's size alone. */
 const boundedShape = (value: unknown): Shape => {
   for (const depth of [6, 4, 3, 2]) {
     const shape = shapeOf(value, depth);
     if (byteLength(JSON.stringify(shape)) <= shapeBytes) return shape;
   }
-  return shapeOf(value, 1);
+  return shapeOf(value, 0);
 };
 
 /** A copy with each array cut to its first `items` and each string to `chars`, each marked. */
@@ -174,14 +210,15 @@ const failureKey = /error|stack|stderr|exception|message|reason/iu;
 
 /**
  * A result's error fields, outside arrays and to three levels deep, each whole while together
- * they fit the threshold.
+ * with their paths they fit the error budget, at most `maxErrorFields` of them. `omitted` counts
+ * the fields left out.
  */
 const errorFields = (value: unknown, errorKey: RegExp) => {
   const found: { path: string; text: string }[] = [];
   const visit = (current: unknown, path: string, depth: number) => {
     if (!isRecord(current) || depth > 3) return;
     for (const [key, field] of Object.entries(current)) {
-      const at = path === "" ? key : `${path}.${key}`;
+      const at = path === "" ? shortKey(key) : `${path}.${shortKey(key)}`;
       if (errorKey.test(key) && field !== null && field !== undefined && field !== "") {
         const text = typeof field === "string" ? field : JSON.stringify(field);
         if (text !== undefined) found.push({ path: at, text });
@@ -189,15 +226,16 @@ const errorFields = (value: unknown, errorKey: RegExp) => {
     }
   };
   visit(value, "", 1);
-  let room = resultDigestThresholdBytes;
+  let room = errorBytes;
   const kept: { path: string; text: string }[] = [];
   for (const entry of found) {
-    if (room <= 0) break;
+    room -= byteLength(entry.path);
+    if (room <= 0 || kept.length >= maxErrorFields) break;
     const text = cut(entry.text, room);
     room -= byteLength(text);
     kept.push({ path: entry.path, text });
   }
-  return kept;
+  return { kept, omitted: found.length - kept.length };
 };
 
 /**
@@ -205,9 +243,13 @@ const errorFields = (value: unknown, errorKey: RegExp) => {
  * keeps its text up to the threshold instead.
  */
 const detailOf = (value: unknown, text: string, failed: boolean) => {
-  const errors = errorFields(value, failed ? failureKey : errorKey);
-  if (failed && errors.length === 0) return { excerpt: cut(text, resultDigestThresholdBytes) };
-  return { ...previewOf(value), ...(errors.length > 0 ? { errors } : {}) };
+  const { kept: errors, omitted } = errorFields(value, failed ? failureKey : errorKey);
+  if (failed && errors.length === 0) return { excerpt: cut(text, errorBytes) };
+  return {
+    ...previewOf(value),
+    ...(errors.length > 0 ? { errors } : {}),
+    ...(omitted > 0 ? { omittedErrors: omitted } : {}),
+  };
 };
 
 const parseJson = (text: string): { readonly value: unknown } | undefined => {
@@ -230,7 +272,7 @@ export const digestResult = (
   const totalBytes = byteLength(text);
   if (totalBytes <= resultDigestThresholdBytes) return { text };
   const parsed = parseJson(text);
-  const instruction = `This result is ${totalBytes} bytes, over the ${resultDigestThresholdBytes} bytes the host returns whole, so this is its digest: its shape with every array's length, its first items and its error fields whole up to that limit. The full result is in ${options.path}: read it with read_source (offset and limit) or search it with rg in exec_command, such as rg -n 'text' ${options.path}, before you rely on what the digest leaves out.`;
+  const instruction = `This result is ${totalBytes} bytes, over the ${resultDigestThresholdBytes} bytes the host returns whole, so this is its digest: its shape with every array's length, its first items and its error fields whole up to a limit. The full result is in ${options.path}: read it with read_source (offset and limit) or search it with rg in exec_command, such as rg -n 'text' ${options.path}, before you rely on what the digest leaves out.`;
   const digest = {
     kind: "result_digest",
     totalBytes,
@@ -239,12 +281,16 @@ export const digestResult = (
     ...(parsed === undefined ? {} : { shape: boundedShape(parsed.value) }),
     ...(parsed === undefined
       ? options.failed
-        ? { excerpt: cut(text, resultDigestThresholdBytes) }
+        ? { excerpt: cut(text, errorBytes) }
         : { previewText: cut(text, previewBytes) }
       : detailOf(parsed.value, text, options.failed)),
   };
+  const digestText = JSON.stringify(digest);
+  // A digest that is not smaller than the result, or that exceeds its cap, is no help.
+  if (byteLength(digestText) >= totalBytes || byteLength(digestText) > resultDigestMaxBytes)
+    return { text: totalBytes <= resultHardCapBytes ? text : boundedResult(text) };
   return {
-    text: JSON.stringify(digest),
+    text: digestText,
     file: parsed === undefined ? text : `${JSON.stringify(parsed.value, null, 2)}\n`,
   };
 };

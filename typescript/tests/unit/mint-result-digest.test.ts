@@ -6,8 +6,13 @@ import { createLocalWorkspace, type LocalWorkspace } from "../../src/execution/l
 import { MintFailure } from "../../src/mint/contracts.js";
 import type { ExecutionEvidence, MintDependencies } from "../../src/mint/contracts.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
-import { resultDigestThresholdBytes } from "../../src/mint/result-digest.js";
+import {
+  resultDigestMaxBytes,
+  resultDigestThresholdBytes,
+  resultHardCapBytes,
+} from "../../src/mint/result-digest.js";
 import { mintError } from "../../src/standalone/errors.js";
+import { portableMintProjection } from "../support/portable-mint.js";
 import { fixtureAllow, makeMintContinuationFixture } from "../support/mint-fixtures.js";
 
 // A browser execution's result reaches the minter whole while it fits the threshold. A larger
@@ -107,6 +112,7 @@ const runOnce = async (
     if (local === undefined) throw new Error("No local workspace");
     return local.install(path, text).pipe(Effect.mapError(mintError));
   },
+  projection?: MintDependencies["projection"],
 ) => {
   let digestPath: string | undefined;
   let file = "";
@@ -132,6 +138,7 @@ const runOnce = async (
     },
     {
       ...(saveResult === null ? {} : { saveResult }),
+      ...(projection === undefined ? {} : { projection }),
       reviewAndExecute: (input, beforeDispatch = () => Effect.void) =>
         beforeDispatch(fixtureAllow(input.purpose)).pipe(
           Effect.as({
@@ -229,9 +236,98 @@ it.each([
     case: "a save that fails",
     saveResult: () => Effect.fail(new MintFailure({ code: "Unavailable" })),
   },
-])("returns a larger result whole for $case", async ({ saveResult }) => {
+])("returns a larger result as a bounded excerpt for $case", async ({ saveResult }) => {
   const observations = { output: rows(200), stdout: "", stderr: "" };
+  const whole = JSON.stringify(observations);
   const { delivered, file } = await runOnce(observations, "completed", saveResult);
-  expect(delivered).toBe(JSON.stringify(observations));
+  const bounded = JSON.parse(delivered) as { kind: string; totalBytes: number; excerpt: string };
+  expect(bounded).toMatchObject({ kind: "result_truncated", totalBytes: bytes(whole) });
+  expect(whole.startsWith(bounded.excerpt.slice(0, 1_000))).toBe(true);
+  expect(bytes(delivered)).toBeLessThan(resultHardCapBytes);
+  expect(file).toBeUndefined();
+});
+
+it("never returns more than the hard cap for a 12 MB result without a save hook", async () => {
+  const observations = { output: rows(90_000) };
+  expect(bytes(JSON.stringify(observations))).toBeGreaterThan(12 * 1024 * 1024);
+  const { delivered } = await runOnce(observations, "completed", null);
+  expect(bytes(delivered)).toBeLessThanOrEqual(resultHardCapBytes);
+  expect(JSON.parse(delivered)).toMatchObject({ kind: "result_truncated" });
+});
+
+it("masks what screening masks in both the digest and the saved file", async () => {
+  const canary = "synthetic-credential-canary-0123456789";
+  const observations = {
+    output: { items: rows(400), token: canary },
+    stderr: `Error: request refused for ${canary}`,
+  };
+  const { delivered, file } = await runOnce(
+    observations,
+    "completed",
+    undefined,
+    portableMintProjection([canary]),
+  );
+  expect(JSON.parse(delivered)).toMatchObject({ kind: "result_digest" });
+  expect(delivered).not.toContain(canary);
+  expect(file).toBeDefined();
+  expect(file).not.toContain(canary);
+});
+
+it("digests and saves a non-JSON text result over the threshold", async () => {
+  const text = Array.from({ length: 2_000 }, (_, line) => `line ${line}: synthetic output`).join(
+    "\n",
+  );
+  expect(bytes(text)).toBeGreaterThan(resultDigestThresholdBytes);
+  const { delivered, file } = await runOnce(text);
+  const digest = JSON.parse(delivered) as { kind: string; previewText: string };
+  expect(digest.kind).toBe("result_digest");
+  expect(digest.previewText).toContain("line 0: synthetic output");
+  expect(bytes(delivered)).toBeLessThan(resultDigestMaxBytes);
+  expect(file).toBe(text);
+});
+
+it("keeps a digest under its cap with long keys and many error fields", async () => {
+  const longKeys = Object.fromEntries(
+    Array.from({ length: 300 }, (_, index) => [`${"k".repeat(500)}${index}`, { nested: index }]),
+  );
+  const errors = Object.fromEntries(
+    Array.from({ length: 200 }, (_, index) => [`error_${"e".repeat(300)}_${index}`, "x".repeat(900)]),
+  );
+  const observations = { output: longKeys, rows: rows(100), ...errors };
+  const { delivered, file } = await runOnce(observations);
+  const digest = JSON.parse(delivered) as {
+    kind: string;
+    errors: unknown[];
+    omittedErrors: number;
+  };
+  expect(digest.kind).toBe("result_digest");
+  expect(bytes(delivered)).toBeLessThanOrEqual(resultDigestMaxBytes);
+  expect(digest.errors.length + digest.omittedErrors).toBe(200);
+  expect(digest.omittedErrors).toBeGreaterThan(0);
+  expect(JSON.parse(file ?? "null")).toEqual(observations);
+});
+
+it("completes the mint for a deeply nested result", async () => {
+  const depth = 1_000;
+  const deep = JSON.parse(`${"[".repeat(depth)}${"]".repeat(depth)}`) as unknown;
+  const observations = { output: deep, padding: "x".repeat(resultDigestThresholdBytes) };
+  const { delivered, file } = await runOnce(observations);
+  const parsed = JSON.parse(delivered) as { kind?: string };
+  if (parsed.kind === "result_digest") expect(JSON.parse(file ?? "null")).toEqual(observations);
+  else expect(delivered).toBe(JSON.stringify(observations));
+});
+
+it("returns a result whole when its digest would not be smaller", async () => {
+  // A little over the threshold, with a full error budget and a full preview: the digest would
+  // add its envelope to what it keeps and come out larger than the result.
+  const fields = Object.fromEntries(
+    Array.from({ length: 40 }, (_, index) => [`field_${index}`, "v".repeat(60)]),
+  );
+  const observations = { output: fields, stderr: "e".repeat(13_600) };
+  const whole = JSON.stringify(observations);
+  expect(bytes(whole)).toBeGreaterThan(resultDigestThresholdBytes);
+  expect(bytes(whole)).toBeLessThan(resultDigestThresholdBytes + 2_000);
+  const { delivered, file } = await runOnce(observations);
+  expect(delivered).toBe(whole);
   expect(file).toBeUndefined();
 });

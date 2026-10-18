@@ -103,7 +103,7 @@ import {
   minterHistory,
 } from "./outcome-review.js";
 import { readImportClosure } from "./operation-source.js";
-import { digestResult, resultDigestPath } from "./result-digest.js";
+import { boundedResult, digestResult, resultDigestPath } from "./result-digest.js";
 import { contentDigest } from "./step-checks.js";
 import {
   caseDigest,
@@ -1484,7 +1484,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       /**
        * A browser execution's screened result as the agent receives it: whole when it fits the
        * threshold, else saved whole through the host's `saveResult` and digested. A command's
-       * output, a host without `saveResult` and a save that fails keep the whole result.
+       * output, a host without `saveResult` and a save that fails keep the whole result within
+       * the threshold and otherwise its first part, never more than the hard cap.
        */
       const deliveredObservations = (
         evidence: ExecutionEvidence,
@@ -1493,13 +1494,22 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       ) =>
         Effect.gen(function* () {
           const save = dependencies.saveResult;
-          if (save === undefined || purpose === "command") return observations;
+          if (save === undefined || purpose === "command") return boundedResult(observations);
           const path = resultDigestPath(evidence.executionId);
-          const digest = digestResult(observations, {
-            path,
-            failed: evidence.status !== "completed",
-          });
-          if (!("file" in digest)) return observations;
+          // A result the digest cannot be built for, such as one nested too deeply, comes back bounded.
+          const attempted = yield* Effect.try(() =>
+            digestResult(observations, { path, failed: evidence.status !== "completed" }),
+          ).pipe(Effect.either);
+          if (attempted._tag === "Left") {
+            yield* diagnose({
+              phase: "execution",
+              reason: "result_not_digested",
+              executionId: evidence.executionId,
+            });
+            return boundedResult(observations);
+          }
+          const digest = attempted.right;
+          if (!("file" in digest)) return digest.text;
           const saved = yield* Effect.either(
             Effect.suspend(() => save(path, digest.file)).pipe(
               Effect.catchAllDefect((error) =>
@@ -1522,7 +1532,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             executionId: evidence.executionId,
             code: saved.left.code,
           });
-          return observations;
+          return boundedResult(observations);
         });
       /** `handedBack`: the execution's unanswered script question went back to the minter. */
       const visible = (
