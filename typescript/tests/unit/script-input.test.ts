@@ -196,6 +196,7 @@ describe("a script question that can't be asked", () => {
     expect(refusal([first, { value: 5, label: "Number value" }])).toBe("");
     expect(refusal([first, { ...second, maskedLabel: "m".repeat(65) }])).toBe("");
     expect(refusal([first, "entry-text"])).toBe("");
+    expect(refusal([first, ["entry-list"]])).toBe("");
     expect(refusal([])).toBe("");
   });
 
