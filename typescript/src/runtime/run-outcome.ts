@@ -62,6 +62,20 @@ export const commitReportOf = (resultJson: unknown): CommitReportOutcome => {
   return { evidence: commitEvidenceOf(marks), marks };
 };
 
+/**
+ * A possibly dispatched write whose every declared commit stayed unsent changed nothing. The
+ * commit marks, not the page's own traffic, say whether a failed write sent its commit, whatever
+ * failed it. Pass the marks of the runner's own final report (`commitReportOf`), or undefined
+ * when there is none: a missing or unreadable report, or marks only streamed while the write ran,
+ * prove nothing. A host whose other channels, such as a relay that sends requests for the
+ * script, may have sent a write must check those too.
+ */
+export const unenteredWrite = (effect: string, marks: readonly CommitMark[] | undefined) =>
+  effect === "may_have_dispatched" &&
+  marks !== undefined &&
+  marks.length > 0 &&
+  marks.every((mark) => mark.state === "not_sent");
+
 /** The tool revision fields the outcome functions read: its effect and declared confirmation. */
 export interface OutcomeRevision {
   readonly effect: "read" | "write";

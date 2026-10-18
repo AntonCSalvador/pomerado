@@ -173,21 +173,47 @@ describe("a run that failed in its operation", () => {
       error: new LocalOperationFailure("Fixture failure", nothingSent),
       outcome: { code: "execution_failed", writeStatus: "not_attempted", possibleCommit: false },
     },
-    // A browser step already ran, so an unentered commit mark proves nothing sent only for a
-    // refusal, as the other host's job view also counts it.
+    // The commit marks decide, whatever failed the write: one whose child reported every
+    // declared commit step unsent changed nothing.
     {
       case: "a script error after a browser step, whose commit was never entered",
       error: new LocalOperationFailure("Fixture failure", commitNotEntered),
-      outcome: { code: "outcome_unknown", writeStatus: "may_have_applied", possibleCommit: true },
+      outcome: { code: "execution_failed", writeStatus: "not_applied", possibleCommit: false },
     },
+    {
+      case: "invalid output after a browser step, whose commit was never entered",
+      error: new LocalOperationFailure("InvalidOutput", commitNotEntered, "InvalidOutput"),
+      outcome: { code: "invalid_output", writeStatus: "not_applied", possibleCommit: false },
+    },
+    // Only the child's own final report proves its marks unsent. The host's deadline, a child
+    // that exited or a result with host requests pending leaves the last streamed journal, which
+    // may miss a mark entered just before.
     {
       case: "an expired deadline after a browser step, whose commit was never entered",
       error: new LocalOperationFailure(
         "Local operation deadline expired; execution was not replayed",
         commitNotEntered,
+        undefined,
+        undefined,
+        undefined,
+        { reported: false },
       ),
       outcome: { code: "outcome_unknown", writeStatus: "may_have_applied", possibleCommit: true },
     },
+    {
+      case: "a child that exited before reporting, whose commit was never entered",
+      error: new LocalOperationFailure(
+        "Local operation child exited 1; completion uncertain",
+        commitNotEntered,
+        undefined,
+        undefined,
+        undefined,
+        { reported: false },
+      ),
+      outcome: { code: "outcome_unknown", writeStatus: "may_have_applied", possibleCommit: true },
+    },
+    // A question left unanswered says nothing about what the page sent before it, and this host
+    // has no request log to tell, so the write stays possibly applied.
     {
       case: "an unanswered question after a browser step, whose commit was never entered",
       error: new LocalOperationFailure("NoResponse", commitNotEntered, "NoResponse"),
@@ -197,11 +223,6 @@ describe("a run that failed in its operation", () => {
         writeStatus: "may_have_applied",
         possibleCommit: true,
       },
-    },
-    {
-      case: "invalid output after a browser step, whose commit was never entered",
-      error: new LocalOperationFailure("InvalidOutput", commitNotEntered, "InvalidOutput"),
-      outcome: { code: "outcome_unknown", writeStatus: "may_have_applied", possibleCommit: true },
     },
     // A refusal makes unentered marks prove nothing applied only while the write may have
     // dispatched. A recorded confirmation keeps the write applied, as the other host's job view

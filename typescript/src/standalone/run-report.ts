@@ -14,6 +14,7 @@ import {
   runnerVerified,
   unconfirmedWrite,
   validatedWriteNeeds,
+  unenteredWrite,
   type OutcomeRevision,
   type RunEvidence,
   type RunOutcome,
@@ -122,11 +123,14 @@ const operationReasons: Readonly<Record<string, string>> = {
 };
 
 /**
- * What a failed operation's journal shows. A browser step that ran may have changed the website
- * before any declared commit, so declared commit marks that were never entered prove nothing was
- * applied only when the site refused the input or the login, or the run couldn't sign in again,
- * and only while the write may have dispatched: a recorded confirmation keeps it applied. A
- * failure with no journal may have dispatched anything.
+ * What a failed operation's journal shows. The commit marks decide, whatever failed the write: a
+ * write that may have dispatched and whose child reported every declared commit step unsent
+ * changed nothing (`unenteredWrite`), and a recorded confirmation keeps it applied. Only the
+ * child's own final report proves that. A failure the host raised without it (its deadline, a
+ * child that exited, a result with host requests pending) keeps the write possibly applied, as
+ * does a question left unanswered: this host keeps no request log to show what the page sent
+ * before it. A refused input or login, or a run that couldn't sign in again, with no commit step
+ * entered also changed nothing. A failure with no journal may have dispatched anything.
  *
  * A run that couldn't sign in again (the host refused the sign-in a script waited for, as when
  * its sign-ins were spent or the sign-in failed) reports the sign-in unavailable, to retry with
@@ -149,7 +153,8 @@ const operationEvidence = (declared: DeclaredEffect, error: unknown): RunEvidenc
     tool === "read"
       ? "not_started"
       : journalEffect(journal, tool === undefined ? undefined : { effect: tool });
-  const commits = commitReportOf(journal).evidence;
+  const report = commitReportOf(journal);
+  const commits = report.evidence;
   const unentered = base === "may_have_dispatched" && commits === "not_entered";
   const signedOut =
     error.sessionLoss === "session_not_kept" &&
@@ -157,7 +162,13 @@ const operationEvidence = (declared: DeclaredEffect, error: unknown): RunEvidenc
     (base === "not_started" || unentered);
   const reason = signedOut ? "login_check_unavailable" : operationReasons[error.code ?? ""];
   const refused = signedOut || reason === "invalid_input" || reason === "credentials_rejected";
-  const effect = refused && unentered ? "rejected" : base;
+  // The child's own report, never one the host kept from the stream, and never past a question
+  // left unanswered.
+  const unsent =
+    error.reported &&
+    reason !== "no_response" &&
+    unenteredWrite(base, report.marks);
+  const effect = unsent || (refused && unentered) ? "rejected" : base;
   return {
     status: "completed",
     effect,
