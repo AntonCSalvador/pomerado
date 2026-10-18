@@ -82,7 +82,10 @@ During the session:
 - When one of those checks rules the task out, such as a total over the caller's limit, an
   item out of stock or a variant the page does not offer, the script refuses before the mark
   with `InvalidInput` (the caller-input skill, "Throw the error that matches what happened").
-  Never return a refusal as the output. While building, a limit the session meets is the
+  Never return a refusal as the output. Prefer throwing over returning when a write stops
+  before its last commit step. A report of the form's fields, its validation messages or the
+  options to pick from is a refusal (`InvalidInput` with `available`) or a failure
+  (`OperationFailure`), not the write's output. While building, a limit the session meets is the
   owner's to settle first: ask them to revise or stop, and end with `report_blocked` when they
   stop, as the cart skill's "Minimums and refusals" says.
 - A pop-up, banner or interstitial on the path, such as an upsell, is conditional unless the
