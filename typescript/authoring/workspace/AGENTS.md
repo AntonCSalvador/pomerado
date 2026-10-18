@@ -35,7 +35,9 @@ The workspace root is `/workspace`. Paths below are relative to it.
   header line with counts, then one route per line whose bodies are `{state, reason, path, bytes,
   sourceBytes}`, each read at its `path` (`reference/captures.md`). After each sign-in step whose
   submit the host clicked, `captures/after-submit/<step>.json` holds the next screen's controls,
-  never a value. Read-only.
+  never a value. An execution result over 16 KiB is saved whole to
+  `captures/results/<executionId>.json`, and its `observations` are a digest naming that file.
+  Read-only.
 - In maintenance only: `captures/original/index.json` and, when the observations say so,
   `failures/original/manifest.json` (`reference/maintenance.md`).
 
@@ -213,7 +215,11 @@ records or table rows in an app: read .agents/records/SKILL.md before you settle
 the file's `total`. Read a large file in parts with `read_source` offset and limit. From a
 probe, return only the slice you need, such as the relevant container, the matching rows and
 their count, never a whole page's text or every control on it. A filter panel's or option
-group's controls, once you open it, are such a slice.<!-- pomerado:section agents.large-content --> Search rather
+group's controls, once you open it, are such a slice. An execution result over 16 KiB comes
+back as a digest (`kind: "result_digest"`): its size, its shape with every array's length, its
+first items and its error fields whole, and the `path` of the file holding the whole result.
+Read that file in ranges with `read_source`, or search it with `rg -n` in an offline command,
+before you rely on anything the digest leaves out.<!-- pomerado:section agents.large-content --> Search rather
 than read whole files: `grep` your own files in an offline command<!-- pomerado:section agents.progressive-reads:start
 .
 pomerado:section agents.progressive-reads:end -->

@@ -103,6 +103,7 @@ import {
   minterHistory,
 } from "./outcome-review.js";
 import { readImportClosure } from "./operation-source.js";
+import { boundedResult, digestResult, resultDigestPath } from "./result-digest.js";
 import { contentDigest } from "./step-checks.js";
 import {
   caseDigest,
@@ -1480,8 +1481,65 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             instruction: `The caller answered. Continue in this attempt with these answers; verify the current page before acting on them, and before any further write.${handles ? " A secret answer is a handle such as {{secret.s1}}, never the value, which you never see. Write the handle exactly as given, as the whole string literal passed as the value to fill, type or pressSequentially, or as a field of a request to this site, in the Playwright code of a kernel.browsers.playwright.execute call in explore, test or act source; the host fills in the value when it runs that source live, and masks it in what comes back. It refuses a handle anywhere else, such as in a variable, a concatenation, a transform, a return value or a navigation. Offline targets get the handle text unchanged. An example and published source never hold a handle: a value the finished tool needs at run time is a declared secret question it asks with ask." : ""}${card ? " A card answer (card_number, card_expiry, card_cvc, billing_postal_code) is never written in source: run an execution with purpose card_fill, target liveBrowser, entrypoint operation/card-fill-step.json and cardFillStep naming each card field's own selector, on the page or inside the payment provider's frame, with the card handle for it; the host types the values and clicks nothing." : ""}`,
           });
         });
+      /**
+       * A browser execution's screened result as the agent receives it: whole when it fits the
+       * threshold, else saved whole through the host's `saveResult` and digested. A command's
+       * output, a host without `saveResult` and a save that fails keep the whole result within
+       * the threshold and otherwise its first part, never more than the hard cap.
+       */
+      const deliveredObservations = (
+        evidence: ExecutionEvidence,
+        purpose: ExecutionRequest["purpose"] | "command",
+        observations: string,
+      ) =>
+        Effect.gen(function* () {
+          const save = dependencies.saveResult;
+          if (save === undefined || purpose === "command") return boundedResult(observations);
+          const path = resultDigestPath(evidence.executionId);
+          // A result the digest cannot be built for, such as one nested too deeply, comes back bounded.
+          const attempted = yield* Effect.try(() =>
+            digestResult(observations, { path, failed: evidence.status !== "completed" }),
+          ).pipe(Effect.either);
+          if (attempted._tag === "Left") {
+            yield* diagnose({
+              phase: "execution",
+              reason: "result_not_digested",
+              executionId: evidence.executionId,
+            });
+            return boundedResult(observations);
+          }
+          const digest = attempted.right;
+          if (!("file" in digest)) return digest.text;
+          const saved = yield* Effect.either(
+            Effect.suspend(() => save(path, digest.file)).pipe(
+              Effect.catchAllDefect((error) =>
+                Effect.fail(
+                  new MintFailure({
+                    code: "Unavailable",
+                    failureDetail: failureDetail("mint_host_dependency_failed", {
+                      operation: "saveResult",
+                      error,
+                    }),
+                  }),
+                ),
+              ),
+            ),
+          );
+          if (saved._tag === "Right") return digest.text;
+          yield* diagnose({
+            phase: "execution",
+            reason: "result_not_saved",
+            executionId: evidence.executionId,
+            code: saved.left.code,
+          });
+          return boundedResult(observations);
+        });
       /** `handedBack`: the execution's unanswered script question went back to the minter. */
-      const visible = (evidence: ExecutionEvidence, handedBack = false) =>
+      const visible = (
+        evidence: ExecutionEvidence,
+        purpose: ExecutionRequest["purpose"] | "command",
+        handedBack = false,
+      ) =>
         Effect.gen(function* () {
           const siteAccess = siteAccessDiagnostic(evidence);
           const withheld = safeExecutionEvidence(evidence).withheldConfirmation;
@@ -1522,6 +1580,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   ),
                 )
               : yield* screenMintText(dependencies, evidence.observations);
+          const delivered = yield* deliveredObservations(evidence, purpose, observations);
           // A script question left unanswered goes back to the agent, which decides how to go on.
           const scriptQuestion =
             evidence.scriptQuestion === undefined && handedBack
@@ -1553,7 +1612,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             repeatableRead,
             ...availabilityMetadata(),
             ...changedEntryNotice(),
-            observations,
+            observations: delivered,
           });
         });
       const record = (
@@ -1586,7 +1645,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           record(evidence, purpose);
           const handedBack = evidence.noResponse !== undefined && handsBackNoAnswer();
           if (handedBack) yield* questionHandedBack;
-          const receipt = yield* visible(evidence, handedBack);
+          const receipt = yield* visible(evidence, purpose, handedBack);
           if (evidence.terminalFailure === "ChallengeFailure" && !stopUnavailableHost())
             terminal ??= {
               build: "incomplete",
@@ -2837,7 +2896,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               command,
             });
             record(evidence, "command");
-            return yield* visible(evidence);
+            return yield* visible(evidence, "command");
           }).pipe(
             executionFailureFeedback(
               (error) => error.execution !== undefined || error.authentication !== undefined,
@@ -4090,7 +4149,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   reason: availability.reason,
                 });
                 record(evidence, submitted.purpose);
-                return yield* visible(evidence);
+                return yield* visible(evidence, submitted.purpose);
               }
               if (submitted.purpose === "residual") yield* dependencies.authorizeResidual;
               if (submitted.purpose === "authenticate") {
