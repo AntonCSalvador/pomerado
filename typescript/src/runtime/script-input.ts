@@ -84,9 +84,9 @@ export type ScriptQuestionDeclarations = Readonly<Record<string, ScriptQuestionD
 /** One option the page offers now. */
 export const ScriptOption = Schema.Struct({
   /** What `ask` returns when the caller picks it. It never leaves the sandbox. */
-  value: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(256)),
-  /** The option as the site shows it. */
-  label: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(256)),
+  value: Schema.String.pipe(Schema.minLength(1)),
+  /** The option as the site shows it. A long one reaches the caller shortened (`shownLabel`). */
+  label: Schema.String.pipe(Schema.minLength(1)),
   /**
    * A detail of the caller's own account, such as a saved card, a passenger or an address. Its
    * full label appears only on the protected page; the API and MCP show it masked.
@@ -155,6 +155,20 @@ type GivenSpec = AskSpec | ReadonlyArray<ScriptOption>;
 /** The pre-unification call passed a choice's options directly. */
 const isOptionList = (spec: GivenSpec): spec is ReadonlyArray<ScriptOption> => Array.isArray(spec);
 
+/** The longest label the host takes (`InputOption`), in UTF-16 code units as it counts them. */
+const longestLabel = 256;
+/**
+ * A label the host can show: one past `longestLabel` keeps its start and ends in "…". The cut
+ * never splits a surrogate pair, so the start may be one code unit shorter. Options that read
+ * the same once cut stay apart, since the host names each by its own id.
+ */
+const shownLabel = (label: string) => {
+  if (label.length <= longestLabel) return label;
+  const end = longestLabel - 1;
+  const last = label.charCodeAt(end - 1);
+  return `${label.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end)}…`;
+};
+
 /** The page's options with host-opaque ids, and the value behind each id. */
 const offeredOptions = (given: ReadonlyArray<ScriptOption> | undefined) => {
   if (given === undefined) return Either.left(invalidOptions());
@@ -169,7 +183,7 @@ const offeredOptions = (given: ReadonlyArray<ScriptOption> | undefined) => {
     values: new Map(options.map((option, index) => [`o${index + 1}`, option.value])),
     offered: options.map((option, index) => ({
       id: `o${index + 1}`,
-      label: option.label,
+      label: shownLabel(option.label),
       ...(option.accountSpecific === undefined ? {} : { accountSpecific: option.accountSpecific }),
       ...(option.maskedLabel === undefined ? {} : { maskedLabel: option.maskedLabel }),
     })),
