@@ -4167,9 +4167,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         ),
                       )
                   : { supported: false as const, reason: repeated };
+              // A refused preflight records no host refusal: it refuses the minter's own request,
+              // such as a wrong target or a missing sign-in step, which the minter can fix.
               if (!availability.supported) {
-                // The host refused to start this sign-in, as for a login page it cannot use.
-                if (submitted.purpose === "authenticate") hostRefused = true;
                 const evidence: ExecutionEvidence = {
                   executionId: randomUUID(),
                   status: "unsupported",

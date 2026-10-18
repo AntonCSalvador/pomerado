@@ -302,13 +302,19 @@ const moveSite = [
   ),
 ];
 
-// The host's refusal to start a sign-in or to apply a task update is on record too, and a policy
-// report that stands only on a host refusal is refused with the way to host_refused.
+const signIn = call("execute", { ...pureExample, purpose: "authenticate", target: "liveBrowser" });
+/** A sign-in the host refused to type into: the login would go where credentials may not. */
+const credentialTargetRefused = new MintFailure({
+  code: "Unavailable",
+  authentication: { phase: "credential_submit", code: "CredentialTargetRefused" },
+});
+/** The minter gives up the refused sign-in, so its blocked ending is no longer held back. */
+const giveUpSignIn = call("abandon_sign_in", { intent: "The host refused the sign-in form." });
+
+// The host's refusal of a sign-in or of a task update is on record too, and a policy report that
+// stands only on a host refusal is refused with the way to host_refused.
 it.each([
-  {
-    basis: "a sign-in",
-    steps: [call("execute", { ...pureExample, purpose: "authenticate", target: "liveBrowser" })],
-  },
+  { basis: "a sign-in", steps: [signIn, giveUpSignIn] },
   { basis: "a site change", steps: moveSite },
 ])("ends as host_refused after the host refused $basis", async ({ steps }) => {
   const explanation = "A Pomerado check refused the step this build needs.";
@@ -320,12 +326,8 @@ it.each([
         call("report_blocked", { reason: "host_refused", explanation }, "host"),
       ][index] ?? prose("Stopping."),
     {
-      preflight: (submitted) =>
-        Effect.succeed(
-          submitted.purpose === "authenticate"
-            ? { supported: false as const, reason: "The host cannot use this login page." }
-            : { supported: true as const },
-        ),
+      reviewAndExecute: () => Effect.fail(credentialTargetRefused),
+      abandonSignIn: () => Effect.succeed({ outcome: "abandoned" as const }),
       askInput: () => Effect.succeed({ move: { type: "confirm", value: { confirmed: true } } }),
       reviewTaskUpdate: () =>
         Effect.succeed({ outcome: "allow" as const, rationale: "Same task.", reviewId: "r1" }),
@@ -346,6 +348,30 @@ it.each([
     blocked: { reason: "host_refused", explanation },
     stopReason: "host_refused",
   });
+});
+
+// A refusal of the minter's own request is no host check refusing a step the build needs: the
+// minter fixes the request. An authenticate the host's preflight refused, as for a wrong target or
+// a missing sign-in step, grants no host_refused ending.
+it("grants no host_refused ending for an authenticate the preflight refused", async () => {
+  const explanation = "A Pomerado check refused the step this build needs.";
+  const f = await fixture(
+    (_request, index) =>
+      [signIn, call("report_blocked", { reason: "host_refused", explanation })][index] ??
+      prose("Stopping."),
+    {
+      preflight: (submitted) =>
+        Effect.succeed(
+          submitted.purpose === "authenticate"
+            ? { supported: false as const, reason: "The sign-in names no signInStep." }
+            : { supported: true as const },
+        ),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
+  const outcome = await f.run();
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(JSON.stringify(f.requests[2]?.input)).toContain("host_not_refused");
 });
 
 // A minter that stops answering with tools says why in its last answer. Its caller reads that
