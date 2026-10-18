@@ -64,7 +64,7 @@ const finalsWithoutToolLimit = 3;
  * One model response's calls as the host schedules them. The SDK takes a response's function
  * calls one at a time, in the model's order, and runs them before its native edits, so a function
  * call after an edit is held until the edits land. A read starts together with the reads that
- * follow it.
+ * follow it. Once a step does not succeed, no later call of the response runs.
  */
 interface ResponseCalls {
   /** The response's output items, in the model's order. */
@@ -72,6 +72,8 @@ interface ResponseCalls {
   readonly edits: readonly { readonly callId: string; readonly index: number }[];
   /** Reads an earlier read of this response started, by call ID, until the SDK takes them. */
   readonly started: Map<string, Promise<unknown>>;
+  /** The position of the response's first step that did not succeed, once one has returned. */
+  failedAt?: number;
 }
 
 /**
@@ -89,6 +91,38 @@ const notRun = JSON.stringify({
   instruction:
     "Not run, nothing was sent. The host runs a call that follows an edit in its response only when every edit in that response came before the call and applied. Read this response's results, then send this call again if it is still the next step.",
 });
+
+/**
+ * A call the model sent after a step of the same response that did not succeed. Nothing was sent.
+ */
+const notRunAfterFailure = JSON.stringify({
+  status: "not_run",
+  effect: "not_sent",
+  instruction:
+    "Not run, nothing was sent. An earlier call in this response did not succeed, and the host runs no call that follows it in the same response. Read that call's result, then send this call again if it is still the next step.",
+});
+
+/**
+ * Whether a step's result is a completed receipt. An execute or a command that failed, was
+ * refused by review, timed out or may have dispatched returns any other result.
+ */
+const completedReceipt = (result: unknown) => {
+  if (typeof result !== "string") return false;
+  try {
+    const receipt: unknown = JSON.parse(result);
+    return (
+      typeof receipt === "object" &&
+      receipt !== null &&
+      "status" in receipt &&
+      receipt.status === "completed"
+    );
+  } catch {
+    return false;
+  }
+};
+
+/** The steps whose result says whether they succeeded: one that did not holds the calls after it. */
+const stepTools: ReadonlySet<string> = new Set(["execute", "exec_command"]);
 
 /**
  * Whether the SDK holds this call because it cannot read its arguments as an object, which it does
@@ -489,7 +523,7 @@ export const makeOpenAIMinter = (
                       );
                     },
                   };
-            /** Each function call's response and position in it, in the model's order. */
+            /** Each call's response and position in it, in the model's order. */
             const placed = new Map<
               string,
               { readonly response: ResponseCalls; readonly index: number }
@@ -513,12 +547,19 @@ export const makeOpenAIMinter = (
                 )
               );
             };
+            /** Whether a step of this call's response before it did not succeed. */
+            const afterFailure = (callId: string) => {
+              const call = placed.get(callId);
+              const failedAt = call?.response.failedAt;
+              return call !== undefined && failedAt !== undefined && failedAt < call.index;
+            };
             /** Each read tool's own invoke, so a read can start the reads after it. */
             const readers = new Map<string, FunctionTool["invoke"]>();
             /**
-             * Holds a function call after an edit in its response. A read the SDK takes first also
-             * starts the reads right after it in the response, up to the next call that is not a
-             * read, so they run at once; the SDK then takes each one's result in turn.
+             * Holds a function call after an edit in its response, and runs none after a step of its
+             * response that did not succeed. A read the SDK takes first also starts the reads right
+             * after it in the response, up to the next call that is not a read, so they run at
+             * once; the SDK then takes each one's result in turn.
              */
             const inResponseOrder = <
               T extends {
@@ -541,8 +582,33 @@ export const makeOpenAIMinter = (
               const needsApproval = async (context: unknown, input: unknown, callId?: string) =>
                 (callId !== undefined && heldForEdit.has(callId)) ||
                 (await own(context, input, callId));
+              const step = stepTools.has(entry.name);
+              /** Runs the call unless an earlier step failed; a step's own failure holds the rest. */
+              const inOrder =
+                (run: FunctionTool["invoke"]): FunctionTool["invoke"] =>
+                async (context, input, details) => {
+                  const callId = details?.toolCall?.callId ?? "";
+                  if (afterFailure(callId)) return notRunAfterFailure;
+                  const call = placed.get(callId);
+                  // Calls run in the model's order, so the first step that fails holds the rest.
+                  const failed = () => {
+                    if (call !== undefined) call.response.failedAt ??= call.index;
+                  };
+                  try {
+                    const result: unknown = await run(context, input, details);
+                    if (step && !completedReceipt(result)) failed();
+                    return result;
+                  } catch (error) {
+                    if (step) failed();
+                    throw error;
+                  }
+                };
               if (!readTools.has(entry.name))
-                return { ...entry, needsApproval: needsApproval as T["needsApproval"] };
+                return {
+                  ...entry,
+                  needsApproval: needsApproval as T["needsApproval"],
+                  invoke: inOrder(entry.invoke),
+                };
               readers.set(entry.name, entry.invoke);
               const invoke: FunctionTool["invoke"] = (context, input, details) => {
                 const callId = details?.toolCall?.callId ?? "";
@@ -573,7 +639,11 @@ export const makeOpenAIMinter = (
                 }
                 return entry.invoke(context, input, details);
               };
-              return { ...entry, needsApproval: needsApproval as T["needsApproval"], invoke };
+              return {
+                ...entry,
+                needsApproval: needsApproval as T["needsApproval"],
+                invoke: inOrder(invoke),
+              };
             };
             /**
              * Awaits the call record before dispatch and the result record before returning. A
@@ -667,11 +737,21 @@ export const makeOpenAIMinter = (
                 .filter((entry) => !(entry.type === "function" && entry.name === "view_image"))
                 .map((entry) =>
                   entry.type === "apply_patch"
-                    ? { ...entry, editor: traceEditor(entry.editor) }
+                    ? {
+                        ...entry,
+                        editor: traceEditor(entry.editor),
+                        // An edit after a step of its response that did not succeed is held, and
+                        // the run loop returns it not run.
+                        needsApproval: async (
+                          ...args: Parameters<typeof entry.needsApproval>
+                        ): Promise<boolean> =>
+                          (args[2] !== undefined && afterFailure(args[2])) ||
+                          (await entry.needsApproval(...args)),
+                      }
                     : entry.type !== "function"
                       ? entry
                       : inResponseOrder(
-                          {
+                          recoverFunction({
                             ...entry,
                             invoke: async (...args: Parameters<typeof entry.invoke>) => {
                               try {
@@ -692,10 +772,9 @@ export const makeOpenAIMinter = (
                                 );
                               }
                             },
-                          },
+                          }),
                         ),
-                )
-                .map((entry) => (entry.type === "function" ? recoverFunction(entry) : entry));
+                );
             const readFailureInstruction = (error: unknown) =>
               mintFailure(error)?.reason === "capture_not_saved"
                 ? "This capture is not saved yet. Re-read captures/index.json and read only the capture paths it lists."
@@ -1185,9 +1264,13 @@ export const makeOpenAIMinter = (
                         started: new Map(),
                       };
                       response.output.forEach((item, index) => {
-                        if (item.type !== "function_call") return;
+                        if (item.type !== "function_call" && item.type !== "apply_patch_call")
+                          return;
                         placed.set(item.callId, { response: calls, index });
-                        if (calls.edits.some((edit) => edit.index < index))
+                        if (
+                          item.type === "function_call" &&
+                          calls.edits.some((edit) => edit.index < index)
+                        )
                           heldForEdit.add(item.callId);
                       });
                       return response;
@@ -1280,21 +1363,30 @@ export const makeOpenAIMinter = (
                 }
                 const result: SegmentResult = segment.value;
                 if (result.interruptions.length > 0 && !turn.isComplete()) {
-                  // Only the host's own holds pause a run: calls behind an edit, and calls whose
-                  // arguments the SDK could not read. A held call runs only when every edit of its
-                  // response came before it and applied; otherwise it returns not run. Resuming
-                  // the same state runs them with no model call, and its usage is counted once,
-                  // below.
-                  const released = result.interruptions.every(
-                    (item) =>
-                      item.rawItem.type === "function_call" &&
-                      (heldForEdit.has(item.rawItem.callId) ||
-                        unreadableArguments(item.rawItem.arguments)),
+                  // Only the host's own holds pause a run: calls behind an edit, calls whose
+                  // arguments the SDK could not read, and edits after a step of their response
+                  // that did not succeed. A held call runs only when every edit of its response
+                  // came before it and applied, and no step before it failed; otherwise it
+                  // returns not run. Resuming the same state runs them with no model call, and
+                  // its usage is counted once, below.
+                  const released = result.interruptions.every((item) =>
+                    item.rawItem.type === "function_call"
+                      ? heldForEdit.has(item.rawItem.callId) ||
+                        unreadableArguments(item.rawItem.arguments)
+                      : item.rawItem.type === "apply_patch_call" &&
+                        afterFailure(item.rawItem.callId),
                   );
                   if (!released) throw new MintFailure({ code: "Unavailable" });
                   for (const item of result.interruptions) {
-                    const callId = item.rawItem.type === "function_call" ? item.rawItem.callId : "";
-                    if (heldForEdit.delete(callId) && !editsLanded(callId, result.history))
+                    const callId =
+                      item.rawItem.type === "function_call" ||
+                      item.rawItem.type === "apply_patch_call"
+                        ? item.rawItem.callId
+                        : "";
+                    const heldBehindEdit = heldForEdit.delete(callId);
+                    if (afterFailure(callId))
+                      result.state.reject(item, { message: notRunAfterFailure });
+                    else if (heldBehindEdit && !editsLanded(callId, result.history))
                       result.state.reject(item, { message: notRun });
                     else result.state.approve(item);
                   }

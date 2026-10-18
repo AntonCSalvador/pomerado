@@ -185,6 +185,14 @@ export interface RecordedSignIn {
 }
 
 /**
+ * The workspace origin a run's sign-in learned for its login, held in memory for that run only:
+ * the local host keeps no login between runs, so it pins nothing past one.
+ */
+export interface RunWorkspace {
+  origin: string | undefined;
+}
+
+/**
  * The local host's automatic sign-in on the browser an operation holds. It checks the recorded
  * marker on the current page without moving it, and only when the page reads signed out does it
  * sign in again: first a check that types nothing (the recipe's account page, then a value-free
@@ -213,6 +221,8 @@ export const makeLocalSessionSignIn = (options: {
    */
   readonly spent?: { attempt: number; scope: number };
   readonly timing?: SignInReplayTiming;
+  /** The login's workspace origin under a recipe's workspace relation; each sign-in updates it. */
+  readonly workspace?: RunWorkspace;
   /**
    * Whether a sign-in again may end on a page that can't tell, as a read's may, asked at each
    * sign-in, since a build's effect may change from read to write between them.
@@ -246,7 +256,17 @@ export const makeLocalSessionSignIn = (options: {
         siteOrigin: options.siteOrigin,
         ...(options.timing === undefined ? {} : { timing: options.timing }),
         ...(options.allowCantTell?.() === true ? { allowCantTell: true } : {}),
-      }),
+        ...(options.workspace?.origin === undefined
+          ? {}
+          : { workspaceOrigin: options.workspace.origin }),
+      }).pipe(
+        Effect.tap((signedIn) =>
+          Effect.sync(() => {
+            if (options.workspace !== undefined && signedIn.workspaceOrigin !== undefined)
+              options.workspace.origin = signedIn.workspaceOrigin;
+          }),
+        ),
+      ),
     );
   /** The recorded marker on the current page; no recorded sign-in says nothing. */
   const sessionOn = Effect.suspend(() => {
@@ -275,7 +295,7 @@ export const makeLocalSessionSignIn = (options: {
       const { signedIn, steps } = sign.recipe;
       if (signedIn.openPath !== undefined) {
         const check = yield* options.browser
-          .confirm(signedIn, steps, steps)
+          .confirm(signedIn, steps, steps, options.workspace?.origin)
           .pipe(Effect.mapError((error) => failed("session_sign_in_failed", "check_failed", error)));
         if (check.signedIn) return true;
       }
@@ -423,6 +443,7 @@ export const mintSessionSignInFailure = (failed: SessionSignInFailed): MintFailu
  * script's `ensureSignedIn` finds the page signed out, with the login `before` read. A run never
  * restores a saved session, so it saves none. Only a read's sign-in may end on a page that can't
  * tell: a write's needs its marker, as nothing checks the session again before the write commits.
+ * `workspace` holds the workspace origin the run's sign-in learned, for this run only.
  */
 export const makeRunSignIn = (
   session: StandaloneSession,
@@ -436,6 +457,7 @@ export const makeRunSignIn = (
   // The site as the owner's questions name it: its host, without `www.`.
   const site = new URL(siteOrigin).hostname.replace(/^www\./u, "");
   const asks = makeBoundableAsk(ask);
+  const workspace: RunWorkspace = { origin: undefined };
   const signInBrowser = makeSignInBrowser({
     page: browser,
     keyboard: browser.keyboard,
@@ -459,7 +481,13 @@ export const makeRunSignIn = (
     site,
     siteOrigin,
     allowCantTell,
-  });
+  }).pipe(
+    Effect.tap((signedIn) =>
+      Effect.sync(() => {
+        workspace.origin = signedIn.workspaceOrigin;
+      }),
+    ),
+  );
   const again = makeLocalSessionSignIn({
     browser: signInBrowser,
     recorded: () => signIn,
@@ -471,7 +499,8 @@ export const makeRunSignIn = (
     siteOrigin,
     limits: runSessionSignIns,
     scope: "attempt",
+    workspace,
     allowCantTell: () => allowCantTell,
   });
-  return { before, hook: again.hook };
+  return { before, hook: again.hook, workspace };
 };
