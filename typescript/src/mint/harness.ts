@@ -397,6 +397,15 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   // Restored inputs change the code, which needs its own example.
   "input_contract_changed",
 ]);
+/**
+ * Publication refusals the host asks about only once in an attempt: finishing again, or passing
+ * `httpVersion` for an HTTP version, publishes. They are advice, not a host check refusing a step.
+ */
+const askedOnceReasons: ReadonlySet<string> = new Set([
+  "http_implementation_untested",
+  "http_implementation_stale",
+  "login_url_one_time",
+]);
 /** How the minter goes on after a refusal that is neither an outage nor Guardian's. */
 const refusalRecovery = (reason: string | undefined, write: boolean): PublicationRecovery =>
   reason !== undefined &&
@@ -419,6 +428,16 @@ const hostRefusalDecision = (
   failedChecks: [reason],
   recovery: refusalRecovery(reason, write),
 });
+/**
+ * Sign-ins the host itself refused: it typed nothing where the login would go somewhere
+ * credentials may not, or somewhere it could not verify. An autofill refusal of another check,
+ * such as a field the selector did not find or matched twice, is the minter's to correct.
+ */
+const hostSignInRefusal = (error: MintFailure) =>
+  error.authentication?.code === "CredentialTargetRefused" ||
+  error.authentication?.code === "CredentialTargetUnverified" ||
+  (error.authentication?.code === "AutofillRefused" &&
+    error.authentication.hostRefusal?.check === "destination");
 /**
  * A failure's code as diagnostics and publication evidence name it. A review whose outcome
  * Guardian kept refusing fails as `ReviewUnavailable`, but it is a verdict that did not form, not
@@ -1083,10 +1102,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         error.review !== undefined ||
         error.execution !== undefined;
       /**
-       * Guardian denied or escalated an execution, or refused a publication for a reason no
-       * correction gets past, in this attempt. A publication denial that names a correction is not one.
+       * Guardian refused an execution with a refusal it did not mark `correctable`, or refused a
+       * publication for a reason no correction gets past, in this attempt. A publication denial
+       * that names a correction is not one, nor is a correctable execution refusal.
        */
       let guardianRefused = recovered?.guardianRefused === true;
+      /**
+       * A host check refused a step the build needs in this attempt: a publication its checks
+       * refused, a sign-in the host refused, or a task update the host refused. A `host_refused`
+       * block stands on it.
+       */
+      let hostRefused = recovered?.hostRefused === true;
       /**
        * This build's Guardian denials, the oldest first to go past the bound, for the blocked
        * explanation's review; a takeover restores them. A checkpoint from an older worker kept
@@ -2073,7 +2099,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         });
       const reviewFeedback = (error: MintFailure) =>
         Effect.gen(function* () {
-          guardianRefused = true;
+          // A refusal Guardian marked correctable names a fix, so no policy block stands on it.
+          // One without a kind, from an older reviewer, counts as final, as it did before.
+          if (error.review?.refusal !== "correctable") guardianRefused = true;
           const rationale = error.review
             ? yield* screenMintText(dependencies, error.review.rationale)
             : "Guardian rejected this submission; rationale unavailable.";
@@ -2096,7 +2124,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             repeatableRead,
             ...availabilityMetadata(),
             ...(error.review
-              ? { outcome: error.review.outcome, reviewId: error.review.reviewId }
+              ? {
+                  outcome: error.review.outcome,
+                  reviewId: error.review.reviewId,
+                  ...(error.review.refusal === undefined ? {} : { refusal: error.review.refusal }),
+                }
               : {}),
             rationale,
             notice:
@@ -2468,6 +2500,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       };
       const providerFeedback = (failed: MintFailure, now: number) => {
         const error = countHostRefusal(failed);
+        if (hostSignInRefusal(error)) hostRefused = true;
         const runnerFailure = screenedRunnerFailure(error);
         // A capture the host could not produce or screen is a gap: the result is withheld, the
         // effect possible, and the build goes on.
@@ -2972,10 +3005,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "explanation_too_long",
             "Private values in the explanation made it longer than 500 characters once screened. Shorten it, leave private values out, and call report_blocked again.",
           );
-        // Each ending stands on its basis on record. A policy block stands on Guardian's deny or
-        // escalation of an execution, or its publication refusal no correction gets past (an
+        // Each ending stands on its basis on record. A policy block stands on Guardian's final
+        // refusal of an execution, or its publication refusal no correction gets past (an
         // escalation for missing evidence is not one), unless the host's own guidance names the
-        // ending; the minter's reading of its own instructions is none. The owner's no to a
+        // ending; the minter's reading of its own instructions is none. A host_refused block
+        // stands on a host check's refusal the host recorded in this attempt. The owner's no to a
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
@@ -2997,6 +3031,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "no_question_unanswered",
             "No question went unanswered in this build, so the build has not ended. Use question_unanswered only after a question you asked came back as no answer and the build cannot go on without it.",
           );
+        if (reason === "host_refused" && !hostRefused)
+          return refused(
+            "host_not_refused",
+            "No host check refused a step in this attempt, so the build has not ended. host_refused needs a host check that refused a step the build needs, such as finish_build, a sign-in form or a site change.",
+          );
         if (
           reason === "policy" &&
           !guardianRefused &&
@@ -3006,7 +3045,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           if (unanswered) return { reason: "question_unanswered" };
           return refused(
             "policy_not_refused",
-            "Nothing in this attempt refused this: Guardian denied or escalated no execution, and refused no publication for privacy or authority or for a finding no correction gets past. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
+            "Nothing in this attempt refused this: Guardian made no final refusal of an execution, and refused no publication for privacy or authority or for a finding no correction gets past. Use host_refused when a host check refused a step the build needs and nothing left in this attempt can fix it. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
           );
         }
         return { reason };
@@ -3359,13 +3398,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               instruction:
                 "Guardian allowed the update, but the host needs something only the caller can give before it applies, so nothing changed yet. Follow the notice, then call mint_update again.",
             });
-          if (result.outcome === "refused")
+          if (result.outcome === "refused") {
+            // The host refused to apply the update, such as a site change, by its own check. The
+            // harness's refusals before review, and one the host failed to apply, are no host
+            // check refusing a step.
+            hostRefused = true;
             return taskUpdateAnswer("update_refused", {
               reason: result.reason,
               notice: yield* screenMintText(dependencies, result.notice),
               instruction:
                 "The host cannot apply this update to this build, so nothing changed. Continue under the current task, or call mint_update with recommend new_mint if the caller's change needs a new build.",
             });
+          }
           const effectChanged = next.effect === "write" && buildEffect !== "write";
           const siteChanged = next.siteOrigin !== taskState.siteOrigin;
           taskState = next;
@@ -4130,6 +4174,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         ),
                       )
                   : { supported: false as const, reason: repeated };
+              // A refused preflight records no host refusal: it refuses the minter's own request,
+              // such as a wrong target or a missing sign-in step, which the minter can fix.
               if (!availability.supported) {
                 const evidence: ExecutionEvidence = {
                   executionId: randomUUID(),
@@ -4578,6 +4624,19 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                           ? "guardian_feedback"
                           : refusalRecovery(reason, buildEffect === "write"),
               };
+              // The host's own publication checks refused it, as a sign-in that fails on a new
+              // browser: neither Guardian's decision nor an outage. An output the example could not
+              // make available is an infrastructure gap, and a refusal the host asks only once,
+              // such as a one-time login URL or an untested HTTP version, is advice: finishing
+              // again publishes.
+              if (
+                publication._tag === "Left" &&
+                publication.left.code === "PublicationUnavailable" &&
+                !publicationOutage(publication.left) &&
+                publication.left.reason !== "example_output_unavailable" &&
+                !askedOnceReasons.has(publication.left.reason ?? "")
+              )
+                hostRefused = true;
               if (publication._tag === "Right" || reviewDecided(publication.left)) {
                 yield* reviewCompleted;
                 // A completed review replaces the input feedback an earlier one returned.
@@ -5923,6 +5982,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         },
         ...(blockedReviewUnavailable ? { blockedReviewUnavailable: true as const } : {}),
         ...(guardianRefused ? { guardianRefused: true as const } : {}),
+        ...(hostRefused ? { hostRefused: true as const } : {}),
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),
         ...(loginHeld ? { loginHeld: true as const } : {}),
         ...(loginDeclined === undefined ? {} : { loginDeclined }),

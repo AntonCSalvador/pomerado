@@ -299,9 +299,13 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
         const result = yield* guardian
           .review(turn, readSource)
           .pipe(Effect.mapError((failure) => reviewFailureOf(failure, dispatch)));
-        const { outcome, rationale } = result.decision;
+        const { outcome, rationale, refusal } = result.decision;
         if (outcome !== "allow")
-          return yield* reviewDenied(result.reviewId, { outcome, rationale });
+          return yield* reviewDenied(result.reviewId, {
+            outcome,
+            rationale,
+            ...(refusal === undefined ? {} : { refusal }),
+          });
         return result;
       });
     /**
