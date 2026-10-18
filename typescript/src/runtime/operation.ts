@@ -10,7 +10,7 @@ import {
   WriteConfirmationRefused,
 } from "./errors.js";
 import type { CaptureUnavailable, EventUnavailable } from "./errors.js";
-import { operationErrors } from "./operation-failure.js";
+import type { operationErrors } from "./operation-failure.js";
 import type { WebsiteAuthenticationFailed } from "./authentication.js";
 import type { ScriptQuestionDeclarations } from "./script-input.js";
 import type { KernelOperation, KernelOperationContext } from "./kernel-operation.js";
@@ -110,6 +110,21 @@ export function defineOperation<Input, EncodedInput, Output, EncodedOutput, Erro
   };
 }
 
+/** The caller's input refusal a script throws, `errors.InvalidInput` from `pomerado/runtime`. */
+type InputRefusal = InstanceType<typeof operationErrors.InvalidInput>;
+
+/**
+ * Whether a thrown value is the input refusal. It is matched by shape, not by class, so a refusal
+ * from another copy of the runtime, such as one a tool bundles, matches too: an `Error` tagged
+ * `InvalidInput` without the `operation` and `issues` that the runner's own schema `InvalidInput`
+ * carries.
+ */
+const isInputRefusal = (value: unknown): value is InputRefusal =>
+  value instanceof Error &&
+  Reflect.get(value, "_tag") === "InvalidInput" &&
+  !("operation" in value) &&
+  !("issues" in value);
+
 /** The `$id` Effect gives an empty struct, which it writes as TypeScript's `{}` type. */
 const emptyStructId = "/schemas/%7B%7D";
 
@@ -158,7 +173,7 @@ export const executeOperation = <Input, EncodedInput, Output, EncodedOutput, Err
   Output,
   | Error
   | InvalidInput
-  | InstanceType<typeof operationErrors.InvalidInput>
+  | InputRefusal
   | InvalidOutput
   | DeadlineExceeded
   | CaptureUnavailable
@@ -207,10 +222,11 @@ export const executeOperation = <Input, EncodedInput, Output, EncodedOutput, Err
       const output = yield* Effect.suspend(() => operation.run(runInput)).pipe(
         // A runtime helper the run calls outside an Effect, such as `startList` refusing its
         // cursor, throws the caller's input refusal: the run fails with it, as a Kernel script's
-        // does, rather than dying.
-        Effect.catchSomeDefect((defect) =>
-          defect instanceof operationErrors.InvalidInput
-            ? Option.some(Effect.fail(defect))
+        // does, rather than dying. Only a cause that is that one defect alone becomes the failure,
+        // so a finalizer's or a concurrent fiber's error is never dropped.
+        Effect.catchSomeCause((cause) =>
+          cause._tag === "Die" && isInputRefusal(cause.defect)
+            ? Option.some(Effect.fail(cause.defect))
             : Option.none(),
         ),
         Effect.provideService(ExecutionContext, { ...context, journal }),
