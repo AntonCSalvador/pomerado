@@ -35,7 +35,9 @@ The workspace root is `/workspace`. Paths below are relative to it.
   header line with counts, then one route per line whose bodies are `{state, reason, path, bytes,
   sourceBytes}`, each read at its `path` (`reference/captures.md`). After each sign-in step whose
   submit the host clicked, `captures/after-submit/<step>.json` holds the next screen's controls,
-  never a value. Read-only.
+  never a value. An execution result over 16 KiB is saved whole to
+  `captures/results/<executionId>.json`, and its `observations` are a digest naming that file.
+  Read-only.
 - In maintenance only: `captures/original/index.json` and, when the observations say so,
   `failures/original/manifest.json` (`reference/maintenance.md`).
 
@@ -213,7 +215,11 @@ records or table rows in an app: read .agents/records/SKILL.md before you settle
 the file's `total`. Read a large file in parts with `read_source` offset and limit. From a
 probe, return only the slice you need, such as the relevant container, the matching rows and
 their count, never a whole page's text or every control on it. A filter panel's or option
-group's controls, once you open it, are such a slice.<!-- pomerado:section agents.large-content --> Search rather
+group's controls, once you open it, are such a slice. An execution result over 16 KiB comes
+back as a digest (`kind: "result_digest"`): its size, its shape with every array's length, its
+first items and its error fields whole, and the `path` of the file holding the whole result.
+Read that file in ranges with `read_source`, or search it with `rg -n` in an offline command,
+before you rely on anything the digest leaves out.<!-- pomerado:section agents.large-content --> Search rather
 than read whole files: `grep` your own files in an offline command<!-- pomerado:section agents.progressive-reads:start
 .
 pomerado:section agents.progressive-reads:end -->
@@ -495,6 +501,17 @@ caller's values, which is the first commit, not a repeat. The host never resubmi
 write's task is done once, in its act session, and uncertain private-field submissions stay
 fenced, regardless of the read flag. An authentication submission with an unknown outcome is
 always fenced.
+
+Signed in, a filter or sort may be saved: some apps keep it with a saved view or setting, such
+as a table app that saves view filters with the view, and changing one there is a write. The
+page's own requests after the change show which: a save request beside the row fetch. A read
+prefers the page's own row query from the captures, the request the page sends for the rows
+(http-mcp skill, "The page's own data request"), to driving such a filter control. When it
+must use the control, the same step reads the prior value first and restores it in a
+finally-style block, so the revert runs on every path, errors and timeouts included. If the
+prior value cannot be read, use the page's own row query instead of the control. This holds
+during exploration too, not only in the published tool. A filter the site does not save stays
+part of the read.
 
 Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md). It designs
 its own cases at the start, from what it saw on the site: different real values unlike the

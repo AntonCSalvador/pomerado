@@ -1,5 +1,6 @@
 // Failure modes covered: switching review kinds changes the instructions, tools or output format
-// and resends the conversation uncached; a review that never reads the host's wrapper fails
+// and resends the conversation uncached; a build's request is left out of the cached instructions
+// or repeated in every review message; a review that never reads the host's wrapper fails
 // although the agent's own file is in view; a skipped entrypoint read retries the whole review
 // with backoff; a compaction in the middle of a review keeps an earlier read; an unchanged source
 // is not marked as already read; session reviews drop their model diagnostics and token counts;
@@ -262,6 +263,81 @@ it("keeps instructions, tools and output format identical across all six review 
     label: "owner_specific",
     rationale: "Names one owner.",
   });
+});
+
+it("sends a build's request once, in the instructions every review of the build shares", async () => {
+  const build = async (screenedIntent: string) => {
+    const requests = scripted([
+      [allow],
+      [decision({ outcome: "allow_business", rationale: "Only the owner knows the table." })],
+      [compact, read("after_compaction", "operation/operation.mjs")],
+      [allow],
+      [decision({ outcome: "allow", rationale: "Nothing private ships.", reason: "approved" })],
+    ]);
+    const guardian = makeGuardian(
+      makeOpenAIReviewer("Synthetic policy {{ tenant_policy_config }}", false, native),
+      undefined,
+      {},
+    );
+    const reader = sourcesOf(files());
+    const ofBuild = { ...pending, screenedIntent };
+    await Effect.runPromise(guardian.review(ofBuild, reader));
+    await Effect.runPromise(
+      guardian.reviewQuestion(
+        ofBuild,
+        {
+          questions: [{ id: "table", type: "text", prompt: "Which table?" }],
+          credentialsAvailable: false,
+        },
+        reader,
+      ),
+    );
+    await Effect.runPromise(guardian.review(ofBuild, reader));
+    await Effect.runPromise(
+      guardian.review(
+        {
+          ...ofBuild,
+          publication: {
+            files: [
+              {
+                path: "operation/operation.mjs",
+                byteLength: 64,
+                published: true,
+                current: true,
+                owner: "minter",
+              },
+            ],
+          },
+        },
+        reader,
+      ),
+    );
+    return requests;
+  };
+  const tables =
+    "Read the rows of the named table in a table app. If the table doesn't exist, tell callers which tables do.";
+  const hours = "Read the listed opening hours";
+  const first = await build(tables);
+  const second = await build(hours);
+
+  // Every review of the build, a compaction included, sends the request in the same
+  // instructions, so the provider keeps them in the cached prefix.
+  expect(first).toHaveLength(5);
+  expect(new Set(first.map(prefixHash)).size).toBe(1);
+  const instructions = first[0]?.systemInstructions ?? "";
+  expect(instructions).toContain(JSON.stringify(tables));
+  // No review message repeats it, so the conversation carries it once.
+  for (const request of first) expect(JSON.stringify(request.input)).not.toContain("tell callers");
+  // Another build's request changes only its own text, after the shared policy, so the policy
+  // stays one cached prefix across builds.
+  const other = second[0]?.systemInstructions ?? "";
+  expect(other).not.toContain("tell callers");
+  expect(instructions.slice(0, instructions.indexOf(JSON.stringify(tables)))).toBe(
+    other.slice(0, other.indexOf(JSON.stringify(hours))),
+  );
+  expect(instructions.replace(JSON.stringify(tables), "")).toBe(
+    other.replace(JSON.stringify(hours), ""),
+  );
 });
 
 it("refuses an outcome the review kind may not return", async () => {

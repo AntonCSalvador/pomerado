@@ -83,12 +83,13 @@ export interface PublicationRoundFile {
 }
 
 /**
- * The review inputs besides the files whose change a later round names, each by the request field
- * it is sent as, from the pending review's fields that reach the request.
+ * The review inputs besides the files whose change a later round names, each by the field it is
+ * sent as, from the pending review's fields that reach the request or, for trusted_request, the
+ * instructions.
  */
 export const publicationContext = (pending: PendingExecution): Readonly<Record<string, string>> => {
   const fields: Record<string, unknown> = {
-    "trusted_authority.intent": pending.screenedIntent,
+    "trusted_request.intent": pending.screenedIntent,
     "trusted_authority.taskUpdates": pending.taskUpdates,
     "trusted_authority.answeredQuestions": pending.answeredQuestions,
     "trusted_authority.allowedOrigins": pending.allowedOrigins,
