@@ -542,6 +542,13 @@ describe("the publication policy", () => {
     );
   });
 
+  // A list whose site rarely shows an empty state can still publish: its untested empty result is
+  // no gap, while its next page still is.
+  it("counts a list's next page as a gap, not its empty result", () => {
+    expect(publicationLiveTestsPolicy).toContain(", a list's next page, another record,");
+    expect(publicationLiveTestsPolicy).not.toContain("a list's empty result");
+  });
+
   // A site's own "Remember me" choice left at its default keeps the owner's session for later
   // runs. It is not a safety default, so neither review denies the host's sign-in step over it.
   it("leaves a site's own Remember me choice at its default in both reviews", () => {

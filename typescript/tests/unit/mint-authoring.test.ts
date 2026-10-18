@@ -265,6 +265,13 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "- Published files are all of `src/`, the named entrypoints and any `explore/`, `test/` or `scratch/` module they import",
   ],
   ["publication", "## Never put these in published files"],
+  // A list whose site rarely shows an empty state still publishes: a no-results case is preferred
+  // when the build finds one, and neither skill names it as a gap.
+  [
+    "testing",
+    "and an option the page lists but greys out, such as a sold-out size, which a read returns as unavailable data. Prefer also a query or filter with no results (`empty`, never a throw) when you find one. Without one, move on: it needs no `notTested` entry and no question;",
+  ],
+  ["publication", "and untested (such as a later page or another layout, live)."],
   [
     "publication",
     "| `reason` | `input_feedback_unresolved` | The feedback rounds are spent | End the attempt; do not execute again |",
@@ -750,14 +757,14 @@ it("renders the pinned standalone authoring", async () => {
     ["af346d56453d40246872599683f72c7c645c6c7fcbc5046ab62570dd3cd0ac96", "core"],
     ["cbf9d84d1cdc1a192ec07df90bf99192a72c7b03c0aefb89096f4f0b5bf6ef27", "search"],
     ["4c82c607ae23ae85bcd723415cb7eda4bb062c02d3eee95e4591e640e88715ad", "auth"],
-    ["03c44d2b4b7e998d3fe1b86d110702d49ca27e3527b63abb69e41fe167056e54", "testing"],
+    ["48ba91768a4c1cbb8d6d325bb6b3ef41182bcbdf8097db014391137e29fb7f7d", "testing"],
     ["fc4707b0cd5692efe8cc9b96be4ec88b1f8807451348056eb13dfc3d88486b0f", "pagination"],
     ["3c9a5f4e12e33f5d10758225f0a233f98f9504fce618108fc93a52b5933e0048", "records"],
     ["7e39ab2d515b817c3d42070922a575f6d3cd5b8427d3c97a4af151cec7a32656", "forms"],
     ["57493a345097dfc8eed0ac8605c94eecefd26d6a3a3f6fd5df1d83835b754eea", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["5e3017df8368f31f52d925062ca0d7f24f2a8badffd8da1589ba9c7860e27b7a", "caller-input"],
-    ["6b731bff43e00509cc46974f62b69f7a71b6023af68fd7c5957a454abd3065d9", "publication"],
+    ["3c11e86df509740394a8913710175dbdb364a84afbd2cd755ea19f676be6e0db", "publication"],
     ["680d940745558e1a573138b62a4d7799aa997c2ad2011ee3d6ef223891292612", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
