@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Cause, Effect, Either, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import type { InputAnswers, InputRequest } from "../../src/runtime/input-request.js";
 import {
@@ -122,5 +122,101 @@ describe("a script question's options", () => {
     expect(
       ask([{ value: "first", label: "First", note: "extra" } as unknown as ScriptOption]).result,
     ).toEqual(refused);
+  });
+});
+
+describe("a script question that can't be asked", () => {
+  /** The failure's message, or undefined when the question was asked. */
+  const refusal = (
+    options: ReadonlyArray<unknown>,
+    id: "pick" | "picks" = "pick",
+  ): string | undefined => {
+    const { result } = ask(options as ReadonlyArray<ScriptOption>, undefined, id);
+    if (Either.isRight(result)) return undefined;
+    expect(result.left).toMatchObject({ _tag: "ScriptInputFailure", code: "InvalidOptions" });
+    return result.left.message;
+  };
+  const first = { value: "entry-first-7f3a", label: "First entry 7f3a" };
+  const second = { value: "entry-second-9c1d", label: "Second entry 9c1d" };
+
+  it.each([
+    [
+      "an empty value",
+      [first, { value: "", label: "Third entry 2b6e" }],
+      "Script question pick could not be asked because option 2 has an empty value.",
+    ],
+    [
+      "an empty label",
+      [{ value: "entry-third-2b6e", label: "" }, second],
+      "Script question pick could not be asked because option 1 has an empty label.",
+    ],
+    [
+      "a repeated value",
+      [first, second, { value: first.value, label: "Third entry 2b6e" }],
+      "Script question pick could not be asked because option 3 repeats another option's value.",
+    ],
+    [
+      "a field options don't take",
+      [first, { ...second, note: "Extra note 4d8f" }],
+      "Script question pick could not be asked because option 2 has a field options do not take.",
+    ],
+  ])("names the question and the option with %s", (_, options, message) => {
+    expect(refusal(options)).toBe(message);
+  });
+
+  it("says the same for a multiple choice", () => {
+    expect(refusal([first, second, { ...first, label: "Again" }], "picks")).toBe(
+      "Script question picks could not be asked because option 3 repeats another option's value.",
+    );
+  });
+
+  it("names the first option that fails", () => {
+    expect(refusal([first, { value: "", label: "" }, { value: "", label: "Third" }])).toBe(
+      "Script question pick could not be asked because option 2 has an empty value.",
+    );
+  });
+
+  it("never says an option's value or label", () => {
+    const extra = { value: "entry-extra-5e0b", label: "Extra entry 5e0b", note: "Note 6a2c" };
+    const cases = [
+      [first, { value: "", label: "Empty value 1f9e" }],
+      [first, { value: "entry-empty-label-3d7c", label: "" }],
+      [first, second, { value: second.value, label: "Repeat 8b4a" }],
+      [first, extra],
+    ];
+    for (const options of cases) {
+      const message = refusal(options);
+      expect(message).toMatch(/^Script question pick could not be asked because option \d /);
+      const said = options.flatMap((option) => Object.values(option)).filter((text) => text !== "");
+      for (const text of said) expect(message).not.toContain(text);
+    }
+  });
+
+  it("says nothing more for a failure no fixed reason covers", () => {
+    expect(refusal([first, { value: 5, label: "Number value" }])).toBe("");
+    expect(refusal([first, { ...second, maskedLabel: "m".repeat(65) }])).toBe("");
+    expect(refusal([first, "entry-text"])).toBe("");
+    expect(refusal([first, ["entry-list"]])).toBe("");
+    expect(refusal([])).toBe("");
+  });
+
+  it("no longer fails on a label over 256 characters, which reaches the caller shortened", () => {
+    expect(refusal([{ value: "first", label: "l".repeat(400) }])).toBeUndefined();
+  });
+
+  it("prints its message where Effect renders the failure", () => {
+    const exit = Effect.runSyncExit(
+      makeScriptInput(questions, () => Effect.succeed({})).ask({
+        pick: { options: [first, { value: "", label: "Third entry 2b6e" }] },
+      }),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const printed = Cause.pretty(exit.cause);
+      expect(printed).toContain(
+        "ScriptInputFailure: Script question pick could not be asked because option 2 has an empty value.",
+      );
+      expect(printed).not.toContain("An error has occurred");
+    }
   });
 });
