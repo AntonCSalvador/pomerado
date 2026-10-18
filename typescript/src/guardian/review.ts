@@ -241,6 +241,12 @@ export interface HostReview {
    */
   readonly labels?: readonly [string, ...string[]];
   /**
+   * The labels each listed outcome may carry, from `labels`, as the policy ties them; an outcome
+   * it does not list carries any of them. A decision whose label its outcome does not carry is
+   * invalid: a kind that is not private is told so once in the same review, as for an outcome.
+   */
+  readonly outcomeLabels?: Partial<Record<GuardianOutcome, readonly [string, ...string[]]>>;
+  /**
    * Private review context: no readable diagnostic keeps the evidence, the transcript or the
    * rationale, and later reviews' readable records show the exchange only as a placeholder.
    */
@@ -676,6 +682,24 @@ const decodeExecution = (pending: PendingExecution) => (raw: unknown) =>
     ),
   );
 
+/**
+ * A host kind's decision whose label its outcome does not carry (`outcomeLabels`): the outcome
+ * and the labels it carries. Undefined for any other decision.
+ */
+const labelRefusedBy = (
+  request: HostReview,
+  raw: unknown,
+): { readonly outcome: string; readonly labels: readonly string[] } | undefined => {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const outcome: unknown = Reflect.get(raw, "outcome");
+  const label: unknown = Reflect.get(raw, "label");
+  const labels =
+    typeof outcome === "string" ? request.outcomeLabels?.[outcome as GuardianOutcome] : undefined;
+  return labels !== undefined && !labels.some((carried) => carried === label)
+    ? { outcome: outcome as string, labels }
+    : undefined;
+};
+
 const decodeHost = (request: HostReview) => {
   const shape = Schema.Struct({
     outcome: Schema.Literal(...request.outcomes),
@@ -686,6 +710,18 @@ const decodeHost = (request: HostReview) => {
     Schema.decodeUnknown(shape)(boundedRationale(raw), { onExcessProperty: "error" }).pipe(
       Effect.mapError((error) =>
         decisionFailure(request.private === true ? privateDecisionError(request, raw) : error),
+      ),
+      Effect.flatMap(
+        (decision: HostReviewDecision): Effect.Effect<HostReviewDecision, ReviewFailure> =>
+          labelRefusedBy(request, decision) === undefined
+            ? Effect.succeed(decision)
+            : decisionFailure(
+                new Error(
+                  request.private === true
+                    ? "The label is not one the decision's outcome carries"
+                    : `The label ${String(decision.label)} is not one a ${decision.outcome} carries`,
+                ),
+              ),
       ),
     );
 };
@@ -936,7 +972,8 @@ export const makeGuardian = (
           }),
         );
       const observeModelTrace = diagnostics?.observeModelTrace;
-      // Follow-up rounds for a refused outcome or a skipped entrypoint read, within this attempt.
+      // Follow-up rounds for a refused outcome or label or a skipped entrypoint read, within this
+      // attempt.
       let followUpRounds = 0;
       const startOffsetMs = performance.now();
       const timing = {
@@ -1218,6 +1255,16 @@ export const makeGuardian = (
               outcomeCorrected = true;
               followUpRounds++;
               return `The host did not accept this decision: a ${kindName} review returns only the outcome ${outcomes.join(", ")}, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them.`;
+            }
+            // A label its outcome does not carry fails to decode; this names the labels it carries.
+            const carried =
+              pending.hostReview === undefined || privateKind || decodeCorrected
+                ? undefined
+                : labelRefusedBy(pending.hostReview, output);
+            if (carried !== undefined) {
+              decodeCorrected = true;
+              followUpRounds++;
+              return `The host did not accept this decision: a ${kindName} review's ${carried.outcome} carries only the label ${carried.labels.join(", ")}, as its policy says. Decide this review again under its policy and return a label its outcome carries.`;
             }
             const invalid =
               decodeCorrected || privateKind || outcomeRefused(output)
