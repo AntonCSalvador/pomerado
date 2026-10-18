@@ -32,7 +32,10 @@ const prefixHash = (text: string, at: number): number =>
   ((text.charCodeAt(at) * 257 + text.charCodeAt(at + 1)) * 257 + text.charCodeAt(at + 2)) * 257 +
   text.charCodeAt(at + 3);
 
-/** One `indexOf` pass per form: the reference behaviour, and the fast path for short texts. */
+/**
+ * One `indexOf` pass per form: the reference behaviour, and the fast path for short texts. A form
+ * longer than the text cannot occur in it, so it is not looked for.
+ */
 export const scanKnownValues = <Value extends KnownValue>(
   text: string,
   values: Iterable<Value>,
@@ -40,7 +43,7 @@ export const scanKnownValues = <Value extends KnownValue>(
   const occurrences: KnownValueOccurrence<Value>[] = [];
   for (const value of values)
     for (const form of value.forms) {
-      if (form.length === 0) continue;
+      if (form.length === 0 || form.length > text.length) continue;
       let start = text.indexOf(form);
       while (start !== -1) {
         occurrences.push({ start, end: start + form.length, value });
