@@ -474,8 +474,11 @@ as a table app that saves view filters with the view, and changing one there is 
 page's own requests after the change show which: a save request beside the row fetch. A read
 prefers the page's own row query from the captures, the request the page sends for the rows
 (http-mcp skill, "The page's own data request"), to driving such a filter control. When it
-must use the control, the same step reverts the filter or sort to its prior value before it
-ends. A filter the site does not save stays part of the read.
+must use the control, the same step reads the prior value first and restores it in a
+finally-style block, so the revert runs on every path, errors and timeouts included. If the
+prior value cannot be read, use the page's own row query instead of the control. This holds
+during exploration too, not only in the published tool. A filter the site does not save stays
+part of the read.
 
 Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md). It designs
 its own cases at the start, from what it saw on the site: different real values unlike the
