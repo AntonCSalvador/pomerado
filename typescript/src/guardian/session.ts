@@ -1,5 +1,11 @@
-import type { AgentInputItem, ModelProvider, ModelRequest } from "@openai/agents";
-import { protocol } from "@openai/agents";
+import type {
+  AgentInputItem,
+  Model,
+  ModelProvider,
+  ModelRequest,
+  ModelResponse,
+} from "@openai/agents";
+import { protocol, Usage } from "@openai/agents";
 import { compaction, StaticCompactionPolicy } from "@openai/agents/sandbox";
 import { Effect, Schema } from "effect";
 import { decodePublicationRound, PublicationRound } from "./publication-delta.js";
@@ -61,9 +67,54 @@ export const guardianContinuityPolicy =
   "a source the host lists in trusted_review.unchangedSources as byte-identical to it. An " +
   "interrupted review grants no approval.";
 
-/** Same explicit provider compaction threshold as the minter; no additional tools or sandbox. */
+/** The conversation size, in input tokens, at which Guardian compacts it; the minter's too. */
+const guardianCompactionTokens = 240_000;
+
+/**
+ * The provider-side compaction at the same threshold, with no additional tools or sandbox. It
+ * is the backstop: the session compacts first (see `compactBefore`), since the provider's
+ * compaction inside a request reads none of the conversation's cached prefix.
+ */
 export const guardianCompaction = (): ReturnType<typeof compaction> =>
-  compaction({ policy: new StaticCompactionPolicy(240_000) });
+  compaction({ policy: new StaticCompactionPolicy(guardianCompactionTokens) });
+
+/** The Responses API compacts the context it is sent when this is the last input item. */
+const compactionTrigger: AgentInputItem = {
+  type: "unknown",
+  providerData: { type: "compaction_trigger" },
+};
+
+/** Tokens of items not yet sent, overestimated: their JSON runs nearer 4 bytes a token. */
+const estimatedTokens = (items: readonly AgentInputItem[]) =>
+  Math.ceil(JSON.stringify(items).length / 3);
+
+/** Items compared by content: a restored history may hold an item's fields in another order. */
+const key = (items: readonly AgentInputItem[]) =>
+  JSON.stringify(items, (_name, value: unknown) =>
+    value === null || typeof value !== "object" || Array.isArray(value)
+      ? value
+      : Object.fromEntries(
+          Object.entries(value).sort(([left], [right]) => (left < right ? -1 : 1)),
+        ),
+  );
+
+type ItemsRequest = Omit<ModelRequest, "input"> & { readonly input: AgentInputItem[] };
+
+const withArrayInput = (request: ModelRequest): ItemsRequest | undefined =>
+  typeof request.input === "string" ? undefined : { ...request, input: request.input };
+
+/** How a continuing session compacts what it sends; see `makeGuardianSession`. */
+interface SessionCompaction {
+  /** The request as it is sent: the conversation from its latest compaction on. */
+  readonly view: (request: ModelRequest) => ModelRequest;
+  /** Compacts the conversation first when this request would reach the threshold. */
+  readonly before: (
+    model: Model,
+    sent: ModelRequest,
+  ) => Effect.Effect<{ readonly sent: ModelRequest; readonly usage?: Usage }, Error>;
+  /** Records the request sent and its response, which the next request continues. */
+  readonly after: (sent: ModelRequest, response: ModelResponse) => void;
+}
 
 const closeInterruptedReview = (
   items: AgentInputItem[],
@@ -84,6 +135,16 @@ const closeInterruptedReview = (
   items.push({ role: "user", type: "message", content: interruption.continuation });
 };
 
+const providerError = (error: unknown) =>
+  error instanceof Error ? error : new Error("Guardian provider failed", { cause: error });
+
+const addedUsage = (first: Usage, second: Usage) => {
+  const total = new Usage();
+  total.add(first);
+  total.add(second);
+  return total;
+};
+
 const continuationProvider = ({
   provider,
   state,
@@ -92,6 +153,7 @@ const continuationProvider = ({
   reportReasoning,
   setEffective,
   compacted,
+  compaction: sessionCompaction,
 }: {
   provider: ModelProvider;
   state: () => AgentInputItem[];
@@ -100,6 +162,7 @@ const continuationProvider = ({
   reportReasoning: GuardianSessionOptions["reportReasoning"];
   setEffective: (value: "all_turns" | "current_turn" | "not_reported") => void;
   compacted: () => void;
+  compaction: SessionCompaction;
 }): ModelProvider => ({
   getModel: (name) =>
     Effect.runPromise(
@@ -112,22 +175,24 @@ const continuationProvider = ({
             Effect.runPromise(
               Effect.gen(function* () {
                 yield* save(state(), true);
-                const response = yield* Effect.tryPromise({
-                  try: () =>
-                    model.getResponse({
-                      ...request,
-                      input:
-                        typeof request.input === "string"
-                          ? request.input
-                          : guardianCompaction().processContext(request.input),
-                    }),
-                  catch: (error) =>
-                    error instanceof Error
-                      ? error
-                      : new Error("Guardian provider failed", { cause: error }),
+                const prepared = yield* sessionCompaction.before(
+                  model,
+                  sessionCompaction.view(request),
+                );
+                signal().throwIfAborted();
+                if (prepared.usage !== undefined) yield* save(state(), true);
+                const returned = yield* Effect.tryPromise({
+                  try: () => model.getResponse(prepared.sent),
+                  catch: providerError,
                 });
                 signal().throwIfAborted();
-                if (response.output.some((item) => item.type === "compaction")) compacted();
+                sessionCompaction.after(prepared.sent, returned);
+                if (returned.output.some((item) => item.type === "compaction")) compacted();
+                // The review's usage counts the compaction call too.
+                const response =
+                  prepared.usage === undefined
+                    ? returned
+                    : { ...returned, usage: addedUsage(prepared.usage, returned.usage) };
                 const metadata = Schema.decodeUnknownEither(
                   Schema.Struct({
                     reasoning: Schema.Struct({
@@ -165,7 +230,7 @@ const continuationProvider = ({
 
 export const makeGuardianSession = (options: GuardianSessionOptions) => {
   const permit = Effect.unsafeMakeSemaphore(1);
-  /** Provider compactions this process observed; each replaces the context Guardian sees. */
+  /** Compactions this process made or observed; each replaces the context Guardian sees. */
   let compactions = 0;
   let current: GuardianSessionSnapshot = options.initial ?? {
     version: 1,
@@ -175,18 +240,58 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
   };
   const history = (): AgentInputItem[] =>
     current.history.map((item) => protocol.ModelItem.parse(item));
+  /**
+   * The current review's compacted prefixes, as the SDK's input holds them, each replaced by its
+   * compaction item. A new review starts from the saved history, which already starts there.
+   */
+  let windows: { readonly length: number; readonly key: string; readonly item: AgentInputItem }[] =
+    [];
+  /** The last request sent with no compaction in its response, and its size with that output. */
+  let last:
+    | {
+        readonly request: ItemsRequest;
+        readonly outputs: number;
+        readonly tokens: number;
+      }
+    | undefined;
+  /** Set once a compaction request returned no compaction: the provider-side backstop remains. */
+  let triggerUnsupported = false;
+  /**
+   * Only a compaction item replaces context, never our own trimming: the items from the latest
+   * one on, each compacted prefix replaced by its item, and the items that dropped out.
+   */
+  const view = (items: readonly AgentInputItem[]) => {
+    let kept = [...items];
+    const dropped: AgentInputItem[] = [];
+    const cut = (length: number) => {
+      dropped.push(...kept.slice(0, length));
+      kept = kept.slice(length);
+    };
+    const toLatestCompaction = () =>
+      cut(
+        Math.max(
+          0,
+          kept.findLastIndex((item) => item.type === "compaction"),
+        ),
+      );
+    toLatestCompaction();
+    for (const window of windows)
+      if (kept.length >= window.length && key(kept.slice(0, window.length)) === window.key) {
+        cut(window.length);
+        kept = [window.item, ...kept];
+      }
+    toLatestCompaction();
+    return { kept, dropped };
+  };
   const save = (items: readonly AgentInputItem[], incomplete: boolean) =>
     Effect.suspend(() => {
-      // Only the provider's continuation item replaces context. Never trim reviews ourselves.
-      let start = 0;
-      for (let index = 0; index < items.length; index++)
-        if (items[index]?.type === "compaction") start = index;
+      const { kept, dropped } = view(items);
       const { leadingPrivate: _previous, ...rest } = current;
       current = {
         ...rest,
-        history: items.slice(start),
+        history: kept,
         incomplete,
-        ...(leadingPrivateAfter(items.slice(0, start), current.leadingPrivate === true)
+        ...(leadingPrivateAfter(dropped, current.leadingPrivate === true)
           ? { leadingPrivate: true as const }
           : {}),
       };
@@ -198,9 +303,83 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
         ),
       );
     });
+  /**
+   * Compacts the conversation before a request that would reach the threshold, by sending the
+   * last request again, the same in every byte, with a compaction trigger after its input. That
+   * request reads the cached prefix the last request wrote, where the provider's own compaction
+   * inside the crossing request would process the whole conversation uncached. The returned
+   * compaction item replaces the last request's input; the last response's output and every
+   * later item follow it, so its reasoning and calls stay paired with their results.
+   */
+  const compactBefore = (
+    model: Model,
+    sent: ModelRequest,
+  ): Effect.Effect<{ readonly sent: ModelRequest; readonly usage?: Usage }, Error> =>
+    Effect.gen(function* () {
+      const previous = last;
+      const input: AgentInputItem[] | undefined = withArrayInput(sent)?.input;
+      if (previous === undefined || input === undefined || triggerUnsupported) return { sent };
+      const prefix = previous.request.input.length;
+      const carried = prefix + previous.outputs;
+      if (
+        input.length <= carried ||
+        previous.tokens + estimatedTokens(input.slice(carried)) < guardianCompactionTokens ||
+        key(input.slice(0, prefix)) !== key(previous.request.input)
+      )
+        return { sent };
+      const { signal: _previousSignal, ...request } = previous.request;
+      const outcome = yield* Effect.either(
+        Effect.tryPromise({
+          try: () =>
+            model.getResponse({
+              ...request,
+              input: [...request.input, compactionTrigger],
+              ...(sent.signal === undefined ? {} : { signal: sent.signal }),
+            }),
+          catch: providerError,
+        }),
+      );
+      // A failed compaction leaves the request as it was, for the provider-side backstop, and
+      // stops further attempts, so a persistent failure is not retried on every request.
+      if (outcome._tag === "Left") {
+        if (sent.signal?.aborted === true) return yield* Effect.fail(outcome.left);
+        triggerUnsupported = true;
+        return { sent };
+      }
+      const item = outcome.right.output.findLast((entry) => entry.type === "compaction");
+      if (item === undefined) {
+        triggerUnsupported = true;
+        return { sent, usage: outcome.right.usage };
+      }
+      windows = [...windows, { length: prefix, key: key(input.slice(0, prefix)), item }];
+      compactions++;
+      return {
+        sent: { ...sent, input: [item, ...input.slice(prefix)] },
+        usage: outcome.right.usage,
+      };
+    });
+  const compaction: SessionCompaction = {
+    view: (request) => {
+      const input = withArrayInput(request)?.input;
+      return input === undefined ? request : { ...request, input: view(input).kept };
+    },
+    before: compactBefore,
+    after: (sent, response) => {
+      const request = withArrayInput(sent);
+      last =
+        request === undefined || response.output.some((item) => item.type === "compaction")
+          ? undefined
+          : {
+              request,
+              outputs: response.output.length,
+              tokens: response.usage.inputTokens + response.usage.outputTokens,
+            };
+    },
+  };
   return {
     provider: (provider: ModelProvider, state: () => AgentInputItem[], signal: () => AbortSignal) =>
       continuationProvider({
+        compaction,
         provider,
         state,
         signal,
@@ -248,6 +427,7 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
     /** Adds a request; `continuing` marks the host's follow-up within the review in progress. */
     input: (request: string, continuing = false) =>
       Effect.gen(function* () {
+        if (!continuing) windows = [];
         const items = history();
         if (current.incomplete && !continuing) {
           closeInterruptedReview(items, options.interruption ?? guardianInterruption);

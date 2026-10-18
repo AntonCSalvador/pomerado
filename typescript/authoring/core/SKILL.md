@@ -388,13 +388,16 @@ the task can't run without it (below).
 **Find contract gaps before your first example.** Compare the schema you plan with what the
 page offers: a control no input covers, an input you cannot wire, a value the request needs
 that the page does not show, or a needed field you would have to make nullable. Settle each
-then: wire it, ask the owner with `request_input` when the request reads two ways, or state in
-the description why the tool lacks it. When the site never shows a value the request needs, a
-field to return or a filter or option to apply, ask the owner with `request_input` as soon as you
-find it missing, before you build, whether to build without it or stop. When they need it, end
-with `report_blocked` reason `site_lacks_capability` (`AGENTS.md`, "Impossible as asked").
-Publication review blocks on the same gaps, and finding them at `finish_build` costs a full
-fix-and-resubmit round.
+then: wire it, ask the owner with `request_input` when the request reads two ways, when you are
+unsure how to solve it, or before leaving out a part the site offers (`AGENTS.md`, "Try hard,
+then ask", item 8), or state in the description why the tool lacks it, only for a part the site
+does not offer, one the owner chose to leave out or, when no answer came, one that is hard and
+optional to the request (`AGENTS.md`, "Solve before you narrow"). When the site never shows a
+value the request needs, a field to return or a filter or option to apply, ask the owner with
+`request_input` as soon as you find it missing, before you build, whether to build without it or
+stop. When they need it, end with `report_blocked` reason `site_lacks_capability` (`AGENTS.md`,
+"Impossible as asked"). Publication review blocks on the same gaps, and finding them at
+`finish_build` costs a full fix-and-resubmit round.
 
 **Never loosen a value the request needs.** The values the request needs are each value it
 names, the record's identifier as the site shows it, and the context those depend on as the page
@@ -443,6 +446,11 @@ the request names. Leave out what is unrelated to the tool's purpose or of no us
   `card_text` section below.
 - A list that can run past one page returns one page per call and a cursor to the next, as the
   pagination skill says.
+- A tool that extracts records or table rows from an app whose fields are user-defined or found
+  at run time, such as a CRM's records or a table's rows, follows the records skill, which takes
+  precedence over the lean toward more fields above and one typed field per fact below: a small
+  default keyed by field name, with every other field through its `fields` and `include` inputs.
+  A record type whose fields are fixed and known keeps one typed field per fact.
 
 **Optional sections (`include`).** Some parts of a page cost every run extra clicks or waits, or
 are large and repeated on every record: the filters, facets and sorts the site offers, each
@@ -569,6 +577,9 @@ caller's value may go in a URL), and write them into the code. Never embed the s
 or account-specific origin as a literal in authored source, schema examples, or logs, and never replace it with `page.url()`
 after a redirect. The host supplies the primary origin even when the model cannot see
 it. This value does not authorize other destinations or credential submission.
+For a tool whose sign-in moves each account to its own workspace host, `siteOrigin` is that
+account's workspace origin at run time, so a URL built from it, or from `siteDomain` for a
+fixed API host, reaches the right workspace, and one built from `page.url()` or a literal does not.
 The context's `siteDomain` is the site's registrable domain, which the host computed with
 the public suffix list: a page is on the site when it is `https:` and its hostname is
 `siteDomain` or ends with `"." + siteDomain`, and only `siteOrigin` itself is the site when

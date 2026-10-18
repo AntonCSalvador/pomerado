@@ -2219,6 +2219,13 @@ export interface MintDependencies {
    * authorization values are its content, so the model's source screen must not withhold them.
    */
   readonly readSessionTokens?: (path: string) => string | undefined;
+  /**
+   * Saves an execution result too large to return whole (`resultDigestThresholdBytes`) as the
+   * read-only workspace file `path`, under `captures/results/`, which `read_source` and offline
+   * commands read; the agent then receives the result's digest naming it. The text is already
+   * screened for the model. A host without it returns every result whole.
+   */
+  readonly saveResult?: (path: string, text: string) => Effect.Effect<void, MintFailure>;
   /** Host-selected original attempt evidence. Content is fetched only for a requested indexed path. */
   readonly readRetainedCapture?: (path: string) => Effect.Effect<string | undefined>;
   /** Host-only selection/retrieval; never refetches a historical website response. */
