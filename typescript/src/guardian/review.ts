@@ -42,6 +42,8 @@ import type { GuardianReasoningEffort } from "./model.js";
 import {
   cutToLimit,
   GuardianAction,
+  GuardianRefusal,
+  guardianRefusals,
   PublicationFinding,
   PublicationReason,
 } from "./review-contracts.js";
@@ -139,6 +141,11 @@ export const GuardianDecision = Schema.Struct({
    * carries one; a deny or escalate may. Other kinds have none.
    */
   action: Schema.optional(Schema.suspend(() => GuardianAction)),
+  /**
+   * An execution deny or escalate's refusal kind: `final` or `correctable`. Absent, from a
+   * reviewer that predates it, the host counts the refusal as `final`. Other kinds have none.
+   */
+  refusal: Schema.optional(Schema.suspend(() => GuardianRefusal)),
 });
 export type GuardianDecision = typeof GuardianDecision.Type;
 export class ReviewFailure extends Data.TaggedError("ReviewFailure")<{
@@ -661,12 +668,26 @@ export const writeOutOfAuthority =
   "Out of authority: this review labelled the execution a write, and this step has no write authority. A read build, and every step outside a write build's write session, may only read. Change the source so it makes no persistent change on the website, or end the build if the task needs one.";
 
 /**
+ * An execution decision with its refusal kept only on a deny or escalate, and only when it is one
+ * Guardian may return. Any other value, as an older or confused reviewer may send, counts as none:
+ * the decision still decodes, and the host reads the refusal as `final`, as before the field.
+ */
+const knownRefusal = (raw: unknown): unknown => {
+  if (typeof raw !== "object" || raw === null || !("refusal" in raw)) return raw;
+  const { refusal, ...rest } = raw as Record<string, unknown>;
+  return Reflect.get(raw, "outcome") !== "allow" &&
+    guardianRefusals.some((known) => known === refusal)
+    ? raw
+    : rest;
+};
+
+/**
  * An execution review's decision. An allow without an action label is malformed, so the review
  * runs again under the outage retry; a `write` allow on a step without write authority becomes a
  * denial.
  */
 const decodeExecution = (pending: PendingExecution) => (raw: unknown) =>
-  decodeDecision(raw).pipe(
+  decodeDecision(knownRefusal(raw)).pipe(
     Effect.flatMap((decision) =>
       decision.outcome !== "allow"
         ? Effect.succeed(decision)

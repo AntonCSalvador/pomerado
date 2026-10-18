@@ -41,6 +41,17 @@ export const GuardianAction = Schema.Literal(...guardianActions);
 export type GuardianAction = typeof GuardianAction.Type;
 
 /**
+ * What kind of refusal an execution review's deny or escalate is: `final` when no change to the
+ * source, input or evidence within the request's authority would make the step acceptable, and
+ * `correctable` otherwise. Only a `final` refusal lets the build end as a `policy` block. A deny
+ * or escalate without one, from a reviewer that predates it, counts as `final`, as every
+ * execution refusal did before.
+ */
+export const guardianRefusals = ["final", "correctable"] as const;
+export const GuardianRefusal = Schema.Literal(...guardianRefusals);
+export type GuardianRefusal = typeof GuardianRefusal.Type;
+
+/**
  * Input findings are feedback for the minter; they never block a publication on their own.
  * `example_input` is the host's own check that each key of an intent-derived example's input is
  * a schema input, never Guardian's.
