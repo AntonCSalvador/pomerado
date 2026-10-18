@@ -422,7 +422,7 @@ it("ends the build blocked with the recommendation when the change is a differen
   expect(updates.applied).toEqual([]);
 });
 
-it("ends the build blocked when Guardian finds an update belongs in a new build", async () => {
+it("ends the build blocked when Guardian agrees the change belongs in a new build", async () => {
   const updates = updateHost(["new_mint"]);
   const f = await fixture(
     (_request, index) =>
@@ -434,7 +434,7 @@ it("ends the build blocked when Guardian finds an update belongs in a new build"
             summary: "Order supplies on another vendor's store instead.",
             changes: [{ setting: "site", origin: "https://store.vendor.test" }],
             confirmedBy: ["task"],
-            recommend: "update",
+            recommend: "new_mint",
             suggestedRequest: "Order the listed supplies on the other vendor's store.",
           },
           "update",
@@ -451,6 +451,59 @@ it("ends the build blocked when Guardian finds an update belongs in a new build"
   });
   expect(updates.applied).toEqual([]);
 });
+
+// Guardian called the minter's revised requirement a new task, and the host ended the build with
+// that call: the owner was told to start over, with no request to send, for the task they asked for.
+const revisedRequirement = {
+  summary: "Convert the uploaded PDF and return its text, without a preview step.",
+  changes: [{ setting: "requirement", change: "drop", text: "Show a preview before converting." }],
+  confirmedBy: ["task"],
+  recommend: "update",
+};
+
+it("asks the caller to confirm when Guardian finds the minter's same-task update a new build", async () => {
+  const updates = updateHost(["new_mint"]);
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("request_input", { questions: [{ id: "task", type: "text", prompt: "What next?" }] }),
+        call("mint_update", revisedRequirement, "update"),
+      ][index] ?? prose(),
+    { ...updates.overrides, askInput: answering([{ task: "Skip the preview" }]) },
+    { siteOrigin: site },
+  );
+  const outcome = await f.run();
+  expect(resultOf(f.requests, "update")).toEqual({
+    status: "clarification_required",
+    userInputRequired: false,
+    source: "guardian",
+    rationale: "Scripted review.",
+    instruction:
+      "Nothing changed. Ask the caller with request_input about what the rationale says is unconfirmed, naming the change plainly, then call mint_update again naming the questions they answered in confirmedBy.",
+  });
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(updates.applied).toEqual([]);
+});
+
+it.each(["allow", "clarify", "reword", "new_mint"] as const)(
+  "never ends a build as a new-build recommendation without a suggested request (Guardian %s)",
+  async (decision) => {
+    const updates = updateHost([decision]);
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("request_input", { questions: [{ id: "task", type: "text", prompt: "What next?" }] }),
+          call("mint_update", revisedRequirement, "update"),
+        ][index] ?? prose(),
+      { ...updates.overrides, askInput: answering([{ task: "Skip the preview" }]) },
+      { siteOrigin: site },
+    );
+    const outcome = await f.run();
+    if (outcome.blocked?.reason === "new_mint_recommended")
+      expect(outcome.blocked).toHaveProperty("suggestedRequest");
+    expect(resultOf(f.requests, "update")?.["status"]).not.toBe("new_mint_recommended");
+  },
+);
 
 it("keeps building after Guardian asks to reword an update", async () => {
   const updates = updateHost(["reword", "allow"]);

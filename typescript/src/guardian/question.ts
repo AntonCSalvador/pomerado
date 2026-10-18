@@ -66,6 +66,11 @@ export interface PendingQuestion {
    * agent through `request_input`.
    */
   readonly scriptAsk?: true;
+  /**
+   * Host fact: the build's effect, once decided, so the review knows a write build does the task
+   * once, for real, before it publishes. Its allowedEffects stays empty on purpose.
+   */
+  readonly buildEffect?: "read" | "write";
 }
 
 const reviewedOption = <E>(
@@ -96,6 +101,7 @@ export const questionForReview = <E>(
     readonly publicationDecisions?: readonly PublicationDecision[];
     readonly decisionLedger?: DecisionLedger;
     readonly scriptAsk?: true;
+    readonly buildEffect?: "read" | "write";
   },
   screen: (text: string) => Effect.Effect<string, E>,
 ): Effect.Effect<PendingQuestion, E> =>
@@ -149,6 +155,7 @@ export const questionForReview = <E>(
       // Written by the harness from text it already screened for the minter.
       ...(facts.decisionLedger === undefined ? {} : { decisionLedger: facts.decisionLedger }),
       ...(facts.scriptAsk === true ? { scriptAsk: true as const } : {}),
+      ...(facts.buildEffect === undefined ? {} : { buildEffect: facts.buildEffect }),
     };
   });
 

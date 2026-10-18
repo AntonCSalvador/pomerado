@@ -85,6 +85,9 @@ export const guardianReviewInput = (
               ? {}
               : { decisionLedger: turn.pending.questionCandidate.decisionLedger }),
             ...(turn.pending.questionCandidate.scriptAsk === true ? { scriptAsk: true } : {}),
+            ...(turn.pending.questionCandidate.buildEffect === undefined
+              ? {}
+              : { buildEffect: turn.pending.questionCandidate.buildEffect }),
           },
         }),
     ...(turn.pending.updateCandidate === undefined
