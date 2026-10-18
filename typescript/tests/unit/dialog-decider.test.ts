@@ -95,13 +95,28 @@ const recorded = expectedConfirmDigest({
   origin: "https://shop.example",
   step: "place-order",
 });
+/** An asker that answers a run's dialog question yes or no, keeping each request it got. */
+const confirming = (confirmed: boolean) => {
+  const asked: InputRequest[] = [];
+  const ask = makeInputAsker((request) =>
+    Effect.sync(() => {
+      asked.push(request);
+      return { decision: { confirmed } };
+    }),
+  );
+  return { ask, asked };
+};
 const runDecider = (
   ask: ReturnType<typeof answering>["ask"],
-  options: { readonly readOnly?: boolean; readonly incidents?: DialogIncident[] } = {},
+  options: {
+    readonly readOnly?: boolean;
+    readonly incidents?: DialogIncident[];
+    readonly project?: (text: string) => string;
+  } = {},
 ) =>
   makeRunDialogDecider({
     ask,
-    project: String,
+    project: options.project ?? String,
     readOnly: options.readOnly ?? false,
     expectedConfirms: [recorded],
     incidents:
@@ -116,7 +131,7 @@ const runDecider = (
   });
 
 it("accepts the confirm a write's build accepted, at its step, without asking", async () => {
-  const { ask, asked } = answering("dismiss");
+  const { ask, asked } = confirming(false);
   const incidents: DialogIncident[] = [];
   const decide = runDecider(ask, { incidents });
   expect(await Effect.runPromise(decide(report("confirm", "Place  this order?")))).toEqual({
@@ -129,20 +144,25 @@ it("accepts the confirm a write's build accepted, at its step, without asking", 
   expect(asked).toHaveLength(1);
 });
 
-it("asks the caller about every other dialog, as before", async () => {
-  const { ask, asked } = answering("accept");
-  const decide = runDecider(ask);
+it("asks one yes or no question about a write's other confirms, in its masked words", async () => {
+  const { ask, asked } = confirming(true);
+  const decide = runDecider(ask, { project: (text) => text.replaceAll("item", "[private]") });
   for (const shown of [
     report("confirm", "Remove this item?"),
     { ...report("confirm"), step: "remove-item" },
     { ...report("confirm"), url: "https://other.example/cart" },
-    report("alert"),
-    report("beforeunload"),
   ])
     expect(await Effect.runPromise(decide(shown))).toEqual({ choice: "accept" });
-  expect(asked).toHaveLength(5);
+  expect(asked).toHaveLength(3);
+  expect(asked[0]?.questions).toEqual([
+    {
+      id: "decision",
+      type: "confirm",
+      prompt: 'The website asks you to confirm: "Remove this [private]?". Confirm?',
+    },
+  ]);
   // A tool published without a record asks about every confirm, as before.
-  const older = answering("dismiss");
+  const older = confirming(false);
   const unrecorded = makeRunDialogDecider({
     ask: older.ask,
     project: String,
@@ -152,38 +172,42 @@ it("asks the caller about every other dialog, as before", async () => {
   });
   expect(await Effect.runPromise(unrecorded(report("confirm")))).toEqual({ choice: "dismiss" });
   expect(older.asked).toHaveLength(1);
-  // A read tool never accepts from the record.
-  const read = answering("dismiss");
-  expect(await Effect.runPromise(runDecider(read.ask, { readOnly: true })(report("confirm")))).toEqual(
-    { choice: "dismiss" },
-  );
-  expect(read.asked).toHaveLength(1);
 });
 
-it("dismisses, never accepts, a dialog whose answer never comes", async () => {
+it("gives every other dialog the safe default without asking", async () => {
+  const incidents: DialogIncident[] = [];
+  const { ask, asked } = confirming(true);
+  const decide = runDecider(ask, { incidents });
+  for (const [shown, choice] of [
+    [report("alert"), "dismiss"],
+    [report("prompt"), "dismiss"],
+    [report("beforeunload"), "accept"],
+  ] as const)
+    expect(await Effect.runPromise(decide(shown))).toEqual({ choice });
+  // A read tool never accepts from the record, and confirms nothing.
+  const read = runDecider(ask, { readOnly: true, incidents });
+  expect(await Effect.runPromise(read(report("confirm")))).toEqual({ choice: "dismiss" });
+  expect(asked).toEqual([]);
+  expect(incidents.map((incident) => [incident.reason, incident.subCause])).toEqual([
+    ["dialog_default_decision", "alert_dismiss"],
+    ["dialog_default_decision", "prompt_dismiss"],
+    ["dialog_default_decision", "beforeunload_accept"],
+    ["dialog_default_decision", "confirm_dismiss"],
+  ]);
+});
+
+it("dismisses, never accepts, a confirm whose answer never comes", async () => {
   const incidents: DialogIncident[] = [];
   const unanswered = makeInputAsker(() =>
     Effect.fail(new InputRequestFailure({ code: "NoResponse" })),
   );
   const decide = runDecider(unanswered, { incidents });
-  for (const type of ["confirm", "alert", "prompt"] as const)
-    expect(await Effect.runPromise(decide(report(type, "Remove this item?")))).toEqual({
-      choice: "dismiss",
-    });
-  expect(incidents.map((incident) => [incident.reason, incident.subCause])).toEqual([
-    ["dialog_decision_expired", "confirm_dismiss"],
-    ["dialog_decision_expired", "alert_dismiss"],
-    ["dialog_decision_expired", "prompt_dismiss"],
-  ]);
-  // A prompt accepted without its text is dismissed too.
-  const noText = makeInputAsker((request) =>
-    request.questions[0]?.id === "text"
-      ? Effect.fail(new InputRequestFailure({ code: "NoResponse" }))
-      : Effect.succeed({ choice: "accept" }),
-  );
-  expect(await Effect.runPromise(runDecider(noText)(report("prompt")))).toEqual({
+  expect(await Effect.runPromise(decide(report("confirm", "Remove this item?")))).toEqual({
     choice: "dismiss",
   });
+  expect(incidents.map((incident) => [incident.reason, incident.subCause])).toEqual([
+    ["dialog_decision_expired", "confirm_dismiss"],
+  ]);
 });
 
 it("fails the step, as before, when the owner cancels or the question cannot be asked", async () => {
@@ -196,7 +220,7 @@ it("fails the step, as before, when the owner cancels or the question cannot be 
     );
     expect(Either.isLeft(decided) && decided.left, failure.code).toMatchObject({
       _tag: "DialogFailure",
-      reason: "unavailable",
+      reason: failure.code === "Unauthorized" ? "unauthorized" : "unavailable",
     });
     expect(incidents).toEqual([]);
   }
