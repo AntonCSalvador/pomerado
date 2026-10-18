@@ -201,6 +201,50 @@ describe("a local operation's questions", () => {
       expect(result.left).toMatchObject({ tag: "ScriptInputFailure", code: "Undeclared" });
     }
   });
+
+  it("reports which option of a question could not be asked, and never its value or label", async () => {
+    const seat = { seat: { type: "choice", prompt: "Which seat?" } } as const;
+    const source = operation(
+      `{name:"ask_seat",input:Schema.Unknown,output:Schema.Unknown,questions:${JSON.stringify(seat)}}`,
+      `async ({ ask }) => ask({ seat: { options: [{ value: "seat-4a", label: "Window 4A" }, { value: "seat-4a", label: "Aisle 4C" }] } })`,
+    );
+    const asked: InputRequest[] = [];
+    const ask = makeInputAsker((request) =>
+      Effect.sync(() => {
+        asked.push(request);
+        return {};
+      }),
+    );
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const workspace = yield* createLocalWorkspace();
+          return yield* Effect.either(
+            runLocalOperation({
+              workspace,
+              entrypoint: "src/tool.mjs",
+              sources: [["src/tool.mjs", source]],
+              input: {},
+              target: "pureFiles",
+              ask,
+              declaredQuestions: seat,
+            }),
+          );
+        }),
+      ),
+    );
+    expect(asked).toEqual([]);
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left).toBeInstanceOf(LocalOperationFailure);
+      expect(result.left).toMatchObject({ tag: "ScriptInputFailure", code: "InvalidOptions" });
+      expect(result.left.message).toBe(
+        "Script question seat could not be asked because option 2 repeats another option's value.",
+      );
+      for (const said of ["seat-4a", "Window 4A", "Aisle 4C"])
+        expect(result.left.message).not.toContain(said);
+    }
+  });
 });
 
 describe("card questions in a script", () => {
