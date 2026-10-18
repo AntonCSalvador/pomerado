@@ -87,7 +87,9 @@ During the session:
   options to pick from is a refusal (`InvalidInput` with `available`) or a failure
   (`OperationFailure`), not the write's output. While building, a limit the session meets is the
   owner's to settle first: ask them to revise or stop, and end with `report_blocked` when they
-  stop, as the cart skill's "Minimums and refusals" says.
+  stop, as the cart skill's "Minimums and refusals" says. When they stop, or the session cannot
+  reach the task's end, end with `report_blocked` (`site_declined` when the site refused this
+  example). A build whose session never reached the end publishes nothing.
 - A pop-up, banner or interstitial on the path, such as an upsell, is conditional unless the
   page always opens it in answer to an action: handle it as the forms skill says, so the tool
   still works for a caller who never sees it.
