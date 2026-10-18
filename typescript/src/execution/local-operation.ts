@@ -52,6 +52,12 @@ export interface LocalOperationOptions {
   readonly timeoutMs?: number;
   readonly mode?: "run" | "contract";
   readonly validateInput?: boolean;
+  /**
+   * A run whose output fails its schema returns that output as its result, with `outputDrift`,
+   * rather than failing `InvalidOutput`: a write already happened when it returned. Its files
+   * are checked as any result's are.
+   */
+  readonly keepDriftedOutput?: boolean;
   readonly target?: "browser" | "pureFiles";
   /**
    * A mint step: the run counts as possibly sent from its first browser call, so a step that
@@ -154,6 +160,8 @@ export interface LocalOperationOutput extends LocalOperationJournal {
   readonly stderr: string;
   readonly write?: WriteDeclaration;
   readonly inputDecodes?: true;
+  /** The output failed its schema and was kept (`keepDriftedOutput`). */
+  readonly outputDrift?: true;
 }
 
 const sendToChild = (process: LocalProcess, message: object) =>
@@ -504,6 +512,7 @@ const operationOutput = (
     ...operationJournal(result),
     ...(result.write === undefined ? {} : { write: result.write }),
     ...(result.inputDecodes === undefined ? {} : { inputDecodes: result.inputDecodes }),
+    ...(result.outputDrift === undefined ? {} : { outputDrift: result.outputDrift }),
   };
 };
 
@@ -558,6 +567,7 @@ export const runLocalOperation = (
         timeoutMs,
         mode: options.mode ?? "run",
         ...(options.validateInput === undefined ? {} : { validateInput: options.validateInput }),
+        ...(options.keepDriftedOutput === true ? { keepDriftedOutput: true } : {}),
         ...(options.target === "pureFiles" || options.browser === undefined
           ? { offline: true }
           : {}),

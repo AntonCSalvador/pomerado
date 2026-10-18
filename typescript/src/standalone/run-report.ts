@@ -75,31 +75,51 @@ const unconfirmedLead = {
  * its output schema declares, returned before any commit step, else the
  * failure that says the write may have applied. A script that declares no write is a read unless
  * the request says it writes.
+ *
+ * A write's output that failed its schema (`outputDrift`) was produced after the write, so it is
+ * returned as drift: as the result of a confirmed write or one that sent nothing, and as the
+ * unconfirmed output of one that may have applied. One whose declared commit steps all stayed
+ * unsent changed nothing and fails as invalid output. Any other run's drifted output is no
+ * result: it fails as the `InvalidOutput` it is, with what its journal shows.
  */
-export const returnedRun = (declared: DeclaredEffect, result: LocalOperationOutput) => {
+export const returnedRun = (
+  declared: DeclaredEffect,
+  result: LocalOperationOutput,
+): Effect.Effect<unknown, RunOutcomeFailure> => {
   const revision = revisionOf(declared ?? "read", result.write);
+  const drift = result.outputDrift === true;
+  if (drift && revision.effect === "read")
+    return Effect.fail(
+      runOutcomeFailure(declared, "operation")(
+        new LocalOperationFailure("InvalidOutput", journalOf(result), "InvalidOutput"),
+      ),
+    );
+  const commits = commitReportOf(result);
   // A declared refusal returned before any commit step changed nothing, so the write did not apply.
+  // Only a validated output declares one.
   const refusal =
-    revision.effect === "write"
+    revision.effect === "write" && !drift
       ? returnedRefusal({
           outputSchema: result.schemas.output,
           output: result.output,
-          commits: commitReportOf(result).evidence,
+          commits: commits.evidence,
           runnerEffect: result.effect === "verified" ? "verified" : "may_have_dispatched",
         })
       : undefined;
+  const journaled = journalEffect(result, revision);
   // A read holds no write authority, so its validated return completes it.
   const effect =
     revision.effect === "read"
       ? "verified"
-      : refusal === undefined
-        ? journalEffect(result, revision)
-        : "rejected";
+      : refusal !== undefined || (drift && unenteredWrite(journaled, commits.marks))
+        ? "rejected"
+        : journaled;
   const evidence: RunEvidence = {
     status: "completed",
     effect,
-    output: "valid",
+    output: drift ? "invalid" : "valid",
     tool_effect: revision.effect,
+    ...(drift ? { output_drift: true } : {}),
     ...(refusal === undefined ? {} : { declared_refusal: true }),
   };
   const outcome = classifyRun(evidence);

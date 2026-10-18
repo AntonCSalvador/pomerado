@@ -133,6 +133,80 @@ describe("a run that returned", () => {
   });
 });
 
+// A write's output that failed its schema was produced after the write, so the run returns it
+// as drift: as its result once the write is confirmed, else as an unconfirmed write's output. A
+// read's is no result.
+describe("a write whose output failed its schema", () => {
+  const drifted = (journal: LocalOperationJournal, write?: WriteDeclaration) => ({
+    ...returned(journal, write),
+    output: { saved: "yes" },
+    outputDrift: true as const,
+  });
+  const declaration = { confirmation: "message", commits: ["save"] } as const;
+
+  it("returns a confirmed write's drifted output as its result", () => {
+    expect(settle("write", drifted(confirmedWrite, declaration))).toEqual(
+      Either.right({ saved: "yes" }),
+    );
+  });
+
+  it("returns the drifted output of a write that sent nothing", () => {
+    expect(settle("write", drifted(nothingSent, declaration))).toEqual(
+      Either.right({ saved: "yes" }),
+    );
+  });
+
+  it("keeps an unconfirmed write's drifted output, possibly applied", () => {
+    const failure = failureOf("write", drifted(commitSent, declaration));
+    expect(failure.outcome).toMatchObject({
+      code: "outcome_unknown",
+      writeStatus: "may_have_applied",
+      possibleCommit: true,
+    });
+    expect(failure.unconfirmed).toEqual({ output: { saved: "yes" } });
+    expect(failure.message).toMatch(readBack);
+  });
+
+  it("fails a write whose declared commits all stayed unsent as invalid, not applied", () => {
+    const failure = failureOf("write", drifted(commitNotEntered, declaration));
+    expect(failure.outcome).toMatchObject({
+      code: "invalid_output",
+      writeStatus: "not_applied",
+      possibleCommit: false,
+    });
+    expect(failure.unconfirmed).toBeUndefined();
+    expect(failure.message).not.toMatch(readBack);
+  });
+
+  // Any other run's drifted output is no result: it fails as its invalid output always did.
+  it.each([
+    {
+      case: "a read",
+      declared: "read" as const,
+      outcome: { code: "invalid_output", writeStatus: null, possibleCommit: false },
+    },
+    // No effect named and no write declared: the run may have changed anything.
+    {
+      case: "an undeclared script",
+      declared: undefined,
+      outcome: { code: "outcome_unknown", writeStatus: null, possibleCommit: true },
+    },
+  ])("fails $case's drifted output as before", ({ declared, outcome }) => {
+    const failure = failureOf(declared, drifted({ effect: "possible", commits: [] }));
+    expect(failure.outcome).toMatchObject(outcome);
+    expect(failure.unconfirmed).toBeUndefined();
+    expect(failure).toEqual(
+      runOutcomeFailure(declared, "operation")(
+        new LocalOperationFailure(
+          "InvalidOutput",
+          { effect: "possible", commits: [] },
+          "InvalidOutput",
+        ),
+      ),
+    );
+  });
+});
+
 describe("a run that failed in its operation", () => {
   const fail = (declared: "read" | "write" | undefined, error: unknown) =>
     runOutcomeFailure(declared, "operation")(error);

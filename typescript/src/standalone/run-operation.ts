@@ -93,6 +93,8 @@ export const runOperation = (
       siteOrigin: operationOrigin,
       ...(siteDomain(siteOrigin) === undefined ? {} : { siteDomain: siteDomain(siteOrigin) ?? "" }),
       timeoutMs: options.timeoutMs ?? 1_200_000,
+      // A write's output that failed its schema was produced after the write, so it comes back.
+      keepDriftedOutput: request.effect !== "read",
       ask,
       // Only the questions publication reviewed; an artifact saved before builds recorded them
       // asks only what its entrypoint declares as a plain literal.
