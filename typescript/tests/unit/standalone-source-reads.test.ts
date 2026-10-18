@@ -111,20 +111,21 @@ describe("Guardian's source reads on the local host", () => {
     expect(await failedCategory("operation/src/missing.mjs")).toBe("workspace");
   });
 
-  it("names a failed read of an SDK file the host's gap, and an authored file's the workspace's", async () => {
+  it("keeps a secret check's refusal of an SDK file out of the host's gaps", async () => {
+    // The check refuses the same file on every read, so a retry could never clear it.
     const secrets = makeRunSecrets();
     secrets.register("defineOperation");
-    const { failedCategory } = await reader(
+    const { read, failedCategory } = await reader(
       new Map([["operation/src/tool.mjs", "export const defineOperation = 1;\n"]]),
       secrets,
     );
-    expect(
-      await Promise.all(
-        ["runtime/operation.js", "operation/pomerado/runtime/operation.js", "operation/src/tool.mjs"].map(
-          failedCategory,
-        ),
-      ),
-    ).toEqual(["host_sdk", "host_sdk", "workspace"]);
+    const paths = [
+      "runtime/operation.js",
+      "operation/pomerado/runtime/operation.js",
+      "operation/src/tool.mjs",
+    ];
+    for (const path of paths) expect(await read(path), path).toEqual({ failure: "SourceUnavailable" });
+    expect(await Promise.all(paths.map(failedCategory))).toEqual([undefined, undefined, undefined]);
   });
 
   it("reads an authored TypeScript file as written, never as the SDK's JavaScript", async () => {

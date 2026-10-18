@@ -75,7 +75,8 @@ const localSdk = (trustedSources: ReadonlyMap<string, string>): SdkFiles => {
  * path, under `operation/`, where authored source imports it as `../../runtime/index.js`, and a
  * bare `pomerado/runtime` as the module it names (`operationReviewSources`). An SDK module spelled
  * as TypeScript reads as its JavaScript. A guessed path under an SDK folder reads as where the SDK
- * is (`sdkReference`), and a failed read of an SDK file is the host's gap (`hostProvidedSource`).
+ * is (`sdkReference`). A read that finds no file names its kind, `host_sdk` for a file the host
+ * provides (`hostProvidedSource`), which the view always holds, so locally it is `workspace`.
  */
 export const sourceInspector = (
   session: Pick<StandaloneSession, "trustedSources" | "secrets">,
@@ -88,31 +89,38 @@ export const sourceInspector = (
   const hostProvided = hostProvidedSource(sdk.files);
   const readInstead = sdkReference(sdk);
   return (path, offset) => {
-    // Which kind of file failed: never the path, which the model chose.
-    const pathCategory = hostProvided(path) ? "host_sdk" : "workspace";
-    const unavailable = (operation: string, error?: unknown) =>
-      new ReviewFailure({
-        code: "SourceUnavailable",
-        failureDetail: failureDetail(
-          error === undefined ? "invalid_input" : "guardian_dependency_failed",
-          {
-            operation,
-            ...(error === undefined ? {} : { error }),
-            context: { pathCategory, offset },
-          },
-        ),
-      });
     const text = readable.get(path) ?? readable.get(sdkJavaScriptPath(path) ?? path);
     if (text === undefined) {
       // A guessed SDK path is answered with where the SDK is, not a failure Guardian must treat
       // as unsafe omitted source.
       const instead = offset === 0 ? readInstead(path) : undefined;
-      return instead === undefined
-        ? Effect.fail(unavailable("standalone.readSource"))
-        : Effect.succeed(hostReference(path, instead));
+      if (instead !== undefined) return Effect.succeed(hostReference(path, instead));
+      // Which kind of file failed: never the path, which the model chose.
+      const pathCategory = hostProvided(path) ? "host_sdk" : "workspace";
+      return Effect.fail(
+        new ReviewFailure({
+          code: "SourceUnavailable",
+          failureDetail: failureDetail("invalid_input", {
+            operation: "standalone.readSource",
+            context: { pathCategory, offset },
+          }),
+        }),
+      );
     }
+    // The secret check refuses the same file on every read, so its refusal is no host gap a
+    // retry could clear: Guardian judges the step without that file.
     return secrets.assertAbsent(text).pipe(
-      Effect.mapError((cause) => unavailable("standalone.projectSource", cause)),
+      Effect.mapError(
+        (error) =>
+          new ReviewFailure({
+            code: "SourceUnavailable",
+            failureDetail: failureDetail("guardian_dependency_failed", {
+              operation: "standalone.projectSource",
+              error,
+              context: { offset },
+            }),
+          }),
+      ),
       Effect.andThen(sourceChunk(path, text, offset)),
     );
   };
