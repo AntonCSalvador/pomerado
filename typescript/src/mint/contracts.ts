@@ -1133,9 +1133,11 @@ export type TaskUpdateRequest = typeof TaskUpdateRequest.Type;
  * Every `status` a `mint_update` result carries:
  * - `updated`: Guardian allowed it and the host applied it; the result carries the effective task.
  * - `clarification_required`: Guardian found the caller's confirmation missing or ambiguous, or
- *   found a `recommend: "update"` a new build, or the host needs something only the caller has,
- *   such as a login for the new site. Nothing changed.
- * - `reword`: Guardian's feedback; nothing changed and the build continues.
+ *   found a `recommend: "update"` a new build for the first time since the task last changed, or
+ *   the host needs something only the caller has, such as a login for the new site. Nothing
+ *   changed.
+ * - `reword`: Guardian's feedback, or its new build call on another `recommend: "update"` before
+ *   the task changed, after the caller was asked once; nothing changed and the build continues.
  * - `new_mint_recommended`: the minter recommended a new build and Guardian did not object. This
  *   build ends blocked with the recommendation and its suggested request.
  * - `review_unavailable`: the review did not complete; resubmit within the review outage budget.
@@ -1144,7 +1146,9 @@ export type TaskUpdateRequest = typeof TaskUpdateRequest.Type;
  * - `review_invalid_outcome`: the review returned an outcome its kind does not accept, even after one
  *   correction. Nothing changed; revise or withdraw the update. A second one in an attempt ends it
  *   incomplete.
- * - `update_invalid`: the request does not decode. Nothing changed.
+ * - `update_invalid`: the request does not decode, a recommended new build has no suggested request,
+ *   or screening made its suggested request longer than 500 characters
+ *   (`suggested_request_too_long`). Nothing changed.
  */
 export const taskUpdateStatuses = [
   "updated",
