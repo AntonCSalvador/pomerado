@@ -127,6 +127,12 @@
 
 ### Other changes
 
+- Guardian's source reads and step context are shared by every host.
+  - `pomerado/core/guardian/source` exports the SDK path mapping: `operationReviewSources`, `hostProvidedSource`, `sdkJavaScriptPath`, the `SdkFiles` type, `sdkReference`, which answers a guessed SDK path with where the SDK is, and `hostReference`, which wraps such an answer as one chunk.
+  - `pomerado/core/guardian/review` exports `refusalsOnHostGapsFail`. A deny or escalate after a failed read of a file the host provides fails as that read's `SourceUnavailable`, an outage, instead of a refusal.
+  - `pomerado/core/mint/review-context` exports `explorationAllowedEffect` and `cappedStepResult`.
+  - The local host uses all of them. A guessed path under an SDK folder (`runtime/`, `browser/`, `testing/`, `node_modules/pomerado/` or `pomerado/`) now reads as a `host_sdk_reference` pointing at `pomerado/browser/index.js`. A TypeScript spelling maps to its JavaScript only under those folders. A failed source read names its `pathCategory`, and a local Guardian refusal that rests on a failed SDK read becomes an outage.
+  - The exploration allowed-effect text adds that clicking the site's own sign-in link or button is navigation, and so is a context step after sign-in that asks for no credential, such as choosing a supplier, company, client or language. A recorded Guardian response keyed on the exact request text needs recording again.
 - Guardian's execution policy lets a host autofill sign-in step put slot `code` on each one-character box of a code split across boxes, when the step lists every box in order, as well as on a one-time-code field. A recorded Guardian response keyed on the exact policy text needs recording again.
 - The auth skill says a code split into one-character boxes is one `code` field per box, in order, as a split date is one field per part, and that the host asks once and types one character into each.
 - The core skill says typing or choosing can reload part of the page once per key or choice, such as suggestions or a dependent list, with answers that land out of order and an element the page may replace. It prefers waiting until every answer has landed, looking the element up again rather than reading one found earlier, checking it shows the answer to the whole value, and entering the value once more when it doesn't.

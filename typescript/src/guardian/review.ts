@@ -580,6 +580,49 @@ export interface Reviewer {
 }
 
 /**
+ * A failed read of a file the host provides: its source reader names the file's kind
+ * `host_sdk` (see `hostProvidedSource`).
+ */
+const hostSourceGap = (failure: ReviewFailure) =>
+  failure.code === "SourceUnavailable" &&
+  failure.failureDetail?.context?.["pathCategory"] === "host_sdk";
+
+/**
+ * A deny or escalate after Guardian could not read a file the host provides rests on the host's
+ * gap, which the minter cannot fix: the review fails with that read's `SourceUnavailable`, an
+ * outage the host retries and that ends a build as a host failure, never as a policy refusal. An
+ * allow stands, and a missing authored file stays Guardian's to judge.
+ */
+export const refusalsOnHostGapsFail = (reviewer: Reviewer): Reviewer => ({
+  ...reviewer,
+  run: (turn) =>
+    Effect.suspend(() => {
+      let gap: ReviewFailure | undefined;
+      return reviewer
+        .run({
+          ...turn,
+          readSource: (path, offset) =>
+            turn.readSource(path, offset).pipe(
+              Effect.tapError((error) =>
+                Effect.sync(() => {
+                  if (hostSourceGap(error)) gap ??= error;
+                }),
+              ),
+            ),
+        })
+        .pipe(
+          Effect.flatMap((raw) => {
+            const outcome: unknown =
+              typeof raw === "object" && raw !== null ? Reflect.get(raw, "outcome") : undefined;
+            return gap !== undefined && (outcome === "deny" || outcome === "escalate")
+              ? Effect.fail(gap)
+              : Effect.succeed(raw);
+          }),
+        );
+    }),
+});
+
+/**
  * One run of a review inside the outage retry loop. Offsets are `performance.now()` readings.
  * Each attempt is a fresh review with its own ID and its own `guardian.started` record, closed
  * by one `guardian.completed` or `guardian.failed`. The follow-up rounds an execution review
