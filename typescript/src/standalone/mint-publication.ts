@@ -26,6 +26,11 @@ import type { PublishedSignIn } from "../mint/sign-in-recorder.js";
 import { sourceDigest } from "../mint/step-checks.js";
 import { liveTestsEvidencePath } from "../mint/live-tests.js";
 import { checkWriteSession } from "../mint/write-session.js";
+import {
+  awsAccessKeyIdPattern,
+  isProviderKey,
+  providerKeyPattern,
+} from "../privacy/credential-policy.js";
 import type { MintState } from "./mint-state.js";
 import { SignInOrigin } from "./contracts.js";
 import { publicationError } from "./errors.js";
@@ -108,6 +113,35 @@ const outputEvidence = (state: MintState, sample: Run, source: ExampleOutputSour
     );
   });
 
+/** 1-based line and column of an offset in the file as written. */
+const position = (text: string, offset: number) => {
+  const before = text.slice(0, offset);
+  return { line: before.split("\n").length, column: offset - before.lastIndexOf("\n") };
+};
+
+/**
+ * A saved file's first hard-coded provider key or AWS access key ID, refused as a publication gate
+ * refuses one: the refusal names the file and where, never the key.
+ */
+export const providerKeyRefusal = (file: string, text: string): MintFailure | undefined => {
+  const provider = [...text.matchAll(providerKeyPattern())].find((match) =>
+    isProviderKey(match[0]),
+  )?.index;
+  const aws = awsAccessKeyIdPattern().exec(text)?.index;
+  const offsets = [provider, aws].filter((offset) => offset !== undefined);
+  if (offsets.length === 0) return undefined;
+  return new MintFailure({
+    code: "PublicationUnavailable",
+    reason: "source_screening",
+    publicationBlock: {
+      file,
+      check: "provider_credential",
+      entity: "API_TOKEN",
+      ...position(text, Math.min(...offsets)),
+    },
+  });
+};
+
 /**
  * The build's verified sign-in as it ships, value-free: its recipe and the address its runs start
  * from. The login URL, name, description and site naming are refused every time one holds a
@@ -184,7 +218,11 @@ export const mintPublication =
         const snapshot = new Map(yield* workspace.snapshot);
         const files = savedOperationFiles(snapshot, publication.entrypoint);
         const sources = [...files];
-        for (const [, text] of sources) yield* secrets.assertAbsent(text);
+        for (const [path, text] of sources) {
+          yield* secrets.assertAbsent(text);
+          const refused = providerKeyRefusal(path, text);
+          if (refused !== undefined) return yield* Effect.fail(refused);
+        }
         const signIn = yield* screenedSignIn(
           state.recorder.published(),
           publication.metadata,

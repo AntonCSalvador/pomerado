@@ -40,6 +40,8 @@ export const credentialPolicy = {
     ["session", "token"],
     ["auth", "token"],
     ["totp", "seed"],
+    ["secret", "string"],
+    ["secret", "binary"],
   ],
   /** The shell's working directory, never a password. */
   shellDirectoryNames: ["PWD", "OLDPWD"],
@@ -104,7 +106,10 @@ export const credentialPolicy = {
     { prefixes: ["phx_"], body: "A-Za-z0-9", minBody: 20, random: true },
     { prefixes: ["bl_"], body: "A-Za-z0-9", minBody: 20, random: true },
   ],
-  /** AWS access key IDs: one of these prefixes and 16 upper-case letters or digits. */
+  /**
+   * AWS access key IDs: one of these prefixes and 16 upper-case letters or digits, with no letter
+   * or digit on either side. An underscore may touch one (`KEY_AKIA…`).
+   */
   awsAccessKeyIdPrefixes: ["AKIA", "ASIA"],
 } as const;
 
@@ -209,10 +214,10 @@ export const isProviderKey = (match: string): boolean => {
   );
 };
 
-/** AWS access key IDs (`AKIA…`, `ASIA…`) as whole words. */
+/** AWS access key IDs (`AKIA…`, `ASIA…`) with no letter or digit on either side. */
 export const awsAccessKeyIdPattern = (): RegExp =>
   new RegExp(
-    `(?<![A-Za-z0-9_])(?:${alternation(credentialPolicy.awsAccessKeyIdPrefixes)})[0-9A-Z]{16}(?![A-Za-z0-9_])`,
+    `(?<![A-Za-z0-9])(?:${alternation(credentialPolicy.awsAccessKeyIdPrefixes)})[0-9A-Z]{16}(?![A-Za-z0-9])`,
     "gu",
   );
 
