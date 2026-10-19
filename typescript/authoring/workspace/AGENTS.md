@@ -170,10 +170,14 @@ than the controls, such as a record page at `/items/<id>` instead of crawling a 
 Either way, read the page's identity back from the page and fail if it does not match.
 
 When the controls flow lands on a URL the site produced, and two runs with different inputs show
-which parts of it carry which input, such as the query, dates, guests or party size, sort or a
-record's own identifier route, the tool may open that URL with the caller's values in those
-parts, built with `URLSearchParams` for a query part or `encodeURIComponent` for a path part and
-every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input
+which parts of it carry which input, such as the query, dates, guests or party size, sort,
+filters, a location the URL itself carries or a record's own identifier route, the tool enters
+at that URL with the caller's values in those parts when the mapping is reliable and clear: each
+part's valid values are known and readable in the URL, such as a sort or filter whose values
+become the input's enum, or a query the site encodes as typed. An opaque filter code still comes
+only from a link the page produced in this run (below). Otherwise it uses the page's controls.
+It builds that URL with `URLSearchParams` for a query part or `encodeURIComponent` for a path
+part and every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input
 back from the page, and when the landing is not an answer it named or a read-back differs, it
 runs the controls flow once instead, in a named function such as `throughControls`
 (`references/navigation.ts`). Never guess a parameter, never iterate on URL variants, and take an
@@ -196,13 +200,16 @@ This holds for `src/tool.mjs`, every fallback in it and your own probes.<!-- pom
 site shows, such as the date picker, selected time, party size, passengers, cabin, applied
 filters, sort and selected options, and refuse a mismatch: the tool throws `InputNotApplied`
 (.agents/core/SKILL.md) and never returns results for an input that did not apply; a control
-the tool could not find or read is `OperationFailure`. Four cases
+the tool could not find or read is `OperationFailure`. Five cases
 return results with what applied instead: a number on a scale the site steps returns its applied
 bound, a filter group the page disables for the results is reported as not offered, a value
 the page's choices do not hold returns the rows of a broader choice that covers it
 (.agents/search/SKILL.md), and an input that tailors the answer, such as a location, that the
 site still won't apply returns what the site showed with the applied value beside the caller's
-(.agents/core/SKILL.md, "Inputs that tailor the answer"). Echoed input, a
+(.agents/core/SKILL.md, "Inputs that tailor the answer"), and a search query the site corrected or
+rewrote, such as a spelling fix, returns the site's results with the query it searched as
+`applied_query` and `query_corrected` true, never silently (.agents/search/SKILL.md). Echoed
+input, a
 URL the tool built, a URL parameter, a box checked before the site applied it or the option's
 name elsewhere on the page does not show an input applied; read the site's committed state, such
 as the applied chip, the selected control or the results' own state, and compare its text with
@@ -234,9 +241,11 @@ account; never embed private literals or tokens in source.
 
 ## Try hard, then ask
 
-First use the request, the business input, earlier answers and what the page shows. Ask with
-`request_input`, one batch of typed questions whose answers come back to you while this attempt
-continues, when:
+First use the request, the business input, earlier answers and what the page shows. Ask no
+unnecessary question: when cheap exploring can answer it, such as opening a panel or a second
+record, explore instead. Then batch: ask everything you can foresee in one request, early, and
+add no question exploring could settle. Ask with `request_input`, one batch of typed questions
+whose answers come back to you while this attempt continues, when:
 
 1. the request has two plausible readings that would build different tools;
 2. a decision needs something only the user knows, such as which account, plan or item, and a
@@ -258,12 +267,13 @@ continues, when:
 8. you would leave out or refuse a capability the site offers, such as a field or column type,
    an option, or what a review finding asks for, because supporting it costs more, such as a
    lookup or an extra request: before narrowing, ask the owner one batched question that lists
-   every such capability, what supporting each would take and what you recommend, with one
-   question per capability and a "support it" or "leave it out" choice, never one question at a
-   time. Collect these while exploring and ask before the first `act` step when you can. A review
-   that offers refusal as an alternative fix is not the owner's choice. A field, input or output
-   the request itself names is never such a capability: support it, or end with `report_blocked`
-   saying why the site cannot; never offer to leave it out.
+   every such capability, what supporting each would take and what you recommend: one
+   `multi_choice` with an option per capability and `minSelections` 0, where an unchecked one is
+   left out, never one question per capability. Collect these while exploring and ask before
+   the first `act` step when you can. A review that offers refusal as an alternative fix is not
+   the owner's choice. A field, input or output the request itself names is never such a
+   capability: support it, or end with `report_blocked` saying why the site cannot; never offer
+   to leave it out.
 
 When nobody answers before the question expires, `request_input` returns `no_answer`. Decide
 how to go on without it: continue with a sensible default and list it in `finish_build`
@@ -280,8 +290,8 @@ accept it in one step.
 
 The caller may answer every choice and multi_choice in their own words: their own text instead
 of an option, or a note beside the options they pick. The host always allows it, so never add an
-"other" option. Their words are their answer: follow them, and ask again if they leave the choice
-open.
+"other" option. Their words are their answer: follow them. If they leave the choice
+open, ask again once at most, then go on as when no answer comes.
 
 Never ask for a fact the site shows (a choice it offers is askable when the input leaves it
 open), for host or infrastructure failures, for permission to do what was requested, for

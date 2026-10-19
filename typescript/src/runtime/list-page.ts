@@ -298,7 +298,8 @@ const refuse = (reason: CursorRefusal, message: string) =>
  * position comes from the host, which checked the cursor's signature, tool, inputs, caller and
  * expiry before the run started. It throws `errors.InvalidInput` with `field: "cursor"` when the
  * run has a cursor its host did not check, or the tool now pages another way than when it was
- * issued. An empty cursor is none.
+ * issued. The run fails with that refusal in a Kernel script and an Effect operation alike, so an
+ * HTTP version calls it directly too. An empty cursor is none.
  */
 export const startList = (
   input: unknown,
