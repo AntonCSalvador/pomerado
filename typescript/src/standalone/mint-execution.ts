@@ -278,7 +278,7 @@ const scriptQuestions = (
       // or the decision its declaration names, whether the agent or a script asked it, however
       // long ago and whether or not a step entered a commit since. Nobody is asked, so Guardian
       // reviews only what is left, and the reused answers are already the owner's latest in its
-      // list (`keptScriptAnswers`, `keptAgentAnswers`).
+      // list (`keptScriptAnswers`).
       const keys = yield* scriptQuestionKeys(candidate, (text) => projection.text(text));
       const decisions = declaredDecisions(candidate, declared);
       const { reused, remaining } = settledScriptAnswers(

@@ -24,8 +24,8 @@ import {
 const Prompt = ConfirmQuestion.fields.prompt;
 const Selections = Schema.Int.pipe(Schema.between(0, 50));
 /**
- * The decision the question asks the owner, by the id of the build's earlier question about it,
- * the agent's own or another script question's with the same `decision`. While a build runs, an
+ * The decision the question asks the owner, by the id of the build's earlier question about it:
+ * the agent's own, or another script question's id or `decision`. While a build runs, an
  * ask reuses the owner's latest answer to that decision instead of asking again; a published
  * tool's run asks its caller every time. A secret never names one.
  */

@@ -150,7 +150,7 @@ already asked for, or to solve a CAPTCHA.
    - `{ type: "confirm", prompt, followUp? }`: yes or no, returned as `{ confirmed }`.
    - Any of these four may also name `decision`, the id of the question you already asked
      the owner about the same decision in this build with `request_input` (or another declared
-     question's `decision`), as in `{ type: "choice", prompt, decision: "cabin" }`. While the
+     question's id), as in `{ type: "choice", prompt, decision: "cabin" }`. While the
      build runs, the host gives the `ask` the owner's latest answer to that decision instead of
      asking again: a picked option becomes the page's option with the same label, and the
      owner is asked only when the answer does not fit, such as no option with that label. A

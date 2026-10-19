@@ -14,7 +14,6 @@ import {
   declaredDecisions,
   forgetScriptAnswers,
   KeptScriptAnswer,
-  keptAgentAnswers,
   keptScriptAnswers,
   scriptQuestionKeys,
   settledScriptAnswers,
@@ -60,7 +59,7 @@ describe("a later step's script question", () => {
     // Reusing leaves the kept answer in place, so every later ask of the same question reuses it.
     for (let ask = 0; ask < 3; ask++) expect(reuse(plan, entries)).toEqual(gold);
     // A kept answer carries no time and no step, so neither age nor the asking step ends it.
-    expect(entries).toEqual([{ question: keys(plan)[0], answer: gold["plan"] }]);
+    expect(entries).toEqual([{ question: keys(plan)[0], answer: gold["plan"], decision: "plan" }]);
     // Only a newer answer to the same prompt replaces it; another prompt's answer keeps it.
     expect(keptScriptAnswers(entries, keys(request([])), {})).toEqual(entries);
   });
@@ -189,7 +188,7 @@ const agentAsked = (questions: InputRequest["questions"]): InputRequest => ({
   questions,
 });
 const agentKept = (asked: InputRequest, answers: ValidAnswers) =>
-  keptAgentAnswers([], keys(asked), answers);
+  keptScriptAnswers([], keys(asked), answers);
 /** What a script's request reuses and leaves to ask, each question naming its decision. */
 const settle = (
   asked: InputRequest,
@@ -328,12 +327,24 @@ describe("a script's question that names an earlier decision", () => {
       seat_class: { type: "choice", value: "o1" },
     });
     // And the agent's newer answer replaces the script's.
-    const again = keptAgentAnswers(scriptBusiness, keys(cabin), {
+    const again = keptScriptAnswers(scriptBusiness, keys(cabin), {
       cabin: { type: "choice", value: "economy" },
     });
     expect(settle(pageCabin, again, ["cabin"]).reused).toEqual({
       seat_class: { type: "choice", value: "o2" },
     });
+  });
+
+  it("takes the answer to an earlier script question it names by id, reworded", () => {
+    const entries = kept(plan, gold);
+    const reworded = request([{ ...choice, id: "tier", prompt: "Which plan is on the account?" }]);
+    expect(settle(reworded, entries, ["plan"]).reused).toEqual({
+      tier: { type: "choice", value: "gold" },
+    });
+    // A question that names no decision is never matched by id alone.
+    expect(settle(request([{ ...choice, prompt: "Which plan?" }]), entries, []).reused).toEqual(
+      {},
+    );
   });
 
   it("asks only what the owner has not answered", () => {

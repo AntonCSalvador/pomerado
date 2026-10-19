@@ -37,8 +37,8 @@ type KeptQuestion = typeof KeptQuestion.Type;
 /**
  * One answer the owner gave in this build, to the agent's own question or a script's, which a
  * later script ask may reuse: the screened question, the answer as the asker returned it, and the
- * decision it settles. An agent question's decision is its id; a script question's is the
- * `decision` its declaration names, if any.
+ * decision it settles: the `decision` a script question's declaration names, else the question's
+ * id. Only a later question that names a decision reuses an answer by it.
  */
 export const KeptScriptAnswer = Schema.Struct({
   question: KeptQuestion,
@@ -197,8 +197,9 @@ export const forgetScriptAnswers = (
 ): readonly KeptScriptAnswer[] => kept.filter((entry) => !prompts.includes(entry.question.prompt));
 
 /**
- * The kept answers once the owner answered afresh: each reusable answer, with the decision it
- * settles, replaces any kept for the same prompt or the same decision.
+ * The kept answers once the owner answered afresh, the agent's own question or a script's: each
+ * reusable answer settles the decision its declaration names (`decisions`, by question), else the
+ * one its id names, and replaces any kept answer to the same prompt or the same decision.
  */
 export const keptScriptAnswers = (
   kept: readonly KeptScriptAnswer[],
@@ -208,10 +209,9 @@ export const keptScriptAnswers = (
 ): readonly KeptScriptAnswer[] => {
   const latest = keys.flatMap((key, index): KeptScriptAnswer[] => {
     const answer = key === undefined ? undefined : answers[key.id];
-    const decision = decisions[index];
     return key === undefined || answer === undefined
       ? []
-      : [{ question: key, answer, ...(decision === undefined ? {} : { decision }) }];
+      : [{ question: key, answer, decision: decisions[index] ?? key.id }];
   });
   const decided = new Set(latest.flatMap((entry) => entry.decision ?? []));
   return [
@@ -222,14 +222,3 @@ export const keptScriptAnswers = (
     ...latest,
   ];
 };
-
-/**
- * The kept answers once the owner answered the agent's own question: each settles the decision
- * named by its question's id, which a script's question may name to reuse it.
- */
-export const keptAgentAnswers = (
-  kept: readonly KeptScriptAnswer[],
-  keys: readonly (KeptQuestion | undefined)[],
-  answers: ValidAnswers,
-): readonly KeptScriptAnswer[] =>
-  keptScriptAnswers(kept, keys, answers, keys.map((key) => key?.id));
