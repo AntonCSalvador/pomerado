@@ -1019,8 +1019,10 @@ test("a sign-in whose page submits its own form still counts, and the example ke
     return respond(request);
   });
   await build(site, { url: `${site.origin}/login-self`, effect: "read" }, steps);
-  // The page sent the login itself, so the host found no submit to click after typing.
-  expect(seen).toContainEqual(expect.objectContaining({ outcome: "filled", submit: "refused" }));
+  // The page sent the login itself as a new document, so the host found no submit to click after
+  // typing and reports that the page sent it.
+  expect(seen).toContainEqual(expect.objectContaining({ outcome: "filled", submit: "page" }));
+  expect(seen).not.toContainEqual(expect.objectContaining({ submit: "refused" }));
   expect(seen).toContainEqual(expect.objectContaining({ signedIn: true }));
   expect(site.visits.slice(0, 2)).toEqual(["/login-self", "/account"]);
   expect(site.probe("example")).toMatchObject({

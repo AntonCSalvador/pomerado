@@ -83,6 +83,8 @@ export type AutofillFillCall =
       readonly submitGet: boolean;
       /** Whether each field's own form was judged to submit by GET. */
       readonly fieldGet: readonly boolean[];
+      /** Only look: a call that finds the step's fields clicks nothing and answers `none`. */
+      readonly look?: true;
     };
 
 /**
@@ -233,7 +235,7 @@ try {
     }, { key: ${JSON.stringify(call.bindingKey)}, text: question.text }, { timeout: ${elementReadMs} }, true);
   }
   return activeTag === null
-    ? { focused: true, located: fieldLocated, url: primary.url() }
+    ? { focused: true, located: fieldLocated, url: primary.url(), document: await documentStart() }
     : { focused: false, unfocused: { activeTag }, located: fieldLocated, url: primary.url() };
 } catch (error) {
   const focusError = error instanceof Error && /^[A-Za-z]{1,64}$/.test(error.name) ? error.name : "unknown";
@@ -247,11 +249,11 @@ try {
     return `try {
   // A date goes into whatever date control the page has, in the format the field takes.
   await fillDate(fields[${call.index}].locator, ${JSON.stringify(call.iso)}, ${JSON.stringify(call.format)}, { timeout: 5000 });
-  return { dated: true, url: primary.url() };
+  return { dated: true, url: primary.url(), document: await documentStart() };
 } catch {
   return { dated: false, url: primary.url() };
 }`;
-  return `if (submit === null) return { submit: "none", url: primary.url() };
+  return `${call.look === true ? "return { submit: \"none\", url: primary.url() };\n" : ""}if (submit === null) return { submit: "none", url: primary.url() };
 // Disabled as Playwright's own click judges it, read where page code cannot redefine the answer.
 if (await submit.locator.isDisabled({ timeout: 5000 })) return { submit: "disabled", url: primary.url() };
 const guardKey = ${JSON.stringify(call.guardKey)};
@@ -313,6 +315,14 @@ const controls = await pageControls().catch(() => null);
 return { submit: "clicked", url: primary.url(), ...(controls === null ? {} : { controls }) };`;
 };
 
+/**
+ * Page code for a fill call: when the primary page's document began loading, which tells one
+ * document from the next. A new document changes it; a pushState, a redraw or a reload of a frame
+ * never does. Undefined when the page cannot say, as while it loads.
+ */
+const documentStartCode = `const documentStart = () =>
+  primary.mainFrame().evaluate(() => performance.timeOrigin).catch(() => undefined);`;
+
 /** Resolves only a real child of the stable primary opener, on the recorded origin. */
 export const autofillPageCode = (targetId: string, popup: AutofillPopup | undefined) =>
   popup === undefined
@@ -369,13 +379,15 @@ ${fill === undefined ? "" : `if (popupTargetId !== ${JSON.stringify(fill.popupTa
 }
 ${formControlsCode}
 ${locateCode}
+${fill === undefined ? "" : documentStartCode}
 const observed = ${JSON.stringify(observed)};
 const selectors = ${JSON.stringify(step.fields.map((field) => field.selector))};
 const questionSelectors = ${JSON.stringify(step.fields.map((field) => field.slot === "private_answer" ? field.questionSelector ?? null : null))};
 const fields = [];
 for (let index = 0; index < selectors.length; index++) {
   const found = await locate(selectors[index], questionSelectors[index]);
-  if ("error" in found) return { ...found, target: index, url: primary.url() };
+  if ("error" in found)
+    return { ...found, target: index, url: primary.url()${fill?.call.kind === "submit" ? ", document: await documentStart()" : ""} };
   fields.push(found);
 }
 const submitSelector = ${JSON.stringify(step.submit ?? null)};
