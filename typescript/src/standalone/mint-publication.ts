@@ -68,7 +68,7 @@ const retainedPublicationSample = (
  * not sign in, and the build took the task to need the account. A write rests on every act step
  * of its session, since its composed script is judged against all of them; a read on the step it
  * publishes, an example or an explore. A sign-in the build verifies later records one, and then
- * the build publishes. The refusal names the origins the login went to off the site, if any.
+ * the build publishes.
  */
 const unverifiedSignInRefusal = (state: MintState, sample: Run) =>
   Effect.suspend(() => {
@@ -79,20 +79,18 @@ const unverifiedSignInRefusal = (state: MintState, sample: Run) =>
           )
         : sample.afterUnverifiedSignIn === true;
     if (!rests || state.recorder.published() !== undefined) return Effect.void;
-    const origins = state.namedSignInOrigins();
     return Effect.fail(
       new MintFailure({
         code: "PublicationUnavailable",
         reason: "autofill_recipe_not_verified",
-        ...(origins.length === 0 ? {} : { untrustedSignInOrigins: origins }),
       }),
     );
   });
 
 /**
  * The build's https sign-in origins, as the tool saves them with a published sign-in: the
- * request's that are https origins, same-site ones included, then each the caller trusted when
- * asked, once each. None when there are none, so a build without them saves what it always did.
+ * request's that are https origins, same-site ones included. None when there are none, so a build
+ * without them saves what it always did.
  */
 const savedSignInOrigins = (state: MintState) => {
   const origins = state.signInOrigins

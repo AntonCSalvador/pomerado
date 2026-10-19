@@ -23,7 +23,6 @@ import { screenMintText } from "../mint/workspace.js";
 import { Deadline } from "../runtime/deadline.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import type { InputAsker } from "../runtime/input-request.js";
-import { askingValueHooks } from "../runtime/sign-in-values.js";
 import { mintSessionSignIns, signedInAtEntry } from "../runtime/session-sign-in.js";
 import {
   localStartHooks,
@@ -47,13 +46,6 @@ const identifiers: ReadonlySet<FillSlot> = new Set(identifierPreference);
 /** What the host does with a sign-in step Guardian allows, for its review. */
 const signInStepNote =
   "The host fills the login's values, which never appear in this review, into the fields the step names and clicks the named submit on the sign-in screen of the authorized site.";
-/** A marker that a page the build saw signed out shows cannot tell signed in from signed out. */
-const markerOnSignedOutPage = {
-  signedIn: false,
-  failed: "marker_matches_signed_out_page",
-  nextStep:
-    "A page this build saw signed out shows this marker too, so it cannot tell the site signed in from signed out. The sign-in is still open. Choose an element only a signed-in user sees, test it with check_signed_in_marker, then check again.",
-} as const;
 /** A step that could not start its page: the browser call failed, so nothing ran. */
 const unavailable = (operation: string) => (error: unknown) =>
   new MintFailure({
@@ -240,23 +232,13 @@ export const mintState = (
      */
     const bindSite = (siteOrigin: string, authenticationOrigins: readonly string[]) =>
       Effect.gen(function* () {
-        /**
-         * The site's sign-in origins: the request's, then each the caller trusted when the host
-         * asked, which count for sign-in only, never for Guardian's allowed origins. Each origin
-         * is asked about once.
-         */
-        const trusted: string[] = [];
-        const signInOrigins = {
-          trusted,
-          asked: new Set<string>(),
-          all: (): readonly string[] => [...new Set([...authenticationOrigins, ...trusted])],
-        };
+        /** The site's sign-in origins: the request's. */
+        const signInOrigins = { all: (): readonly string[] => authenticationOrigins };
         const signInBrowser = makeSignInBrowser({
           page: browser,
           keyboard: browser.keyboard,
           siteOrigin: siteOrigin,
           authenticationOrigins,
-          trusted: () => trusted,
           onRequest: browser.onRequest,
           typing: session.signInTyping,
         });
@@ -275,17 +257,11 @@ export const mintState = (
           }),
           repeatedLoginFailure,
         );
-        const values = askingValueHooks({
-          ask: signInAsks.ask,
-          register: secrets.register,
-          site,
-          siteOrigin: siteOrigin,
-        });
-        const recorder = yield* makeSignInRecorder<Error>({
+        const recorder = makeSignInRecorder({
           browser: signInBrowser,
-          markerVisible: signInBrowser.markerVisible,
           login: login.login,
-          values,
+          ask: signInAsks.ask,
+          secrets,
           // The screen may show a value the caller gave, such as the typed email on a password
           // screen; it reaches Guardian masked. The source check still refuses any value left.
           review: (step, inspection) =>
@@ -308,9 +284,7 @@ export const mintState = (
               Effect.asVoid,
             ),
           site,
-          carries: secrets.carries,
-          refuseIndicator: (indicator) =>
-            markers.signedOutShows(indicator) ? markerOnSignedOutPage : undefined,
+          signedOutPages: () => markers.signedOutPages(),
         });
         const markers = makeMarkerChecks({
           page: browser,
@@ -363,12 +337,7 @@ export const mintState = (
           // update made a write since, or one whose effect the build decides, needs its marker.
           allowCantTell: () => request.effect === "read" && context.buildEffect === "read",
         });
-        /**
-         * The origins a signed-in check found the login sent only to, off the site and its sign-in
-         * origins, since the last verified sign-in: what an unpublished build names to its caller.
-         */
-        const untrustedSignInOrigins = new Set<string>();
-        return { recorder, markers, start, sessionSignIn, untrustedSignInOrigins, signInOrigins };
+        return { recorder, markers, start, sessionSignIn, signInOrigins };
       });
     let bound = yield* bindSite(context.siteOrigin, context.authenticationOrigins);
     // A later binding lives as long as the first: until the request's scope closes.
@@ -401,19 +370,9 @@ export const mintState = (
       get sessionSignIn() {
         return bound.sessionSignIn;
       },
-      get untrustedSignInOrigins() {
-        return bound.untrustedSignInOrigins;
-      },
       get signInOrigins() {
         return bound.signInOrigins;
       },
-      /**
-       * What an unpublished build names to its caller: the origins its checks named since the last
-       * verified sign-in, then the ones the open sign-in's requests carried the login to, so a
-       * build that never checked its sign-in names them too.
-       */
-      namedSignInOrigins: (): readonly string[] =>
-        bound.recorder.namedOrigins([...bound.untrustedSignInOrigins]),
       /**
        * Binds the build to another site, for a task update the host applies, with no sign-in
        * origins of its own; nothing switches unless it succeeds.

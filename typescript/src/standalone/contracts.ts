@@ -43,10 +43,9 @@ export interface PomeradoRequest {
 }
 
 /**
- * A local mint's outcome. An unpublished build whose sign-in sent the login only to origins off
- * the site and `authenticationOrigins` names them in `untrustedSignInOrigins`, each an exact
- * origin, whether or not the caller trusted one when asked: answer yes when the build asks, or add
- * one you trust to `authenticationOrigins`, and mint again.
+ * A local mint's outcome. A build no longer sets `untrustedSignInOrigins`: it refuses a sign-in
+ * form that submits off the site and `authenticationOrigins` before anything is typed, and counts
+ * a screen as sent by its clicked submit. The field stays so older callers still type-check.
  */
 export type LocalMintOutcome = MintOutcome & {
   readonly untrustedSignInOrigins?: readonly string[];

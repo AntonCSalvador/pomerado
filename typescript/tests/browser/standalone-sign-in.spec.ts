@@ -830,36 +830,6 @@ const noteMinter = (
     return [message("Done.")];
   }, requests);
 };
-/**
- * Answers as `answers` does, and the host's question whether to trust the origins a sign-in sent
- * the login to with `trust`, or leaves it unanswered.
- */
-const trustAnswers = (asked: InputRequest[], trust: boolean | "unanswered") =>
-  makeInputAsker((request) =>
-    Effect.suspend(() => {
-      asked.push(request);
-      if (trust === "unanswered" && request.questions[0]?.id === "trust_sign_in_origin")
-        return Effect.fail(new InputRequestFailure({ code: "NoResponse" }));
-      return Effect.succeed(
-        Object.fromEntries(
-          request.questions.map((question) => [
-            question.id,
-            question.id === "trust_sign_in_origin"
-              ? { confirmed: trust === true }
-              : question.type === "confirm"
-                ? { confirmed: true }
-                : question.type === "credential"
-                  ? {
-                      username: shopAccount.username,
-                      password: shopAccount.password,
-                      saveLogin: false,
-                    }
-                  : shopAccount.username,
-          ]),
-        ),
-      );
-    }),
-  );
 /** The account note's write request, on the shop's sign-in at `path`, the identity sign-in's. */
 const noteRequest = (shop: Shop, path = "/identity-login") => ({
   url: `${shop.origin}${path}`,
@@ -876,7 +846,6 @@ const buildNote = (
   endpoint: string,
   options: {
     readonly check: boolean;
-    readonly trust?: boolean | "unanswered";
     readonly authenticationOrigins?: readonly string[];
     readonly path?: string;
     readonly signIn?: readonly unknown[];
@@ -899,7 +868,7 @@ const buildNote = (
           ),
           guardianProvider: options.guardian ?? guardian(),
           outcomeReviewerProvider: quietReviewer,
-          ask: trustAnswers(asked, options.trust ?? true),
+          ask: answers(asked),
           timeoutMs: 60_000,
         });
         const built = yield* service.mint({
@@ -946,13 +915,6 @@ const identityRecipe = (shop: Shop) => ({
   ],
   signedIn: { selector: "#account" },
 });
-/** The host's one question whether to trust `origin` for signing in on the shop. */
-const trustQuestion = (origin: string) => ({
-  id: "trust_sign_in_origin",
-  type: "confirm",
-  prompt: `Does shop.test sign in through ${origin}? Its sign-in page sent the login you gave to that address, which is outside the website. Yes trusts it for signing in only and saves it with the tool, so its runs sign in the same way. No stops the build without publishing.`,
-});
-
 test("a local write build that never checks a sign-in whose script sends the login to another site publishes nothing without a recorded sign-in; with that site as a sign-in origin up front it asks nothing more, publishes its sign-in, and a run in a new session signs in", async () => {
   test.info().annotations.push({
     type: "slow",
@@ -961,8 +923,8 @@ test("a local write build that never checks a sign-in whose script sends the log
   test.setTimeout(180_000);
   await withShop(async (shop, endpoint) => {
     const identityOrigin = `https://${identityHost}:${shop.port}`;
-    // The site's own origin never receives the login and no check runs, so the host asks
-    // nothing about it. The first act step starts signed out; the minter signs in again on the
+    // No check runs, so the host asks for nothing beyond the login. The first act step starts
+    // signed out; the minter signs in again on the
     // page it was sent to, and its next act step saves the note. The build does not publish that
     // write.
     const unverified = await buildNote(shop, endpoint, { check: false });
@@ -973,22 +935,21 @@ test("a local write build that never checks a sign-in whose script sends the log
     expect(shop.state.accountNotes).toEqual(["kept"]);
     expect(unverified.built.build, JSON.stringify(unverified.built)).not.toBe("published");
     expect(unverified.built.artifact).toBeUndefined();
-    // With no check, the refusal and the outcome still name the origin the login went to.
+    // The refusal and the outcome name no origin the login went to.
     expect(objects(resultOf(last, "finish_build"))).toContainEqual(
       expect.objectContaining({
         status: "not_published",
         reason: "autofill_recipe_not_verified",
-        untrustedSignInOrigins: [identityOrigin],
       }),
     );
-    expect(unverified.built.untrustedSignInOrigins).toEqual([identityOrigin]);
+    expect(JSON.stringify(resultOf(last, "finish_build"))).not.toContain(identityHost);
+    expect(unverified.built.untrustedSignInOrigins).toBeUndefined();
     expect(unverified.asked.map(({ questions }) => questions)).toEqual([
       [loginQuestion(shop.origin)],
     ]);
     expect(JSON.stringify(unverified.built)).not.toContain(shopAccount.password);
 
-    // With the identity service as a sign-in origin, its request carries the login: the check
-    // verifies without a question, the first act step starts from the saved session and the
+    // With the identity service as a sign-in origin, the check verifies without a question, the first act step starts from the saved session and the
     // build publishes its sign-in, value-free, with that origin.
     const verified = await buildNote(shop, endpoint, {
       check: true,
@@ -1021,28 +982,21 @@ test("a local write build that never checks a sign-in whose script sends the log
   });
 });
 
-test("a local build asks the caller once whether to trust the origin its sign-in script sent the login to; after a yes it publishes that origin with its sign-in, and a run in a new session signs in through it with no origin given", async () => {
+test("a local build whose sign-in script sends the login to another site verifies once the host clicked its submit, asks for nothing beyond the login, publishes its sign-in without that site, and a run in a new session signs in", async () => {
   test.info().annotations.push({
     type: "slow",
     description: "Original SDKs, Chromium, a scripted write build with a host sign-in, then a run",
   });
   test.setTimeout(120_000);
   await withShop(async (shop, endpoint) => {
-    const identityOrigin = `https://${identityHost}:${shop.port}`;
     const reviewer = recordingGuardian();
     const { built, last, asked } = await buildNote(shop, endpoint, {
       check: true,
-      trust: true,
       guardian: reviewer.provider,
     });
-    // The login question, then the one trust question, which the host asks itself.
-    expect(asked.map(({ questions }) => questions)).toEqual([
-      [loginQuestion(shop.origin)],
-      [trustQuestion(identityOrigin)],
-    ]);
-    expect(asked[1]).toMatchObject({ source: "system" });
-    // The check verified once trusted, with nothing typed again, so the first act step started
-    // from the saved session and the note was saved once.
+    expect(asked.map(({ questions }) => questions)).toEqual([[loginQuestion(shop.origin)]]);
+    // The host filled the login and clicked the submit, so the check verified with nothing typed
+    // again, the first act step started from the saved session and the note was saved once.
     expect(objects(resultOf(last, "signed_in"))).toContainEqual(
       expect.objectContaining({ state: "authenticated" }),
     );
@@ -1057,10 +1011,9 @@ test("a local build asks the caller once whether to trust the origin its sign-in
     expect(artifact.signIn).toEqual({
       recipe: identityRecipe(shop),
       entryUrl: `${shop.origin}/identity-login`,
-      authenticationOrigins: [identityOrigin],
     });
-    // The yes trusts the origin for sign-in only: every review, the act steps' after it and the
-    // publication's included, allows only the shop, never the identity service or its site.
+    // Every review, the act steps' and the publication's included, allows only the shop, never
+    // the identity service or its site.
     const purposes = reviewer.reviews.map(
       (review) =>
         (
@@ -1076,65 +1029,12 @@ test("a local build asks the caller once whether to trust the origin its sign-in
       expect(authority["allowedOrigins"]).toEqual([shop.origin]);
       expect(JSON.stringify(authority["allowedSites"])).not.toContain("identity.test");
     }
-    // A run takes the trusted origin from the tool, asks only for the login and signs in.
+    // A run asks only for the login and signs in with the recipe.
     const ran = await runNote(endpoint, artifact, noteRequest(shop));
     expect(ran.output).toEqual({ saved: true });
     expect(ran.asked.map(({ questions }) => questions)).toEqual([[loginQuestion(shop.origin)]]);
     expect(shop.state.identityPosts).toBe(2);
     expect(shop.state.accountNotes).toEqual(["kept", "kept"]);
-  });
-});
-
-test("a local build whose caller does not trust the origin its sign-in script sent the login to stops at once as sign-in unavailable, naming that origin", async () => {
-  test.info().annotations.push({
-    type: "slow",
-    description: "Original SDKs, Chromium, a scripted write build with a host sign-in",
-  });
-  test.setTimeout(90_000);
-  await withShop(async (shop, endpoint) => {
-    const identityOrigin = `https://${identityHost}:${shop.port}`;
-    const { built, last, asked } = await buildNote(shop, endpoint, { check: true, trust: false });
-    expect(asked.map(({ questions }) => questions)).toEqual([
-      [loginQuestion(shop.origin)],
-      [trustQuestion(identityOrigin)],
-    ]);
-    expect(built).toMatchObject({ build: "incomplete", recoveryReason: "sign_in_unavailable" });
-    expect(built.artifact).toBeUndefined();
-    expect(built.untrustedSignInOrigins).toEqual([identityOrigin]);
-    expect(built.summary).toContain(
-      `The sign-in sent the login to ${identityOrigin}, which is not trusted for sign-in.`,
-    );
-    // Nothing ran after the check: no act step, no second sign-in.
-    expect(resultOf(last, "open_note")).toBeUndefined();
-    expect(shop.state.identityPosts).toBe(1);
-    expect(shop.state.accountNotes).toEqual([]);
-  });
-});
-
-test("a local build whose caller leaves the trust question unanswered stops as no response, naming the origin its sign-in script sent the login to", async () => {
-  test.info().annotations.push({
-    type: "slow",
-    description: "Original SDKs, Chromium, a scripted write build with a host sign-in",
-  });
-  test.setTimeout(90_000);
-  await withShop(async (shop, endpoint) => {
-    const identityOrigin = `https://${identityHost}:${shop.port}`;
-    const { built, last, asked } = await buildNote(shop, endpoint, {
-      check: true,
-      trust: "unanswered",
-    });
-    expect(asked.map(({ questions }) => questions)).toEqual([
-      [loginQuestion(shop.origin)],
-      [trustQuestion(identityOrigin)],
-    ]);
-    expect(built).toMatchObject({ build: "incomplete", noResponse: { possibleCommit: false } });
-    expect(built.artifact).toBeUndefined();
-    expect(built.untrustedSignInOrigins).toEqual([identityOrigin]);
-    expect(built.summary).toContain(
-      `The sign-in sent the login to ${identityOrigin}, which is not trusted for sign-in. Answer yes when asked, or pass it in authenticationOrigins, and build again.`,
-    );
-    expect(resultOf(last, "open_note")).toBeUndefined();
-    expect(shop.state.accountNotes).toEqual([]);
   });
 });
 
@@ -1150,26 +1050,21 @@ const identityStepsRecipe = (shop: Shop, path: string) => ({
   signedIn: { selector: "#account" },
 });
 
-test("a local build whose identifier-first sign-in sends each screen's value alone to another site verifies after one yes, publishes both screens with that origin, and a run in a new session signs in", async () => {
+test("a local build whose identifier-first sign-in sends each screen's value alone to another site verifies once the host clicked both submits, publishes both screens without that site, and a run in a new session signs in", async () => {
   test.info().annotations.push({
     type: "slow",
     description: "Original SDKs, Chromium, a scripted write build with a two-screen host sign-in, then a run",
   });
   test.setTimeout(120_000);
   await withShop(async (shop, endpoint) => {
-    const identityOrigin = `https://${identityHost}:${shop.port}`;
     const { built, last, asked } = await buildNote(shop, endpoint, {
       check: true,
-      trust: true,
       path: "/identity-steps",
       signIn: identitySteps,
     });
-    expect(asked.map(({ questions }) => questions)).toEqual([
-      [loginQuestion(shop.origin)],
-      [trustQuestion(identityOrigin)],
-    ]);
-    // The identifier went there on the first screen and the password on the second; the yes
-    // counts both, and the check verifies with nothing typed again.
+    expect(asked.map(({ questions }) => questions)).toEqual([[loginQuestion(shop.origin)]]);
+    // The identifier went there on the first screen and the password on the second, and the
+    // check verifies with nothing typed again.
     expect(objects(resultOf(last, "signed_in"))).toContainEqual(
       expect.objectContaining({ state: "authenticated" }),
     );
@@ -1183,7 +1078,6 @@ test("a local build whose identifier-first sign-in sends each screen's value alo
     expect(artifact.signIn).toEqual({
       recipe: identityStepsRecipe(shop, "/identity-steps"),
       entryUrl: `${shop.origin}/identity-steps`,
-      authenticationOrigins: [identityOrigin],
     });
     const ran = await runNote(endpoint, artifact, noteRequest(shop, "/identity-steps"));
     expect(ran.output).toEqual({ saved: true });
@@ -1193,37 +1087,29 @@ test("a local build whose identifier-first sign-in sends each screen's value alo
   });
 });
 
-test("a local build whose identifier-first sign-in sends the identifier to another site and the password alone to the site still names that origin after a yes whose check failed, and says to pass it up front", async () => {
+test("a local build whose identifier-first sign-in sends the identifier to another site and the password alone to the site verifies once the host clicked both submits, naming no origin", async () => {
   test.info().annotations.push({
     type: "slow",
     description: "Original SDKs, Chromium, a scripted build with a two-screen host sign-in",
   });
   test.setTimeout(90_000);
   await withShop(async (shop, endpoint) => {
-    const identityOrigin = `https://${identityHost}:${shop.port}`;
     const { built, last, asked } = await buildNote(shop, endpoint, {
       check: true,
-      trust: true,
-      path: "/identity-steps?password=site",
+      path: "/identity-steps?password=site&analytics=on",
       signIn: identitySteps,
       stopAfterCheck: true,
     });
-    expect(asked.map(({ questions }) => questions)).toEqual([
-      [loginQuestion(shop.origin)],
-      [trustQuestion(identityOrigin)],
-    ]);
-    // The site's request carried the password without the identifier, so trusting the identity
-    // service later does not verify: a known limit an origin given up front does not have.
+    expect(asked.map(({ questions }) => questions)).toEqual([[loginQuestion(shop.origin)]]);
+    // The site's request carried the password without the identifier, and the email also went to
+    // an analytics service: the host's clicks after each fill are what count.
+    expect(shop.state.analyticsPosts).toBe(1);
     expect(objects(resultOf(last, "signed_in"))).toContainEqual(
-      expect.objectContaining({ failed: "credentials_not_submitted" }),
+      expect.objectContaining({ state: "authenticated" }),
     );
-    expect(built.build).toBe("incomplete");
-    expect(built.artifact).toBeUndefined();
-    expect(built.untrustedSignInOrigins).toEqual([identityOrigin]);
-    expect(built.summary).toContain(
-      `The sign-in sent the login to ${identityOrigin}, which the caller trusted for sign-in, but no check verified a sign-in through it. Pass it in authenticationOrigins and build again, so the login sent there counts from the first screen.`,
-    );
-    expect(built.summary).not.toContain("not trusted for sign-in");
+    expect(built.untrustedSignInOrigins).toBeUndefined();
+    expect(built.summary).not.toContain(identityHost);
+    expect(built.summary).not.toContain(analyticsHost);
   });
 });
 
@@ -1233,135 +1119,48 @@ const earlyCheckSteps = [
   { signedIn: { selector: "#account" } },
   identitySteps[1],
 ];
-/** The early check's result, as the minter read it, when it named both `origins` and failed. */
-const namedBoth = (last: ModelRequest, origins: readonly string[]) => {
-  const named = objects(resultOf(last, "sign_in_2")).find(
-    (item) => item["failed"] === "credentials_not_submitted",
-  )?.["untrustedSignInOrigins"];
-  expect(Array.isArray(named) ? [...named].sort() : named).toEqual([...origins].sort());
-};
 
-test("a local build whose check before the password screen finds the email sent to an identity service and an analytics service asks nothing then, asks about the identity service alone after the password, and after a no names only it", async () => {
-  test.info().annotations.push({
-    type: "slow",
-    description: "Original SDKs, Chromium, a scripted build with a two-screen host sign-in",
-  });
-  test.setTimeout(90_000);
-  await withShop(async (shop, endpoint) => {
-    const identityOrigin = `https://${identityHost}:${shop.port}`;
-    const analyticsOrigin = `https://${analyticsHost}:${shop.port}`;
-    const { built, last, asked } = await buildNote(shop, endpoint, {
-      check: true,
-      trust: false,
-      path: "/identity-steps?analytics=on",
-      signIn: earlyCheckSteps,
-    });
-    // The early check names both origins that heard the email, and the host asks nothing about
-    // them; the check after the password screen asks about the identity service alone.
-    expect(asked.map(({ questions }) => questions)).toEqual([
-      [loginQuestion(shop.origin)],
-      [trustQuestion(identityOrigin)],
-    ]);
-    namedBoth(last, [identityOrigin, analyticsOrigin]);
-    expect(shop.state.analyticsPosts).toBe(1);
-    expect(shop.state.identityPosts).toBe(2);
-    expect(built).toMatchObject({ build: "incomplete", recoveryReason: "sign_in_unavailable" });
-    expect(built.artifact).toBeUndefined();
-    // What the build names drops the analytics origin the early check named.
-    expect(built.untrustedSignInOrigins).toEqual([identityOrigin]);
-    expect(built.summary).toContain(
-      `The sign-in sent the login to ${identityOrigin}, which is not trusted for sign-in.`,
-    );
-    expect(built.summary).not.toContain(analyticsHost);
-    expect(resultOf(last, "open_note")).toBeUndefined();
-  });
-});
-
-test("a local build whose check before the password screen finds the email sent to an identity service and an analytics service verifies after one yes about the identity service alone, and publishes only that origin", async () => {
+test("a local build whose check before the password screen fails as nothing submitted yet, naming no origin the email went to, verifies after the password screen and publishes neither origin", async () => {
   test.info().annotations.push({
     type: "slow",
     description: "Original SDKs, Chromium, a scripted write build with a two-screen host sign-in",
   });
   test.setTimeout(120_000);
   await withShop(async (shop, endpoint) => {
-    const identityOrigin = `https://${identityHost}:${shop.port}`;
-    const analyticsOrigin = `https://${analyticsHost}:${shop.port}`;
     const { built, last, asked } = await buildNote(shop, endpoint, {
       check: true,
-      trust: true,
       path: "/identity-steps?analytics=on",
       signIn: earlyCheckSteps,
     });
-    expect(asked.map(({ questions }) => questions)).toEqual([
-      [loginQuestion(shop.origin)],
-      [trustQuestion(identityOrigin)],
-    ]);
-    namedBoth(last, [identityOrigin, analyticsOrigin]);
+    expect(asked.map(({ questions }) => questions)).toEqual([[loginQuestion(shop.origin)]]);
+    const early = objects(resultOf(last, "sign_in_2")).find(
+      (item) => item["failed"] === "credentials_not_submitted",
+    );
+    expect(early).toBeDefined();
+    expect(early?.["untrustedSignInOrigins"]).toBeUndefined();
+    expect(shop.state.analyticsPosts).toBe(1);
+    expect(shop.state.identityPosts).toBe(2);
     expect(objects(resultOf(last, "signed_in"))).toContainEqual(
       expect.objectContaining({ state: "authenticated" }),
     );
     expect(shop.state.accountNotes).toEqual(["kept"]);
     expect(built.build, JSON.stringify(built)).toBe("published");
     expect(built.untrustedSignInOrigins).toBeUndefined();
-    // The analytics origin is never saved as a sign-in origin.
-    expect(built.artifact?.signIn?.authenticationOrigins).toEqual([identityOrigin]);
+    expect(built.artifact?.signIn?.authenticationOrigins).toBeUndefined();
     expect(JSON.stringify(built.artifact)).not.toContain(analyticsHost);
+    expect(JSON.stringify(built.artifact)).not.toContain(identityHost);
   });
 });
 
-/** The host's one question whether to trust both `origins`, in the order the check named them. */
-const trustBothQuestion = (origins: readonly string[]) => ({
-  id: "trust_sign_in_origin",
-  type: "confirm",
-  prompt: `Does shop.test sign in through ${origins.join(" and ")}? Its sign-in page sent the login you gave to those addresses, which are outside the website. Yes trusts them for signing in only and saves them with the tool, so its runs sign in the same way. No stops the build without publishing.`,
-});
-
-test("a local build whose sign-in sent the password to the site and the email to an identity service and an analytics service still asks one question naming both once the password went", async () => {
+test("a local build that stops after a check before the password screen fails it as nothing submitted and names no origin the email went to", async () => {
   test.info().annotations.push({
     type: "slow",
     description: "Original SDKs, Chromium, a scripted build with a two-screen host sign-in",
   });
   test.setTimeout(90_000);
   await withShop(async (shop, endpoint) => {
-    const identityOrigin = `https://${identityHost}:${shop.port}`;
-    const analyticsOrigin = `https://${analyticsHost}:${shop.port}`;
-    // The password goes to the shop without the identifier, so it never counts and no origin off
-    // the site received it. It went somewhere, so the host asks as it always did.
-    const { built, asked } = await buildNote(shop, endpoint, {
-      check: true,
-      trust: false,
-      path: "/identity-steps?password=site&analytics=on",
-      signIn: identitySteps,
-      stopAfterCheck: true,
-    });
-    const named = built.untrustedSignInOrigins ?? [];
-    expect([...named].sort()).toEqual([identityOrigin, analyticsOrigin].sort());
-    expect(asked.map(({ questions }) => questions)).toEqual([
-      [loginQuestion(shop.origin)],
-      [trustBothQuestion(named)],
-    ]);
-    expect(built).toMatchObject({ build: "incomplete", recoveryReason: "sign_in_unavailable" });
-    expect(built.artifact).toBeUndefined();
-    expect(built.summary).toContain(
-      `The sign-in sent the login to ${named.join(" and ")}, which are not trusted for sign-in. Answer yes when asked, or pass them in authenticationOrigins, and build again.`,
-    );
-  });
-});
-
-test("a local build that stops after a check before the password screen, which found the email sent to an identity service and an analytics service, asks nothing about them, names both and says to pass them up front", async () => {
-  test.info().annotations.push({
-    type: "slow",
-    description: "Original SDKs, Chromium, a scripted build with a two-screen host sign-in",
-  });
-  test.setTimeout(90_000);
-  await withShop(async (shop, endpoint) => {
-    const identityOrigin = `https://${identityHost}:${shop.port}`;
-    const analyticsOrigin = `https://${analyticsHost}:${shop.port}`;
-    // No password or code went anywhere, and a later build stopping at the same place would not
-    // ask either, so the summary does not say it will.
     const { built, last, asked } = await buildNote(shop, endpoint, {
       check: true,
-      trust: false,
       path: "/identity-steps?analytics=on",
       signIn: [identitySteps[0]],
       stopAfterCheck: true,
@@ -1372,12 +1171,9 @@ test("a local build that stops after a check before the password screen, which f
     );
     expect(built.build).toBe("incomplete");
     expect(built.artifact).toBeUndefined();
-    const named = built.untrustedSignInOrigins ?? [];
-    expect([...named].sort()).toEqual([identityOrigin, analyticsOrigin].sort());
-    expect(built.summary).toContain(
-      `The sign-in sent the login to ${named.join(" and ")}, which are not trusted for sign-in. Pass them in authenticationOrigins and build again.`,
-    );
-    expect(built.summary).not.toContain("Answer yes when asked");
+    expect(built.untrustedSignInOrigins).toBeUndefined();
+    expect(built.summary).not.toContain(identityHost);
+    expect(built.summary).not.toContain(analyticsHost);
   });
 });
 
@@ -1479,22 +1275,20 @@ const identityLoginSignIn = (shop: Shop) => ({
   entryUrl: `${shop.origin}/identity-login`,
 });
 
-test("a local read build whose example or explore ran after a sign-in no check verified publishes nothing without a recorded sign-in, and names the origin the login went to, checked or not", async () => {
+test("a local read build whose example or explore ran after a sign-in no check verified publishes nothing without a recorded sign-in, and names no origin the login went to", async () => {
   test.info().annotations.push({
     type: "slow",
     description: "Original SDKs, Chromium, two scripted read builds with host sign-ins",
   });
   test.setTimeout(120_000);
   await withShop(async (shop, endpoint) => {
-    const identityOrigin = `https://${identityHost}:${shop.port}`;
     const refusal = expect.objectContaining({
       status: "not_published",
       reason: "autofill_recipe_not_verified",
-      untrustedSignInOrigins: [identityOrigin],
     });
     // The example started over from a cleared browser, after a sign-in that sent the login and
     // that no check verified. It read the account signed out, and the read still fails closed.
-    // No check runs, so the host asks nothing, and the refusal and the outcome still name the
+    // No check runs, so the host asks nothing, and neither the refusal nor the outcome names the
     // origin the login went to.
     const example = await readBuild(shop, endpoint, [
       patch,
@@ -1505,7 +1299,8 @@ test("a local read build whose example or explore ran after a sign-in no check v
     expect(example.built.build, JSON.stringify(example.built)).not.toBe("published");
     expect(example.built.artifact).toBeUndefined();
     expect(objects(resultOf(example.last, "finish_build"))).toContainEqual(refusal);
-    expect(example.built.untrustedSignInOrigins).toEqual([identityOrigin]);
+    expect(JSON.stringify(resultOf(example.last, "finish_build"))).not.toContain(identityHost);
+    expect(example.built.untrustedSignInOrigins).toBeUndefined();
     // An explore keeps the page that sign-in left, which the site's own token exchange signed
     // in, so it read the account signed in, and the build still fails closed.
     const explore = await readBuild(shop, endpoint, [
@@ -1518,7 +1313,8 @@ test("a local read build whose example or explore ran after a sign-in no check v
     expect(explore.built.build, JSON.stringify(explore.built)).not.toBe("published");
     expect(explore.built.artifact).toBeUndefined();
     expect(objects(resultOf(explore.last, "finish_build"))).toContainEqual(refusal);
-    expect(explore.built.untrustedSignInOrigins).toEqual([identityOrigin]);
+    expect(JSON.stringify(resultOf(explore.last, "finish_build"))).not.toContain(identityHost);
+    expect(explore.built.untrustedSignInOrigins).toBeUndefined();
   });
 });
 
