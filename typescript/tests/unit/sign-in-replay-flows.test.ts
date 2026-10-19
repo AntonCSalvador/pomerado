@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Duration, Effect, Either } from "effect";
 import { expect, it } from "vitest";
 import type {
   AutofillInspection,
@@ -14,8 +14,7 @@ import {
   SignInRunFailed,
   type SignInReplayBrowser,
 } from "../../src/runtime/sign-in-replay.js";
-import type { SignInReplayTiming } from "../../src/runtime/sign-in-replay-steps.js";
-import { askingValueHooks } from "../../src/runtime/sign-in-values.js";
+import type { AutofillReplayTiming } from "../../src/runtime/autofill-replay-steps.js";
 import { localSignInLogin } from "../../src/standalone/authentication.js";
 
 // A run's sign-in through the screens a site may put after the login: a date of birth, a combined
@@ -228,12 +227,12 @@ const owner = (fake: ScriptedSite, answers: Answers = {}) => {
   return { ask, prompts };
 };
 
-const fastTiming: SignInReplayTiming = { stepWaitMs: 60, pollMs: 2 };
+const fastTiming: AutofillReplayTiming = { stepWaitMs: 60, pollMs: 2 };
 const signIn = (
   recipe: SignInRecipe,
   fake: ScriptedSite,
   answers: Answers = {},
-  timing: SignInReplayTiming = fastTiming,
+  timing: AutofillReplayTiming = fastTiming,
 ) => {
   const secrets = makeRunSecrets();
   const { ask, prompts } = owner(fake, answers);
@@ -244,8 +243,9 @@ const signIn = (
         entryUrl: `${origin}/${fake.state.page}`,
         browser: fake.browser,
         login: localSignInLogin({ ask, register: secrets.register, siteOrigin: origin }),
-        values: askingValueHooks({ ask, register: secrets.register, site, siteOrigin: origin }),
-        carries: secrets.carries,
+        ask,
+        secrets,
+        markerSettle: { within: Duration.millis(20), interval: Duration.millis(5) },
         site,
         siteOrigin: origin,
         timing,
@@ -725,7 +725,7 @@ it("waits again for a fieldless screen whose submit the page kept disabled, then
   expect(fake.filled("notice")).toHaveLength(2);
 });
 
-it("fails NeedsInput with advice to answer again when a security question changes before its answer is typed", async () => {
+it("fails RecipeFailed with the fill's refusal when a security question changes before its answer is typed", async () => {
   const questionStep = {
     page: `${origin}/question`,
     fields: [{ selector: "#answer", slot: "private_answer" as const, questionSelector: "#question" }],
@@ -752,9 +752,8 @@ it("fails NeedsInput with advice to answer again when a security question change
           },
   });
   const { result } = await signIn({ ...recipe(loginStep, questionStep), version: 3 }, fake);
-  expect(result).toEqual(Either.left(new SignInRunFailed({ code: "NeedsInput", reason: "question_changed" })));
-  expect(Either.isLeft(result) && result.left.message).toBe(
-    "The website changed its security question before the answer was typed, so nothing was typed and the run stopped before the tool ran. Run the tool again to answer the question it shows then.",
+  expect(result).toEqual(
+    Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "credential_target_refused" })),
   );
 });
 
@@ -809,7 +808,7 @@ const pageSentSite = () =>
           : { report: sentByPage("code") },
   });
 const codeRefusedPrompts = (prompts: readonly string[]) =>
-  prompts.filter((prompt) => prompt.includes("The site did not accept the last code"));
+  prompts.filter((prompt) => prompt.includes("The site refused the last code."));
 
 it("signs in through the recipe's check when a code screen sends its code itself", async () => {
   const fake = pageSentSite();
@@ -837,7 +836,7 @@ it("asks for one new code, saying the site refused the last, when a code screen 
   expect(codeRefusedPrompts(prompts)).toHaveLength(1);
 });
 
-it("never says the site refused a code that a code screen only seemed to send itself, as no request carried it", async () => {
+it("takes a code screen that sent its code itself and shows its box again as a refused code, though no request carried it", async () => {
   const fake = scriptedSite({
     entry: "login",
     screens: { login: loginScreen, code: ["#code"], account: [] },
@@ -849,11 +848,18 @@ it("never says the site refused a code that a code screen only seemed to send it
         : { report: sentByPage("code"), unheard: true },
   });
   const { result, prompts } = await signIn(recipe(loginStep, pageSentStep), fake);
-  expect(result).toEqual(
-    Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "sign_in_check_failed" })),
-  );
-  expect(steps(fake)).toEqual(["ask:missing_credentials", "fill:login", "ask:code", "fill:code"]);
-  expect(codeRefusedPrompts(prompts)).toEqual([]);
+  expect(result).toEqual(Either.left(new SignInRunFailed({ code: "CredentialsRejected", reason: "code" })));
+  // The box showing again refuses the code: it is asked again, saying so, and an answer that
+  // repeats the refused code is never filled.
+  expect(steps(fake)).toEqual([
+    "ask:missing_credentials",
+    "fill:login",
+    "ask:code",
+    "fill:code",
+    "ask:code",
+    "ask:code",
+  ]);
+  expect(codeRefusedPrompts(prompts)).toHaveLength(2);
 });
 
 it("never takes a code screen that sent its code itself for signed in while the site keeps showing it", async () => {

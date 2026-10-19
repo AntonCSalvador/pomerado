@@ -1621,6 +1621,20 @@ const loginRecipe = (origin: string) => ({
   ],
   signedIn: { selector: "#account" },
 });
+/**
+ * The one-screen sign-in with the error the shop shows under its form for a login it refused
+ * (`loginError`) as its rejection marker: only a marker proves the site rejected the password.
+ */
+const markedLoginRecipe = (origin: string) => {
+  const login = loginRecipe(origin);
+  return {
+    ...login,
+    steps: login.steps.map((step) => ({
+      ...step,
+      rejectedMarkers: [{ slot: "password", selector: "#login-error" }],
+    })),
+  };
+};
 /** Runs `artifact` once in a new session, answering with `ask`; its failure comes back. */
 const runInNewSession = (
   endpoint: string,
@@ -1676,12 +1690,13 @@ test("a run corrects a rejected password without sending it again, asking again 
   });
   test.setTimeout(120_000);
   await withShop(async (shop, endpoint) => {
+    shop.state.loginError = true;
     const wrong = `${shopAccount.password}-wrong`;
     const asked: InputRequest[] = [];
     const result = await runInNewSession(
       endpoint,
       loginAnswers(asked, [wrong, wrong, shopAccount.password]),
-      accountReader({ recipe: loginRecipe(shop.origin), entryUrl: `${shop.origin}/login` }),
+      accountReader({ recipe: markedLoginRecipe(shop.origin), entryUrl: `${shop.origin}/login` }),
       `${shop.origin}/account`,
     );
     expect(result).toEqual(Either.right({ signedIn: true }));
@@ -1868,10 +1883,10 @@ test("a write run whose sign-in lands on a workspace picker without the marker f
 });
 
 // The value-free check opens the recorded entry page, and a signed-in session lands on the picker:
-// none of the sign-in's screens shows, so the replay can't find its first one, with or without
-// the login, and the run fails before its operation, as it did before a missing marker could
-// read can't tell. Nothing more is typed.
-test("a second read run on the same session, whose sign-in page sends a signed-in visit to the workspace picker, fails before its operation without typing the login again", async () => {
+// none of the sign-in's screens shows, and the page left them and the entry page and stayed put
+// without the marker, so a read's sign-in ends there as can't tell and its operation runs.
+// Nothing more is typed or asked.
+test("a second read run on the same session, whose sign-in page sends a signed-in visit to the workspace picker, carries on from the picker without typing the login again", async () => {
   test.info().annotations.push({
     type: "slow",
     description: "Chromium and two runs whose sign-ins wait out the recorded marker on the picker",
@@ -1906,12 +1921,10 @@ test("a second read run on the same session, whose sign-in page sends a signed-i
     expect(first).toEqual(
       Either.right({ account: shopAccount.username, workspace: shopWorkspaces[0] }),
     );
-    expect(Either.isLeft(second) ? second.left : second).toMatchObject({
-      _tag: "SignInRunFailed",
-      code: "RecipeFailed",
-      reason: "not_found",
-    });
-    expect(reasons(asked)).toEqual(["missing_credentials", "code", "missing_credentials"]);
+    expect(second).toEqual(
+      Either.right({ account: shopAccount.username, workspace: shopWorkspaces[1] }),
+    );
+    expect(reasons(asked)).toEqual(["missing_credentials", "code"]);
     expect(shop.state.loginPosts).toBe(1);
     expect(shop.state.codePosts).toBe(1);
   });

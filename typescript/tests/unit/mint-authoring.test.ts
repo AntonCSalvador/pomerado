@@ -50,7 +50,6 @@ it("loads modular skill references and keeps auth discovery outside managed logi
     "auth",
     "testing",
     "pagination",
-    "records",
     "forms",
     "writes",
     "cart",
@@ -843,13 +842,12 @@ it("renders the pinned standalone authoring", async () => {
     ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
     ["8d5ed87ae2208d1efa175ff627a1660a3943a00263a1437fc3688a1b6340604e", "testing"],
     ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
-    ["f0dd745f7e9b94173bf0ccbfde6c2fa4aab49c6ac84641f84764eae9e11c9f2c", "records"],
     ["12b198d6503ef35853f9ff42aefefe641dc3b59c8b2a3e5a1424aabb4f6af2f4", "forms"],
     ["f17ddc96cd999764d5a203416b2318b43366bcbc7b3ae3e6912a4a35a720c2e4", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["e425e194933160e1094a5d5cecd917bcff31015ce6f506d4bda8383797aa6bad", "caller-input"],
     ["9ca946a431fb56aa842d5c8d94e44077fdfca6a7f7adb1b8a3085066ac85cc42", "publication"],
-    ["d037500d728a1a76b771a7d98800a6827c49aa73d16a11ed235416e3bda0c175", "workspace/AGENTS.md"],
+    ["d627f425dc5a01878dd0b6c2d03ec863a0e61edeba5b0c69a19ebcd695dff5cf", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
