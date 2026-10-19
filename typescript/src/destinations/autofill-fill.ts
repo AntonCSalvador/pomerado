@@ -325,6 +325,12 @@ interface FillInput {
    * with no submit gives the page as long, at most `pageSendMs`, to send what was typed itself.
    */
   readonly settleMs?: number;
+  /**
+   * Whether the submit call reads the page's alerts just before its click, so its report counts
+   * the ones after it that are new (`newAlerts`). The read waits for every frame, so only a host
+   * that reads the count asks; a read that takes longer than `alertsBeforeMs` counts nothing.
+   */
+  readonly countNewAlerts?: boolean;
 }
 
 /**
@@ -731,6 +737,7 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
             ? null
             : configuredOrigins(input.inspection),
         codeBoxes: codeBoxes(step, input.values),
+        alertsBefore: input.countNewAlerts === true,
       }),
     );
     if (clicked._tag === "Left")

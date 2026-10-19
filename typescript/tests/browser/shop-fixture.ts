@@ -416,8 +416,10 @@ ${next === null ? "" : `<a rel="next" href="${next}">Next</a>`}`,
   // The sign-in's query goes on to the password screen: `hidden=N` puts N hidden text fields
   // ahead of its own field, `pad=N` puts N spaces ahead of the identifier its label echoes in
   // place of "Password for", `tag` marks its help links, so a test finds its own screen,
-  // `echo=none` shows the identifier only in the hidden field, and `stash=password` puts the
-  // account's password in its form's action, as page code that kept a typed value could.
+  // `echo=none` shows the identifier only in the hidden field, `stash=password` puts the
+  // account's password in its form's action, as page code that kept a typed value could, and
+  // `alert=1` shows an error naming the typed identifier beside a hidden one, and `alert=class` an
+  // error known only by its class and id.
   const queryOf = (request: IncomingMessage) =>
     new URL(request.url ?? "/", "https://www.shop.test").searchParams;
   const identifierScreen: Route = (request, response) =>
@@ -443,13 +445,18 @@ ${next === null ? "" : `<a rel="next" href="${next}">Next</a>`}`,
       { length: Number(queryOf(request).get("hidden") ?? 0) },
       (_, index) => `<input name="extra${index}" style="display:none">`,
     ).join("");
+    const alerts: Readonly<Record<string, string>> = {
+      "1": `<div role="alert">Check the password for ${typed}</div><p class="error-message" style="display:none">Hidden error</p>`,
+      class: `<div id="login_error" class="login_form__error">Check the password for ${typed}</div>`,
+    };
+    const alert = alerts[queryOf(request).get("alert") ?? ""] ?? "";
     const action =
       queryOf(request).get("stash") === "password"
         ? `/sign-in/session?next=${encodeURIComponent(shopAccount.password)}`
         : "/sign-in/session";
     html(
       response,
-      `<title>Password</title>${echo ? `<p>Signing in as ${typed}</p>` : ""}<form method="post" action="${action}"><input type="hidden" name="user" value="${typed}">${hidden}<label>${label}<input id="password" name="password" type="password" required placeholder="${echo ? typed : ""}"></label><input id="otp" style="display:none" aria-label="Code"><button id="sign-in">Sign in</button><button id="trouble" disabled>Trouble signing in</button></form><nav>${links}</nav>`,
+      `<title>Password</title>${echo ? `<p>Signing in as ${typed}</p>` : ""}${alert}<form method="post" action="${action}"><input type="hidden" name="user" value="${typed}">${hidden}<label>${label}<input id="password" name="password" type="password" required placeholder="${echo ? typed : ""}"></label><input id="otp" style="display:none" aria-label="Code"><button id="sign-in">Sign in</button><button id="trouble" disabled>Trouble signing in</button></form><nav>${links}</nav>`,
     );
   };
   // The password screen's form posts here: the shop's account signs in, any other is refused.
