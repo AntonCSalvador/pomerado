@@ -357,6 +357,19 @@ describe("confirms that name the run's record", () => {
       },
     },
     {
+      case: "a two-letter code the message only spells as words",
+      build: {
+        message: "Save changes in this form? Press OK to continue.",
+        input: { state: "IN" },
+      },
+      run: { message: "Save changes in this form? Press OK to continue.", input: { state: "OK" } },
+    },
+    {
+      case: "a three-letter code the message also spells in another case",
+      build: { message: "Ship to CAN? You can change it later.", input: { country: "CAN" } },
+      run: { message: "Ship to USA? You can change it later.", input: { country: "USA" } },
+    },
+    {
       case: "the same value in two fields",
       build: {
         message: "Merge Ann Lee into Ann Lee?",
@@ -441,6 +454,21 @@ describe("confirms that name the run's record", () => {
       case: "a one-character value, kept as page text",
       build: { message: "Add 1 seat to plan B?", input: { seats: "1" } },
       run: { message: "Add 2 seat to plan B?", input: { seats: "2" } },
+    },
+    {
+      case: "wording a two-letter code would have spelled",
+      build: { message: "Cancel or keep the plan?", input: { state: "OR" } },
+      run: { message: "Cancel and keep the plan?", input: { state: "AND" } },
+    },
+    {
+      case: "wording a three-letter code spells in another case",
+      build: { message: "You can undo it?", input: { country: "CAN" } },
+      run: { message: "You may undo it?", input: { country: "may" } },
+    },
+    {
+      case: "an amount in the page query",
+      build: { message: "Approve $50.00?", url: "https://records.example/pay?amount=50.00" },
+      run: { message: "Approve $75.00?", url: "https://records.example/pay?amount=75.00" },
     },
     {
       case: "a value inside a longer word or number",

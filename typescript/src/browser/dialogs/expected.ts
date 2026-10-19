@@ -33,11 +33,19 @@ type Slot = readonly [source: string, value: string];
  */
 export type ConfirmTemplate = readonly (string | readonly string[])[];
 
+/** A record identifier holds a digit, such as an order number or a generated name. */
+const identifierPattern = /\p{N}/u;
+/** A query value such as "50.00" or "1,200" is an amount the site set, not a record. */
+const amountPattern = /^[\p{N}\s]*[.,][\p{N}.,\s]*$/u;
+
 /**
- * A value shorter than this stays page text, so a one-character value such as "1" or "a" never
+ * The shortest value that becomes a slot: two characters when it holds a digit, such as "12",
+ * three otherwise. A shorter value stays page text, so "1", "a" or a code such as "OR" never
  * turns a word or number the site wrote into a placeholder.
  */
-const slotValueMinimum = 2;
+const slotValueMinimum = (value: string) => (identifierPattern.test(value) ? 2 : 3);
+/** A value shorter than this matches only in its own letter case, so "Can" never matches "can". */
+const foldedValueMinimum = 4;
 /** How many values of a run's input a confirm's template reads, in order. */
 const inputSlotLimit = 256;
 const inputDepthLimit = 16;
@@ -69,8 +77,6 @@ const decoded = (part: string) => {
     return part;
   }
 };
-/** A record identifier holds a digit, such as an order number or a generated name. */
-const identifierPattern = /\p{N}/u;
 
 /** The page URL's path segments and query values that look like the record it shows. */
 const pageSlots = (url: URL): Slot[] => {
@@ -83,7 +89,7 @@ const pageSlots = (url: URL): Slot[] => {
   for (const [name, value] of url.searchParams) {
     if (named.has(name)) continue;
     named.add(name);
-    if (identifierPattern.test(value))
+    if (identifierPattern.test(value) && !amountPattern.test(value))
       slots.push([`page/query/${encodeURIComponent(name)}`, value]);
   }
   return slots;
@@ -92,27 +98,33 @@ const pageSlots = (url: URL): Slot[] => {
 const wordCharacter = /[\p{L}\p{M}\p{N}_]/u;
 const escapedPattern = (value: string) => value.replace(/[\\^$.*+?()[\]{}|/]/gu, "\\$&");
 /** A value matches only as a whole token: never inside a longer word or number. */
-const tokenPattern = (value: string) => {
+const tokenPattern = (value: string, folded: boolean) => {
   const characters = [...value];
   return (
     `${wordCharacter.test(characters.at(0) ?? "") ? "(?<![\\p{L}\\p{M}\\p{N}_])" : ""}` +
-    escapedPattern(value) +
+    (folded ? `(?i:${escapedPattern(value)})` : escapedPattern(value)) +
     `${wordCharacter.test(characters.at(-1) ?? "") ? "(?![\\p{L}\\p{M}\\p{N}_])" : ""}`
   );
 };
 
 /**
- * The message with each whole-token, case-insensitive occurrence of a slot's value replaced by
- * the sources that hold it, longest value first, or undefined when it names none. Values are
- * normalized as the message is.
+ * The message with each whole-token occurrence of a slot's value replaced by the sources that
+ * hold it, longest value first, or undefined when it names none. Values are normalized as the
+ * message is, and one of four or more characters matches in any letter case.
  */
 const confirmTemplate = (message: string, slots: readonly Slot[]): ConfirmTemplate | undefined => {
-  const groups = new Map<string, { readonly value: string; readonly sources: Set<string> }>();
+  const groups = new Map<
+    string,
+    { readonly value: string; readonly folded: boolean; readonly sources: Set<string> }
+  >();
   for (const [source, raw] of slots) {
+    // Whitespace collapses, but never a value far longer than any message to a short one.
+    if (raw.length > messageLimit * 4) continue;
     const value = normalizedMessage(raw);
-    if (value.length < slotValueMinimum || value.length > message.length) continue;
-    const key = value.toLowerCase();
-    const group = groups.get(key) ?? { value, sources: new Set<string>() };
+    if (value.length < slotValueMinimum(value) || value.length > message.length) continue;
+    const folded = value.length >= foldedValueMinimum;
+    const key = folded ? `folded:${value.toLowerCase()}` : `exact:${value}`;
+    const group = groups.get(key) ?? { value, folded, sources: new Set<string>() };
     group.sources.add(source);
     groups.set(key, group);
   }
@@ -120,12 +132,13 @@ const confirmTemplate = (message: string, slots: readonly Slot[]): ConfirmTempla
     .sort(([left, a], [right, b]) => b.value.length - a.value.length || (left < right ? -1 : 1))
     .map(([, group]) => ({
       value: group.value,
+      folded: group.folded,
       sources: [...group.sources].sort(),
     }));
   if (ordered.length === 0) return undefined;
   const pattern = new RegExp(
-    ordered.map(({ value }) => `(${tokenPattern(value)})`).join("|"),
-    "giu",
+    ordered.map(({ value, folded }) => `(${tokenPattern(value, folded)})`).join("|"),
+    "gu",
   );
   const template: (string | readonly string[])[] = [];
   let end = 0;
