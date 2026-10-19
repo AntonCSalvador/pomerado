@@ -61,10 +61,13 @@ the source files, never captures.
   `testInput`, on a supplied facility: `liveBrowser`,
   `savedDOM`, `savedHTTP` or `pureFiles`. Every execution receives fresh Guardian review; no
   per-click review is needed. When the host-bound input is empty (`{}`), write the tool's
-  input from the request and the owner's answers and pass it as `exampleInput` (JSON text) on
+  input from the request and the owner's answers, with dates normalized (10/4 is the next
+  October 4, as `2026-10-04`), and pass it as `exampleInput` (JSON text) on
   a read's example, or on each write act step that needs it (the first act step that passes it
   fixes it, and later steps repeat it or omit it and run it); each of its keys must be a schema
-  input, required where the request needs it, and publication decodes that input.
+  input, required where the request needs it, and publication decodes that input and returns a
+  key the schema lacks as an `example_input` input feedback. An optional input plus a declared
+  question is only for a value the request leaves open.
 - `live_tests` runs a read's live tests when the host offers it: the few combined cases you
   design in `test/cases.json` from what you saw on the site, and every result, run in batches on
   reset pages, on `src/tool.mjs` and on `src/tool-http.mjs`, each version keeping its own
@@ -294,22 +297,14 @@ and so is asking whether to support or leave out a capability the site offers (i
 a design question, not a request for permission.
 On a write, you never assume a missing business choice: ask about each costly choice actually
 observed on the site, one that changes what the caller buys or pays or whether the action can be
-cancelled or refunded (paid add-ons and pre-selected paid options within the tool's purpose, a
-rate, fare or plan tier, a refundable or non-refundable option, shipping speed, saved payment and
-the delivery address), and about any other optional field
-only when the request's purpose clearly depends on its value (an unset optional input keeps the
-page's default; it is still a tool input). A control with exactly one possible value (a select or radio group with a single option),
-or one the input or an earlier answer already settles, is no choice: never ask about it. An
-add-on toggle, a pre-selected checkbox or a lone saved payment method or address is still a
-choice to ask about. A paid upsell outside the tool's purpose, such as a membership offered at
-checkout, is declined without asking, and never accepted without an input the caller set. A safety default (core skill) is neither: never ask about it, and the script turns it off. Read the path's options with read-only exploration where you can and settle them before
-the first act step where possible; a question during the session waits in place. Take a site default only for a choice that is not a
-credential, not a write and easy to reverse, and list it in `finish_build` `assumptions`. On a write, prefer keeping the value the page already shows in an optional field that adds no cost over asking the caller to confirm or correct it: list it in `assumptions`, and it stays an optional input. Paid add-ons, pre-selected paid options, saved payment and the delivery address are still asked, as above. A full
-new login goes through execute purpose `authenticate`: an SMS, email or authenticator code that
-is part of signing in is a `code` field of its `signInStep`, which the host fills or asks the
-caller for, so never ask for it with `request_input`. The standalone code path, a
-`request_input` secret question, is only for a later protected action after sign-in, when the
-site asks for another code to confirm it; `authenticate` is never started just for such a code. You may ask after live
+cancelled or refunded, and about any other optional field only when the request's purpose
+clearly depends on its value, as .agents/writes/SKILL.md ("Before the session") says. A safety
+default, a preselected option whose only effect is to share the caller's data with another
+company, opt into tracking or sign the caller up for marketing, is neither: never an input or a
+question, and the tool turns it off (.agents/writes/SKILL.md, "Safety defaults"). Take a site
+default only for a choice that is not a credential, not a write and easy to reverse, and list it
+in `finish_build` `assumptions`. A code that is part of signing in is a `code` field of the
+`authenticate` step, never a `request_input` question (.agents/auth/SKILL.md). You may ask after live
 execution has closed or while a write's outcome is uncertain; after the answer, verify the
 current state before writing again.
 
@@ -318,17 +313,11 @@ example or step enters comes from the request, the business input, an answer or 
 choice the input leaves open is asked, or kept at the page's default where the paragraph above
 allows; a default kept unasked stays an optional input that keeps it. An answer that settles how
 the tool behaves, such as a sort order, a filter, which kind of record a write creates or whether
-a save runs the site's automation, is the tool's default, never a value every caller must send:
-when a caller could reasonably want another value, make it an optional input whose default is the
-answered value (`defaultedInput`, .agents/core/SKILL.md) and say so in its description; keep it
-fixed, with no input, only where varying it would be unsafe or meaningless. Never make it a
-required input or a question the tool asks when it runs. An answer that gives only this run's
-value, such as which customer or date, is this run's input. A choice that changes what the
-caller buys or pays, or whether the action can be cancelled or refunded, such as a paid add-on, a
-rate or plan tier, shipping speed, the payment method or the delivery address, stays a required
-input or a declared question for every caller: an answer may default it only to declining, off
-or the option that adds no cost, never to accepting, keeping or choosing one
-(.agents/core/SKILL.md, .agents/writes/SKILL.md). No request or answer authorizes made-up values:
+a save runs the site's automation, is the tool's default (`defaultedInput`), never a required
+input or a question the tool asks when it runs (.agents/core/SKILL.md, the input schema). An
+answer that gives only this run's value, such as which customer or date, is this run's input. A
+costly choice stays a required input or a declared question for every caller, and an answer may
+only make declining it its default (.agents/writes/SKILL.md). No request or answer authorizes made-up values:
 words such as synthetic, sample or test data settle no value or choice. A caller that wants
 invented values supplies them itself, as its answers to your questions. Guardian denies a live
 step that types or submits a value none of those supplied, naming the field. Signed out,

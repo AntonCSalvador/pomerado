@@ -144,8 +144,7 @@ request and the flow, never from one caller's account or example.
 
 A value the request's text supplies, such as a code, a quantity or a choice, is the build's to
 use even when the caller's structured input is empty: pass the request's values as
-`exampleInput` where the host takes one (a read's example, or each write act step that needs
-it), never as a build-time question. Decide from the request and the site which inputs are
+`exampleInput`, as `AGENTS.md` says (`execute`), never as a build-time question. Decide from the request and the site which inputs are
 required. An optional input plus a declared question the tool asks before any effect is only for
 a value the request genuinely leaves open; never make a required field optional with nothing
 that asks. A choice the request or the owner's answer settled as how the tool behaves, such as
@@ -154,12 +153,8 @@ input or a question at run time. When a caller could reasonably want another val
 with `defaultedInput(schema, answeredValue)` from the runtime, an optional input whose published
 schema shows that default and whose run gets it when the caller leaves it out, and say in its
 description that it defaults to what the owner chose; keep it fixed with no input only where
-varying it would be unsafe or meaningless. A choice that changes what the caller buys or pays,
-or whether the action can be cancelled or refunded, such as a paid add-on, a rate, fare or plan
-tier, a refundable option, shipping speed, how much of a balance to pay, the payment method or
-the delivery address, never takes one owner's answer as its default: it stays a required input
-or a declared question, and only declining it, turning it off or the option that adds no cost
-and keeps the action cancellable may be its optional input's default. A write asks
+varying it would be unsafe or meaningless. A costly choice never takes one owner's answer as
+its default (writes skill, "Compose and publish"). A write asks
 its questions before its first save wherever the page lets it, so an unanswered question never
 leaves a partial save on the site (caller-input skill). An input that tailors the answer on a read is the
 exception: it is optional unless the task can't run without it (below).
@@ -213,17 +208,8 @@ exception: it is optional unless the task can't run without it (below).
   accents (Abaca for Abacá), a city alone or with its state and country, or a company with
   or without Ltd. or Inc. Never require an exact match.
   When more than one option matches, list them for the caller instead of picking one.
-- On a write, every choice the session met is an input: each option on the path,
-  add-ons and pre-selected defaults included, except one the request or an answer settled,
-  which is the tool's default (above). A costly choice, one that changes what the caller
-  buys or pays or whether the action can be cancelled or refunded (a paid add-on or
-  pre-selected paid option, a rate, fare or plan tier, a refundable or non-refundable option,
-  shipping speed, a saved payment or the delivery address), is never left to the page's
-  default: make it a required input or ask about it (`AGENTS.md`, "Try hard, then ask"), and
-  an optional input for it may default only to declining it, turning it off or the option
-  that adds no cost. Any other option is an optional input (a seat), required only when the
-  site requires a choice and nothing settled it; an unset optional input keeps the page's
-  default.
+- On a write, every choice the session met is an input, costly choices included, as the
+  writes skill says ("Compose and publish").
 - Never make an account-specific value (a passenger, loyalty number, saved card or
   address, account or member ID) an enum member, example or default in a public
   schema. Take it as a free-form input when the caller can name it, such as a loyalty
@@ -235,31 +221,12 @@ exception: it is optional unless the task can't run without it (below).
   required fields, array lengths, numeric bounds or future values: derive those from
   the request and reviewed evidence.
 - Never hard-code a value the caller could vary: it comes from the input, never a literal
-  in source, a schema default or the definition. A good tool exposes the options its
-  purpose calls for, not only the ones the request names: record every control the flow
-  offers that narrows, orders or configures what the tool returns as an optional input wired
-  to its control, such as cabin class (economy or first) on a flight search, even when the
-  request never mentions it, except a choice that was declined (below). Open collapsed
-  groups, drawers and "more" links before you decide what the page offers: a collapsed group
-  is not an absent one. Leave out controls
-  unrelated to the purpose, such as a language switch or a newsletter opt-in on a search.
-  Record such a field as an optional input whether or not you ask about it, since callers of
-  the tool can set it. Ask about one only as `AGENTS.md` ("Try hard, then ask") allows; left
-  unset, it keeps the page's default.
-- Turn safety defaults off. A preselected option whose only effect is to share the caller's
-  data with another company, such as a partner comparison that opens the search on another
-  site, to opt into tracking beyond what the site needs, or to sign the caller up for marketing
-  email, is never an input and never a question. The tool turns it off on every run before the
-  submit it affects, and reads back that it is off. When the site won't submit with it off,
-  leave it on and say so in the description. Name the ones the tool turns off in the
-  description in general words, such as "turns off partner comparisons". A repair keeps each
-  one the registered source turns off.
-- Find these boxes where you fill the form, unlabeled ones included. List every checkbox,
-  switch and toggle in and near the form by role and by `input[type=checkbox]`, never only by
-  label, with its checked state, its nearest text, its group's heading and the alt text or
-  title of any logo beside it. A preselected box whose group names another company or shows its
-  logo is a partner box. After a probe's first submit, check whether a new tab opened or the
-  page left the site. If one did, a box you missed sent it there.
+  in source, a schema default or the definition. Record every control the flow offers that
+  narrows, orders or configures what the tool returns as an optional input wired to its
+  control, even when the request never mentions it, except a choice that was declined
+  (below), as the search skill's "Find the filters" says.
+- Turn safety defaults off. They are never an input or a question (writes skill, "Safety
+  defaults").
 - Inputs that tailor the answer. Many sites tailor what they show to facts about the visitor,
   not just what they searched for: where they are (ZIP, address, store, delivery or pickup),
   what they have (a vehicle, a device), or who they are (a membership or rate type, an insurance
@@ -317,17 +284,7 @@ exception: it is optional unless the task can't run without it (below).
   location, no store, skip a filter, don't sign in), is not part of the tool for any caller:
   never offer it as an input, never set it in the example or a test, and never put it in
   `exampleInput`. Note it in coverage. That covers a step the tool then never takes. A costly
-  choice a write still meets on its path, one that changes what the caller buys or pays or
-  whether the action can be cancelled or refunded (a paid add-on, a rate, fare or plan tier, a
-  refundable option, shipping speed, the payment method or the address), is never settled this
-  way: it stays an input or a run-time question (writes skill), whose default may only decline it.
-- When the caller input is empty (`{}`), write the tool's input from the request and the
-  owner's answers, with dates normalized (10/4 is the next October 4, as `2026-10-04`), and
-  pass it as `exampleInput`: on a read's example, or on each write act step that needs it. The
-  first act step that passes it fixes it, and later steps repeat it unchanged or omit it. Make
-  each of its keys a schema input, required where the request needs it; publication returns a
-  key the schema lacks as an `example_input` input feedback. An optional input plus a declared
-  question is only for a value the request leaves open.
+  choice a write still meets on its path is never settled this way (writes skill).
 - Callers and Guardian see the JSON Schema form, so write every constraint in one it
   shows: a `Schema.filter` shows nothing, its description included, so use
   `Schema.NonEmptyTrimmedString`, `pattern`, `minLength`, `Int`, `between` or `Literal`. Type

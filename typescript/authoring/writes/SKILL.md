@@ -53,18 +53,25 @@ Sign in first when the site needs it, and always for a cart or checkout
 read-only, for example to read the first page's options, but never fill, select,
 add, save or submit anything there.
 
-Read the path's options with read-only exploration where you can, then ask with
+Read the path's options with read-only exploration where you can, and settle them before the
+first `act` step where possible: ask with
 `request_input` about the ones the caller's input does not settle, as `AGENTS.md` ("Try
 hard, then ask") says: each costly choice you saw, one that changes what the caller buys or
 pays or whether the action can be cancelled or refunded (each paid add-on and pre-selected paid
 option within the tool's purpose, a rate, fare or plan tier, a refundable or non-refundable
-option, shipping speed, the payment method and the delivery address), and any other option only when
+option, shipping speed, how much of a balance to pay, the payment method and the delivery
+address), and any other option only when
 the request's purpose clearly depends on it. An unasked optional field keeps the page's
-default and is still an optional input of the script. Ask only about options the site
-actually shows. Never keep, clear, accept or decline one of those unasked. A paid upsell
+default and is still an optional input of the script. Prefer keeping the value the page
+already shows in an optional field that adds no cost over asking the caller to confirm or
+correct it, and list it in `finish_build` `assumptions`. Ask only about options the site
+actually shows. A control with exactly one possible value (a select or radio group with a
+single option), or one the input or an earlier answer already settles, is no choice: never ask
+about it. An add-on toggle, a pre-selected checkbox or a lone saved payment method or address
+is still a choice to ask about. Never keep, clear, accept or decline one of those unasked. A paid upsell
 outside the tool's purpose, such as a membership, subscription or trial offered during a
 checkout, is not a question: the script declines it, and never accepts one without an input
-the caller set for it. A safety default (core skill) is
+the caller set for it. A safety default (below) is
 neither: never ask about it, and the script turns it off. Credentials never go through a
 question; the host's protected form owns them.
 
@@ -111,6 +118,26 @@ During the session:
   that exists only on the page mid-flow, such as a seat on the flight just chosen, is
   a declared `ask` in the next `act` step's script (the caller-input skill). An
   answered question settles the option. Check the page again before continuing.
+
+## Safety defaults
+
+Turn safety defaults off, on a read or a write. A preselected option whose only effect is to
+share the caller's data with another company, such as a partner comparison that opens the search
+on another site, to opt into tracking beyond what the site needs, or to sign the caller up for
+marketing email, is never an input and never a question. The tool turns it off on every run
+before the submit it affects, and reads back that it is off. When the site won't submit with it
+off, leave it on and say so in the description. Name the ones the tool turns off in the
+description in general words, such as "turns off partner comparisons". A repair keeps each one
+the registered source turns off. Never turn one on yourself, in a form or a request body. For a
+consent flag the site sets for the user in a request body, send the value read at run time or
+leave the field out.
+
+Find these boxes where you fill the form, unlabeled ones included. List every checkbox, switch
+and toggle in and near the form by role and by `input[type=checkbox]`, never only by label, with
+its checked state, its nearest text, its group's heading and the alt text or title of any logo
+beside it. A preselected box whose group names another company or shows its logo is a partner
+box. After a probe's first submit, check whether a new tab opened or the page left the site. If
+one did, a box you missed sent it there.
 
 ## The session
 
@@ -322,14 +349,17 @@ explicit, so the script never keeps, clears, accepts or declines one the input l
 asks with a declared question before the commit mark (the caller-input skill), offering a
 saved payment or address as an account-specific choice. The same holds for any choice that
 changes what the caller buys or pays, or whether the action can be cancelled or refunded, such
-as a rate, fare or plan tier, a refundable option or shipping speed (core skill). An owner's
-answer may make declining such an option, turning it off or the option that adds no cost the
-default of its optional input, never accepting, keeping or choosing one. Choosing the address and payment is
+as a rate, fare or plan tier, a refundable option, shipping speed or how much of a balance to pay. An owner's
+answer may make declining such an option, turning it off or the option that adds no cost and
+keeps the action cancellable the default of its optional input, never accepting, keeping or
+choosing one. Choosing the address and payment is
 part of a checkout's job, so the page's pre-selected one is never used silently. The request
 and the owner's answers settle such a choice for the session only: the published tool serves
-other callers, so it takes the choice as an input or asks, never hard-codes the build's answer.
+other callers, so it takes the choice as an input or asks, never hard-codes the build's answer,
+and never leaves it to the page's default. A costly choice the request, the caller or the owner
+declined still stays an input or a declared question, whose default may only decline it.
 An out-of-scope paid upsell is declined, as above. A safety default
-(core skill) is neither: never ask about it, and the script turns it off. An
+(above) is neither: never ask about it, and the script turns it off. An
 account-specific value, such as a passenger, loyalty number, saved card, address or
 account ID, is a free-form input, never an enum member, example or default in the
 public schema (core's input schema rules).
