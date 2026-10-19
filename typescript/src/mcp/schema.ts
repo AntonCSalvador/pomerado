@@ -101,3 +101,40 @@ export const siteInput = (name: string, input: CanonicalSchema) => {
     description: `${own}${inputSummary(described(input))}`,
   };
 };
+
+/** A schema without its description. */
+const undescribed = ({ description: _description, ...schema }: Json) => schema;
+/**
+ * The tool's input as its call nests it: `siteInput`, whose description adds a summary of the
+ * input's fields to its own, without that summary when the fields are listed right beside it.
+ * There every part of it repeats a field's own name, type, required flag or description, and the
+ * repeat can push a long tool past the schema size some MCP clients accept before they drop every
+ * description. An input with no fields of its own here, such as one that is a reference or takes
+ * no fields, keeps `siteInput`'s description.
+ */
+export const nestedInput = (name: string, input: CanonicalSchema): Json => {
+  const nested = siteInput(name, input);
+  const fields = input.schema["properties"];
+  if (!isRecord(fields) || Object.keys(fields).length === 0) return nested;
+  const own = input.schema["description"];
+  return typeof own === "string" ? { ...nested, description: own } : undescribed(nested);
+};
+
+/** The MCP hints of a tool that may change a website. */
+export const writeHints = {
+  readOnlyHint: false,
+  openWorldHint: true,
+  idempotentHint: false,
+  destructiveHint: true,
+} as const;
+
+/**
+ * The MCP hints of a tool that only reads a website: clients may run it without asking and run
+ * several at once. Signing in changes nothing on the website the hint describes.
+ */
+export const readHints = {
+  readOnlyHint: true,
+  openWorldHint: true,
+  idempotentHint: true,
+  destructiveHint: false,
+} as const;

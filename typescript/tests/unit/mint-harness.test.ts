@@ -801,6 +801,149 @@ it("marks the decision ledger partial after a takeover from a checkpoint without
   expect(ledgers).toEqual([{ partial: true, denials: [], testFailures: [] }]);
 });
 
+/**
+ * The reply to a takeover's host_refused report after its predecessor's publication was refused by
+ * a host check, from the predecessor's checkpoint as `edit` leaves it.
+ */
+const hostRefusedAfterTakeover = async (edit: (checkpoint: Record<string, unknown>) => void) => {
+  let capture: (() => MintHarnessSnapshot) | undefined;
+  const first = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        yield* turn.actions.execute(execution);
+        yield* turn.actions.finish(publication);
+      }),
+    {
+      publish: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "PublicationUnavailable",
+            reason: "autofill_recipe_not_verified",
+          }),
+        ),
+      agentRecovery: {
+        bindHarness: (bound) =>
+          Effect.sync(() => {
+            capture = bound;
+          }),
+        save: () => Effect.void,
+      },
+    },
+  );
+  await first.run();
+  const checkpoint = JSON.parse(JSON.stringify(capture?.())) as Record<string, unknown>;
+  edit(checkpoint);
+  const harness = Schema.decodeUnknownSync(MintHarnessSnapshot)(checkpoint);
+  const replies: unknown[] = [];
+  const takeover = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        const reportBlocked = turn.actions.reportBlocked;
+        if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+        replies.push(
+          JSON.parse(
+            yield* reportBlocked({
+              reason: "host_refused",
+              explanation: "Publication's sign-in check failed on a new browser.",
+            }),
+          ),
+        );
+      }),
+    { agentRecovery: { initial: { agent: freshAgent, harness }, save: () => Effect.void } },
+  );
+  await takeover.run();
+  return replies;
+};
+
+// A host check's refusal is the host's own record, so a takeover keeps it; a checkpoint from an
+// older worker, which kept none, grants no host_refused ending.
+it.each([
+  { checkpoint: "this worker's", edit: () => undefined, status: "blocked" },
+  {
+    checkpoint: "an older worker's",
+    edit: (checkpoint: Record<string, unknown>) => {
+      delete checkpoint["hostRefused"];
+    },
+    status: "blocked_refused",
+  },
+])("keeps a host refusal across a takeover from $checkpoint checkpoint", async ({ edit, status }) => {
+  expect(await hostRefusedAfterTakeover(edit)).toEqual([expect.objectContaining({ status })]);
+});
+
+/**
+ * The reply to a takeover's site_declined report after its predecessor sent a sign-in that nothing
+ * confirmed, from the predecessor's checkpoint as `edit` leaves it.
+ */
+const declinedAfterUnconfirmedSignIn = async (
+  edit: (checkpoint: Record<string, unknown>) => void,
+) => {
+  let capture: (() => MintHarnessSnapshot) | undefined;
+  const first = await fixture(
+    (turn) => turn.actions.execute({ ...execution, purpose: "authenticate", target: "liveBrowser" }),
+    {
+      reviewAndExecute: () =>
+        Effect.succeed({
+          executionId: "sign_in_screen",
+          status: "completed" as const,
+          effect: "possible" as const,
+          resultRef: "screen_result",
+          observations: { step: { outcome: "filled", submit: "clicked" } },
+        }),
+      agentRecovery: {
+        bindHarness: (bound) =>
+          Effect.sync(() => {
+            capture = bound;
+          }),
+        save: () => Effect.void,
+      },
+    },
+  );
+  await first.run();
+  const checkpoint = JSON.parse(JSON.stringify(capture?.())) as Record<string, unknown>;
+  edit(checkpoint);
+  const harness = Schema.decodeUnknownSync(MintHarnessSnapshot)(checkpoint);
+  const replies: unknown[] = [];
+  const takeover = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        const reportBlocked = turn.actions.reportBlocked;
+        if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+        replies.push(
+          JSON.parse(
+            yield* reportBlocked({
+              reason: "site_declined",
+              explanation: "The site kept showing its sign-in screen.",
+            }),
+          ),
+        );
+      }),
+    { agentRecovery: { initial: { agent: freshAgent, harness }, save: () => Effect.void } },
+  );
+  await takeover.run();
+  return replies;
+};
+
+// The sign-in a predecessor sent and nothing confirmed is still unconfirmed after a takeover, so
+// the site still never judged the task; a checkpoint from an older worker, which kept none, leaves
+// the report as it was.
+it.each([
+  { checkpoint: "this worker's", edit: () => undefined, status: "sign_in_unavailable" },
+  {
+    checkpoint: "an older worker's",
+    edit: (checkpoint: Record<string, unknown>) => {
+      delete checkpoint["signInUnconfirmed"];
+    },
+    status: "blocked",
+  },
+])(
+  "keeps an unconfirmed sign-in across a takeover from $checkpoint checkpoint",
+  async ({ edit, status }) => {
+    expect(await declinedAfterUnconfirmedSignIn(edit)).toEqual([
+      expect.objectContaining({ status }),
+    ]);
+  },
+);
+
 // A takeover in the middle of a blocked explanation's review outage keeps it resubmittable, so the
 // build can still end blocked instead of looping on the refusal until it runs out of calls.
 it("ends blocked after a takeover during a blocked explanation's review outage", async () => {

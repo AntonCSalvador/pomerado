@@ -2,9 +2,10 @@ import { chmod, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import { Effect } from "effect";
+import type { McpServer } from "@modelcontextprotocol/server";
+import { Effect, type Scope } from "effect";
 import { expect, it } from "vitest";
-import { makeIntegrationMcp } from "../../src/standalone/mcp-server.js";
+import { makeIntegrationMcp, makePomeradoMcp } from "../../src/standalone/mcp-server.js";
 
 const artifact = {
   entrypoint: "src/tool.mjs",
@@ -69,11 +70,71 @@ const listed = (effect: "read" | "write") =>
 
 it("marks a write tool as neither idempotent nor read-only", async () => {
   const tool = await listed("write");
-  expect(tool.annotations).toMatchObject({
+  expect(tool.annotations).toEqual({
     readOnlyHint: false,
+    openWorldHint: true,
     idempotentHint: false,
     destructiveHint: true,
   });
+});
+
+it("marks a read tool as read-only and idempotent, so clients may run several at once", async () => {
+  const tool = await listed("read");
+  expect(tool.annotations).toEqual({
+    readOnlyHint: true,
+    openWorldHint: true,
+    idempotentHint: true,
+    destructiveHint: false,
+  });
+});
+
+/** Every tool a server lists, over MCP, without starting a browser or a run. */
+const listedTools = (server: Effect.Effect<McpServer, Error, Scope.Scope>) =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+        const served = yield* server;
+        yield* Effect.promise(() => served.connect(serverTransport));
+        const client = new Client({ name: "pomerado-unit", version: "1.0.0" });
+        yield* Effect.acquireRelease(
+          Effect.promise(() => client.connect(clientTransport)),
+          () => Effect.promise(() => client.close()),
+        );
+        return (yield* Effect.promise(() => client.listTools())).tools;
+      }),
+    ),
+  );
+const writeHints = {
+  readOnlyHint: false,
+  openWorldHint: true,
+  idempotentHint: false,
+  destructiveHint: true,
+};
+
+it("marks a job's answer and cancel tools as writes, and its read as read-only", async () => {
+  const tools = await listedTools(makeIntegrationMcp({ artifact, deployment: deployment("read") }));
+  const hints = Object.fromEntries(tools.map((tool) => [tool.name, tool.annotations]));
+  expect(hints["get_job"]).toEqual({ readOnlyHint: true });
+  expect(hints["provide_input"]).toEqual(writeHints);
+  expect(hints["cancel_job"]).toEqual(writeHints);
+});
+
+it("marks the mint tool as a write", async () => {
+  const tools = await listedTools(
+    makePomeradoMcp({ prepare: () => Effect.die("A listing prepares nothing") }),
+  );
+  expect(tools.find((tool) => tool.name === "mint")?.annotations).toEqual(writeHints);
+});
+
+it("describes a tool's input by its own description, its fields listed beside it", async () => {
+  const tool = await listed("read");
+  const input = tool.inputSchema.properties?.["input"];
+  expect(input).toMatchObject({
+    title: "read_fixture input",
+    properties: { note: { type: "string" } },
+  });
+  expect(input).not.toHaveProperty("description");
 });
 
 it("gives a read tool only its input", async () => {

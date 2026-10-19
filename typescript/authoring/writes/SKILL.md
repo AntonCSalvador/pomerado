@@ -55,8 +55,10 @@ add, save or submit anything there.
 
 Read the path's options with read-only exploration where you can, then ask with
 `request_input` about the ones the caller's input does not settle, as `AGENTS.md` ("Try
-hard, then ask") says: each paid add-on and pre-selected paid option within the tool's
-purpose, the payment method and the delivery address you saw, and any other option only when
+hard, then ask") says: each costly choice you saw, one that changes what the caller buys or
+pays or whether the action can be cancelled or refunded (each paid add-on and pre-selected paid
+option within the tool's purpose, a rate, fare or plan tier, a refundable or non-refundable
+option, shipping speed, the payment method and the delivery address), and any other option only when
 the request's purpose clearly depends on it. An unasked optional field keeps the page's
 default and is still an optional input of the script. Ask only about options the site
 actually shows. Never keep, clear, accept or decline one of those unasked. A paid upsell
@@ -89,7 +91,9 @@ During the session:
   refusal (`InvalidInput` with `available`) or a failure (`OperationFailure`), not the write's
   output. While building, a limit the session meets is the
   owner's to settle first: ask them to revise or stop, and end with `report_blocked` when they
-  stop, as the cart skill's "Minimums and refusals" says.
+  stop, as the cart skill's "Minimums and refusals" says. When they stop, or the session cannot
+  reach the task's end, end with `report_blocked` (`site_declined` when the site refused this
+  example). A build whose session never reached the end publishes nothing.
 - A pop-up, banner or interstitial on the path, such as an upsell, is conditional unless the
   page always opens it in answer to an action: handle it as the forms skill says, so the tool
   still works for a caller who never sees it.
@@ -132,7 +136,8 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   asking only at the step the session accepted it at, so the host refuses to publish
   a composed script that drops one.
 - Mark only the step whose click saves or submits. Opening or filling an unsaved
-  form is not a commit step. Mark every such step other than a hold that expires on
+  form is not a commit step. Prefer placing the first commit mark at the first step that
+  saves on the site. Mark every such step other than a hold that expires on
   its own, including an autosave, a saved form step and a payment submission whose
   next screen is unknown. Call `enteringCommit("place-order")` right before the
   execute call that can send that change, and declare the names in order as
@@ -166,8 +171,9 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   Location names the new record went through as soon as it arrives, with no wait for the
   page. A 200 whose
   body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says
-  the work is queued, went through too; return the site's own status word for it in the
-  output. Then read what the output promises from that response or from the page the commit
+  the work is queued, went through too; return that in the output as a status in the core
+  notation, such as `queued`, with the site's own word in a `status_label` field. Then read
+  what the output promises from that response or from the page the commit
   left, match it to the caller's values, and call `verified()` with no argument just before
   returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page,
   such as a list, a history or an account screen, only to prove the write: a commit that went
@@ -229,8 +235,11 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   committed; its receipt says so under `writeSession` (`verifyFirst`). Before any
   further write, run an `act` step that only reads the page or the account. When
   `stateChangingRequests` shows the failed step's commit request went through, that
-  step may read only the page as it stands: check it for an error or validation
-  message, read what the output needs, and call `verified()` there. If the
+  step starts from the page as it stands: check it for an error or validation
+  message, read what the output needs, and call `verified()` there. When that page
+  lacks something the output needs, such as the new record's ID, the same step may
+  read it elsewhere on the site without changing anything, such as by finding the
+  record in the site's list or search, then call `verified()`. If the
   write happened, call `verified()` there and publish against that step, never
   submitting it again. If nothing happened, do the write with the
   caller's values and read its confirmation. The host refuses only an unchanged
@@ -301,13 +310,22 @@ the task completed but its commit steps were not marked; never repeat the write
 to add them.
 
 Every option the session met on its path is an input of the script, add-ons and
-pre-selected defaults included: required when the site requires a choice, optional
-otherwise. The script sets each option from its input. An unset optional input leaves the
-page's default, as in a read. The exception is a paid add-on or pre-selected paid option
+pre-selected defaults included: required only when the site requires a choice that neither
+the request nor an answer settled, optional otherwise. The script sets each option from its
+input. An unset optional input leaves the page's default, as in a read. An option the request
+or the owner's answer settled as how the tool behaves, such as which kind of record it
+creates, which line type a free-text line takes or whether a save runs the site's automation,
+is the tool's default: an optional input declared with `defaultedInput` and the answered value,
+whose description says so (core skill), never a required input or a question the script asks.
+The exception is a paid add-on or pre-selected paid option
 within the tool's purpose, the payment method and the delivery address: each must be
 explicit, so the script never keeps, clears, accepts or declines one the input leaves open. It
 asks with a declared question before the commit mark (the caller-input skill), offering a
-saved payment or address as an account-specific choice. Choosing the address and payment is
+saved payment or address as an account-specific choice. The same holds for any choice that
+changes what the caller buys or pays, or whether the action can be cancelled or refunded, such
+as a rate, fare or plan tier, a refundable option or shipping speed (core skill). An owner's
+answer may make declining such an option, turning it off or the option that adds no cost the
+default of its optional input, never accepting, keeping or choosing one. Choosing the address and payment is
 part of a checkout's job, so the page's pre-selected one is never used silently. The request
 and the owner's answers settle such a choice for the session only: the published tool serves
 other callers, so it takes the choice as an input or asks, never hard-codes the build's answer.

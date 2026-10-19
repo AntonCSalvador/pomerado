@@ -48,7 +48,7 @@ import { makeRunFiles } from "../runtime/file-transfer.js";
 import { stepInput } from "../mint/step-checks.js";
 import { admitListCursor, sealListOutput } from "../runtime/list-cursor.js";
 import { mintListScope, refusedCursor } from "./list-cursors.js";
-import { commitUncertain, verifyFirstNotice } from "../mint/write-session.js";
+import { readBackFirst } from "../mint/write-session.js";
 import { commitEvidenceOf, type CommitEvidence } from "../runtime/run-outcome.js";
 import { InputRequestFailure, type InputAsker } from "../runtime/input-request.js";
 import { siteDomain } from "../runtime/same-site.js";
@@ -335,7 +335,9 @@ const scriptQuestions = (
  * `possiblySent`. Whether it was a write is Guardian's label, `action`. A step whose child did
  * not report its own result has `unreported` commit evidence, and the marks it streamed count
  * only once a later step confirms. Only a failed step Guardian labelled a write asks the minter
- * to read back before writing again.
+ * to read back before writing again (`readBackFirst`). Marks showing no commit step entered
+ * skip the ask only while the step made no browser call: this host records no requests that
+ * would show a write the page sent before any mark was entered.
  */
 const actOutcome = (
   executed: Either.Either<LocalOperationOutput, Error>,
@@ -352,7 +354,6 @@ const actOutcome = (
   const entered = journal.commits
     .filter((mark) => mark.state !== "not_sent")
     .map(({ name }) => name);
-  const sent = journal.effect === "not_sent" ? 0 : undefined;
   const commit: CommitEvidence = reported ? commitEvidenceOf(journal.commits) : "unreported";
   return {
     marks: {
@@ -363,8 +364,10 @@ const actOutcome = (
       ...(failure instanceof LocalOperationFailure && !reported ? { streamedMarks: entered } : {}),
     },
     writeSession:
-      failure !== undefined && action === "write" && commitUncertain(sent, commit)
-        ? { verifyFirst: true as const, notice: verifyFirstNotice(sent, commit) }
+      failure !== undefined && action === "write"
+        ? readBackFirst(
+            commit === "not_entered" && journal.effect !== "not_sent" ? undefined : commit,
+          )
         : undefined,
   };
 };

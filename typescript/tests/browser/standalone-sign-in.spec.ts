@@ -359,6 +359,225 @@ test("a local build asks for its login once and publishes its sign-in without a 
   });
 });
 
+// A code screen whose form has no button submits when Enter is pressed in its one field. The
+// minter names the key in place of a submit, the host presses it, and the published step keeps it,
+// so a run presses it too.
+test("a local build whose code screen has no button submits it with Enter, publishes that step, and a run in a new session signs in through it", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Original SDKs, Chromium, a scripted build with a password and a code screen, then a run",
+  });
+  test.setTimeout(90_000);
+  await withShop(async (shop, endpoint) => {
+    shop.state.loginCode = true;
+    shop.state.codeSubmitsOnEnter = true;
+    const mintRequests: ModelRequest[] = [];
+    const minter = provider((request, index) => {
+      const steps: Output[] = [
+        patch,
+        [signInFields()],
+        [
+          signInStep(
+            { fields: [{ selector: "input[name=code]", slot: "code" }], submitKey: "Enter" },
+            "code",
+          ),
+        ],
+        [signInStep({ signedIn: { selector: "#account" } }, "signed_in")],
+        [execute("example", {}, "example")],
+      ];
+      if (index < steps.length) return steps[index] ?? [];
+      if (index > steps.length) return [message("Built.")];
+      const receipt = objects(request.input)
+        .filter((item) => typeof item["executionId"] === "string")
+        .at(-1);
+      if (receipt === undefined) throw new Error("No execution receipt to finish with");
+      return [
+        call("finish_build", {
+          intent: "Return the account reader",
+          entrypoint: "src/tool.mjs",
+          executionId: receipt["executionId"],
+          metadata: { name: "read_account", description: "Read whether the account shows" },
+          coverage: "One live example, signed in",
+        }),
+      ];
+    }, mintRequests);
+    const request = { url: `${shop.origin}/account`, intent: "Read the account", input: {} };
+    const built = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* createPomerado({
+            browser: { endpoint },
+            minterProvider: minter,
+            guardianProvider: guardian(),
+            outcomeReviewerProvider: quietReviewer,
+            ask: answers([]),
+            timeoutMs: 30_000,
+          });
+          return yield* service.mint({ ...request, url: `${shop.origin}/login`, effect: "read" });
+        }),
+      ),
+    );
+    expect(built.build, JSON.stringify(built)).toBe("published");
+    if (built.artifact === undefined) throw new Error(JSON.stringify(built));
+    expect(shop.state.codePosts).toBe(1);
+    expect(built.artifact.signIn).toEqual({
+      recipe: {
+        version: 5,
+        steps: [
+          ...loginRecipe(shop.origin).steps,
+          {
+            page: `${shop.origin}/two-factor`,
+            fields: [{ selector: "input[name=code]", slot: "code" }],
+            submitKey: "Enter",
+            submittedBy: "host",
+          },
+        ],
+        signedIn: { selector: "#account" },
+      },
+      entryUrl: `${shop.origin}/login`,
+    });
+    expect(JSON.stringify(mintRequests)).not.toContain(shopCode);
+    const runAsked: InputRequest[] = [];
+    const output = await runInNewSession(
+      endpoint,
+      answers(runAsked),
+      built.artifact as MintArtifact,
+      request.url,
+    );
+    expect(output).toEqual(Either.right({ signedIn: true }));
+    expect(reasons(runAsked)).toEqual(["missing_credentials", "code"]);
+    expect(shop.state.codePosts).toBe(2);
+  });
+});
+
+// A code screen that splits its code across six one-character boxes, one digit each, whose form
+// posts each box as its own field. A code step that names only the first box can never send the
+// whole code, so the host sends it back with how many boxes the screen shows, before Guardian or
+// the owner sees it; the step that names every box in order is reviewed with each box's place,
+// asks for the code once, types a digit in each box and signs in, and a run in a new session signs
+// in through the same boxes.
+test("a local build whose code screen has six one-character boxes sends back a step that names only the first box, signs in once the step names all six in order, and a run in a new session signs in through them", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Original SDKs, Chromium, a scripted build with a password and a six-box code screen, then a run",
+  });
+  test.setTimeout(90_000);
+  await withShop(async (shop, endpoint) => {
+    shop.state.loginCode = true;
+    shop.state.codeBoxes = 6;
+    const boxes = [1, 2, 3, 4, 5, 6].map((box) => ({ selector: `#code-${box}`, slot: "code" }));
+    const mintRequests: ModelRequest[] = [];
+    const minter = provider((request, index) => {
+      const steps: Output[] = [
+        patch,
+        [signInFields()],
+        [signInStep({ fields: [boxes[0]], submit: "button" }, "first_box")],
+        [signInStep({ fields: boxes, submit: "button" }, "every_box")],
+        [signInStep({ signedIn: { selector: "#account" } }, "signed_in")],
+        [execute("example", {}, "example")],
+      ];
+      if (index < steps.length) return steps[index] ?? [];
+      if (index > steps.length) return [message("Built.")];
+      const receipt = objects(request.input)
+        .filter((item) => typeof item["executionId"] === "string")
+        .at(-1);
+      if (receipt === undefined) throw new Error("No execution receipt to finish with");
+      return [
+        call("finish_build", {
+          intent: "Return the account reader",
+          entrypoint: "src/tool.mjs",
+          executionId: receipt["executionId"],
+          metadata: { name: "read_account", description: "Read whether the account shows" },
+          coverage: "One live example, signed in",
+        }),
+      ];
+    }, mintRequests);
+    // Guardian's sign-in rule: a code split across boxes is allowed only with every box, in order.
+    const signInSource = (review: { reads: readonly Readonly<Record<string, unknown>>[] }) => {
+      const read = review.reads.find((value) => value["path"] === "operation/sign-in-step.json");
+      return typeof read?.["source"] === "string"
+        ? (JSON.parse(read["source"]) as {
+            step: { fields: { slot?: string }[] };
+            screen: { fields: { codeBox?: { box: number; of: number } }[] };
+          })
+        : undefined;
+    };
+    const reviewer = recordingGuardian({
+      decide: (review) => {
+        const reviewed = signInSource(review);
+        const codes = reviewed?.step.fields.filter((field) => field.slot === "code").length ?? 0;
+        return codes === 0 || codes === shop.state.codeBoxes ? "allow" : "deny";
+      },
+    });
+    const asked: InputRequest[] = [];
+    const request = { url: `${shop.origin}/account`, intent: "Read the account", input: {} };
+    const built = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* createPomerado({
+            browser: { endpoint },
+            minterProvider: minter,
+            guardianProvider: reviewer.provider,
+            outcomeReviewerProvider: quietReviewer,
+            ask: answers(asked),
+            timeoutMs: 30_000,
+          });
+          return yield* service.mint({ ...request, url: `${shop.origin}/login`, effect: "read" });
+        }),
+      ),
+    );
+    expect(built.build, JSON.stringify(built)).toBe("published");
+    if (built.artifact === undefined) throw new Error(JSON.stringify(built));
+    // The first-box step is sent back, typing nothing and asking nobody for the code.
+    expect(objects(toolResult(mintRequests, "first_box"))).toContainEqual(
+      expect.objectContaining({
+        outcome: "refused",
+        reason: "code_boxes_incomplete",
+        target: 0,
+        codeBoxes: { boxes: 6, named: [1] },
+      }),
+    );
+    // Guardian reviewed the code screen once, with all six boxes, each with its place among them.
+    const codeReviews = reviewer.reviews
+      .map(signInSource)
+      .filter((reviewed) => reviewed?.step.fields.some((field) => field.slot === "code"));
+    expect(codeReviews).toHaveLength(1);
+    expect(codeReviews[0]?.screen.fields.map((field) => field.codeBox)).toEqual(
+      [1, 2, 3, 4, 5, 6].map((box) => ({ box, of: 6 })),
+    );
+    // One login, one code, one code post with the whole code.
+    expect(reasons(asked)).toEqual(["missing_credentials", "code"]);
+    expect(shop.state.codeMatches).toEqual([true]);
+    expect(built.artifact.signIn).toEqual({
+      recipe: {
+        version: 1,
+        steps: [
+          ...loginRecipe(shop.origin).steps,
+          {
+            page: `${shop.origin}/two-factor`,
+            fields: boxes,
+            submit: "button",
+            submittedBy: "host",
+          },
+        ],
+        signedIn: { selector: "#account" },
+      },
+      entryUrl: `${shop.origin}/login`,
+    });
+    expect(JSON.stringify(mintRequests)).not.toContain(shopCode);
+    const runAsked: InputRequest[] = [];
+    const output = await runInNewSession(
+      endpoint,
+      answers(runAsked),
+      built.artifact as MintArtifact,
+      request.url,
+    );
+    expect(output).toEqual(Either.right({ signedIn: true }));
+    expect(reasons(runAsked)).toEqual(["missing_credentials", "code"]);
+    expect(shop.state.codeMatches).toEqual([true, true]);
+  });
+});
+
 // A cancel at the terminal is the owner's choice to stop, not a question left unanswered: a
 // signed-out build ends at once instead of going on without the answer.
 test("a local build whose owner cancels the minter's question ends as no response and the minter is not asked to go on", async () => {
@@ -1944,7 +2163,7 @@ test("a recipe of a version this host does not know is refused before the run si
       endpoint,
       answers(asked),
       accountReader({
-        recipe: { ...loginRecipe(shop.origin), version: 4 },
+        recipe: { ...loginRecipe(shop.origin), version: 6 },
         entryUrl: `${shop.origin}/login`,
       }),
       `${shop.origin}/account`,

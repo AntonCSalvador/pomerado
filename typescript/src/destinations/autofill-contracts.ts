@@ -83,6 +83,13 @@ export const AutofillPopup = Schema.Struct({
 });
 export type AutofillPopup = typeof AutofillPopup.Type;
 
+/**
+ * The key a sign-in step presses in its last field to submit that field's form, for a form with no
+ * submit control that submits on Enter (HTML implicit submission, or its own script on the key).
+ */
+export const SubmitKey = Schema.Literal("Enter");
+export type SubmitKey = typeof SubmitKey.Type;
+
 /** An off-page sign-in the owner completes before confirming through the protected input. */
 export const AutofillApproval = Schema.Literal("email_link", "device");
 export type AutofillApproval = typeof AutofillApproval.Type;

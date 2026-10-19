@@ -115,9 +115,16 @@ async ({kernel,sessionId,decideDialog,enteringCommit,verified}) => {
   return {placed:answered.result === true};
 });`;
 
-/** The question a native dialog puts to the owner or the caller. */
+/** The question a native dialog puts to the owner, while building, or the caller, in a run. */
 const dialogQuestion = (request: InputRequest) =>
-  request.questions.some((question) => question.prompt.includes("respond to this dialog"));
+  request.questions.some(
+    (question) => question.prompt.includes("respond to this dialog") || question.id === "decision",
+  );
+/** The answer to a dialog question: a build's choice, or a run's yes or no. */
+const dialogAnswer = (request: InputRequest, choice: "accept" | "dismiss") =>
+  request.questions.some((question) => question.id === "decision")
+    ? { decision: { confirmed: choice === "accept" } }
+    : { choice };
 
 /** Mints the order write, the owner accepting its confirm, and returns the published artifact. */
 const mintOrder = async (site: Awaited<ReturnType<typeof startOrderSite>>) => {
@@ -181,7 +188,7 @@ const runOrder = async (
           ask: makeInputAsker((request) =>
             Effect.sync(() => {
               asked.push(request);
-              return dialogQuestion(request) ? { choice } : {};
+              return dialogQuestion(request) ? dialogAnswer(request, choice) : {};
             }),
           ),
           timeoutMs: 60_000,
@@ -242,7 +249,9 @@ test("a write's run accepts the confirm its build accepted, and asks about a cha
     });
     expect(declined.unconfirmed).toEqual({ output: { placed: false } });
     expect(changed.asked).toHaveLength(1);
-    expect(changed.asked[0]?.notice).toContain("Place this order and subscribe?");
+    expect(changed.asked[0]?.questions[0]?.prompt).toBe(
+      'The website asks you to confirm: "Place this order and subscribe?". Confirm?',
+    );
     expect(site.state.orders).toBe(2);
   });
 });
@@ -420,7 +429,8 @@ test("the local run keeps the confirm popup contract", async ({ context }) => {
     cross_origin_frame: { outcomes: ["accepted"], asked: 0 },
     // No script listens to the new window, so the browser dismisses its confirm.
     popup: { outcomes: ["dismissed"], asked: 0 },
-    read_only: { outcomes: ["dismissed"], asked: 1 },
+    // A read run confirms nothing, so it decides without asking.
+    read_only: { outcomes: ["dismissed"], asked: 0 },
   });
   expect(confirmPopupContractFailures(observed)).toEqual([]);
 });

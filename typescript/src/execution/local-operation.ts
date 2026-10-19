@@ -19,10 +19,9 @@ import {
   type CardFillOutcome,
   type RunCardHandles,
   makeRunCardHandles,
+  scriptAnswers,
   scriptCardFillAnswer,
 } from "../destinations/card-fill.js";
-import { isCardSlot } from "../destinations/payment-frames.js";
-import type { InputRequest, ValidAnswers } from "../runtime/input-request.js";
 import type { ScriptCardFillRequest } from "../runtime/script-card-fill.js";
 import {
   sessionSignInAnswerMs,
@@ -52,6 +51,12 @@ export interface LocalOperationOptions {
   readonly timeoutMs?: number;
   readonly mode?: "run" | "contract";
   readonly validateInput?: boolean;
+  /**
+   * A run whose output fails its schema returns that output as its result, with `outputDrift`,
+   * rather than failing `InvalidOutput`: a write already happened when it returned. Its files
+   * are checked as any result's are.
+   */
+  readonly keepDriftedOutput?: boolean;
   readonly target?: "browser" | "pureFiles";
   /**
    * A mint step: the run counts as possibly sent from its first browser call, so a step that
@@ -154,6 +159,8 @@ export interface LocalOperationOutput extends LocalOperationJournal {
   readonly stderr: string;
   readonly write?: WriteDeclaration;
   readonly inputDecodes?: true;
+  /** The output failed its schema and was kept (`keepDriftedOutput`). */
+  readonly outputDrift?: true;
 }
 
 const sendToChild = (process: LocalProcess, message: object) =>
@@ -208,24 +215,6 @@ export const answerSessionSignIn = (
     yield* settle;
     return { outcome: "refused", cause: "session_sign_in_failed" } satisfies SessionSignInAnswer;
   });
-/**
- * The answers as the script receives them: each card answer replaced by a handle this run's
- * `fillCard` names, so the card never enters the child.
- */
-const scriptAnswers = (request: InputRequest, answers: ValidAnswers, handles: RunCardHandles) =>
-  Object.fromEntries(
-    Object.entries(answers).map(([id, answer]) => {
-      const question = request.questions.find((candidate) => candidate.id === id);
-      return [
-        id,
-        question?.type === "secret" &&
-        isCardSlot(question.secretKind) &&
-        typeof answer.value === "string"
-          ? handles.issue(answer.value, question.secretKind)
-          : answer.value,
-      ];
-    }),
-  );
 const handleRequest = (
   options: LocalOperationOptions,
   deadline: Deadline,
@@ -352,6 +341,8 @@ const handleTerminalMessage = (
           message.tag,
           message.inputIssues,
           {
+            // A host request still out may yet reach the page, so this is no final report.
+            ...(pending.size === 0 ? {} : { reported: false }),
             ...(message.sessionLoss === undefined ? {} : { sessionLoss: message.sessionLoss }),
             ...(message.refusal === undefined ? {} : { refusal: message.refusal }),
             ...(message.unapplied === undefined ? {} : { unapplied: message.unapplied }),
@@ -504,6 +495,7 @@ const operationOutput = (
     ...operationJournal(result),
     ...(result.write === undefined ? {} : { write: result.write }),
     ...(result.inputDecodes === undefined ? {} : { inputDecodes: result.inputDecodes }),
+    ...(result.outputDrift === undefined ? {} : { outputDrift: result.outputDrift }),
   };
 };
 
@@ -558,6 +550,7 @@ export const runLocalOperation = (
         timeoutMs,
         mode: options.mode ?? "run",
         ...(options.validateInput === undefined ? {} : { validateInput: options.validateInput }),
+        ...(options.keepDriftedOutput === true ? { keepDriftedOutput: true } : {}),
         ...(options.target === "pureFiles" || options.browser === undefined
           ? { offline: true }
           : {}),

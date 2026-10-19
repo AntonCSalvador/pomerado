@@ -6,8 +6,12 @@ import { runnableOperationFiles, savedOperationFiles } from "../mint/operation-s
 import {
   exampleOutputEvidence,
   exampleOutputPath,
+  outputDigest,
+  outputDigestNote,
+  outputDigestPath,
   publicationEvidenceNote,
   publicDefinition,
+  requestedOutputFields,
   reviewPublication,
   sessionEvidenceFiles,
   sessionOutputPath,
@@ -329,7 +333,12 @@ export const mintPublication =
                 executedEntrypoint: `executed/${sample.entrypoint}`,
                 executedSourceDigest: sourceDigest(baseline),
               });
+              // Every field of each list in the output, across all its records, including those
+              // past what the output's record keeps.
+              const digest =
+                output.screened === undefined ? undefined : outputDigest(output.screened);
               return {
+                digest,
                 note: publicationEvidenceNote({
                   kind: "read",
                   entrypoint: sample.entrypoint,
@@ -339,6 +348,7 @@ export const mintPublication =
                 files: new Map([
                   [exampleOutputPath, output.text],
                   ...(notes.any ? [[outputNotesPath, notes.text] as const] : []),
+                  ...(digest === undefined ? [] : [[outputDigestPath, digest] as const]),
                   ...(hostEvidence?.liveTests === undefined
                     ? []
                     : [
@@ -352,14 +362,24 @@ export const mintPublication =
                 intentDerivedInput: sample.intentDerivedInput,
               };
             });
+      // A read's digest is named before what its review judges, as every host names it.
+      const digestNote =
+        "digest" in judged && judged.digest !== undefined ? `${outputDigestNote} ` : "";
       yield* reviewPublication(context.reviewPublication, {
         entrypoint: publication.entrypoint,
         files,
         definition: publicDefinition(publication.metadata, result.schemas),
         evidence: judged.files,
         ...("baseline" in judged ? { baseline: judged.baseline } : {}),
-        notes: `${judged.note} Coverage: ${secrets.redact(publication.coverage)}`,
+        notes: `${digestNote}${judged.note} Coverage: ${secrets.redact(publication.coverage)}`,
         inputSchema: result.schemas.input,
+        outputSchema: result.schemas.output,
+        // What the request declares in structure: the caller's own input and the output fields
+        // its updates declared. Its prose declares nothing the host can check.
+        requested: {
+          input: context.input,
+          outputs: requestedOutputFields(context.taskUpdates),
+        },
         references: skillReferenceFiles(state.authoring.skills),
         ...(judged.intentDerivedInput === undefined
           ? {}

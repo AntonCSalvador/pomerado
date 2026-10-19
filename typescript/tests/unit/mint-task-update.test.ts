@@ -505,6 +505,147 @@ it.each(["allow", "clarify", "reword", "new_mint"] as const)(
   },
 );
 
+// The owner said the change is the same task, and Guardian still called it a new build: asking the
+// owner again would only repeat the loop until the build ran out of turns.
+it("asks the minter to reword, not the owner again, when Guardian calls the same change a new build twice", async () => {
+  const updates = updateHost(["new_mint", "new_mint"]);
+  const sameTask = {
+    questions: [
+      {
+        id: "same",
+        type: "choice",
+        prompt: "Is converting the PDF without a preview still the task you asked for?",
+        options: [
+          { id: "same", label: "Yes, the same task" },
+          { id: "other", label: "No, a different task" },
+        ],
+      },
+    ],
+  };
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("request_input", { questions: [{ id: "task", type: "text", prompt: "What next?" }] }),
+        call("mint_update", revisedRequirement, "first"),
+        call("request_input", sameTask, "confirm"),
+        // The retry rewords the summary and cites the owner's yes: still the same change.
+        call(
+          "mint_update",
+          {
+            ...revisedRequirement,
+            summary: "Skip the preview and return the PDF's text, which the owner confirmed.",
+            confirmedBy: ["task", "same"],
+          },
+          "second",
+        ),
+      ][index] ?? prose(),
+    {
+      ...updates.overrides,
+      askInput: answering([{ task: "Skip the preview" }, { same: "same" }]),
+    },
+    { siteOrigin: site },
+  );
+  const outcome = await f.run();
+  expect(resultOf(f.requests, "first")).toMatchObject({
+    status: "clarification_required",
+    source: "guardian",
+  });
+  expect(resultOf(f.requests, "second")).toEqual({
+    status: "reword",
+    userInputRequired: false,
+    rationale: "Scripted review.",
+    instruction:
+      "Nothing changed, and the build continues under the current task. Revise the update using the rationale and call mint_update again, or continue without it.",
+  });
+  // Guardian still decided both, the second with the owner's yes before it.
+  expect(updates.reviews).toHaveLength(2);
+  expect(updates.reviews[1]?.update.confirmation.map(({ id }) => id)).toEqual(["task", "same"]);
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(updates.applied).toEqual([]);
+});
+
+it("asks the owner again when Guardian calls a change a new build after an update applied", async () => {
+  const updates = updateHost(["new_mint", "allow", "new_mint"]);
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("request_input", { questions: [{ id: "task", type: "text", prompt: "What next?" }] }),
+        call("mint_update", revisedRequirement, "first"),
+        call(
+          "mint_update",
+          {
+            summary: "Convert the PDF the caller named.",
+            changes: [{ setting: "input", values: { file: "notes.pdf" } }],
+            confirmedBy: ["task"],
+            recommend: "update",
+          },
+          "applied",
+        ),
+        call("mint_update", revisedRequirement, "later"),
+      ][index] ?? prose(),
+    { ...updates.overrides, askInput: answering([{ task: "Skip the preview" }]) },
+    { siteOrigin: site },
+  );
+  await f.run();
+  expect(resultOf(f.requests, "first")).toMatchObject({
+    status: "clarification_required",
+    source: "guardian",
+  });
+  expect(resultOf(f.requests, "applied")).toMatchObject({ status: "updated" });
+  expect(resultOf(f.requests, "later")).toMatchObject({
+    status: "clarification_required",
+    source: "guardian",
+  });
+});
+
+// Screening swaps a private value for a longer marker, so a suggested request under the limit as
+// written can end past it. The ending used to drop it, and the caller got nothing to send.
+it("asks the minter to shorten a suggested request that screening pushed past the limit", async () => {
+  const updates = updateHost(["allow"]);
+  const marker = "[a private value the host withheld from the caller]";
+  const written =
+    `Order the listed supplies on the other vendor's store for account ACCT-4471. ${"Keep the current quantities. ".repeat(14)}`.trim();
+  expect(written.length).toBeLessThanOrEqual(500);
+  expect(written.replaceAll("ACCT-4471", marker).length).toBeGreaterThan(500);
+  const shorter = "Order the listed supplies on the other vendor's store.";
+  const recommendation = {
+    summary: "The caller now wants to order from another vendor's store.",
+    changes: [{ setting: "purpose", text: "Order supplies on another vendor's store." }],
+    confirmedBy: ["task"],
+    recommend: "new_mint",
+  };
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("request_input", { questions: [{ id: "task", type: "text", prompt: "What next?" }] }),
+        call("mint_update", { ...recommendation, suggestedRequest: written }, "long"),
+        call("mint_update", { ...recommendation, suggestedRequest: shorter }, "short"),
+      ][index] ?? prose(),
+    {
+      ...updates.overrides,
+      askInput: answering([{ task: "Use the other vendor" }]),
+      redactCallerText: (text) => text.replaceAll("ACCT-4471", marker),
+    },
+    { siteOrigin: site },
+  );
+  const outcome = await f.run();
+  expect(outcome.blocked).toEqual({
+    reason: "new_mint_recommended",
+    explanation: recommendation.summary,
+    suggestedRequest: shorter,
+  });
+  expect(resultOf(f.requests, "long")).toEqual({
+    status: "update_invalid",
+    userInputRequired: false,
+    reason: "suggested_request_too_long",
+    instruction:
+      "Private values in suggestedRequest made it longer than 500 characters once screened. Shorten it, leave private values out, and call mint_update again.",
+  });
+  // The long one never reached Guardian.
+  expect(updates.reviews).toHaveLength(1);
+  expect(updates.reviews[0]?.update.suggestedRequest).toBe(shorter);
+});
+
 it("keeps building after Guardian asks to reword an update", async () => {
   const updates = updateHost(["reword", "allow"]);
   const f = await fixture(
@@ -788,6 +929,54 @@ it("refuses a site change while the write session is open", async () => {
     reason: "write_session_open",
   });
   expect(updates.reviews).toEqual([]);
+});
+
+// A build that started on one site, such as a sign-in host, and needs another can't move on a host
+// that can't move builds. Asking the caller to confirm a move the host then refuses wastes the
+// build, so the host refuses the move when the minter proposes it, and the new build the minter
+// recommends next shows Guardian the host's report.
+it("refuses a site move when proposed on a host that can't move builds, and shows Guardian why", async () => {
+  const updates = updateHost(["allow"]);
+  const suggestedRequest = `Read the saved notes on ${sister}.`;
+  const asked: AgentInputRequest[] = [];
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("mint_update", { ...toSister, confirmedBy: [] }, "move"),
+        call("mint_update", toSister, "confirmed"),
+        call(
+          "mint_update",
+          { ...toSister, confirmedBy: [], recommend: "new_mint", suggestedRequest },
+          "new_build",
+        ),
+      ][index] ?? prose(),
+    {
+      ...updates.overrides,
+      siteMoveUnsupported: true,
+      askInput: (request) =>
+        Effect.sync(() => {
+          asked.push(request);
+          return {};
+        }),
+    },
+    { siteOrigin: site },
+  );
+  const outcome = await f.run();
+  for (const id of ["move", "confirmed"]) {
+    expect(resultOf(f.requests, id), id).toMatchObject({
+      status: "update_refused",
+      reason: "site_move_unsupported",
+    });
+    expect(String(resultOf(f.requests, id)?.["instruction"]), id).toContain("new_mint");
+  }
+  expect(asked).toEqual([]);
+  expect(updates.reviews).toHaveLength(1);
+  expect(updates.reviews[0]?.update).toMatchObject({
+    recommend: "new_mint",
+    siteMoveUnsupported: true,
+  });
+  expect(outcome.blocked).toMatchObject({ reason: "new_mint_recommended", suggestedRequest });
+  expect(updates.applied).toEqual([]);
 });
 
 it("asks for the caller's confirmation before a change that widens what the build may do", async () => {

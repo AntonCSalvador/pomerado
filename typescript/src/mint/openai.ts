@@ -64,7 +64,7 @@ const finalsWithoutToolLimit = 3;
  * One model response's calls as the host schedules them. The SDK takes a response's function
  * calls one at a time, in the model's order, and runs them before its native edits, so a function
  * call after an edit is held until the edits land. A read starts together with the reads that
- * follow it.
+ * follow it. Once a step does not succeed, no later call of the response runs.
  */
 interface ResponseCalls {
   /** The response's output items, in the model's order. */
@@ -72,6 +72,8 @@ interface ResponseCalls {
   readonly edits: readonly { readonly callId: string; readonly index: number }[];
   /** Reads an earlier read of this response started, by call ID, until the SDK takes them. */
   readonly started: Map<string, Promise<unknown>>;
+  /** The position of the response's first step that did not succeed, once one has returned. */
+  failedAt?: number;
 }
 
 /**
@@ -89,6 +91,38 @@ const notRun = JSON.stringify({
   instruction:
     "Not run, nothing was sent. The host runs a call that follows an edit in its response only when every edit in that response came before the call and applied. Read this response's results, then send this call again if it is still the next step.",
 });
+
+/**
+ * A call the model sent after a step of the same response that did not succeed. Nothing was sent.
+ */
+const notRunAfterFailure = JSON.stringify({
+  status: "not_run",
+  effect: "not_sent",
+  instruction:
+    "Not run, nothing was sent. An earlier call in this response did not succeed, and the host runs no call that follows it in the same response. Read that call's result, then send this call again if it is still the next step.",
+});
+
+/**
+ * Whether a step's result is a completed receipt. An execute or a command that failed, was
+ * refused by review, timed out or may have dispatched returns any other result.
+ */
+const completedReceipt = (result: unknown) => {
+  if (typeof result !== "string") return false;
+  try {
+    const receipt: unknown = JSON.parse(result);
+    return (
+      typeof receipt === "object" &&
+      receipt !== null &&
+      "status" in receipt &&
+      receipt.status === "completed"
+    );
+  } catch {
+    return false;
+  }
+};
+
+/** The steps whose result says whether they succeeded: one that did not holds the calls after it. */
+const stepTools: ReadonlySet<string> = new Set(["execute", "exec_command"]);
 
 /**
  * Whether the SDK holds this call because it cannot read its arguments as an object, which it does
@@ -489,7 +523,7 @@ export const makeOpenAIMinter = (
                       );
                     },
                   };
-            /** Each function call's response and position in it, in the model's order. */
+            /** Each call's response and position in it, in the model's order. */
             const placed = new Map<
               string,
               { readonly response: ResponseCalls; readonly index: number }
@@ -513,12 +547,19 @@ export const makeOpenAIMinter = (
                 )
               );
             };
+            /** Whether a step of this call's response before it did not succeed. */
+            const afterFailure = (callId: string) => {
+              const call = placed.get(callId);
+              const failedAt = call?.response.failedAt;
+              return call !== undefined && failedAt !== undefined && failedAt < call.index;
+            };
             /** Each read tool's own invoke, so a read can start the reads after it. */
             const readers = new Map<string, FunctionTool["invoke"]>();
             /**
-             * Holds a function call after an edit in its response. A read the SDK takes first also
-             * starts the reads right after it in the response, up to the next call that is not a
-             * read, so they run at once; the SDK then takes each one's result in turn.
+             * Holds a function call after an edit in its response, and runs none after a step of its
+             * response that did not succeed. A read the SDK takes first also starts the reads right
+             * after it in the response, up to the next call that is not a read, so they run at
+             * once; the SDK then takes each one's result in turn.
              */
             const inResponseOrder = <
               T extends {
@@ -541,8 +582,33 @@ export const makeOpenAIMinter = (
               const needsApproval = async (context: unknown, input: unknown, callId?: string) =>
                 (callId !== undefined && heldForEdit.has(callId)) ||
                 (await own(context, input, callId));
+              const step = stepTools.has(entry.name);
+              /** Runs the call unless an earlier step failed; a step's own failure holds the rest. */
+              const inOrder =
+                (run: FunctionTool["invoke"]): FunctionTool["invoke"] =>
+                async (context, input, details) => {
+                  const callId = details?.toolCall?.callId ?? "";
+                  if (afterFailure(callId)) return notRunAfterFailure;
+                  const call = placed.get(callId);
+                  // Calls run in the model's order, so the first step that fails holds the rest.
+                  const failed = () => {
+                    if (call !== undefined) call.response.failedAt ??= call.index;
+                  };
+                  try {
+                    const result: unknown = await run(context, input, details);
+                    if (step && !completedReceipt(result)) failed();
+                    return result;
+                  } catch (error) {
+                    if (step) failed();
+                    throw error;
+                  }
+                };
               if (!readTools.has(entry.name))
-                return { ...entry, needsApproval: needsApproval as T["needsApproval"] };
+                return {
+                  ...entry,
+                  needsApproval: needsApproval as T["needsApproval"],
+                  invoke: inOrder(entry.invoke),
+                };
               readers.set(entry.name, entry.invoke);
               const invoke: FunctionTool["invoke"] = (context, input, details) => {
                 const callId = details?.toolCall?.callId ?? "";
@@ -573,7 +639,11 @@ export const makeOpenAIMinter = (
                 }
                 return entry.invoke(context, input, details);
               };
-              return { ...entry, needsApproval: needsApproval as T["needsApproval"], invoke };
+              return {
+                ...entry,
+                needsApproval: needsApproval as T["needsApproval"],
+                invoke: inOrder(invoke),
+              };
             };
             /**
              * Awaits the call record before dispatch and the result record before returning. A
@@ -667,11 +737,21 @@ export const makeOpenAIMinter = (
                 .filter((entry) => !(entry.type === "function" && entry.name === "view_image"))
                 .map((entry) =>
                   entry.type === "apply_patch"
-                    ? { ...entry, editor: traceEditor(entry.editor) }
+                    ? {
+                        ...entry,
+                        editor: traceEditor(entry.editor),
+                        // An edit after a step of its response that did not succeed is held, and
+                        // the run loop returns it not run.
+                        needsApproval: async (
+                          ...args: Parameters<typeof entry.needsApproval>
+                        ): Promise<boolean> =>
+                          (args[2] !== undefined && afterFailure(args[2])) ||
+                          (await entry.needsApproval(...args)),
+                      }
                     : entry.type !== "function"
                       ? entry
                       : inResponseOrder(
-                          {
+                          recoverFunction({
                             ...entry,
                             invoke: async (...args: Parameters<typeof entry.invoke>) => {
                               try {
@@ -692,10 +772,9 @@ export const makeOpenAIMinter = (
                                 );
                               }
                             },
-                          },
+                          }),
                         ),
-                )
-                .map((entry) => (entry.type === "function" ? recoverFunction(entry) : entry));
+                );
             const readFailureInstruction = (error: unknown) =>
               mintFailure(error)?.reason === "capture_not_saved"
                 ? "This capture is not saved yet. Re-read captures/index.json and read only the capture paths it lists."
@@ -813,8 +892,8 @@ export const makeOpenAIMinter = (
             });
             const liveTestsSentence =
               turn.actions.liveTests === undefined
-                ? "Only a read signed out runs live tests on inputs you choose, one at a time (testInput); the host may limit how many."
-                : "Only a read signed out runs live tests on inputs you choose: it plans its cases in test/cases.json and runs them in parallel batches with live_tests, on src/tool.mjs and on src/tool-http.mjs.";
+                ? "A read runs live tests on inputs you choose, one at a time (testInput): a read signed out a handful of combined cases, a signed-in read at most two distinct inputs, its combined filter case; the host may limit how many."
+                : "A read runs live tests on inputs you choose: it plans its cases in test/cases.json and runs them in batches with live_tests, on src/tool.mjs and on src/tool-http.mjs. A signed-in read runs at most two distinct inputs, its combined filter case.";
             const signInDescription = turn.autofillSignIn
               ? "trusted host credentials, signing in by host autofill with a signInStep for each sign-in screen"
               : "trusted host credentials";
@@ -863,7 +942,7 @@ export const makeOpenAIMinter = (
                 : tool({
                     ...hostTool(
                       "report_blocked",
-                      "End this build as blocked when the requested task is impossible as asked: site_lacks_capability when the site does not offer what the task needs; site_declined when the site offers what the task needs but declines this example's own facts, such as an applicant it will not quote, and explanation names the reason the site gave; owner_declined when the owner answered no to a confirm question, or declined to sign in, and the build needs that step; question_unanswered when a question you asked went unanswered and the build cannot go on without its answer; policy only when Guardian denied or escalated an execution in this attempt, denied or escalated a publication for privacy or authority, or with a private_literal, credential, customer_data, exfiltration, unsafe_logging or safety_default finding, and nothing within your authority gets past it; a publication denial or escalation that names a correction or missing evidence, such as source_correction, evidence or an example_value finding, is review feedback to fix, never a policy block; your own instructions are never a policy block, and the host refuses each reason without its basis on record, unless the host's guidance names that policy ending. explanation tells the caller in one or two plain sentences what is missing or refused; Guardian reviews it first, and returns it with a rationale when it passes on a website's instructions, links or phone numbers or does not match the evidence: the attempt then goes on, and you revise the explanation and call again, or withdraw it and continue. Never use it for anything recoverable: a failed execution, review feedback, a sign-in problem, a browser or host problem the host can still recover, a question only the caller can answer (ask with request_input), or a target on another registrable domain (proceed; Guardian reviews it). Once Guardian allows the explanation, it ends the attempt; nothing is published. Use host_unavailable only when executionAvailability is host_unavailable and what the build still needs cannot run without live execution, such as a fresh example after a source correction: it ends the attempt as the host's failure, never as blocked, with no explanation review, so never call a host fault policy. intent states the evidence that the task is impossible as asked, or that the host ended live execution.",
+                      "End this build as blocked when the requested task is impossible as asked: site_lacks_capability when the site does not offer what the task needs; site_declined when the site offers what the task needs but declines this example's own facts, such as an applicant it will not quote, and explanation names the reason the site gave; owner_declined when the owner answered no to a confirm question, or declined to sign in, and the build needs that step; question_unanswered when a question you asked went unanswered and the build cannot go on without its answer; host_refused when a host check refused a step the build needs, such as finish_build, a sign-in form or a site change, and nothing left in this attempt can fix it; policy only when Guardian refused an execution in this attempt with refusal final, denied or escalated a publication for privacy or authority, or with a private_literal, credential, customer_data, exfiltration, unsafe_logging or safety_default finding, and nothing within your authority gets past it; a publication denial or escalation that names a correction or missing evidence, such as source_correction, evidence or an example_value finding, is review feedback to fix, never a policy block; your own instructions are never a policy block, and the host refuses each reason without its basis on record, unless the host's guidance names that policy ending. explanation tells the caller in one or two plain sentences what is missing or refused; Guardian reviews it first, and returns it with a rationale when it passes on a website's instructions, links or phone numbers or does not match the evidence: the attempt then goes on, and you revise the explanation and call again, or withdraw it and continue. Never use it for anything recoverable: a failed execution, review feedback, a sign-in problem, a browser or host problem the host can still recover, a question only the caller can answer (ask with request_input), or a target on another registrable domain (proceed; Guardian reviews it). Once Guardian allows the explanation, it ends the attempt; nothing is published. Use host_unavailable only when executionAvailability is host_unavailable and what the build still needs cannot run without live execution, such as a fresh example after a source correction: it ends the attempt as the host's failure, never as blocked, with no explanation review, so never call a host fault policy. intent states the evidence that the task is impossible as asked, or that the host ended live execution.",
                       "The blocked ending was not recorded. Inspect the finite failure; correct the request or continue the build.",
                       (request) => reportBlocked(request),
                     ),
@@ -893,7 +972,7 @@ export const makeOpenAIMinter = (
                 : tool({
                     ...hostTool(
                       "mint_update",
-                      "Change this build's task settings after the caller confirmed the change: input values, a requirement, constraint or prerequisite (add, drop or revise), the purpose, read to write (effect), the target site or the login (sign_in, different_login, or signed_out when the owner chose what the site shows without signing in); in maintenance, only a requirement, the purpose or an output field (output) of the published tool's contract. An output change adds a field (add) or makes one stricter (tighten: optional or nullable to required, or a narrower type) with no confirmation needed, since callers keep everything they received; to fix a gap, such as a fact the page shows that the output lacks, or a needed value the schema lets be null, add or tighten it. Loosening one (optional, nullable, widen) or removing it (remove) needs its owner's confirmation, and remove also needs reason: why the field must go, from what the site shows now. Ask with request_input first when the request does not already settle the change, then name the answered questions in confirmedBy; the caller picking an option you wrote confirms what that option says, as do their own words. summary says the change in plain words, as the caller would read it. recommend update keeps the same task and workflow: changed values, dates or options, a dropped prerequisite, a read becoming a write, or a sister domain of the same product. recommend new_mint when the caller now wants a different task or another product's workflow, with suggestedRequest, the request they could submit for it; a changed site origin alone decides neither. Guardian reviews the change. Results: updated (continue under the returned task), clarification_required (ask, then call again), reword (revise; nothing changed and the build continues), new_mint_recommended (the build ends blocked and the caller gets the recommendation), review_unavailable (submit the same call again), update_refused (nothing changed; the instruction says why), update_invalid (correct the request and call again). A site, login or effect change always names the caller's confirming answers in confirmedBy. No update removes the requested action itself, allows repeating a write that may have committed, or overturns a Guardian decision, except that the caller's confirmed answer can overturn one that held a step to their own request, such as a time, a value or a search setting. A caller's answer never overturns a decision made for safety or for a Pomerado scope limit. intent states the evidence for the change.",
+                      "Change this build's task settings after the caller confirmed the change: input values, a requirement, constraint or prerequisite (add, drop or revise), the purpose, read to write (effect), the target site or the login (sign_in, different_login, or signed_out when the owner chose what the site shows without signing in); in maintenance, only a requirement, the purpose or an output field (output) of the published tool's contract. An output change adds a field (add) or makes one stricter (tighten: optional or nullable to required, or a narrower type) with no confirmation needed, since callers keep everything they received; to fix a gap, such as a fact the page shows that the output lacks, or a needed value the schema lets be null, add or tighten it. Loosening one (optional, nullable, widen) or removing it (remove) needs its owner's confirmation, and remove also needs reason: why the field must go, from what the site shows now. When the build is the owner's own request to change the tool and that request plainly names the output change, the request is their confirmation: confirmedBy may be empty. Ask with request_input first when the request does not already settle the change, then name the answered questions in confirmedBy; the caller picking an option you wrote confirms what that option says, as do their own words. summary says the change in plain words, as the caller would read it. recommend update keeps the same task and workflow: changed values, dates or options, a dropped prerequisite, a read becoming a write, or a sister domain of the same product. recommend new_mint when the caller now wants a different task or another product's workflow, with suggestedRequest, the request they could submit for it; a changed site origin alone decides neither. Guardian reviews the change. Results: updated (continue under the returned task), clarification_required (ask, then call again), reword (revise; nothing changed and the build continues), new_mint_recommended (the build ends blocked and the caller gets the recommendation), review_unavailable (submit the same call again), update_refused (nothing changed; the instruction says why), update_invalid (correct the request and call again). A site, login or effect change always names the caller's confirming answers in confirmedBy. No update removes the requested action itself, allows repeating a write that may have committed, or overturns a Guardian decision, except that the caller's confirmed answer can overturn one that held a step to their own request, such as a time, a value or a search setting. A caller's answer never overturns a decision made for safety or for a Pomerado scope limit. intent states the evidence for the change.",
                       "The task was not updated. Inspect the finite failure; correct the request or continue under the current task.",
                       (request) => updateTask(request),
                     ),
@@ -965,7 +1044,7 @@ export const makeOpenAIMinter = (
                 : tool({
                     ...hostTool(
                       "live_tests",
-                      `A read signed out's live tests (read the testing skill); a signed-in read or a write runs none. You design the cases in ${"test/cases.json"} from what you saw on the site, each with its purpose: different real values unlike the example's (another record, retailer or store the site lists), smart combinations of inputs, edge cases (a value the site does not offer, no results, the next page, a location the site won't apply, returned labeled with the applied value) and one rerun of the example's input. Start as soon as you know the page and the inputs, and refine them once the example passes. Action plan returns your cases and each case's latest status, result and failure with its source line; name cases to see their full outputs. Action run runs the named cases, or all when cases is null, as one batch after one Guardian review: each case starts on a fresh page like the example, keeping its browser's site data, on separate browsers at once where the host has them, and you get every result, each marked warm or cold: cold ran first on a new browser with an empty profile. entrypoint is src/tool.mjs or src/tool-http.mjs: run the same cases on both versions, each as its own batch, and each version keeps its own results, so one never replaces or stales the other's. Results count only for the version, the source and the case as they ran; publication review reads the host's record of them and judges it against what the tool claims. intent states what these cases should establish.`,
+                      `A read's live tests (read the testing skill); a write runs none. You design a few cases in ${"test/cases.json"} from what you saw on the site, each with its purpose. A read signed out runs a handful: one case that sets together every input the example left unset, each to a value the site shows that at least one example row fails while some rows pass, so its rows show each was applied, the example's input once more, no results, the next page, and another case only where a different layout or real variant needs it. A signed-in read runs at most two distinct inputs, on its own signed-in browser: its combined case, and a second only for inputs that cannot be set with the others; running one again is free. Start as soon as you know the page and the inputs, and refine them once the example passes. Action plan returns your cases and each case's latest status, result and failure with its source line; name cases to see their full outputs. Action run runs the named cases, or all when cases is null, as one batch after one Guardian review: each case starts on a fresh page like the example, keeping its browser's site data, on separate browsers at once where the host has them, and you get every result, each marked warm or cold: cold ran first on a new browser with an empty profile. entrypoint is src/tool.mjs or src/tool-http.mjs: run the same cases on both versions, each as its own batch, and each version keeps its own results, so one never replaces or stales the other's. Results count only for the version, the source and the case as they ran; publication review reads the host's record of them and judges it against what the tool claims. intent states what these cases should establish.`,
                       "The live tests did not run. Inspect the finite failure; fix the cases file or the source, then plan or run again.",
                       (request) => runLiveTests(request),
                     ),
@@ -1185,9 +1264,13 @@ export const makeOpenAIMinter = (
                         started: new Map(),
                       };
                       response.output.forEach((item, index) => {
-                        if (item.type !== "function_call") return;
+                        if (item.type !== "function_call" && item.type !== "apply_patch_call")
+                          return;
                         placed.set(item.callId, { response: calls, index });
-                        if (calls.edits.some((edit) => edit.index < index))
+                        if (
+                          item.type === "function_call" &&
+                          calls.edits.some((edit) => edit.index < index)
+                        )
                           heldForEdit.add(item.callId);
                       });
                       return response;
@@ -1280,21 +1363,30 @@ export const makeOpenAIMinter = (
                 }
                 const result: SegmentResult = segment.value;
                 if (result.interruptions.length > 0 && !turn.isComplete()) {
-                  // Only the host's own holds pause a run: calls behind an edit, and calls whose
-                  // arguments the SDK could not read. A held call runs only when every edit of its
-                  // response came before it and applied; otherwise it returns not run. Resuming
-                  // the same state runs them with no model call, and its usage is counted once,
-                  // below.
-                  const released = result.interruptions.every(
-                    (item) =>
-                      item.rawItem.type === "function_call" &&
-                      (heldForEdit.has(item.rawItem.callId) ||
-                        unreadableArguments(item.rawItem.arguments)),
+                  // Only the host's own holds pause a run: calls behind an edit, calls whose
+                  // arguments the SDK could not read, and edits after a step of their response
+                  // that did not succeed. A held call runs only when every edit of its response
+                  // came before it and applied, and no step before it failed; otherwise it
+                  // returns not run. Resuming the same state runs them with no model call, and
+                  // its usage is counted once, below.
+                  const released = result.interruptions.every((item) =>
+                    item.rawItem.type === "function_call"
+                      ? heldForEdit.has(item.rawItem.callId) ||
+                        unreadableArguments(item.rawItem.arguments)
+                      : item.rawItem.type === "apply_patch_call" &&
+                        afterFailure(item.rawItem.callId),
                   );
                   if (!released) throw new MintFailure({ code: "Unavailable" });
                   for (const item of result.interruptions) {
-                    const callId = item.rawItem.type === "function_call" ? item.rawItem.callId : "";
-                    if (heldForEdit.delete(callId) && !editsLanded(callId, result.history))
+                    const callId =
+                      item.rawItem.type === "function_call" ||
+                      item.rawItem.type === "apply_patch_call"
+                        ? item.rawItem.callId
+                        : "";
+                    const heldBehindEdit = heldForEdit.delete(callId);
+                    if (afterFailure(callId))
+                      result.state.reject(item, { message: notRunAfterFailure });
+                    else if (heldBehindEdit && !editsLanded(callId, result.history))
                       result.state.reject(item, { message: notRun });
                     else result.state.approve(item);
                   }

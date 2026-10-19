@@ -161,6 +161,18 @@ const withEmptyObjectsIn = (
  * schema. A no-input operation takes the empty object, written the way Effect writes every other
  * struct; annotations such as a description are kept.
  */
+/**
+ * An optional input field that defaults to `value`: a caller may leave it out, and the run then
+ * gets `value`. Its published schema shows `value` as its `default`, which `Schema.optionalWith`'s
+ * own default does not. Use it for a choice the build's request or the owner's answer settled as
+ * how the tool behaves, such as a sort order, so callers may vary it and need not send it.
+ */
+export const defaultedInput = <A, I, R>(schema: Schema.Schema<A, I, R>, value: NoInfer<A>) =>
+  Schema.optionalWith(schema.annotations({ default: value }), {
+    default: () => value,
+    exact: true,
+  });
+
 export const contractJsonSchema = <A, I, R>(schema: Schema.Schema<A, I, R>) =>
   withEmptyObjectsIn({ ...JSONSchema.make(schema) });
 

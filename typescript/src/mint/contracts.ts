@@ -36,6 +36,7 @@ import {
   RejectedMarker,
   SecretSlots,
   SignInMethodChoice,
+  SubmitKey,
 } from "../destinations/autofill-contracts.js";
 import type { SandboxSession, SkillDescriptor } from "@openai/agents/sandbox";
 import type { AgentInputItem } from "@openai/agents";
@@ -60,6 +61,7 @@ import {
   TaskChange,
   type PendingTaskUpdate,
   type ReviewedTaskUpdate,
+  type TaskUpdateConfirmer,
   type TaskUpdateDecision,
 } from "../guardian/task-update.js";
 import {
@@ -86,6 +88,7 @@ import {
   GuardianAction,
   PublicationFinding,
   PublicationReason,
+  type GuardianRefusal,
 } from "../guardian/review-contracts.js";
 import {
   OutcomeWrite,
@@ -439,6 +442,11 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
      * the harness screens it before a build's result carries it (`PublicationDenial`).
      */
     readonly publicReason?: string;
+    /**
+     * An execution review's refusal kind (`GuardianRefusal`). Absent from an older reviewer, it
+     * counts as `final`, as every execution refusal did before.
+     */
+    readonly refusal?: GuardianRefusal;
   };
 }> {}
 
@@ -477,8 +485,9 @@ export type SignedInMarkerCheckRequest = typeof SignedInMarkerCheckRequest.Type;
  * One sign-in screen for host autofill (autofill enabled): the
  * fields the host fills from the held login, each with the kind of value it takes, and the control
  * that submits them, which the host clicks. A screen without a button (a password field that
- * appears once the identifier is filled) names no submit; a method choice names only a submit.
- * `signedIn` names what shows the site signed in, which the host checks on the page itself.
+ * appears once the identifier is filled) names no submit; a method choice names only a submit. A
+ * screen whose form has no submit control and submits on Enter names `submitKey` instead, and the
+ * host presses Enter in its last field. `signedIn` names what shows the site signed in, which the host checks on the page itself.
  */
 export const SignInStep = Schema.Union(
   Schema.Struct({
@@ -514,6 +523,11 @@ export const SignInStep = Schema.Union(
     ).pipe(Schema.maxItems(maximumStepFields)),
     submit: Schema.optional(SignInSelector),
     /**
+     * Enter, pressed in the last field to submit that field's form, on a screen whose form has no
+     * submit control and submits on Enter. Never with `submit`.
+     */
+    submitKey: Schema.optional(SubmitKey),
+    /**
      * A two-factor method choice: every method the screen offers, each with the control that
      * picks it, and `submit` the one to pick now. Runs pick again from these.
      */
@@ -527,6 +541,15 @@ export const SignInStep = Schema.Union(
     Schema.filter((step) => step.fields.length > 0 || step.submit !== undefined, {
       message: () => "a sign-in step fills a field or clicks a control",
     }),
+    Schema.filter(
+      (step) =>
+        step.submitKey === undefined ||
+        (step.submit === undefined && step.methods === undefined && step.fields.length > 0),
+      {
+        message: () =>
+          "a submitKey step fills a field and names no submit: the key submits its last field's form",
+      },
+    ),
     Schema.filter(
       (step) =>
         step.methods === undefined ||
@@ -623,7 +646,7 @@ export const ExecutionRequest = Schema.Struct({
   testInput: Schema.optional(
     Schema.String.pipe(Schema.minLength(2), Schema.maxLength(16_384)).annotations({
       description:
-        "Only with purpose test and target liveBrowser on a read build: the tool's input you chose, as JSON text, to show the tool works for values other than the caller's, such as another route or passenger count. Public values only. Only a read signed out runs one; a signed-in read proves the tool with its example and runs none. Where the host offers live_tests, a read signed out runs its planned cases in batches with it instead. Omit it to run the caller's input.",
+        "Only with purpose test and target liveBrowser on a read build: the tool's input you chose, as JSON text, to show the tool works for values other than the caller's, such as another route or passenger count. Public values only. A read signed out runs as many as it needs. A signed-in read runs at most two distinct inputs beyond its example in a build or repair, its combined filter case (testing skill); running one again is free. Where the host offers live_tests, run planned cases in batches with it instead. Omit it to run the caller's input.",
     }),
   ),
   /** Only on authenticate, and only where the host offers autofill sign-in. */
@@ -652,8 +675,10 @@ export const ManagedSignInExecutionRequest = ExecutionRequest.omit("signInStep")
  * What a host provides for a read's live tests. The minting agent designs cases in
  * `test/cases.json` from what it saw on the site, and runs them in batches on the Playwright
  * version or the HTTP version (`entrypoint`); the harness keeps each version's results apart. A
- * batch runs only on a read that has not signed in: a signed-in read and a write prove the tool
- * with one run.
+ * read signed out runs as many as it needs. A signed-in read runs a few, on at most
+ * `signedInTestInputLimit` distinct inputs in a build or repair, as batches marked `signedIn`,
+ * only on a host that declares `signedInBatches`. A
+ * write runs none: its act session is the one run that proves it.
  */
 export interface LiveTestHost {
   /**
@@ -675,7 +700,9 @@ export interface LiveTestHost {
    * case first on a new browser with an empty profile, and marks each case run's `start`: `cold`
    * for a case that ran first on such a browser, `warm` for one that ran on a browser that kept
    * site data from earlier steps. A host with one browser runs every case warm, and the record
-   * shows that no case passed cold. `runLiveTestCase` runs a case and its next page. A
+   * shows that no case passed cold. A batch marked `signedIn` belongs to a signed-in read: the
+   * host runs each of its cases on the build's own signed-in browser, one at a time and warm,
+   * never on a new browser, which would hold no session. `runLiveTestCase` runs a case and its next page. A
    * case a host problem, a challenge, a site block or the deadline stopped is `inconclusive`; a
    * case not run by `batch.deadlineAt` (epoch milliseconds) is `inconclusive` with reason
    * `deadline`. A host may record the batch as one history entry marked `agent_chosen_batch`, as
@@ -684,6 +711,14 @@ export interface LiveTestHost {
   readonly run: (batch: LiveTestBatch) => Effect.Effect<LiveTestBatchResult, MintFailure>;
   /** The most browsers this host runs a batch on at once, the build's own included. */
   readonly maxWorkers: number;
+  /**
+   * The host runs a batch marked `signedIn` as that field says: every case on the build's own
+   * signed-in browser, warm, never on a new browser. Only then does the harness give a signed-in
+   * read live tests, on at most `signedInTestInputLimit` distinct inputs, and only then should the
+   * host's preflight pass `signedInTests: true` to `preflightTestInput`. Absent, a signed-in read
+   * runs no live tests, as before this field existed.
+   */
+  readonly signedInBatches?: true;
   /**
    * How long one case may run on this host, in milliseconds; `defaultLiveTestCaseMs` when
    * absent. The harness refuses a batch as `no_time`, running nothing, when less than this is
@@ -708,6 +743,11 @@ export interface LiveTestBatch {
   readonly workers: number;
   /** When the batch must end, in epoch milliseconds. */
   readonly deadlineAt: number;
+  /**
+   * The read signed in: run every case on the build's own signed-in browser, warm, never on a new
+   * browser. The harness then asks for one worker.
+   */
+  readonly signedIn?: true;
 }
 
 export type LiveTestBatchResult =
@@ -1021,13 +1061,16 @@ export type PublicationRequest = typeof PublicationRequest.Type;
  * - `site_lacks_capability`: the site does not offer what the task needs.
  * - `site_declined`: the site offers what the task needs but declines this example's own facts,
  *   such as an applicant it will not quote; the explanation names the reason the site gave.
- * - `policy`: Guardian denied or escalated an execution, or refused a publication for a reason no
- *   correction gets past (`publicationRefusalUnfixable`), in this attempt, and nothing within
- *   authority gets past it.
+ * - `policy`: Guardian refused an execution with refusal `final`, or refused a publication for a
+ *   reason no correction gets past (`publicationRefusalUnfixable`), in this attempt, and nothing
+ *   within authority gets past it. An execution refusal Guardian marked `correctable` is never one.
  * - `owner_declined`: the owner explicitly said no to a step the build needs: a confirm question
  *   answered no, or a login request declined.
  * - `question_unanswered`: a question the build needed went unanswered, and the build cannot go
  *   on without its answer.
+ * - `host_refused`: a host check, not Guardian and not the site, refused a step the build needs in
+ *   this attempt, such as a publication, a sign-in form or a site change, and nothing left in the
+ *   attempt can fix it. The host records those refusals itself.
  * The host refuses each ending without its basis on record. A `policy` report whose only basis is
  * the owner's no or an unanswered question ends as `owner_declined` or `question_unanswered`. A
  * target on another registrable domain is never a reason by itself: Guardian reviews such work.
@@ -1040,6 +1083,7 @@ export const BuildBlocked = Schema.Struct({
     "policy",
     "owner_declined",
     "question_unanswered",
+    "host_refused",
   ),
   explanation: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(blockedExplanationLimit)),
 });
@@ -1049,7 +1093,9 @@ export const BuildBlocked = Schema.Struct({
  * asked for, cannot run without it. That one ends the attempt as the host's failure, never as a
  * block: nothing about the task is impossible, so the caller never reads it as one. Once sign-in
  * is unavailable in the build, any report, `policy` included, ends the build with the sign-in's
- * own result instead of the reason it names.
+ * own result instead of the reason it names. So does any ending the report's checks accept but
+ * `owner_declined` or `question_unanswered` while the build's latest sign-in never confirmed and
+ * no failed one is pending: the site never got as far as judging the task.
  */
 export const BlockedReport = Schema.Struct({
   reason: Schema.Literal(
@@ -1058,6 +1104,7 @@ export const BlockedReport = Schema.Struct({
     "policy",
     "owner_declined",
     "question_unanswered",
+    "host_refused",
     "host_unavailable",
   ),
   explanation: BuildBlocked.fields.explanation,
@@ -1121,9 +1168,11 @@ export type TaskUpdateRequest = typeof TaskUpdateRequest.Type;
  * Every `status` a `mint_update` result carries:
  * - `updated`: Guardian allowed it and the host applied it; the result carries the effective task.
  * - `clarification_required`: Guardian found the caller's confirmation missing or ambiguous, or
- *   found a `recommend: "update"` a new build, or the host needs something only the caller has,
- *   such as a login for the new site. Nothing changed.
- * - `reword`: Guardian's feedback; nothing changed and the build continues.
+ *   found a `recommend: "update"` a new build for the first time since the task last changed, or
+ *   the host needs something only the caller has, such as a login for the new site. Nothing
+ *   changed.
+ * - `reword`: Guardian's feedback, or its new build call on another `recommend: "update"` before
+ *   the task changed, after the caller was asked once; nothing changed and the build continues.
  * - `new_mint_recommended`: the minter recommended a new build and Guardian did not object. This
  *   build ends blocked with the recommendation and its suggested request.
  * - `review_unavailable`: the review did not complete; resubmit within the review outage budget.
@@ -1132,7 +1181,9 @@ export type TaskUpdateRequest = typeof TaskUpdateRequest.Type;
  * - `review_invalid_outcome`: the review returned an outcome its kind does not accept, even after one
  *   correction. Nothing changed; revise or withdraw the update. A second one in an attempt ends it
  *   incomplete.
- * - `update_invalid`: the request does not decode. Nothing changed.
+ * - `update_invalid`: the request does not decode, a recommended new build has no suggested request,
+ *   or screening made its suggested request longer than 500 characters
+ *   (`suggested_request_too_long`). Nothing changed.
  */
 export const taskUpdateStatuses = [
   "updated",
@@ -1266,8 +1317,8 @@ export type PublicationDenial = typeof PublicationDenial.Type;
  * - `account_locked`: the site said the account is locked, suspended or disabled.
  * - `question_unanswered`: a question the build needed went unanswered.
  * - `owner_declined`: the owner said no to a step the build needs.
- * - `site_lacks_capability`, `site_declined`, `policy`: the minter's blocked ending of the same
- *   name.
+ * - `site_lacks_capability`, `site_declined`, `policy`, `host_refused`: the minter's blocked ending
+ *   of the same name.
  * - `host_unavailable`: the host, not the task, ended the build.
  */
 export const mintStopReasons = [
@@ -1281,6 +1332,7 @@ export const mintStopReasons = [
   "site_lacks_capability",
   "site_declined",
   "policy",
+  "host_refused",
   "host_unavailable",
 ] as const;
 export const MintStopReason = Schema.Literal(...mintStopReasons);
@@ -1620,6 +1672,12 @@ export interface MintHarnessSnapshot {
    */
   readonly liveTestsOutOfTime?: boolean;
   /**
+   * The distinct inputs a signed-in read ran live tests on in this attempt (`testInputKey`), so a
+   * takeover keeps its count against `signedInTestInputLimit`. A worker from an older release
+   * drops it, and runs no live test for a signed-in read.
+   */
+  readonly signedInTestInputs?: readonly string[];
+  /**
    * The writes Guardian labelled that the outcome reviewer tracks, with their entrypoints and
    * source digests, so a takeover tracks them, and refuses their repeats, even when the
    * reviewer's own best-effort save failed.
@@ -1683,11 +1741,20 @@ export interface MintHarnessSnapshot {
    */
   readonly blockedReviewUnavailable?: true;
   /**
-   * Guardian denied or escalated an execution, or refused a publication for a reason no
-   * correction gets past (`publicationRefusalUnfixable`), in this attempt: the refusal a `policy`
-   * block needs. A publication denial that names a correction never sets it.
+   * Guardian refused an execution with a refusal it did not mark `correctable`, or refused a
+   * publication for a reason no correction gets past (`publicationRefusalUnfixable`), in this
+   * attempt: the refusal a `policy` block needs. A publication denial that names a correction, or
+   * an execution refusal marked `correctable`, never sets it. A checkpoint from an older worker
+   * set it on any execution refusal, which a newer one restores as it is.
    */
   readonly guardianRefused?: true;
+  /**
+   * A host check refused a step the build needs in this attempt: a publication its checks refused,
+   * a sign-in the host refused, or a task update the host refused. The refusal a `host_refused`
+   * block needs. Optional, so an older worker ignores it and a newer one
+   * restores an older checkpoint.
+   */
+  readonly hostRefused?: true;
   /**
    * Unanswered questions handed back to the minter as no answer in this build, which a
    * `question_unanswered` block stands on. Optional so a rollout's old and new workers each restore the other's
@@ -1710,6 +1777,11 @@ export interface MintHarnessSnapshot {
    * `different_login` update. Optional for the same reason.
    */
   readonly signInAbandoned?: true;
+  /**
+   * The build's latest sign-in on its current site may have sent the login and nothing confirmed
+   * it, which ends a blocked report as sign-in unavailable. Optional for the same reason.
+   */
+  readonly signInUnconfirmed?: true;
   readonly destinationEvidenceRefusals: number;
   readonly inputFeedbackRounds: number;
   readonly inputFeedbackPublicTool: boolean;
@@ -1813,8 +1885,8 @@ const HarnessTerminal = Schema.Struct({
   hostFailure: Schema.optionalWith(Schema.Literal(...mintHostFailures), { exact: true }),
   // Optional, and dropped as an excess field by an older worker's decode, so a rollout's old and
   // new workers each restore the other's checkpoint, except a terminal whose blocked reason is
-  // one an older worker does not know (`owner_declined`, `question_unanswered`, `site_declined`):
-  // that one does not decode there.
+  // one an older worker does not know (`owner_declined`, `question_unanswered`, `site_declined`,
+  // `host_refused`): that one does not decode there.
   blocked: Schema.optionalWith(BuildBlockedOutcome, { exact: true }),
   // Optional, and dropped by an older worker's decode.
   stopReason: Schema.optionalWith(MintStopReason, { exact: true }),
@@ -1826,6 +1898,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   liveTests: Schema.optionalWith(Schema.Array(LiveTestRecord), { exact: true }),
   liveTestsHttp: Schema.optionalWith(Schema.Array(LiveTestRecord), { exact: true }),
   liveTestsOutOfTime: Schema.optionalWith(Schema.Boolean, { exact: true }),
+  signedInTestInputs: Schema.optionalWith(Schema.Array(Schema.String), { exact: true }),
   outcomeWrites: Schema.optionalWith(Schema.Array(OutcomeWrite), { exact: true }),
   purposes: Schema.Array(
     Schema.Struct({
@@ -1862,10 +1935,12 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   ),
   blockedReviewUnavailable: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   guardianRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  hostRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   noAnswerHandBacks: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
   loginHeld: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   loginDeclined: Schema.optionalWith(LoginDecline, { exact: true }),
   signInAbandoned: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  signInUnconfirmed: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   destinationEvidenceRefusals: Schema.NonNegativeInt,
   inputFeedbackRounds: Schema.NonNegativeInt,
   inputFeedbackPublicTool: Schema.Boolean,
@@ -2168,12 +2243,24 @@ export interface MintDependencies {
     application: TaskUpdateApplication,
   ) => Effect.Effect<TaskUpdateHostResult, MintFailure>;
   /**
-   * In maintenance, who can confirm a `mint_update` to the published tool's registered contract:
-   * `owner` when the person the repair's questions reach may manage the tool, otherwise `none`.
-   * The harness asks it before review; `none`, a failure or an absent hook refuses the update as
-   * `owner_unavailable`, so a repair without the owner keeps the registered contract.
+   * The host can't move a build to another site: `applyTaskUpdate` would refuse every `site`
+   * change. The harness then refuses a `site` change as `site_move_unsupported` when the minter
+   * proposes it, before the host asks for the caller's confirmation or Guardian reviews it, and
+   * points it to a new build; every update review reads it as a host fact
+   * (`PendingTaskUpdate.siteMoveUnsupported`). Absent, a `site` change is confirmed and reviewed,
+   * and the host applies or refuses it, as before.
    */
-  readonly taskUpdateConfirmer?: () => Effect.Effect<"owner" | "none", MintFailure>;
+  readonly siteMoveUnsupported?: true;
+  /**
+   * In maintenance, who can confirm a `mint_update` to the published tool's registered contract:
+   * `owner` when the person the repair's questions reach may manage the tool, `owner_request`
+   * when, in addition, the maintenance is that owner's own request to change the tool, otherwise
+   * `none`. The harness asks it before review; `none`, a failure or an absent hook refuses an
+   * update that loosens the contract as `owner_unavailable`, so a repair without the owner keeps
+   * it. With `owner_request`, an update that cites no answer goes to Guardian, which accepts the
+   * owner's request as confirmation of an output change the request plainly names.
+   */
+  readonly taskUpdateConfirmer?: () => Effect.Effect<TaskUpdateConfirmer, MintFailure>;
   /** Receives the owner's answer to the host's capability question. */
   readonly capabilityAnswered?: (answer: string) => Effect.Effect<void, MintFailure>;
   readonly diagnostics?: MintDiagnostics;
@@ -2215,6 +2302,13 @@ export interface MintDependencies {
    * authorization values are its content, so the model's source screen must not withhold them.
    */
   readonly readSessionTokens?: (path: string) => string | undefined;
+  /**
+   * Saves an execution result too large to return whole (`resultDigestThresholdBytes`) as the
+   * read-only workspace file `path`, under `captures/results/`, which `read_source` and offline
+   * commands read; the agent then receives the result's digest naming it. The text is already
+   * screened for the model. A host without it returns every result whole.
+   */
+  readonly saveResult?: (path: string, text: string) => Effect.Effect<void, MintFailure>;
   /** Host-selected original attempt evidence. Content is fetched only for a requested indexed path. */
   readonly readRetainedCapture?: (path: string) => Effect.Effect<string | undefined>;
   /** Host-only selection/retrieval; never refetches a historical website response. */
@@ -2247,7 +2341,7 @@ export interface MintDependencies {
   ) => Effect.Effect<SignedInMarkerCheck, MintFailure>;
   /**
    * Runs a read's planned live tests in batches (`LiveTestHost`). Absent, the minter is offered
-   * no live_tests tool, and a read signed out tests one input at a time with execute.
+   * no live_tests tool, and a read tests one input at a time with execute.
    */
   readonly liveTests?: LiveTestHost;
   /**
@@ -2258,6 +2352,15 @@ export interface MintDependencies {
    * live tests and publication go on signed out. Absent, the minter is offered no such tool.
    */
   readonly abandonSignIn?: () => Effect.Effect<AbandonSignInResult, MintFailure>;
+  /**
+   * The host's own reading of the build's latest sign-in when nothing confirmed it:
+   * `session_not_kept` when the site accepted the login but the signed-in session did not survive
+   * the page load after it. A blocked ending the report's checks accept while that sign-in is
+   * unconfirmed, other than the owner's `owner_declined` or `question_unanswered`, ends the build
+   * as sign-in unavailable, worded by this answer. Absent, or undefined, the ending says the site
+   * could not be signed in.
+   */
+  readonly signInSessionLoss?: () => SessionLoss | undefined;
   /** The host's own descriptions of its optional tools, in place of the generic ones. */
   readonly hostToolDescriptions?: HostToolDescriptions;
   readonly projection: MintProjection;

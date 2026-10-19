@@ -14,6 +14,11 @@ import bookSeat from "../../authoring/examples/caller-choice.js";
 import dialogPicker from "../../authoring/examples/dialog-picker.js";
 import placeOrder from "../../authoring/examples/write-session.js";
 import { selectInvoiceLayout } from "../../authoring/examples/variants.js";
+import {
+  guardianPublicationPolicy,
+  publicationLiveTestsPolicy,
+  publicationOutputPolicy,
+} from "../../src/guardian/publication.js";
 import { inputFeedbackInstruction } from "../../src/mint/input-feedback.js";
 import { loadAuthoringSkills, loadWorkspaceGuide } from "../../src/mint/skills.js";
 import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
@@ -115,6 +120,32 @@ const contents = (skills: readonly SkillDescriptor[]) =>
     if (!(skill.content instanceof Uint8Array)) throw new Error(`${skill.name} is not bytes`);
     return new TextDecoder().decode(skill.content);
   });
+
+/*
+ * The minter reads the publication review's rules for live tests and output while it explores, so
+ * it gathers that evidence before its first publication instead of learning it from a denial. The
+ * file is the text the review reads, so a policy change reaches the minter in the same release.
+ */
+it("installs the publication review's test and output rules for the minter", async () => {
+  const rules = `${publicationLiveTestsPolicy}\n\n${publicationOutputPolicy}`;
+  for (const part of [publicationLiveTestsPolicy, publicationOutputPolicy])
+    expect(guardianPublicationPolicy).toContain(part);
+  const root = await authoringCopy((_path, text) => composeHostText(text));
+  try {
+    // Every host gets the same file, whether it loads standalone text or composes its own.
+    for (const guide of [
+      await Effect.runPromise(loadWorkspaceGuide("typescript/authoring")),
+      await Effect.runPromise(loadWorkspaceGuide(root, (text) => text)),
+    ]) {
+      expect(guide.files.get("reference/publication-review.md")).toBe(rules);
+      expect(guide.instructions).toContain(
+        "- `reference/publication-review.md` holds the rules Guardian's publication review applies",
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 it("loads standalone text by default", async () => {
   const skills = await Effect.runPromise(loadAuthoringSkills("typescript/authoring"));
@@ -265,6 +296,13 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "- Published files are all of `src/`, the named entrypoints and any `explore/`, `test/` or `scratch/` module they import",
   ],
   ["publication", "## Never put these in published files"],
+  // A list whose site rarely shows an empty state still publishes: a no-results case is preferred
+  // when the build finds one, and neither skill names it as a gap.
+  [
+    "testing",
+    "Without a no-results answer, move on: it needs no `notTested` entry and no question;",
+  ],
+  ["publication", "and untested (such as a later page or another layout, live)."],
   [
     "publication",
     "| `reason` | `input_feedback_unresolved` | The feedback rounds are spent | End the attempt; do not execute again |",
@@ -315,7 +353,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   // fails the output check.
   [
     "core",
-    "**Never loosen a value the request needs.** The values the request needs are each value it names, the record's identifier as the site shows it, and the context those depend on as the page shows it, such as dates, a party size or a location. Make each one required and non-null, typed so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the request's wording or a description says. A run whose output fails its schema goes to repair. - Type each output field as strictly as its value: required text is non-empty and trimmed (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports an input's value reuses that input's enum or pattern. Make one optional or nullable only where the page may genuinely not show the value. - The one exception is a record whose own page genuinely does not show the value, such as an item that is sold out and shows no amount, or a listing that shows no date yet. Then the value may be null only together with a field that says why, such as its availability, and both descriptions say so. - Null never covers a value the page shows that the code failed to read: that throws `OperationFailure` naming it. Never turn a read that found nothing into null (`?.innerText ?? null`); a missing element is a failure, not an absence. - Before your first example, list the needed values. If the page may not show one, settle it then: find where the site shows it, on every layout its records use, or ask the owner. **Output fields.** Design the output for what a caller could use, and lean toward more fields and more information rather than the minimum: include the facts about each record or result that a caller could reasonably use to identify, choose, compare or act on it, not only the values the request names. Leave out what is unrelated to the tool's purpose or of no use to a caller. - Keep each value's full displayed text. Read the element that holds the whole value, never a shorter or secondary one. When the page splits one value across elements, such as a maker line above a linked name or an author line above a title, return each part in its own field. Never drop either part. - Prefer a separate typed field for each fact over folding it into another field's text. Never derive a value the page does not show. - A field that is not a needed value is nullable when records on this site can lack it, and it is null exactly when this record does not show it. - Never declare a field the code does not read. A field that is always null, empty or fixed is not a disclosed limit: read it from the page, or leave the field out.",
+    "**Never loosen a value the request needs.** The values the request needs are each value it names, the record's identifier as the site shows it, and the context those depend on as the page shows it, such as dates, a party size or a location. Make each one required and non-null, typed so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever a description says. A run whose output fails its schema goes to repair. - The owner may settle a different form for every run: in the request's own explicit words, in an answer to your design question or in a task update, such as blank fields returned as empty strings. Publication review honours that decision as stated. Build it that way, and say in the field's description what the owner chose. It never covers a value the page shows that the code failed to read, or anything personal or account-specific. - Type each output field as strictly as its value: required text is non-empty and trimmed (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports an input's value reuses that input's enum or pattern. Make one optional or nullable only where the page may genuinely not show the value. - The one exception is a record whose own page genuinely does not show the value, such as an item that is sold out and shows no amount, or a listing that shows no date yet. Then the value may be null only together with a field that says why, such as its availability, and both descriptions say so. - Null never covers a value the page shows that the code failed to read: that throws `OperationFailure` naming it. Never turn a read that found nothing into null (`?.innerText ?? null`); a missing element is a failure, not an absence. - Before your first example, list the needed values. If the page may not show one, settle it then: find where the site shows it, on every layout its records use, or ask the owner. **Output fields.** Design the output for what a caller could use, and lean toward more fields and more information rather than the minimum: include the facts about each record or result that a caller could reasonably use to identify, choose, compare or act on it, not only the values the request names. Leave out what is unrelated to the tool's purpose or of no use to a caller. - Keep each value's full displayed text. Read the element that holds the whole value, never a shorter or secondary one. When the page splits one value across elements, such as a maker line above a linked name or an author line above a title, return each part in its own field. Never drop either part. - Prefer a separate typed field for each fact over folding it into another field's text. Never derive a value the page does not show. - A field that is not a needed value is nullable when records on this site can lack it, and it is null exactly when this record does not show it. - Never declare a field the code does not read. A field that is always null, empty or fixed is not a disclosed limit: read it from the page, or leave the field out.",
   ],
   // A list returns one page per call and a cursor to the next.
   [
@@ -380,7 +418,7 @@ const formerSections: readonly (readonly [string, string])[] = [
   ["workspace/AGENTS.md", "Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md)."],
   ["workspace/AGENTS.md", "- `src/`: your operation. It exists from the start and is empty until you write to it"],
   ["testing", "Choose cases that catch actual risk: applied filters, IDs, units, authoritative empty"],
-  ["testing", "Where the host offers `live_tests`, a read signed out has no limit on live tests, and the host runs them for you in parallel."],
+  ["testing", "Where the host offers `live_tests`, the host runs a read signed out's cases for you in parallel."],
 ];
 
 const renderedTexts = async (directory: string, render?: (text: string) => string) => {
@@ -692,14 +730,14 @@ it("has a write confirm from its own commit request, and read back only when tha
   const texts = await renderedTexts("typescript/authoring");
   const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    '- Prefer confirming the write from its commit request. Keep the click on the final commit control, such as Save, Send, Submit, Book or Pay, in its own step. In the same call as that click, wait for the site\'s response to the request it sends, matched by the method and path the session saw carry the commit on the site, and by its body where the body shows the caller\'s values, as `references/write-readback.ts` does. Wait too for every way the page can answer with `waitForOutcome`, listing the site\'s error or validation message first. The write went through when that response is 2xx or 3xx, a body the call can read shows no error, and the page shows no error or validation message after it. A 201 whose Location names the new record went through as soon as it arrives, with no wait for the page. A 200 whose body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says the work is queued, went through too; return the site\'s own status word for it in the output. Then read what the output promises from that response or from the page the commit left, match it to the caller\'s values, and call `verified()` with no argument just before returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page, such as a list, a history or an account screen, only to prove the write: a commit that went through, with the new record\'s id, already proves it. When a commit step returned without calling `verified()` and its `stateChangingRequests` list the commit request with a 2xx or 3xx status, prefer confirming it in the next step from the page as it stands. Make no execute call after `verified()`: a later call reopens the effect. After the confirming step, further `act` steps are refused.',
+    '- Prefer confirming the write from its commit request. Keep the click on the final commit control, such as Save, Send, Submit, Book or Pay, in its own step. In the same call as that click, wait for the site\'s response to the request it sends, matched by the method and path the session saw carry the commit on the site, and by its body where the body shows the caller\'s values, as `references/write-readback.ts` does. Wait too for every way the page can answer with `waitForOutcome`, listing the site\'s error or validation message first. The write went through when that response is 2xx or 3xx, a body the call can read shows no error, and the page shows no error or validation message after it. A 201 whose Location names the new record went through as soon as it arrives, with no wait for the page. A 200 whose body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says the work is queued, went through too; return that in the output as a status in the core notation, such as `queued`, with the site\'s own word in a `status_label` field. Then read what the output promises from that response or from the page the commit left, match it to the caller\'s values, and call `verified()` with no argument just before returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page, such as a list, a history or an account screen, only to prove the write: a commit that went through, with the new record\'s id, already proves it. When a commit step returned without calling `verified()` and its `stateChangingRequests` list the commit request with a 2xx or 3xx status, prefer confirming it in the next step from the page as it stands. Make no execute call after `verified()`: a later call reopens the effect. After the confirming step, further `act` steps are refused.',
   );
   // Every case the request cannot settle keeps a read-back.
   expect(text("writes")).toContain(
     "- Read the site's own proof instead only when the commit request can't confirm the write: no such request went out; it failed, got no answer or returned an error status; its body shows an error, or can't be read on an endpoint that reports errors with a 200, such as GraphQL or a batch call; the page shows an error; the commit went over a websocket or a GET link; or a later stage the site can still refuse, such as sending what an earlier click saved, sent no request of its own. Then prefer the confirmation the page shows after the click: an order, booking or reference number, or a success message or toast that appears after the click with no error on the page. Open the saved state, such as the orders page, the booking list or the updated profile, only when the page shows no confirmation. Match it to the caller's values, return the number or record in the output, and call `verified()` as above. A 200 from any other request is not a confirmation.",
   );
   expect(text("writes")).toContain(
-    "Before any further write, run an `act` step that only reads the page or the account. When `stateChangingRequests` shows the failed step's commit request went through, that step may read only the page as it stands: check it for an error or validation message, read what the output needs, and call `verified()` there.",
+    "Before any further write, run an `act` step that only reads the page or the account. When `stateChangingRequests` shows the failed step's commit request went through, that step starts from the page as it stands: check it for an error or validation message, read what the output needs, and call `verified()` there.",
   );
   expect(text("writes")).not.toContain("a 200 response is not a confirmation");
   expect(text("forms")).toContain(
@@ -745,20 +783,24 @@ it("renders the pinned standalone authoring", async () => {
   expect(guide.instructions).toBe(guide.files.get("AGENTS.md"));
   expect([
     ...skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name]),
-    ...[...guide.files].map(([path, text]) => [sha256(text), `workspace/${path}`]),
+    // The publication review's rules are Guardian's policy text, held equal to it above, so a
+    // policy change moves no digest here.
+    ...[...guide.files]
+      .filter(([path]) => path !== "reference/publication-review.md")
+      .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["b60d4654ff1257f814ed02d0f52dd4c946b076003d897b3f5c500ad398619cd9", "core"],
-    ["cbf9d84d1cdc1a192ec07df90bf99192a72c7b03c0aefb89096f4f0b5bf6ef27", "search"],
-    ["6d50eda98f3919ed5c9b618ca9333d5371658519bd718869c4fa9e5f38287e77", "auth"],
-    ["03c44d2b4b7e998d3fe1b86d110702d49ca27e3527b63abb69e41fe167056e54", "testing"],
-    ["fc4707b0cd5692efe8cc9b96be4ec88b1f8807451348056eb13dfc3d88486b0f", "pagination"],
-    ["3c9a5f4e12e33f5d10758225f0a233f98f9504fce618108fc93a52b5933e0048", "records"],
-    ["7e39ab2d515b817c3d42070922a575f6d3cd5b8427d3c97a4af151cec7a32656", "forms"],
-    ["914aa2968ae5843788037a2d3dbbcf08ad56dabd4c7f8b7750a33f24aa7dceed", "writes"],
+    ["96af1b0d060d1eaabc0056b9563c092d21c0b4f455cc0308f10ea73959e708ba", "core"],
+    ["fe1283cbe9de49c475065da5c44f55bddafb854a141f9151b2c8d54a8dae749b", "search"],
+    ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
+    ["51fa575e15e88f8087eb4e4c25b8a79a684de0453e1dff7e8e7246dde202dab6", "testing"],
+    ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
+    ["f0dd745f7e9b94173bf0ccbfde6c2fa4aab49c6ac84641f84764eae9e11c9f2c", "records"],
+    ["12b198d6503ef35853f9ff42aefefe641dc3b59c8b2a3e5a1424aabb4f6af2f4", "forms"],
+    ["9c8d7256bd2f53cec0b11f7f6cf25a07fe9b87837938ca78dc8f8867e843aba0", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["5e3017df8368f31f52d925062ca0d7f24f2a8badffd8da1589ba9c7860e27b7a", "caller-input"],
-    ["6b731bff43e00509cc46974f62b69f7a71b6023af68fd7c5957a454abd3065d9", "publication"],
-    ["fa90da16bbb796ba872f2570fb9f57fc787d3e0584aa209f07fbe0e8e318d0b5", "workspace/AGENTS.md"],
+    ["e425e194933160e1094a5d5cecd917bcff31015ce6f506d4bda8383797aa6bad", "caller-input"],
+    ["9ca946a431fb56aa842d5c8d94e44077fdfca6a7f7adb1b8a3085066ac85cc42", "publication"],
+    ["32f2254189c4e3df0dbe12dab8daa51359b078822c0ebf875c918216d250238a", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
@@ -777,10 +819,10 @@ it("renders the pinned standalone input-feedback instructions", () => {
       ]),
     ),
   ).toStrictEqual([
-    ["aba44b16df36914a1d988881085b9b43e4d6e0570e0a68423318eecd7abb4cbc", "read, 1 left"],
-    ["bad5f0878c5ecce40c209c1f5e3bd0dac6422c9e42fb0a857c0281e99c6e88eb", "read, 0 left"],
-    ["acf24b4205a7e37c6cfab1f19421d36f26a385bbc7bcaaf8a2799ef29fc77d5e", "write, 1 left"],
-    ["fa380b552c8ddec278fc6d2de4f613a37459d2f9cbf3c9393fe94251ee71511a", "write, 0 left"],
+    ["10bfff2324305b9608cd2a153a0b90e8c6e28383d4f32d7bf09d10ec23479705", "read, 1 left"],
+    ["31cd716b81eca4aeb91fd2997f5cbcc6f110071b4488eab16435b184d3fae43a", "read, 0 left"],
+    ["95f8842b93f08b7e92092f5f5e8e2996688a587763299560caa770f7fe4828d8", "write, 1 left"],
+    ["971c876f338e973bce199c666d750ceaf1808d88911f7e5cbe87bb69c7433ec1", "write, 0 left"],
   ]);
 });
 

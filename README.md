@@ -15,6 +15,7 @@
   <a href="#use-your-integration">Use your integration</a> ·
   <a href="#open-source-and-pomerado-cloud">Open source and Cloud</a> ·
   <a href="#documentation-for-humans-and-agents">Docs</a> ·
+  <a href="https://discord.gg/QCwQFydAym">Discord</a> ·
   <a href="#contributing">Contributing</a>
 </p>
 
@@ -193,6 +194,10 @@ This repository is the complete Pomerado core, released under the MIT license. E
 | `third-party/` | Licenses for adapted third-party code |
 
 [How it works](docs/how-it-works.md#source-layout) lists each module under `typescript/src/`.
+
+## Community
+
+Join the [Pomerado Discord](https://discord.gg/QCwQFydAym) to get help, share integrations you build, and discuss contributions.
 
 ## Contributing
 

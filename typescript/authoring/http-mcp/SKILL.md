@@ -8,8 +8,8 @@ description: Build a read's faster HTTP version, which may ship alone: find wher
 `src/tool-http.mjs` answers the same contract as `src/tool.mjs` without driving the page, so runs
 are faster. Most sites that render server-side, or call a JSON API from the page, port, bot-protected
 ones included: requests ride the browser's own cookies, TLS fingerprint and proxy. The HTTP version
-is tested as its Playwright version is, by what the tool is now: a read signed out on several
-inputs, a signed-in read once against its example, and a write once, by replaying its act session
+is tested as its Playwright version is, by what the tool is now: a read on its cases (a
+signed-in read's combined case and a check against its example), and a write once, by replaying its act session
 offline (Test it, below). A read whose HTTP version passes and whose example ran on it may ship
 `http` alone, even when its Playwright version is incomplete or fails a case (What publishes and
 runs, below).
@@ -152,7 +152,8 @@ A site-relative URL such as `/api/search?q=...` resolves against the site origin
 in replay. `http.siteOrigin` is that origin, and each response's `requestUrl` is the
 absolute URL requested, so build other URLs from them, never from a sponsored link, a
 canonical tag or other page text, and never write the site's hostname as a literal (the core
-skill). A request may go to a sibling host on the site's registrable domain, such as
+skill). When the site signs each account in to its own workspace host, `http.siteOrigin` is
+that workspace's origin at run time, so an API on the workspace host is reached from it. A request may go to a sibling host on the site's registrable domain, such as
 `api.shop.example` or `data.shop.example` for `www.shop.example`, which many sites serve their
 data from. A host on another
 registrable domain is a third party: call it only with an https read that matches a call
@@ -222,8 +223,9 @@ refuses literal tokens.
   HTTP version's live test. Then test it as the Playwright version is tested. A read signed out
   runs its cases as a batch on it too, with `live_tests` entrypoint `src/tool-http.mjs`, in
   parallel; each version keeps its own results, and the review judges the HTTP version from its
-  own (testing skill). A signed-in read checks it once, against the example: the caller's input
-  (omit `testInput`), compared with the example's output. Either way, after a failure fix it and
+  own (testing skill). A signed-in read checks it against the example: the caller's input
+  (omit `testInput`), compared with the example's output, and runs its combined case on it too,
+  which counts no new input. Either way, after a failure fix it and
   test again until it passes. A live test starts like the example: the site origin page, with the
   browser's cookies and storage kept, so the module sends every value its input controls itself
   and never relies on what the site remembers; a case that runs cold, on a new browser with an
