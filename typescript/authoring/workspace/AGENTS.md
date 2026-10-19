@@ -235,6 +235,23 @@ where the page landed.
 time, with no parallel live manipulation. The host chooses the private example input and
 account; never embed private literals or tokens in source.
 
+**Publication blocks on these.** Each skill named holds the full rule.
+
+- Never make an account-specific value an enum member, example or default; take it free-form
+  or as a declared `ask` with `accountSpecific` options (core skill, the input schema).
+- Never narrow an input to the example's value (`example_value`): the code works for every value
+  the schema accepts (core skill).
+- Write every constraint in a form JSON Schema shows, never a `Schema.filter`, and type every
+  output field, never `Schema.Unknown` (core skill).
+- A secret answer is a handle, written only as the whole value it fills; published source never
+  holds one (core skill, "Secret answers").
+- Before a live step enters a name, email or phone, ask the owner with `request_input` (core
+  skill, "Inputs that tailor the answer").
+- After a write, call `verified()` with no argument just before returning, once a call has read
+  the result back (writes skill).
+- Publish only a flow its example ran: a changed read flow needs a fresh example (publication
+  skill).
+
 ## Try hard, then ask
 
 First use the request, the business input, earlier answers and what the page shows. Ask no

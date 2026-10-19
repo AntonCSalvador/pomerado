@@ -837,17 +837,17 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["92fc0b7671fa69255608725756172a9c4d7f2ceed5a7096a039a1025ea764a27", "core"],
-    ["fb27753b30c3e53a0a51b07b13eedfbae2555e4abb861fe287a7f9d352018a7a", "search"],
-    ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
-    ["3c50b8548da85efbdeb173ff0e13969053a7cff6208ce8297bbac6ad8361360e", "testing"],
+    ["54d017648e1ff5e5c43776212d0dea51c5d40025b7df384544fb91ab7edd2c70", "core"],
+    ["81f138a56506c9ff792ee54b9227f53575b798e206795ac2f9c97ba4e16697a0", "search"],
+    ["57c7edd7c326f5cdfd367e80b22fefeba3df08b2bc1694c55a9116abc69bf483", "auth"],
+    ["b5a96cdb7779b2a83359b85fcb6f6cc4fb6f55acba1bce997c6d3780352b1e2a", "testing"],
     ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
-    ["12b198d6503ef35853f9ff42aefefe641dc3b59c8b2a3e5a1424aabb4f6af2f4", "forms"],
-    ["f17ddc96cd999764d5a203416b2318b43366bcbc7b3ae3e6912a4a35a720c2e4", "writes"],
+    ["a8f94638ddf2d5474106eb89a4d96e9deb73420d7236fdffb6cfc756295bdd30", "forms"],
+    ["8b5e53c2533e5d63142194858492198058539be606ea02847f5346004f22d508", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["a3a3b9de15fe58391adc4e5185e4bff3fa7f01a95b89a9cc6a87852f749d346e", "caller-input"],
-    ["e3f1bf2ec18dc6285b34e01ed9c3b95ba8d3cf41e2a8eb0a7cdd3540b6948848", "publication"],
-    ["69a275fc44bc2bd80f12148f34daf4e35ab119aaab0b125edb24cf628459272d", "workspace/AGENTS.md"],
+    ["fdff589fe37de80134fe1f49e58ace38221d3fb360dfc448767228037cc4e25f", "caller-input"],
+    ["d1fd7aa3c80f4261d74c982cbfc3134eb421cba09b5214d1c10ebfbf79c99fae", "publication"],
+    ["acb3be4b01a71bacf24fbf846ea348ae74ceb1cb186fb7aca3cd2a83779b3bf1", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
