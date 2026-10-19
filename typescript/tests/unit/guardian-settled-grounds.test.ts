@@ -1,8 +1,8 @@
 // Failure modes covered: an execution refusal that rests on a fact the host already settled
 // stands, so a read example the host lets run again is refused for lacking retry permission,
 // and a read-only look-up of a confirmed write's own result is refused as a repeat of that write;
-// the host's pushback reaches a second write or an unrelated read, which stay refused; and a
-// refusal that keeps resting on a settled fact ends the build as a policy block.
+// the host's pushback lets a second write or an unrelated read through; and a refusal that
+// keeps resting on a settled fact ends the build as a policy block.
 import { OpenAIProvider, setDefaultModelProvider, Usage } from "@openai/agents";
 import type { ModelRequest, ModelResponse } from "@openai/agents";
 import { Effect } from "effect";
@@ -272,4 +272,70 @@ it("keeps a retry-permission refusal when the host grants no retry", async () =>
     refusal: "final",
   });
   expect(requests).toHaveLength(1);
+});
+
+it("keeps the committed-write refusal when the review answers the pushback with a write allow", async () => {
+  const requests = scripted([
+    decision({
+      outcome: "deny",
+      rationale: "This would submit the create form again.",
+      action: "read",
+      refusal: "final",
+      refusalGround: "committed_write",
+    }),
+    decision({ outcome: "allow", rationale: "Submits the form.", action: "write" }),
+  ]);
+  const reviewed = await Effect.runPromise(guardian().review(afterConfirmedWrite, reader));
+  expect(reviewed.decision).toEqual({
+    outcome: "deny",
+    rationale: "This would submit the create form again.",
+    action: "read",
+    refusal: "correctable",
+  });
+  expect(requests).toHaveLength(2);
+});
+
+it("keeps refusing an unrelated read that the review refuses again on its own ground after the pushback", async () => {
+  const requests = scripted([
+    decision({
+      outcome: "deny",
+      rationale: "Opens the account's billing pages after the create.",
+      action: "read",
+      refusal: "correctable",
+      refusalGround: "committed_write",
+    }),
+    decision({
+      outcome: "deny",
+      rationale: "Opens the account's billing pages, which the task does not concern.",
+      action: "read",
+      refusal: "correctable",
+    }),
+  ]);
+  const reviewed = await Effect.runPromise(guardian().review(afterConfirmedWrite, reader));
+  expect(reviewed.decision).toEqual({
+    outcome: "deny",
+    rationale: "Opens the account's billing pages, which the task does not concern.",
+    action: "read",
+    refusal: "correctable",
+  });
+  expect(requests).toHaveLength(2);
+});
+
+it("sends back an escalation on a settled ground too", async () => {
+  const requests = scripted([
+    decision({
+      outcome: "escalate",
+      rationale: "Ask the host for retry permission.",
+      refusal: "correctable",
+      refusalGround: "retry_permission",
+    }),
+    decision({ outcome: "allow", rationale: "Reads the category list.", action: "read" }),
+  ]);
+  const reviewed = await Effect.runPromise(guardian().review(correctedExample, reader));
+  expect(reviewed.decision).toEqual({
+    outcome: "allow",
+    rationale: "Reads the category list.",
+    action: "read",
+  });
+  expect(requests).toHaveLength(2);
 });

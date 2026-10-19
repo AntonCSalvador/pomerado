@@ -711,23 +711,37 @@ const settledGroundCorrection: Record<GuardianRefusalGround, string> = {
   retry_permission:
     "The host did not accept this refusal: it rests on retry permission, and trusted_execution_context.repeatableRead is true. Whether a step may run again is the host's to decide: it refuses before review any run it does not permit, and it permits this one, a corrected example included. Judge this step's own source and effects under the policy and decide again, without retry permission as a ground.",
   committed_write:
-    "The host did not accept this refusal: it rests on committing a listed write again, and this review labels the step a read, which changes nothing and so commits nothing again. Reading back a write's result, the record it created or changed included, on any page of the authorized site, and the request's other remaining steps toward the same task stay allowed. Judge this step under the policy's other rules and decide again, without the earlier write as a ground.",
+    "The host did not accept this refusal as given: it rests on committing a listed write again, yet this review labels the step a read. If the submitted code changes the site, label it write and keep the refusal. If it changes nothing, it commits nothing again: reading back a write's result, the record it created or changed included, on any page of the authorized site, and the request's other remaining steps toward the same task stay allowed, so judge the step under the policy's other rules and decide again without the earlier write as a ground.",
+};
+
+/**
+ * The decision a review ends with after the host sent back a refusal on a settled ground. A
+ * refusal that still rests on it is correctable, never final, so a misread host fact never ends
+ * the build as a policy block. After a committed-write refusal went back, only an allow labelled
+ * read stands; any other allow keeps the original refusal, as correctable, so the pushback never
+ * lets a second write through.
+ */
+const afterGroundPushback = (
+  pending: PendingExecution,
+  pushback: { readonly ground: GuardianRefusalGround; readonly refused: object },
+  raw: unknown,
+): unknown => {
+  if (typeof raw !== "object" || raw === null) return raw;
+  if (settledGroundOf(pending, raw) !== undefined) return { ...raw, refusal: "correctable" };
+  return pushback.ground === "committed_write" &&
+    Reflect.get(raw, "outcome") === "allow" &&
+    Reflect.get(raw, "action") !== "read"
+    ? { ...pushback.refused, refusal: "correctable" }
+    : raw;
 };
 
 /**
  * An execution review's decision. An allow without an action label is malformed, so the review
  * runs again under the outage retry; a `write` allow on a step without write authority becomes a
- * denial. A refusal still resting on a ground the host settled is correctable, never final, so a
- * misread host fact never ends the build as a policy block.
+ * denial.
  */
 const decodeExecution = (pending: PendingExecution) => (raw: unknown) =>
-  decodeDecision(
-    knownRefusal(
-      settledGroundOf(pending, raw) === undefined
-        ? raw
-        : { ...(raw as Record<string, unknown>), refusal: "correctable" },
-    ),
-  ).pipe(
+  decodeDecision(knownRefusal(raw)).pipe(
     Effect.flatMap((decision) =>
       decision.outcome !== "allow"
         ? Effect.succeed(decision)
@@ -1263,7 +1277,10 @@ export const makeGuardian = (
           !outcomeAccepted(pending, raw);
         let outcomeCorrected = false;
         let decodeCorrected = false;
-        let groundCorrected = false;
+        /** The refusal on a settled ground the host sent back in this review, if any. */
+        let groundPushback:
+          | { readonly ground: GuardianRefusalGround; readonly refused: object }
+          | undefined;
         let readRounds = 0;
         // A publication finding names one of these paths exactly.
         const indexedPaths =
@@ -1274,7 +1291,7 @@ export const makeGuardian = (
           raw !== null &&
           Reflect.get(raw, "outcome") === "allow" &&
           entrypointReadAt !== epoch();
-        const raw = yield* reviewer.run({
+        const output = yield* reviewer.run({
           reviewId,
           ...(session ? { session } : {}),
           pending,
@@ -1342,9 +1359,10 @@ export const makeGuardian = (
               return `The host could not decode this decision: ${invalid} Return this review's decision again in the output format, corrected.${paths}`;
             }
             // A refusal on a ground the host's own record settles goes back once, naming it.
-            const settled = groundCorrected ? undefined : settledGroundOf(pending, output);
+            const settled =
+              groundPushback === undefined ? settledGroundOf(pending, output) : undefined;
             if (settled !== undefined) {
-              groundCorrected = true;
+              groundPushback = { ground: settled, refused: output as object };
               followUpRounds++;
               return settledGroundCorrection[settled];
             }
@@ -1363,6 +1381,12 @@ export const makeGuardian = (
         });
         const unavailableSource = unavailableSources.values().next().value;
         if (unavailableSource !== undefined) return yield* unavailableSource;
+        // The closure above may have set it; the cast keeps the compiler from narrowing it away.
+        const pushback = groundPushback as
+          | { readonly ground: GuardianRefusalGround; readonly refused: object }
+          | undefined;
+        const raw =
+          pushback === undefined ? output : afterGroundPushback(pending, pushback, output);
         if (outcomeRefused(raw))
           return yield* decisionFailure(
             new Error(`The outcome is not one a ${kind} review returns`),
