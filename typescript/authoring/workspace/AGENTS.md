@@ -199,16 +199,9 @@ This holds for `src/tool.mjs`, every fallback in it and your own probes.<!-- pom
 **Read back every input before returning.** Read the page's own display of each input the
 site shows, such as the date picker, selected time, party size, passengers, cabin, applied
 filters, sort and selected options, and refuse a mismatch: the tool throws `InputNotApplied`
-(.agents/core/SKILL.md) and never returns results for an input that did not apply; a control
-the tool could not find or read is `OperationFailure`. Five cases
-return results with what applied instead: a number on a scale the site steps returns its applied
-bound, a filter group the page disables for the results is reported as not offered, a value
-the page's choices do not hold returns the rows of a broader choice that covers it
-(.agents/search/SKILL.md), and an input that tailors the answer, such as a location, that the
-site still won't apply returns what the site showed with the applied value beside the caller's
-(.agents/core/SKILL.md, "Inputs that tailor the answer"), and a search query the site corrected or
-rewrote, such as a spelling fix, returns the site's results with the query it searched as
-`applied_query` and `query_corrected` true, never silently (.agents/search/SKILL.md). Echoed
+and never returns results for an input that did not apply, except in the cases
+.agents/caller-input/SKILL.md lists, such as a location the site won't apply; a control
+the tool could not find or read is `OperationFailure`. Echoed
 input, a
 URL the tool built, a URL parameter, a box checked before the site applied it or the option's
 name elsewhere on the page does not show an input applied; read the site's committed state, such

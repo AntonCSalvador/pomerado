@@ -164,12 +164,9 @@ impossible date before the run, in a browser or an HTTP tool alike. It sets no r
 narrow it to the example's date or a guessed window. A rule of the task or the site, such as
 a range that ends before it starts, a past date or a booking limit, is the tool's own check:
 fail as `InvalidInput` with a message naming the field and the rule, before any site action
-when the input alone breaks it, and when the site refuses the date. Start the message with
-"Caller input error:" when the refusal is obvious, and count a date as past only when it is
-before today in the site's time zone, both as the core skill says. A site with places in
-several time zones uses the place's zone when the tool knows it before any site action.
-When it doesn't know the zone, refuse only a date that is past in every time zone, such as one
-before yesterday in UTC.
+when the input alone breaks it, and when the site refuses the date. The message's start and
+the time zone that makes a date past follow the caller-input skill ("Validate it, and fail
+with the right error").
 
 Date ranges, calendar-only pickers, validation messages, uploads, staged forms and
 autosave need site-specific semantic checks. A date field that takes typing goes

@@ -384,7 +384,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   // An obvious refusal settles the caller's run at once; one from the tool's own empty read never
   // claims to be obvious.
   [
-    "core",
+    "caller-input",
     'When the refusal is obvious, start the message with "Caller input error:" so the caller gets it at once.',
   ],
   // A record whose name differs from the caller's only in case or in a usual form of the same name
