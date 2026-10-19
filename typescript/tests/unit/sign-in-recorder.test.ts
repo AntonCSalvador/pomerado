@@ -384,7 +384,19 @@ it("counts a screen as sent once the minter goes on after the host's click faile
   expect(published?.recipe.steps[0]).toMatchObject({ submittedBy: "minter" });
 });
 
-it("refuses a masked method step before it counts the screen before as sent, so a rejection and correction leave that screen's password unspent", async () => {
+// A refused step shows the minter went on from the screen before, as a method chooser shows
+// only once the login screen was sent, so that screen's password counts as sent before the
+// refusal. A corrected login then never fills the same password a third time.
+it.each<[string, SignInStep]>([
+  [
+    "masked method",
+    {
+      fields: [],
+      submit: "#sms",
+      methods: [{ method: "sms", selector: "button:has-text('Text ***-***-1234')" }],
+    },
+  ],
+])("counts the screen before as sent when a %s step is refused, so a corrected login's third fill of the same password is refused", async (_, refusedStep) => {
   let fills = 0;
   const host = harness({
     held: account,
@@ -409,17 +421,8 @@ it("refuses a masked method step before it counts the screen before as sent, so 
   const third = await host.run((recorder) =>
     Effect.gen(function* () {
       yield* recorder.step(login, undefined, Effect.void);
-      // The step typed nothing, so the minter did not go on from the screen before.
-      const masked = yield* recorder.step(
-        {
-          fields: [],
-          submit: "#sms",
-          methods: [{ method: "sms", selector: "button:has-text('Text ***-***-1234')" }],
-        },
-        undefined,
-        Effect.void,
-      );
-      expect(masked.result).toMatchObject({
+      const refused = yield* recorder.step(refusedStep, undefined, Effect.void);
+      expect(refused.result).toMatchObject({
         step: { outcome: "refused", reason: "selector_names_contact" },
       });
       for (let round = 0; round < 2; round++) {
@@ -430,13 +433,14 @@ it("refuses a masked method step before it counts the screen before as sent, so 
       return yield* recorder.step(login, undefined, Effect.void);
     }),
   );
-  // Each corrected login's screen reached the page, the third not refused as a third password.
+  // The password went out on two fills, so the third login screen types nothing.
+  expect(third.result).toMatchObject({
+    step: { outcome: "refused", reason: "credential_already_filled" },
+  });
   expect(host.filled.map(({ values }) => values)).toEqual([
     [account.username, account.password],
     ["ada-corrected", account.password],
-    ["ada-second", account.password],
   ]);
-  expect(third.report).toMatchObject({ outcome: "filled", submit: "clicked" });
 });
 
 it("confirms an approval after a sent identifier, records it as version 2, and verifies with it", async () => {
