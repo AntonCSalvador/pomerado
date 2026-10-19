@@ -451,6 +451,56 @@ test("an account-specific enum Guardian returns as input feedback is fixed and p
   }
 });
 
+// An input the caller's request supplies is never silently dropped: the example ignores a key its
+// schema lacks, so the host names it after Guardian allows, and the tool that takes it publishes.
+test("an input the caller's request names that the schema drops comes back as input feedback", async () => {
+  test.setTimeout(60_000);
+  const site = await headingSite();
+  const guardian = recordingGuardian({ decide: () => "allow" });
+  const notesTool = headingTool.replace(
+    "input:Schema.Struct({})",
+    "input:Schema.Struct({notes:Schema.optional(Schema.String)})",
+  );
+  try {
+    const { built, last } = await mint({
+      effect: "read",
+      url: site.url,
+      guardian,
+      input: { notes: "Window seat" },
+      turns: [
+        () => patch({ "src/tool.mjs": headingTool }),
+        () => [call("execute", execution("example", "src/tool.mjs"), "example")],
+        (request) => finish(request, "finish_1", "example"),
+        () => [
+          {
+            type: "apply_patch_call",
+            callId: "take_notes",
+            status: "completed",
+            operation: {
+              type: "update_file",
+              path: "src/tool.mjs",
+              diff: `@@\n-${headingTool.split("\n")[2]}\n+${notesTool.split("\n")[2]}\n`,
+            },
+          },
+        ],
+        (request) => finish(request, "finish_2", "example"),
+      ],
+    });
+    expect(built.build, JSON.stringify(built)).toBe("published");
+    expect(built.artifact?.inputSchema).toMatchObject({ properties: { notes: { type: "string" } } });
+    const feedback = toolResult(last, "finish_1");
+    expect(feedback).toMatchObject({
+      status: "not_published",
+      reason: "input_feedback",
+      findings: [{ path: definitionPath, category: "example_input" }],
+    });
+    expect(JSON.stringify(feedback)).toContain('\\"notes\\"');
+    expect(publications(guardian.reviews)).toHaveLength(2);
+  } finally {
+    await site.close();
+  }
+});
+
 // A runtime override starts the actual compiled terminal CLI with recorded providers: the minter
 // submits the build three times, changing it each time, and Guardian returns input feedback on
 // each.

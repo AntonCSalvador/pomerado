@@ -11,6 +11,7 @@ import {
   outputDigestPath,
   publicationEvidenceNote,
   publicDefinition,
+  requestedOutputFields,
   reviewPublication,
   sessionEvidenceFiles,
   sessionOutputPath,
@@ -372,6 +373,13 @@ export const mintPublication =
         ...("baseline" in judged ? { baseline: judged.baseline } : {}),
         notes: `${digestNote}${judged.note} Coverage: ${secrets.redact(publication.coverage)}`,
         inputSchema: result.schemas.input,
+        outputSchema: result.schemas.output,
+        // What the request declares in structure: the caller's own input and the output fields
+        // its updates declared. Its prose declares nothing the host can check.
+        requested: {
+          input: context.input,
+          outputs: requestedOutputFields(context.taskUpdates),
+        },
         references: skillReferenceFiles(state.authoring.skills),
         ...(judged.intentDerivedInput === undefined
           ? {}

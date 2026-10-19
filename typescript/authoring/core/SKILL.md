@@ -163,8 +163,12 @@ use even when the caller's structured input is empty: pass the request's values 
 it), never as a build-time question. Decide from the request and the site which inputs are
 required. An optional input plus a declared question the tool asks before any effect is only for
 a value the request genuinely leaves open; never make a required field optional with nothing
-that asks. An input that tailors the answer on a read is the exception: it is optional unless
-the task can't run without it (below).
+that asks. A choice the request or the owner's answer settled as how the tool behaves, such as
+which kind of record it creates, is the tool's fixed behavior: at most an optional input that
+defaults to the answered value, never a required input or a question at run time. A write asks
+before its first commit step: after one, the runtime refuses every question but a code the site
+asks for at that step (caller-input skill). An input that tailors the answer on a read is the
+exception: it is optional unless the task can't run without it (below).
 
 - The code works for every value the schema accepts. Never let the schema promise what
   the code rejects or ignores, such as a string the code throws on unless it is the example's
@@ -343,13 +347,21 @@ the task can't run without it (below).
   guest rating out of 5, not a count of reviews". Effect's stock text, such as "a non empty
   string", is no description. Annotate the field's own schema, inside `Schema.optional(...)`
   for an optional one. Callers see each beside its name.
-- Shape inputs and outputs like Pomerado's own API, so every tool reads alike: field names in
-  snake_case; dates as `YYYY-MM-DD` and timestamps as ISO 8601 with an offset; money as an
-  integer in minor units with the ISO 4217 `currency` the page shows beside it, such as
-  `total_minor` 12999 and `currency` `"EUR"` read from "€129.99"; enum values in lowercase
-  snake_case (`"premium_economy"`); booleans named as statements (`refundable`, not
-  `is_refundable_flag`); lists named in the plural; and the unit in the field name or its
-  description (`duration_minutes`). Convert between these and the site's own formats in code.
+- Shape inputs and outputs like Pomerado's own API, so every tool reads alike. A notation the
+  request states, such as amounts as decimal strings or signed amounts, always wins; follow it
+  and say so in the field's description. Otherwise: field names in snake_case; dates as
+  `YYYY-MM-DD` and timestamps as ISO 8601 with an offset; money as an integer in minor units
+  with the ISO 4217 `currency` the page shows beside it, such as `total_minor` 12999 and
+  `currency` `"EUR"` read from "€129.99", and an amount that can go either way, such as a
+  ledger entry, unsigned with a field that says its direction, such as `direction` `"debit"`
+  or `"credit"`; enum values, statuses included, in lowercase
+  snake_case (`"premium_economy"`, `"partially_paid"`), with the site's own wording, where a
+  caller may want it, in a separate `*_label` field (`status_label` `"Partially Paid"`);
+  booleans named as statements (`refundable`, not `is_refundable_flag`); lists named in the
+  plural; and the unit in the field name or its description (`duration_minutes`). Convert
+  between these and the site's own formats in code. The output check flags a date or timestamp
+  not in the form its field declares (`format_mismatch`) and one value in two letter cases
+  across a list (`case_variant`).
 - When `reference/site-tools.json` exists, you can view the site's other tools. Read
   `reference/site-tools/README.md` first: it indexes them, one folder each, with each tool's
   effect, sign-in and a short description. Then read the folders you need: each holds a

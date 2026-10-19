@@ -46,8 +46,11 @@ the values are one object typed by the value union below, in place of one output
   missing key means empty.
 - A link to another record, a person or a linked row as `{ "id": "...", "label": "..." }`, with
   the label the site shows for it, and a list of them for a field that holds several.
-- A choice, status or tag as its label, and several as a list of labels, never the site's option
-  ID alone.
+- A choice, status or tag whose options the site's users define as its label, and several as a
+  list of labels, never the site's option ID alone. A field whose options the site fixes and
+  the tool's schema lists as an enum follows the core notation instead: a lowercase snake_case
+  value with the site's wording in a separate `*_label` field, unless the request states
+  another notation.
 - Numbers as numbers, dates as `YYYY-MM-DD` and timestamps as ISO 8601, in the form the site's
   write tools take (below).
 

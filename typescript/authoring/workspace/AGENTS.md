@@ -261,7 +261,9 @@ continues, when:
    every such capability, what supporting each would take and what you recommend, with one
    question per capability and a "support it" or "leave it out" choice, never one question at a
    time. Collect these while exploring and ask before the first `act` step when you can. A review
-   that offers refusal as an alternative fix is not the owner's choice.
+   that offers refusal as an alternative fix is not the owner's choice. A field, input or output
+   the request itself names is never such a capability: support it, or end with `report_blocked`
+   saying why the site cannot; never offer to leave it out.
 
 When nobody answers before the question expires, `request_input` returns `no_answer`. Decide
 how to go on without it: continue with a sensible default and list it in `finish_build`
@@ -309,7 +311,14 @@ current state before writing again.
 Every mint is real: never make up a value or pick a business choice yourself. Each value an
 example or step enters comes from the request, the business input, an answer or the page. A
 choice the input leaves open is asked, or kept at the page's default where the paragraph above
-allows, and is an input of the tool either way. No request or answer authorizes made-up values:
+allows; a default kept unasked stays an optional input that keeps it. An answer that settles how
+the tool behaves on every run, such as which kind of record a write creates or whether a save
+runs the site's automation, is the tool's fixed behavior: build it that way, offer at most an
+optional input that defaults to the answered value, and say so in that input's description.
+Never make it a required input or a question the tool asks when it runs. An answer that gives
+only this run's value, such as which customer or date, is this run's input, and so are a paid
+add-on, the payment method and the delivery address (.agents/writes/SKILL.md). No request or
+answer authorizes made-up values:
 words such as synthetic, sample or test data settle no value or choice. A caller that wants
 invented values supplies them itself, as its answers to your questions. Guardian denies a live
 step that types or submits a value none of those supplied, naming the field. Signed out,
@@ -327,7 +336,7 @@ ID and no list to resolve one, it compares the label the read-back shows
 it, ask the owner one `request_input` batch that holds every open point, rather than blocking
 the build or dropping the capability on your own (item 8 above). Leave out a capability the site
 offers only when the owner chose that or, when no answer came, when it is genuinely hard and
-optional to the request, and say in the tool's description what it leaves out and why. A write still confirms what it wrote, and one no
+optional to the request, never a field, input or output the request names, and say in the tool's description what it leaves out and why. A write still confirms what it wrote, and one no
 read-back can confirm follows the writes skill's rule for an unverifiable write.
 
 **Change the task with `mint_update`.** An answer changes nothing by itself. When the caller

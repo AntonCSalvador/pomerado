@@ -169,8 +169,9 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   Location names the new record went through as soon as it arrives, with no wait for the
   page. A 200 whose
   body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says
-  the work is queued, went through too; return the site's own status word for it in the
-  output. Then read what the output promises from that response or from the page the commit
+  the work is queued, went through too; return that in the output as a status in the core
+  notation, such as `queued`, with the site's own word in a `status_label` field. Then read
+  what the output promises from that response or from the page the commit
   left, match it to the caller's values, and call `verified()` with no argument just before
   returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page,
   such as a list, a history or an account screen, only to prove the write: a commit that went
@@ -307,9 +308,14 @@ the task completed but its commit steps were not marked; never repeat the write
 to add them.
 
 Every option the session met on its path is an input of the script, add-ons and
-pre-selected defaults included: required when the site requires a choice, optional
-otherwise. The script sets each option from its input. An unset optional input leaves the
-page's default, as in a read. The exception is a paid add-on or pre-selected paid option
+pre-selected defaults included: required only when the site requires a choice that neither
+the request nor an answer settled, optional otherwise. The script sets each option from its
+input. An unset optional input leaves the page's default, as in a read. An option the request
+or the owner's answer settled as how the tool behaves, such as which kind of record it
+creates, which line type a free-text line takes or whether a save runs the site's automation,
+is the tool's fixed behavior: its optional input defaults to the answered value, and its
+description says so. Never make it a required input or a question the script asks. The
+exception is a paid add-on or pre-selected paid option
 within the tool's purpose, the payment method and the delivery address: each must be
 explicit, so the script never keeps, clears, accepts or declines one the input leaves open. It
 asks with a declared question before the commit mark (the caller-input skill), offering a

@@ -259,3 +259,117 @@ describe("card questions in a script", () => {
     });
   });
 });
+
+// A question asked once a write's commit step may have reached the site leaves the record half
+// done while the caller decides, such as a draft saved before asking which kind of line to add.
+// The runtime refuses it with words that name the question and the step; a code the site sends
+// only after that step is the one question that can come later.
+describe("a question asked after a commit mark", () => {
+  const questions = {
+    line_kind: { type: "choice", prompt: "Which kind of line should I add?" },
+    code: {
+      type: "secret",
+      secretKind: "one_time_code",
+      prompt: "Enter the code the website just sent you.",
+    },
+  } as const;
+  const write = (body: string) =>
+    operation(
+      `{name:"save_invoice",input:Schema.Unknown,output:Schema.Unknown,write:{confirmation:"readback",commits:["save_draft","submit"]},questions:${JSON.stringify(questions)}}`,
+      body,
+    );
+  const run = (source: string) => {
+    const asked: InputRequest[] = [];
+    const ask = makeInputAsker((request) =>
+      Effect.sync(() => {
+        asked.push(request);
+        const question = request.questions[0];
+        // The first option the page offered, or a code.
+        return question?.type === "choice"
+          ? { [question.id]: question.options[0]?.id ?? "" }
+          : { [question?.id ?? "code"]: "123456" };
+      }),
+    );
+    return Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const workspace = yield* createLocalWorkspace();
+          return yield* Effect.either(
+            runLocalOperation({
+              workspace,
+              entrypoint: "src/tool.mjs",
+              sources: [["src/tool.mjs", source]],
+              input: {},
+              target: "pureFiles",
+              ask,
+              declaredQuestions: questions,
+            }),
+          );
+        }),
+      ),
+    ).then((result) => ({ result, asked }));
+  };
+  const lineOptions = `{ options: [{ value: "item", label: "Item line" }, { value: "text", label: "Free-text line" }] }`;
+
+  it("refuses the question, names it and the step, and asks nobody", async () => {
+    const { result, asked } = await run(
+      write(
+        `async ({ ask, enteringCommit }) => { enteringCommit("save_draft"); return { kind: await ask({ line_kind: ${lineOptions} }) }; }`,
+      ),
+    );
+    expect(asked).toEqual([]);
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left).toBeInstanceOf(LocalOperationFailure);
+      expect(result.left).toMatchObject({ tag: "ScriptInputFailure", code: "AskedAfterCommit" });
+      expect(result.left.message).toContain("line_kind");
+      expect(result.left.message).toContain("save_draft");
+    }
+  });
+
+  it("refuses askOne and a list of ids after the mark the same way", async () => {
+    for (const call of [
+      `askOne("line_kind", ${lineOptions})`,
+      `ask(["code", "line_kind"])`,
+    ]) {
+      const { result, asked } = await run(
+        write(`async ({ ask, askOne, enteringCommit }) => { enteringCommit("submit"); return await ${call}; }`),
+      );
+      expect(asked).toEqual([]);
+      expect(Either.isLeft(result) && result.left).toMatchObject({ code: "AskedAfterCommit" });
+    }
+  });
+
+  it("names only an identifier the script passed, never other text", async () => {
+    const { result } = await run(
+      write(
+        `async ({ ask, enteringCommit }) => { enteringCommit("save draft for Ada"); return await ask("Ada's card 4242"); }`,
+      ),
+    );
+    expect(Either.isLeft(result) && result.left).toMatchObject({ code: "AskedAfterCommit" });
+    if (Either.isLeft(result)) {
+      expect(result.left.message).toMatch(/^A script question was asked after the commit step was entered/u);
+      for (const said of ["Ada", "4242"]) expect(result.left.message).not.toContain(said);
+    }
+  });
+
+  it("asks the same question before the first commit mark", async () => {
+    const { result, asked } = await run(
+      write(
+        `async ({ ask, enteringCommit }) => { const kind = (await ask({ line_kind: ${lineOptions} })).line_kind; enteringCommit("save_draft"); return { kind }; }`,
+      ),
+    );
+    expect(Either.isRight(result) && result.right.output).toEqual({ kind: "item" });
+    expect(asked).toHaveLength(1);
+  });
+
+  it("asks for a code the site sends after a commit step", async () => {
+    const { result, asked } = await run(
+      write(
+        `async ({ ask, enteringCommit }) => { enteringCommit("save_draft"); const code = await ask("code"); return { sent: code.length > 0 }; }`,
+      ),
+    );
+    expect(Either.isRight(result) && result.right.output).toEqual({ sent: true });
+    expect(asked).toHaveLength(1);
+  });
+});

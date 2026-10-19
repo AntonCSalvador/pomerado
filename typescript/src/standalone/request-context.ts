@@ -581,6 +581,10 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
       get input() {
         return input;
       },
+      /** The task updates this build applied, in order. */
+      get taskUpdates(): readonly ReviewedTaskUpdate[] {
+        return taskUpdates;
+      },
       observations,
       review,
       reviewTaskUpdate,

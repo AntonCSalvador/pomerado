@@ -121,6 +121,40 @@ export type ScriptAnswer =
   | readonly string[]
   | { readonly confirmed: boolean; readonly text?: string };
 
+/** The question ids one `ask` call names: one id, a list of ids or a record of questions. */
+export const askedQuestionIds = (asked: unknown): readonly string[] =>
+  typeof asked === "string"
+    ? [asked]
+    : Array.isArray(asked)
+      ? asked.filter((id): id is string => typeof id === "string")
+      : typeof asked === "object" && asked !== null
+        ? Object.keys(asked)
+        : [];
+
+/**
+ * A question a write may still ask after a commit step: a code the site sends or asks for at that
+ * step, such as one that confirms the submission, which no earlier question could ask for.
+ */
+export const askableAfterCommit = (declaration: ScriptQuestionDeclaration | undefined) =>
+  declaration !== undefined &&
+  "type" in declaration &&
+  declaration.type === "secret" &&
+  (declaration.secretKind === "one_time_code" || declaration.secretKind === "totp");
+
+/** A commit mark's name as the message may carry it: a short identifier, never a runtime value. */
+const markName = /^[A-Za-z][A-Za-z0-9_-]{0,47}$/u;
+
+/**
+ * The refusal of a question asked after the write entered its commit step `step`, naming both
+ * when each is an identifier, a question id or a commit mark's name. The message never holds an
+ * answer or any other runtime value.
+ */
+export const askedAfterCommit = (id: string, step: string) =>
+  new ScriptInputFailure({
+    code: "AskedAfterCommit",
+    message: `${questionIdPattern.test(id) ? `Script question ${id}` : "A script question"} was asked after the commit step ${markName.test(step) ? `${step} ` : ""}was entered, so the site may already hold part of this write. Ask every question before the first enteringCommit, or take the value from the input; only a code the site sends at that step may be asked after it.`,
+  });
+
 /** What each asked question needs at ask time: the page's options for a choice, else nothing. */
 export type AskSpecOf<Declaration> = Declaration extends {
   readonly type: "text" | "secret" | "confirm";
@@ -132,14 +166,23 @@ export type AskSpecOf<Declaration> = Declaration extends {
  * `NoResponse`: the caller did not answer in time, and the run fails as `no_response`.
  * `Undeclared`: an id the contract does not declare. `InvalidOptions`: options missing for a
  * choice, given for another type, duplicated, too many, or selection bounds they cannot meet.
- * The others mean the question could not be asked or its answer could not be used.
+ * `AskedAfterCommit`: a write asked once one of its commit steps was entered, so the site may
+ * already hold part of the write while the caller decides; only a code the site sends at that
+ * step may be asked then. The others mean the question could not be asked or its answer could
+ * not be used.
  *
  * `message`, when set, names the declared question, the option that stopped it by its number
  * from 1, and what is wrong with that option in fixed words. It never holds an option's value or
  * label. A failure the fixed words don't cover keeps only its code.
  */
 export class ScriptInputFailure extends Data.TaggedError("ScriptInputFailure")<{
-  readonly code: "Unavailable" | "NoResponse" | "Unauthorized" | "Undeclared" | "InvalidOptions";
+  readonly code:
+    | "Unavailable"
+    | "NoResponse"
+    | "Unauthorized"
+    | "Undeclared"
+    | "InvalidOptions"
+    | "AskedAfterCommit";
   readonly message?: string;
 }> {}
 

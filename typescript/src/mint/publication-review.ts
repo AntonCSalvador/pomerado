@@ -3,6 +3,7 @@ import { publicDefinitionPath } from "../guardian/publication.js";
 import type { PublicationScope } from "../guardian/review-contracts.js";
 import { inlineLocalRefs, UnresolvedSchemaReference } from "../registry/schema-references.js";
 import type { ScriptQuestionDeclarations } from "../runtime/script-input.js";
+import type { TaskChange } from "../guardian/task-update.js";
 import { MintFailure } from "./contracts.js";
 import { entrypointImportClosure } from "./operation-source.js";
 
@@ -460,6 +461,10 @@ export interface PublicationCandidate {
   readonly notes: string;
   /** The published input schema, as JSON Schema. */
   readonly inputSchema: unknown;
+  /** The published output schema, as JSON Schema, which `requested` output fields are checked against. */
+  readonly outputSchema?: unknown;
+  /** The names the build's request declares in structure (`RequestedNames`). */
+  readonly requested?: RequestedNames;
   /** The agent's exampleInput the example or the write session ran because the caller sent none. */
   readonly intentDerivedInput?: Json;
   readonly write: boolean;
@@ -525,26 +530,183 @@ export const exampleInputFeedback = (
   candidate: { readonly definition: string; readonly write: boolean },
   unlisted: readonly string[],
   reviewId: string,
+) => requestedNamesFeedback(candidate, { unlisted, inputs: [], outputs: [] }, reviewId);
+
+/**
+ * The names a build's request declares in structure, which the published schemas must hold. The
+ * request's own words are prose and declare nothing here; the publication review judges them.
+ */
+export interface RequestedNames {
+  /** The caller's own input as the effective task holds it: each top-level key names an input. */
+  readonly input?: unknown;
+  /** Output fields the task's updates declared, as paths such as `price.amount` or `items[].currency`. */
+  readonly outputs?: readonly string[];
+}
+
+/**
+ * The output fields a task's accepted updates declare, in order: each one an update added,
+ * tightened or loosened but kept, less any a later update removed.
+ */
+export const requestedOutputFields = (
+  updates: readonly { readonly changes: readonly TaskChange[] }[],
+): readonly string[] => {
+  const fields: string[] = [];
+  for (const { changes } of updates)
+    for (const change of changes) {
+      if (change.setting !== "output") continue;
+      const at = fields.indexOf(change.field);
+      if (change.change === "remove") {
+        if (at >= 0) fields.splice(at, 1);
+      } else if (at < 0) fields.push(change.field);
+    }
+  return fields;
+};
+
+const isJson = (value: unknown): value is Json =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Whether a schema declares the field at `path`, its parts split on `.`, a part ending in `[]`
+ * naming a list whose items hold the rest. Each union branch counts. Undefined when the schema
+ * cannot answer: a node on the way declares no properties at all, such as a free-form object, or
+ * takes keys it does not list, as a map does, or a reference does not resolve.
+ */
+const declaresPath = (schema: unknown, path: string): boolean | undefined => {
+  if (!isJson(schema)) return undefined;
+  let root: Json;
+  try {
+    root = inlineLocalRefs({ ...schema });
+  } catch (error) {
+    if (error instanceof UnresolvedSchemaReference) return undefined;
+    throw error;
+  }
+  const branches = (node: unknown): Json[] => {
+    if (!isJson(node)) return [];
+    const union = ["anyOf", "oneOf", "allOf"].flatMap((key) => {
+      const listed = node[key];
+      return Array.isArray(listed) ? listed : [];
+    });
+    return [node, ...union.flatMap(branches)];
+  };
+  const visit = (node: unknown, parts: readonly string[]): boolean | undefined => {
+    const [part, ...rest] = parts;
+    if (part === undefined) return true;
+    const list = part.endsWith("[]");
+    const key = list ? part.slice(0, -2) : part;
+    const listings = branches(node).flatMap((branch) =>
+      isJson(branch["properties"]) ? [branch["properties"]] : [],
+    );
+    if (listings.length === 0) return undefined;
+    const children = listings.flatMap((properties) =>
+      Object.hasOwn(properties, key) ? [properties[key]] : [],
+    );
+    // A map, such as a record keyed by the site's own field names, may hold any key.
+    if (children.length === 0)
+      return branches(node).some(
+        (branch) =>
+          (branch["additionalProperties"] !== undefined &&
+            branch["additionalProperties"] !== false) ||
+          branch["patternProperties"] !== undefined,
+      )
+        ? undefined
+        : false;
+    const next = list
+      ? children.flatMap((child) => branches(child).map((branch) => branch["items"]))
+      : children;
+    const found = next.map((child) => visit(child, rest));
+    return found.includes(true) ? true : found.includes(undefined) ? undefined : false;
+  };
+  return visit(root, path.split(".").filter((part) => part !== ""));
+};
+
+/**
+ * The names the request declares that the published schemas lack: each top-level key of the
+ * caller's own input the input schema does not list, and each requested output field the output
+ * schema does not declare. A name a schema cannot answer for is never reported.
+ */
+export const missingRequestedNames = (
+  schemas: { readonly input: unknown; readonly output: unknown },
+  requested: RequestedNames,
+): { readonly inputs: readonly string[]; readonly outputs: readonly string[] } => ({
+  inputs: isJson(requested.input)
+    ? Object.keys(requested.input).filter((key) => declaresPath(schemas.input, key) === false)
+    : [],
+  outputs: (requested.outputs ?? []).filter(
+    (field) => declaresPath(schemas.output, field) === false,
+  ),
+});
+
+/** The byte range of a top-level key of the public definition, such as `"inputSchema"`. */
+const definitionKey = (definition: string, key: string) => {
+  const quoted = JSON.stringify(key);
+  const byteStart = byteLength(definition.slice(0, Math.max(0, definition.indexOf(quoted))));
+  return { byteStart, byteEnd: byteStart + byteLength(quoted) };
+};
+
+const quotedList = (names: readonly string[]) => names.map((name) => JSON.stringify(name)).join(", ");
+
+/**
+ * The host's feedback on an allowed candidate whose schemas miss what the build ran or its request
+ * declares: `unlisted` example keys and `inputs` the caller's request named, as `example_input`
+ * findings at the input schema, input feedback alone; and requested `outputs`, a `schema_mismatch`
+ * at the output schema that makes the whole a source correction. Each says to support the name or
+ * end the build blocked, never to drop it.
+ */
+export const requestedNamesFeedback = (
+  candidate: { readonly definition: string; readonly write: boolean },
+  missing: {
+    readonly unlisted: readonly string[];
+    readonly inputs: readonly string[];
+    readonly outputs: readonly string[];
+  },
+  reviewId: string,
 ) => {
-  const inputSchemaAt = byteLength(
-    candidate.definition.slice(0, candidate.definition.indexOf('"inputSchema"')),
-  );
-  const rationale = `The ${candidate.write ? "write session" : "example"} ran with ${unlisted.map((key) => JSON.stringify(key)).join(", ")} in its exampleInput, which the input schema does not list, so the tool fixes that value itself. Make each an input property.`;
+  const ran = candidate.write ? "write session" : "example";
+  const inputText = [
+    ...(missing.unlisted.length === 0
+      ? []
+      : [
+          `The ${ran} ran with ${quotedList(missing.unlisted)} in its exampleInput, which the input schema does not list, so the tool fixes that value itself. Make each an input property.`,
+        ]),
+    ...(missing.inputs.length === 0
+      ? []
+      : [
+          `The caller's request names the input ${quotedList(missing.inputs)}, which the input schema does not list, so the tool drops what the caller supplies there. Make each an input property the tool applies, or end the build with report_blocked saying why the site cannot take it; never leave it out.`,
+        ]),
+  ].join(" ");
+  const outputText =
+    missing.outputs.length === 0
+      ? ""
+      : `The task's updates declare the output ${quotedList(missing.outputs)}, which the output schema does not declare. Return each as the update says, or end the build with report_blocked saying why the site does not show it; never leave it out.`;
+  const rationale = [inputText, outputText].filter((text) => text !== "").join(" ");
   return new MintFailure({
     code: "ReviewDenied",
     review: {
       outcome: "deny",
-      reason: "input_feedback",
+      reason: outputText === "" ? "input_feedback" : "source_correction",
       reviewId,
       rationale,
       findings: [
-        {
-          path: publicDefinitionPath,
-          byteStart: inputSchemaAt,
-          byteEnd: inputSchemaAt + '"inputSchema"'.length,
-          category: "example_input",
-          explanation: rationale,
-        },
+        ...(inputText === ""
+          ? []
+          : [
+              {
+                path: publicDefinitionPath,
+                ...definitionKey(candidate.definition, "inputSchema"),
+                category: "example_input" as const,
+                explanation: inputText,
+              },
+            ]),
+        ...(outputText === ""
+          ? []
+          : [
+              {
+                path: publicDefinitionPath,
+                ...definitionKey(candidate.definition, "outputSchema"),
+                category: "schema_mismatch" as const,
+                explanation: outputText,
+              },
+            ]),
       ],
     },
   });
@@ -552,13 +714,19 @@ export const exampleInputFeedback = (
 
 /**
  * Runs the publication review and returns the allowing review's ID. An intent-derived example
- * input key the published schema does not list is a value the tool fixes itself: once Guardian
- * allows, it comes back as the host's own input feedback on the reviewed candidate, so, like
- * Guardian's, the minter gets rounds to fix it.
+ * input key the published schema does not list is a value the tool fixes itself, and an input the
+ * caller's request named that it does not list is one the tool drops: once Guardian allows, each
+ * comes back as the host's own input feedback on the reviewed candidate, so, like Guardian's, the
+ * minter gets rounds to fix it. A requested output field the output schema lacks comes back the
+ * same way as a source correction.
  */
 export const reviewPublication = (review: PublicationReview, candidate: PublicationCandidate) =>
   Effect.gen(function* () {
     const unlisted = unlistedExampleInputKeys(candidate.inputSchema, candidate.intentDerivedInput);
+    const missing = missingRequestedNames(
+      { input: candidate.inputSchema, output: candidate.outputSchema },
+      candidate.requested ?? {},
+    );
     const reviewId = yield* review({
       entrypoint: candidate.entrypoint,
       files: candidate.files,
@@ -568,6 +736,7 @@ export const reviewPublication = (review: PublicationReview, candidate: Publicat
       evidence: new Map([[publicDefinitionPath, candidate.definition], ...candidate.evidence]),
       ...(candidate.references === undefined ? {} : { references: candidate.references }),
     });
-    if (unlisted.length === 0) return reviewId;
-    return yield* exampleInputFeedback(candidate, unlisted, reviewId);
+    if (unlisted.length === 0 && missing.inputs.length === 0 && missing.outputs.length === 0)
+      return reviewId;
+    return yield* requestedNamesFeedback(candidate, { unlisted, ...missing }, reviewId);
   });
