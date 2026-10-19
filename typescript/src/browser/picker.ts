@@ -20,7 +20,10 @@ const pickerPageCode = String.raw`(element, args) => {
   const state = store.get(args.token) ?? { before: new WeakSet(), signs: new WeakSet() };
   store.set(args.token, state);
   const token = args.token;
-  if (args.phase === "cleanup") store.delete(token);
+  if (args.phase === "cleanup") {
+    store.delete(token);
+    if (store.size === 0) delete win[Symbol.for("pomerado.picker")];
+  }
   const roots = [doc];
   for (let index = 0; index < roots.length; index++)
     for (const host of roots[index].querySelectorAll("*")) if (host.shadowRoot) roots.push(host.shadowRoot);
@@ -188,13 +191,14 @@ const pickerPageCode = String.raw`(element, args) => {
     '[role=listbox], [role=menu], [role=grid], [role=tree], [role=dialog], [role=alertdialog], dialog, [aria-modal="true"], ul, ol, table, [class*="menu" i], [class*="dropdown" i], [class*="popup" i], [class*="popover" i], [class*="popper" i], [class*="suggest" i], [class*="autocomplete" i], [class*="results" i], [class*="options" i], [class*="listbox" i], [class*="lookup" i], [class*="picker" i], [class*="overlay" i]';
   const loadingSigns =
     '[aria-busy="true"], [role=progressbar]:not([aria-valuenow]):not([aria-valuetext]), [class*="loading" i], [class*="spinner" i], [class*="searching" i], [class*="skeleton" i]';
+  // Whole status lines, so an option such as "Loading Dock B" stays an option.
   const statusText =
-    /^(no (results?|matches|options|items|records|data|suggestions)\b|nothing (found|matches)|loading|searching|please (enter|type)|type (to|at least)|start typing|enter \d+ or more|\d+ results? (are |is )?available)/i;
-  const loadingText = /^(loading|searching)\b/i;
+    /^(no (results?|matches|options|items|records|data|suggestions)( found)?|nothing (found|matches)|loading( results| options)?|searching|(please )?(enter|type) .{0,40}|type to search|start typing.{0,40}|\d+ results? (are |is )?available)[.!\u2026]*$/i;
+  const loadingText = /^(loading|searching)( results| options)?[.!\u2026]*$/i;
   const excluded =
     /(^|[\s_-])(group|header|heading|separator|divider|no-?results?|no-?options|no-?matches|no-?data|empty|loading|searching|optgroup|placeholder|footer|message)([\s_-]|$)/i;
   const creation = (node, text) =>
-    /^\+?\s*(add|create)\b.*["\u201C\u201D'\u2018\u2019]/i.test(text) || /^\+?\s*(add|create) new\b/i.test(text) || node.matches('[class*="create" i], [data-create]');
+    /^\+?\s*(add|create)\s+(new\b|["\u201C\u2018'])/i.test(text) || node.matches('[class*="create-option" i], [class*="option-create" i], [data-create]');
   const tiers = [
     "[role=option]",
     "[role=menuitem], [role=menuitemradio], [role=menuitemcheckbox], [role=treeitem]",
@@ -282,7 +286,7 @@ const pickerPageCode = String.raw`(element, args) => {
       via = "near";
       if (args.near) {
         const near = wrapper();
-        const beside = all(containers, up(near) ?? near).filter((node) => !holds(node, element) && shown(node) && optionsOf(node, []).length > 0);
+        const beside = all(containers, up(near) ?? near).filter((node) => !before(node) && !holds(node, element) && shown(node) && optionsOf(node, []).length > 0);
         if (beside.length > 0) return beside[0];
       }
       return null;
@@ -309,18 +313,23 @@ const pickerPageCode = String.raw`(element, args) => {
     state.focusedBefore = focused();
     state.focusedShown = shown(state.focusedBefore);
   }
+  // The target's keyboard state: named by aria-activedescendant or focused (strong signs), or
+  // marked selected or with an active class (weak signs, which page code counts only once they
+  // appear after its own keys, since a saved choice is often marked selected).
   if (args.phase === "active") {
     const target = tagged("data-pomerado-pick", args.tag);
-    if (!target) return "gone";
+    if (!target) return null;
     const activeIds = owners.map((owner) => owner.getAttribute("aria-activedescendant")).filter(Boolean);
     const classes = typeof target.className === "string" ? target.className : "";
-    const active =
-      (target.id !== "" && activeIds.includes(target.id)) ||
-      focused() === target ||
-      target.getAttribute("aria-selected") === "true" ||
-      target.getAttribute("data-headlessui-state")?.split(" ").includes("active") ||
-      /(^|[\s_-])(active|focused|is-focused|highlighted|highlight|hover|hovered|current|cursor)([\s_-]|$)/i.test(classes);
-    return active ? "active" : "inactive";
+    const field = focused();
+    return {
+      strong: (target.id !== "" && activeIds.includes(target.id)) || field === target,
+      selected: target.getAttribute("aria-selected") === "true",
+      marked:
+        Boolean(target.getAttribute("data-headlessui-state")?.split(" ").includes("active")) ||
+        /(^|[\s_-])(active|focused|is-focused|highlighted|highlight)([\s_-]|$)/i.test(classes),
+      inForm: Boolean(field && (field.form || field.closest?.("form"))),
+    };
   }
 
   // A scan: the popup and its options, tagged for the page code.
@@ -425,7 +434,7 @@ const pickerPageCode = String.raw`(element, args) => {
   if (popup && kindOf(popup) === "dialog") {
     const button = all("button, [role=button], input[type=button], input[type=submit]", popup).find(
       (node) => shown(node) && !node.disabled && node.getAttribute("aria-disabled") !== "true" &&
-        /^(select|choose|ok|okay|done|apply|confirm|use|insert|add)( (selected|this|item|it))?$/i.test(clean(node.innerText || node.value)),
+        /^(select|choose|ok|okay|done|confirm|use)( (selected|this|item|it))?$/i.test(clean(node.innerText || node.value)),
     );
     if (button) {
       button.setAttribute("data-pomerado-pick-confirm", token);
@@ -500,8 +509,11 @@ const pickerPageCode = String.raw`(element, args) => {
  * "Loading" or "Searching" row), no request the picker's actions started is in flight, and they
  * have held still for `settleMs`; with no reaction at all, the field is typed again key by key
  * (a popup's search box first gets its Search button, or Enter when it is in no form).
- * A list for a stale query that lacks the value is typed once more. A list that renders as it
- * scrolls is scrolled until a match by name or value shows, or to its end.
+ * A list for a stale query that lacks the value is typed once more. A list that renders or loads
+ * as it scrolls is read to its end before matching, so a tie further down is never missed; one too
+ * long for two thirds of the budget is narrowed with its search box, or fails as `options_loading`.
+ * Requests count only when the action caused them: a repeat of an earlier identical request, such
+ * as a heartbeat or poller, never holds a wait open.
  *
  * The pick is clicked (a row's one link or button when it has one); `options.commit` set to
  * `"keyboard"` moves to it with ArrowDown and presses Enter. After it, focus left in the
@@ -513,7 +525,9 @@ const pickerPageCode = String.raw`(element, args) => {
  * changed or the option became selected), since a field holding the typed text already shows a
  * label equal to it. A pick that did not hold, such as an editor a grid refresh resets, is picked
  * again up to `options.refills` times (2), leaving the field with Tab; a click that did nothing is
- * tried with the keyboard when `commit` is `"auto"`.
+ * tried with the keyboard when `commit` is `"auto"`. The keyboard presses Enter only on an option
+ * its own keys made active (named by `aria-activedescendant` or focused, or, outside a form, newly
+ * marked selected or active), so it never submits a form with nothing chosen.
  *
  * Hooks for a site's quirks: `query` (text to type, when the site searches by something other
  * than the value), `open()` (open the picker instead of clicking the control), `type(field,
@@ -554,36 +568,52 @@ const pickerWanted = (wanted) => {
   if (spellings.length === 0) throw pickerFailure("wanted_missing");
   return [...new Set(spellings)];
 };
-// The site's own requests a picker's actions start: xhr, fetch and documents to the page's site
-// (any host when the page has none), each counted until it ends or for the inflight budget.
-const pickerNetwork = (page) => {
-  const open = new Map();
-  let lastAt = 0;
+// The site's own requests a picker's action caused: xhr, fetch and documents to the page's site
+// (any host when the page has none) that started within causedMs of the action, counted until
+// they end or for the inflight budget. A request repeating an earlier one exactly (same method,
+// URL and body), such as a heartbeat or poller, is the page's own and never counts.
+const pickerNetwork = (page, causedMs) => {
+  const entries = [];
+  const keys = new Set();
+  const siteOf = (host) => {
+    const labels = host.split(".");
+    if (labels.length <= 2 || /^\d+$/.test(labels.at(-1))) return host;
+    const shared = labels.at(-1).length === 2 && /^(?:ac|co|com|edu|gov|ne|net|or|org)$/.test(labels.at(-2));
+    return labels.slice(shared ? -3 : -2).join(".");
+  };
   const firstParty = (url) => {
     try {
-      const pageHost = new URL(page.url()).hostname;
-      if (!/^https?:/.test(page.url()) || pageHost === "") return true;
-      const site = pageHost.split(".").slice(-2).join(".");
+      const pageUrl = new URL(page.url());
+      if (!/^https?:$/.test(pageUrl.protocol) || pageUrl.hostname === "") return true;
+      const site = siteOf(pageUrl.hostname);
       const host = new URL(url).hostname;
       return host === site || host.endsWith("." + site);
     } catch {
       return true;
     }
   };
+  const byRequest = new Map();
   const onRequest = (request) => {
     if (!["xhr", "fetch", "document"].includes(request.resourceType()) || !firstParty(request.url())) return;
-    open.set(request, Date.now());
-    lastAt = Date.now();
+    const key = request.method() + " " + request.url() + " " + String(request.postData() ?? "").slice(0, 2048);
+    const entry = { at: Date.now(), endAt: null, repeat: keys.has(key) };
+    keys.add(key);
+    entries.push(entry);
+    byRequest.set(request, entry);
   };
   const onDone = (request) => {
-    if (open.delete(request)) lastAt = Date.now();
+    const entry = byRequest.get(request);
+    if (entry) entry.endAt = Date.now();
+    byRequest.delete(request);
   };
   page.on("request", onRequest);
   page.on("requestfinished", onDone);
   page.on("requestfailed", onDone);
+  const caused = (since) => entries.filter((entry) => !entry.repeat && entry.at >= since && entry.at <= since + causedMs);
   return {
-    inflight: (since) => [...open.values()].filter((at) => at >= since && Date.now() - at < pickerLimits.inflight).length,
-    lastAt: () => lastAt,
+    inflight: (since) => caused(since).filter((entry) => entry.endAt === null && Date.now() - entry.at < pickerLimits.inflight).length,
+    // When the action's last caused request started or ended, or 0.
+    lastAt: (since) => Math.max(0, ...caused(since).map((entry) => entry.endAt ?? entry.at)),
     stop: () => {
       page.off("request", onRequest);
       page.off("requestfinished", onDone);
@@ -603,11 +633,12 @@ const pickerSession = async (control, options) => {
     control,
     options,
     until,
+    started: Date.now(),
     left,
     act: () => ({ timeout: Math.min(left(), pickerLimits.action) }),
     frame,
     token: "pk" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-    net: pickerNetwork(control.page()),
+    net: pickerNetwork(control.page(), Math.max(settleMs * 2, 1000)),
     settleMs,
     idleMs: Math.max(settleMs * 2, 600),
     holdMs: options.holdMs ?? settleMs,
@@ -636,15 +667,16 @@ const pickerEval = async (s, phase, extra = {}) => {
     ...extra,
   };
   // The control's element is kept between reads and found again once the page replaced it.
+  const wait = phase === "cleanup" ? 500 : s.act().timeout;
   const run = async () => {
-    s.handle ??= await s.control.elementHandle({ timeout: s.act().timeout });
+    s.handle ??= await s.control.elementHandle({ timeout: wait });
     const answer = await s.handle.evaluate(pickerRun, args).catch((error) => {
       if (/not attached|detached|context was destroyed|Target closed/i.test(String(error?.message))) return { installed: true, detached: true };
       throw error;
     });
     if (!answer.detached) return answer;
     await s.handle.dispose().catch(() => undefined);
-    s.handle = await s.control.elementHandle({ timeout: s.act().timeout });
+    s.handle = await s.control.elementHandle({ timeout: wait });
     return s.handle.evaluate(pickerRun, args);
   };
   try {
@@ -676,9 +708,9 @@ const pickerSettle = async (s, since, before, query) => {
       if (last !== null || scan.signature !== before) changedAt = now;
       last = scan.signature;
     }
-    if (scan.signature !== before || s.net.inflight(since) > 0 || s.net.lastAt() >= since) reacted = true;
+    if (scan.signature !== before || s.net.lastAt(since) > 0) reacted = true;
     const busy = scan.loading || s.net.inflight(since) > 0;
-    const quiet = now - Math.max(changedAt, s.net.lastAt() >= since ? s.net.lastAt() : 0);
+    const quiet = now - Math.max(changedAt, s.net.lastAt(since));
     const answered = s.options.answered ? scan.popup && Boolean(await s.options.answered(pickerTag(s, "data-pomerado-pick-popup", s.token), query)) : true;
     // No reaction needs a few looks across the idle window, so one slow read cannot end it.
     if (!busy && answered && quiet >= (reacted ? s.settleMs : s.idleMs) && (reacted || looks >= 3)) return { scan, reacted };
@@ -689,41 +721,40 @@ const pickerSettle = async (s, since, before, query) => {
     await pickerSleep(40);
   }
 };
-// Every option the list holds: a list that renders as it scrolls is scrolled a page at a time
-// until a match by name or value shows or it ends, remembering where each option showed.
+// Every option the list holds: a list that renders or loads as it scrolls is scrolled a page at a
+// time to its end, remembering where each option showed, so a tie further down is never missed.
+// complete says the whole list was read; scrolling stops with a third of the budget left, for
+// the pick itself.
 const pickerCollect = async (s, scan, wanted) => {
   const seen = new Map();
   const add = (found) => {
     for (const option of found.options) if (!seen.has(option.key)) seen.set(option.key, option);
   };
   add(scan);
-  const ranked = () => {
-    const list = [...seen.values()].filter((option) => !option.creation);
-    return { list, ranking: wanted ? pickerRankChoices(pickerChoices(list), wanted, pickerFold) : { status: "missing" } };
-  };
-  let current = ranked();
+  const reserve = s.until - (s.until - s.started) / 3;
   let latest = scan;
   let stuck = 0;
-  const strong = () => current.ranking.status !== "missing" && ["exact", "normalized"].includes(current.ranking.rank);
-  while (latest.scroll && !strong() && Date.now() < s.until && seen.size < 2000) {
+  let complete = !scan.scroll || scan.scroll.end;
+  while (!complete && Date.now() < reserve && seen.size < 2000) {
     const size = seen.size;
     const at = latest.scroll.top;
+    const scrolledAt = Date.now();
     latest = await pickerEval(s, "scan", { scroll: "next" });
     // Options the scroll asked for can take a moment, or a request, to arrive.
-    for (let look = 0; look < 25 && Date.now() < s.until; look++) {
+    for (let look = 0; look < 25 && Date.now() < reserve; look++) {
       await pickerSleep(30);
       latest = await pickerEval(s, "scan");
-      if (latest.loading || s.net.inflight(Date.now() - 2000) > 0) continue;
+      if (latest.loading || s.net.inflight(scrolledAt) > 0) continue;
       if (latest.options.some((option) => !seen.has(option.key)) || look >= 3) break;
     }
     add(latest);
-    current = ranked();
-    if (seen.size > size) stuck = 0;
-    else if (latest.scroll === null || latest.scroll.end || latest.scroll.top === at || ++stuck >= 3) break;
+    if (latest.scroll === null) complete = true;
+    else if (seen.size > size) stuck = 0;
+    else if (latest.scroll.end || latest.scroll.top === at || ++stuck >= 3) complete = !latest.loading;
   }
-  // Out of time with more list to read: the value may be further down, so it is not missing.
-  if (latest.scroll && !latest.scroll.end && current.ranking.status === "missing" && Date.now() >= s.until) throw pickerFailure("options_loading");
-  return { ...current, scan: latest };
+  const list = [...seen.values()].filter((option) => !option.creation);
+  const ranking = wanted ? pickerRankChoices(pickerChoices(list), wanted, pickerFold) : { status: "missing" };
+  return { list, ranking, scan: latest, complete: complete || seen.size >= 2000 };
 };
 // The enabled options as shown, never a native select's empty-valued prompt such as "Choose...".
 const pickerAvailable = (list) =>
@@ -795,6 +826,7 @@ const pickerQuery = async (s, field, wanted, seenAvailable = []) => {
       const { scan, reacted } = await pickerSettle(s, since, before, query);
       const found = await pickerCollect(s, scan, wanted);
       lastFound = found;
+      if (!found.complete) throw pickerFailure("options_loading");
       if (found.ranking.status !== "missing") return { found, field };
       available.push(...pickerAvailable(found.list));
       // A tag input that may create values and shows nothing for the text is a free-entry field.
@@ -834,11 +866,13 @@ const pickerFind = async (s, wanted) => {
   }
   const scan = await pickerOpen(s);
   const found = await pickerCollect(s, scan, wanted);
-  const strong = found.ranking.status !== "missing" && ["exact", "normalized"].includes(found.ranking.rank);
+  const strong = found.complete && found.ranking.status !== "missing" && ["exact", "normalized"].includes(found.ranking.rank);
   const search = s.options.search ?? (found.scan.search || scan.search ? pickerTag(s, "data-pomerado-pick-search", s.token) : null);
+  // A list too long to read whole is narrowed with its search box, or not judged at all.
+  if (!found.complete && search === null) throw pickerFailure("options_loading");
   if (strong || search === null) return { ...pickerOutcome(found, wanted), field: s.control, scan: found.scan, popupKind: scan.kind };
   const queried = await pickerQuery(s, search, wanted, pickerAvailable(found.list));
-  const outcome = pickerOutcome(queried.found.ranking.status === "missing" && found.ranking.status !== "missing" ? found : queried.found, wanted);
+  const outcome = pickerOutcome(queried.found.ranking.status === "missing" && found.complete && found.ranking.status !== "missing" ? found : queried.found, wanted);
   if (outcome.status === "refused" && queried.available && outcome.refusal.reason === "option_missing")
     outcome.refusal.available = [...new Set([...outcome.refusal.available, ...queried.available])].slice(0, 100);
   return { ...outcome, field: search, scan: queried.found.scan ?? found.scan, popupKind: scan.kind };
@@ -861,13 +895,20 @@ const pickerClick = async (s, tag, double = false) => {
   if (double) await target.dblclick({ timeout: Math.min(2000, s.left()) });
   else await target.click({ timeout: Math.min(2000, s.left()) });
 };
-// Moves to the option with ArrowDown until the page marks it active, then presses Enter.
+// Moves to the option with ArrowDown until the page marks it active, then presses Enter. Only a
+// mark the keys made counts: aria-activedescendant or focus on it, or, outside a form, a selected
+// state or active class it lacked before the first key. Enter with nothing active can submit a form.
 const pickerKeys = async (s, field, option, count) => {
   await field.focus(s.act());
+  let baseline = null;
   for (let press = 0; press <= count + 1 && Date.now() < s.until; press++) {
     const tag = await pickerLocate(s, option);
     if (tag === null) return false;
-    if ((await pickerEval(s, "active", { tag })) === "active") {
+    const state = await pickerEval(s, "active", { tag });
+    if (state === null) return false;
+    baseline ??= state;
+    const weak = press > 0 && ((state.selected && !baseline.selected) || (state.marked && !baseline.marked));
+    if (state.strong || (weak && !state.inForm)) {
       await field.press("Enter", s.act());
       return true;
     }
@@ -975,7 +1016,7 @@ const pickerConfirm = async (s, option, since, shows = () => pickerShows(s, opti
     const busy = s.net.inflight(since) > 0;
     if (ok) {
       okSince ??= now;
-      const lastRequest = s.net.lastAt() >= since ? s.net.lastAt() : 0;
+      const lastRequest = s.net.lastAt(since);
       if (!busy && now - okSince >= s.holdMs && now - lastRequest >= s.holdMs) return "kept";
     } else {
       if (okSince !== null) return "reverted";
@@ -1057,6 +1098,7 @@ const pickValue = async (control, wanted, options = {}) => {
     if (s.kind === "select" || s.kind === "select-multiple") return await pickerNative(s, spellings);
     if (s.kind === "datalist") return await pickerDatalist(s, spellings);
     let switches = 0;
+    let acted = false;
     for (let attempt = 0; ; attempt++) {
       const { method, blur } = pickerTry(options, attempt, switches);
       const found = await pickerFind(s, spellings);
@@ -1067,12 +1109,14 @@ const pickValue = async (control, wanted, options = {}) => {
       const pre = await pickerState(s);
       const since = Date.now();
       const committed = await pickerCommit(s, found, method);
+      acted ||= committed;
       const did = committed && (await pickerEvidence(s, pre, found.option));
       if (did) {
         await pickerBlur(s, blur, found.field === s.control ? s.control : null);
         if ((await pickerConfirm(s, found.option, since)) === "kept")
           return { picked: true, kind: s.kind, label: found.option.label, value: found.option.value, rank: found.rank, refills: attempt };
       } else switches++;
+      if (Date.now() >= s.until && !acted) throw pickerFailure("timeout");
       if (attempt >= s.refills || Date.now() >= s.until) throw pickerFailure("not_committed");
     }
   } catch (error) {
@@ -1084,6 +1128,12 @@ const pickValue = async (control, wanted, options = {}) => {
   }
 };
 const pickerChips = (s) => pickerEval(s, "chips", { chips: s.options.chips ?? null });
+// A chip is the value only by its whole name (as written, or ignoring case, spacing, accents and
+// punctuation), never because its name holds the value as a word: "Blue Grey" is not "Blue".
+const pickerChipIs = (chips, wanted) => {
+  const ranking = pickerRankChoices(chips, wanted, pickerFold);
+  return ranking.status === "picked" && ranking.rank !== "words" ? ranking : null;
+};
 const pickValues = async (control, values, options = {}) => {
   const list = (Array.isArray(values) ? values : [values]).map(pickerWanted);
   const s = await pickerStart(control, options);
@@ -1121,19 +1171,22 @@ const pickValues = async (control, values, options = {}) => {
     const chipNames = (chip) => ({ names: chip.names.length > 0 ? chip.names : [chip.label], value: chip.value, disabled: false, key: chip.tag });
     for (const wanted of list) {
       const chips = await pickerChips(s);
-      const present = pickerRankChoices(chips.map(chipNames), wanted, pickerFold);
-      if (present.status === "picked") {
+      const present = pickerChipIs(chips.map(chipNames), wanted);
+      if (present) {
         results.push({ label: chips[present.index].label, value: chips[present.index].value, added: false });
         continue;
       }
       let done = false;
       for (let attempt = 0; attempt <= s.refills && !done; attempt++) {
         const { method } = pickerTry(options, attempt, attempt);
-        const found = await pickerFind(s, wanted);
+        let found = await pickerFind(s, wanted);
+        // A free-entry value is created rather than replaced by a suggestion that only holds it.
+        if (options.create && found.status === "picked" && found.rank === "words")
+          found = { status: "refused", field: found.field, refusal: { picked: false, reason: "option_missing", wanted: wanted[0], available: [], matches: [] } };
         const since = Date.now();
         const showsChip = (label) => async () => {
           const now = await pickerChips(s).catch(() => []);
-          return pickerRankChoices(now.map(chipNames), [label], pickerFold).status === "picked";
+          return pickerChipIs(now.map(chipNames), [label]) !== null;
         };
         if (found.status === "refused") {
           if (!(options.create && found.refusal.reason === "option_missing")) {
@@ -1161,7 +1214,7 @@ const pickValues = async (control, values, options = {}) => {
     if (mode === "replace") {
       for (let round = 0; round < 50 && Date.now() < s.until; round++) {
         const chips = await pickerChips(s);
-        const extra = chips.find((chip) => !list.some((wanted) => pickerRankChoices([chipNames(chip)], wanted, pickerFold).status === "picked"));
+        const extra = chips.find((chip) => !list.some((wanted) => pickerChipIs([chipNames(chip)], wanted)));
         if (!extra) break;
         if (!extra.removable) throw pickerFailure("not_committed");
         const since = Date.now();
@@ -1212,6 +1265,7 @@ const pickerOptions = async (control, options = {}) => {
       }
     }
     const found = await pickerCollect(s, scan, null);
+    if (!found.complete) throw pickerFailure("options_loading");
     await pickerClose(s, field);
     return { kind: s.kind, options: found.list.map((option) => ({ label: option.label, value: option.value, disabled: option.disabled })) };
   } catch (error) {

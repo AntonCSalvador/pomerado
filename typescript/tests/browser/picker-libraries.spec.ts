@@ -255,6 +255,7 @@ document.getElementById("choose").addEventListener("click", () => {
   dialog.hidden = true;
 });
 document.getElementById("cancel").addEventListener("click", () => { dialog.hidden = true; });
+dialog.addEventListener("keydown", (event) => { if (event.key === "Escape") dialog.hidden = true; });
 </script>`;
 const customers = [
   { id: "C-101", name: "Acme Insurance Group", city: "Boston" },
@@ -287,6 +288,7 @@ test("pickValue reports two rows of a lookup dialog that both match, and closes 
     },
   });
   expect(await submitted(page)).toEqual({ customer_id: "" });
+  await expect(page.getByRole("dialog")).toBeHidden();
 });
 
 test("pickValue clicks the one link in a lookup row that selects it", async ({ page }) => {
@@ -447,4 +449,14 @@ button.addEventListener("keydown", (event) => { if (event.key === "Escape") { li
   expect(options).toHaveLength(60);
   expect(options[59]).toEqual({ label: "Seat 59", value: "s59", disabled: true });
   await expect(page.getByRole("listbox")).toBeHidden();
+});
+
+test("pickValues adds a value even when a chip already holds it as a word", async ({ page }) => {
+  await serve(page, chips);
+  const colors = 'page.getByRole("combobox", { name: "Colors" })';
+  expect(await call(page, `return await pickValues(${colors}, ["Blue Grey"], fast);`)).toMatchObject({ result: { picked: true } });
+  expect(await call(page, `return await pickValues(${colors}, ["Blue"], { ...fast, mode: "replace" });`)).toEqual({
+    result: { picked: true, kind: "typeahead", values: [{ label: "Blue", value: "", added: true }], removed: ["Red", "Blue Grey"] },
+  });
+  expect(await submitted(page)).toEqual({ colors: "blue" });
 });

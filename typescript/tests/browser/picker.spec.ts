@@ -246,7 +246,7 @@ input.addEventListener("input", () => {
   timer = setTimeout(() => {
     box.innerHTML = ["Apple", "Apricot", "Avocado"].filter((name) => name.toLowerCase().startsWith(input.value.toLowerCase()))
       .map((name) => '<div class="suggestion" data-value="' + name.toLowerCase() + '">' + name + "</div>").join("");
-  }, 300);
+  }, 250);
 });
 box.addEventListener("click", (event) => { input.value = event.target.textContent; box.innerHTML = ""; });
 </script>`);
@@ -648,5 +648,50 @@ test("pickValue fails as timeout, a fixed reason, when its control never shows",
   await serve(page, `<p>No picker here</p>`);
   expect(await call(page, `return await pickValue(page.getByLabel("Missing"), "Anything", { ...fast, timeout: 500 });`)).toEqual({
     error: "timeout",
+  });
+});
+
+test("pickValue never presses Enter in a form when no option became active, so the form is not submitted", async ({ page }) => {
+  await serve(page, `<form id="ticket"><label>Severity <input id="severity" role="combobox" aria-controls="levels" autocomplete="off"></label>
+<ul id="levels" role="listbox" hidden></ul><button type="submit">Save</button></form><output id="submits">0</output>
+<script>
+const input = document.getElementById("severity"), list = document.getElementById("levels");
+// The saved choice is marked selected; clicks and keys change nothing.
+input.addEventListener("input", () => {
+  list.hidden = false;
+  list.innerHTML = ["Low", "High"].map((name) => '<li role="option"' + (name === "High" ? ' aria-selected="true"' : "") + ">" + name + "</li>").join("");
+});
+document.getElementById("ticket").addEventListener("submit", (event) => { event.preventDefault(); document.getElementById("submits").textContent++; });
+</script>`);
+  expect(await call(page, `return await pickValue(page.getByLabel("Severity"), "High", { ...fast, refills: 1 });`)).toEqual({ error: "not_committed" });
+  await expect(page.locator("#submits")).toHaveText("0");
+});
+
+test("pickValue ignores a page's background polling while it waits", async ({ page }) => {
+  await serve(page, `${combobox}<script>setInterval(() => fetch("/api/heartbeat"), 150);</script>`, () => ({ delayMs: 60, body: {} }));
+  expect(await call(page, `return await pickValue(page.getByRole("combobox", { name: "Assignee" }), "Quinn Avery", fast);`)).toMatchObject({
+    result: { picked: true, label: "Quinn Avery", value: "5" },
+  });
+});
+
+test("pickValue reads a virtualized list to its end and reports a tie further down", async ({ page }) => {
+  await serve(page, `<button type="button" aria-label="Contact" aria-haspopup="listbox" aria-controls="contacts" aria-expanded="false">Choose</button>
+<div id="contacts" role="listbox" hidden style="height:200px;overflow-y:auto;position:relative"><div id="rows" style="position:relative"></div></div>
+<script>
+const button = document.querySelector("button"), list = document.getElementById("contacts"), rows = document.getElementById("rows");
+const total = 160, height = 24;
+const name = (index) => (index === 3 || index === 150 ? "Ana Silva" : "Contact " + index);
+rows.style.height = total * height + "px";
+const render = () => {
+  const first = Math.max(0, Math.floor(list.scrollTop / height) - 2);
+  rows.innerHTML = "";
+  for (let index = first; index < Math.min(total, first + 20); index++)
+    rows.insertAdjacentHTML("beforeend", '<div role="option" data-value="c' + index + '" style="position:absolute;top:' + index * height + 'px">' + name(index) + "</div>");
+};
+list.addEventListener("scroll", render);
+button.addEventListener("click", () => { list.hidden = false; button.setAttribute("aria-expanded", "true"); render(); });
+</script>`);
+  expect(await call(page, `return await pickValue(page.getByRole("button", { name: "Contact" }), "Ana Silva", fast);`)).toMatchObject({
+    result: { picked: false, reason: "option_ambiguous", matches: ["Ana Silva [c3]", "Ana Silva [c150]"] },
   });
 });
