@@ -41,14 +41,19 @@ async ({kernel,sessionId,enteringCommit}) => {
   await kernel.browsers.playwright.execute(sessionId,{code:"await page.locator('#save').click(); await page.waitForFunction(() => document.title === 'Saved'); return true;",timeout_sec:5});
   await new Promise(() => undefined);
 });`;
-/** A write step that declares its commit mark, reads the page without entering it, then fails. */
-const lookThenFail = `import { Schema } from "effect";
+/** A write step that declares its commit mark, clicks Save without entering it, then fails. */
+const clickThenFail = `import { Schema } from "effect";
 import { defineOperation } from "../runtime/index.js";
 export default defineOperation({name:"save",input:Schema.Unknown,output:Schema.Unknown,write:{confirmation:"readback",commits:["save"]}},
 async ({kernel,sessionId}) => {
-  await kernel.browsers.playwright.execute(sessionId,{code:"return await page.title();",timeout_sec:5});
-  throw new Error("Failed before the save");
+  await kernel.browsers.playwright.execute(sessionId,{code:"await page.locator('#save').click(); await page.waitForFunction(() => document.title === 'Saved'); return true;",timeout_sec:5});
+  throw new Error("Failed after the save");
 });`;
+/** A write step that declares its commit mark, then fails before it calls the browser. */
+const declareThenFail = `import { Schema } from "effect";
+import { defineOperation } from "../runtime/index.js";
+export default defineOperation({name:"save",input:Schema.Unknown,output:Schema.Unknown,write:{confirmation:"readback",commits:["save"]}},
+async () => { throw new Error("Failed before the page"); });`;
 /** A write step that only reads the save back and records it. */
 const readBack = `import { Schema } from "effect";
 import { defineOperation } from "../runtime/index.js";
@@ -267,7 +272,7 @@ test("a failed act step Guardian labelled a write asks for a read-back, though i
   }
 });
 
-test("a failed act step whose marks show no commit step entered carries no read-back notice, though it called the browser", async () => {
+test("a failed act step whose marks show no commit step entered asks for a read-back once it called the browser", async () => {
   test.setTimeout(90_000);
   const fixture = saveSite();
   const site = await fixture.start();
@@ -278,12 +283,41 @@ test("a failed act step whose marks show no commit step entered carries no read-
       url: site.url,
       guardian,
       turns: [
-        () => patch({ "src/look.mjs": lookThenFail }),
-        () => [call("execute", act("src/look.mjs"), "look")],
+        () => patch({ "src/click.mjs": clickThenFail }),
+        () => [call("execute", act("src/click.mjs"), "click")],
       ],
     });
-    const receipt = toolResult(last, "look");
+    expect(fixture.writes()).toBe(1);
+    const receipt = toolResult(last, "click");
+    // The page may have sent the write before any mark was entered, and this host records no
+    // requests that would show it, so Guardian's label still asks for a read-back.
     expect(receipt).toMatchObject({ status: "failed", effect: "possible" });
+    expect(observationsOf(receipt)?.writeSession?.verifyFirst).toBe(true);
+    expect(observationsOf(receipt)?.writeSession?.notice).toContain(
+      verifyFirst("Guardian labelled it a write"),
+    );
+  } finally {
+    await site.close();
+  }
+});
+
+test("a failed act step whose marks show no commit step entered carries no read-back notice when it never called the browser", async () => {
+  test.setTimeout(90_000);
+  const fixture = saveSite();
+  const site = await fixture.start();
+  const guardian = recordingGuardian();
+  try {
+    const { last } = await mint({
+      effect: "write",
+      url: site.url,
+      guardian,
+      turns: [
+        () => patch({ "src/declare.mjs": declareThenFail }),
+        () => [call("execute", act("src/declare.mjs"), "declare")],
+      ],
+    });
+    const receipt = toolResult(last, "declare");
+    expect(receipt).toMatchObject({ status: "failed", effect: "not_sent" });
     expect(JSON.stringify(receipt)).not.toContain("writeSession");
     expect(fixture.writes()).toBe(0);
   } finally {

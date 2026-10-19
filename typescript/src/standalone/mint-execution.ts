@@ -335,8 +335,9 @@ const scriptQuestions = (
  * `possiblySent`. Whether it was a write is Guardian's label, `action`. A step whose child did
  * not report its own result has `unreported` commit evidence, and the marks it streamed count
  * only once a later step confirms. Only a failed step Guardian labelled a write asks the minter
- * to read back before writing again, and not when its marks show no commit step entered
- * (`readBackFirst`).
+ * to read back before writing again (`readBackFirst`). Marks showing no commit step entered
+ * skip the ask only while the step made no browser call: this host records no requests that
+ * would show a write the page sent before any mark was entered.
  */
 const actOutcome = (
   executed: Either.Either<LocalOperationOutput, Error>,
@@ -362,7 +363,12 @@ const actOutcome = (
       enteredMarks: reported ? entered : [],
       ...(failure instanceof LocalOperationFailure && !reported ? { streamedMarks: entered } : {}),
     },
-    writeSession: failure !== undefined && action === "write" ? readBackFirst(commit) : undefined,
+    writeSession:
+      failure !== undefined && action === "write"
+        ? readBackFirst(
+            commit === "not_entered" && journal.effect !== "not_sent" ? undefined : commit,
+          )
+        : undefined,
   };
 };
 
