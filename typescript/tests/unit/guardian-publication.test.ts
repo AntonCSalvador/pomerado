@@ -10,6 +10,7 @@ import { makeOpenAIReviewer } from "../../src/guardian/openai.js";
 import { answersForReview } from "../../src/guardian/question.js";
 import {
   guardianPublicationPolicy,
+  publicationCallerDecisionPolicy,
   publicationDecisionPolicy,
   publicationLiveTestsPolicy,
   publicationOutputPolicy,
@@ -775,6 +776,48 @@ describe("the OpenAI publication reviewer", () => {
       expect(policyOf(requests[0])).toContain(publicationOutputPolicy);
     },
   );
+
+  // A caller who settles how the tool behaves, such as blank fields as empty strings, does so in
+  // the build's request, an answer or a task update. The publication review gets all three
+  // beside the rule that honours that decision, and a host that composes its own publication
+  // policy from the shared output rules gets the rule with them.
+  it("gives the publication review the caller's design decisions and the rule that honours them", async () => {
+    const intent = "Read each order. Return a blank field as an empty string.";
+    const prompt = "How should the tool return a field the record leaves blank?";
+    const answeredQuestions = await Effect.runPromise(
+      answersForReview(
+        {
+          questions: [
+            {
+              id: "blank_fields",
+              type: "choice",
+              prompt,
+              options: [
+                { id: "empty", label: "As an empty string" },
+                { id: "null", label: "As null with a reason" },
+              ],
+            },
+          ],
+        },
+        { blank_fields: { type: "choice", value: "empty" } },
+        Effect.succeed,
+      ),
+    );
+    const requests = scripted(() => [message(allow)]);
+    await Effect.runPromise(
+      makeGuardian(
+        makeOpenAIReviewer("Synthetic policy {{ tenant_policy_config }}", false, native),
+      ).review({ ...pending, screenedIntent: intent, answeredQuestions }, sourcesOf(files)),
+    );
+    expect(requests[0]?.systemInstructions).toContain(
+      `trusted_request: ${JSON.stringify({ intent })}`,
+    );
+    expect(reviewRequest(requests[0])["trusted_authority"]).toMatchObject({
+      answeredQuestions: [{ id: "blank_fields", question: prompt, answer: "As an empty string" }],
+    });
+    expect(policyOf(requests[0])).toContain(publicationCallerDecisionPolicy);
+    expect(publicationOutputPolicy).toContain(publicationCallerDecisionPolicy);
+  });
 
   it("gives an execution review no publication policy or index", async () => {
     const requests = scripted((index) =>
