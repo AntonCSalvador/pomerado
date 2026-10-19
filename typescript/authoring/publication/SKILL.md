@@ -93,9 +93,11 @@ first:
   that narrows, orders or configures what the tool returns, a location included, is an optional
   input, even one the request never mentioned and one you never asked about (core skill, the
   input schema). The one exception is a choice the request, the caller or the owner declined,
-  which is never an input for any caller (core skill), unless it is a paid add-on within the
-  tool's purpose, the payment method or the delivery address a write still meets on its path,
-  which stays an input or a declared question (writes skill). Guardian counts such an input as
+  which is never an input for any caller (core skill), unless it is a costly choice a write still
+  meets on its path, one that changes what the caller buys or pays or whether the action can be
+  cancelled or refunded (a paid add-on within the tool's purpose, a rate, fare or plan tier, a
+  refundable option, shipping speed, the payment method or the delivery address), which stays an
+  input or a declared question (writes skill). Guardian counts such an input as
   part of the tool, never as scope drift or an unsupported claim. Each input you accept is
   applied and read back (core skill, the input schema, and `AGENTS.md`; the search skill for a search). An input
   that tailors the answer, such as a location, store or vehicle, that the site won't apply
@@ -196,10 +198,11 @@ pomerado:section publication.saved-files:end -->.
    - the input schema: no account-specific value (a passenger, loyalty or member number, saved
      card or address, account ID) as an enum member, example or default; every input as general
      as the site's field, never narrowed to the example's value; on a write, every option the
-     session met on the path is an input, and a paid add-on or pre-selected paid option within
-     the tool's purpose, the payment method and the delivery address are inputs or run-time
-     questions, never left to the page's default or hard-coded from the build's request or
-     answers, which spoke for one caller; a paid upsell outside the tool's purpose is declined;
+     session met on the path is an input or a settled default, and a costly choice, one that
+     changes what the caller buys or pays or whether the action can be cancelled or refunded
+     (core skill), is an input or a run-time question whose default may only decline it, never
+     left to the page's default or hard-coded from the build's request or answers, which spoke
+     for one caller; a paid upsell outside the tool's purpose is declined;
    - a pop-up that shows only for some accounts, states or visits is handled when present and
      never required;
    - declared questions ask only what the page or the caller uniquely knows, never a login;

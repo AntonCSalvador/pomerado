@@ -149,6 +149,17 @@ describe("asksAsDeclared", () => {
   });
 });
 
+// One invalid declaration would leave the run with none, so the draft check names it before a step runs.
+it("refuses a declaration that does not decode instead of dropping every question", () => {
+  const source = operation(
+    `{name:"book",input:Schema.Unknown,output:Schema.Unknown,questions:{slot:{type:"choice",prompt:"Which slot?",allowOther:"yes"},note:{type:"text",prompt:"Which note should I keep?"}}}`,
+  );
+  expect(draftQuestionDeclarations("src/tool.mjs", source)).toEqual({});
+  expect(draftQuestionDeclarationFailure("src/tool.mjs", source)).toMatch(
+    /^Invalid script questions: the run would declare none of them\./,
+  );
+});
+
 describe("a local operation's questions", () => {
   const asking = operation(
     `{name:"ask_note",input:Schema.Unknown,output:Schema.Unknown,questions:{note:{type:"text",prompt:"Which note should I keep?"}}}`,
