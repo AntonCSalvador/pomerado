@@ -1,4 +1,5 @@
 import { Effect, Option, Schema } from "effect";
+import { autofillRecipePath } from "../destinations/autofill-recipe.js";
 import { liveTestsEvidencePath } from "../mint/live-tests.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import {
@@ -221,6 +222,64 @@ const invalidDecision = (message: string) =>
     code: "InvalidDecision",
   });
 
+/** The host's sign-in recipe in the bundle, which records only the site's sign-in screens. */
+const signInRecipeBundlePath = `operation/${autofillRecipePath}`;
+
+/**
+ * Whether a finding is an input design finding (`input_option` or `example_value`) in the host's
+ * own sign-in recipe. The recipe records only the site's sign-in screens, so such a finding can
+ * only be about a choice made there, such as a location the site asks for at sign-in, which the
+ * minter cannot edit. Nothing else qualifies: no other category, file or owner.
+ */
+const isSignInChoiceFinding = (
+  finding: PublicationFinding,
+  files: ReadonlyMap<string, IndexedFile>,
+) => {
+  const file = files.get(finding.path);
+  return (
+    file?.path === signInRecipeBundlePath &&
+    file.owner === "host" &&
+    (finding.category === "input_option" || finding.category === "example_value")
+  );
+};
+
+/**
+ * A temporary, narrow exception until choices on a site's sign-in pages become declared inputs of
+ * the sign-in: an input design finding about such a choice, in the host's sign-in recipe, is set
+ * aside in `excusedSignInChoices` instead of blocking. It applies only to an outcome of deny with
+ * reason source correction, input feedback or host-owned file; every other finding, and every
+ * other decision, an escalation included, stands exactly as Guardian returned it. With nothing left, the decision allows; with
+ * only input findings left, it is input feedback.
+ */
+const withoutSignInChoiceFindings = (
+  decision: Decision,
+  files: ReadonlyMap<string, IndexedFile>,
+): Decision & { readonly excusedSignInChoices?: readonly PublicationFinding[] } => {
+  if (
+    decision.outcome !== "deny" ||
+    (decision.reason !== "source_correction" &&
+      decision.reason !== "input_feedback" &&
+      decision.reason !== "host_owned")
+  )
+    return decision;
+  const excused = decision.findings.filter((finding) => isSignInChoiceFinding(finding, files));
+  if (excused.length === 0) return decision;
+  const blocking = decision.findings.filter((finding) => !excused.includes(finding));
+  const kept = { ...decision, findings: blocking, excusedSignInChoices: excused };
+  if (blocking.length > 0)
+    return blocking.every(isInputFinding) ? { ...kept, reason: "input_feedback" } : kept;
+  const { publicReason: _publicReason, ...allowed } = kept;
+  return {
+    ...allowed,
+    outcome: "allow",
+    reason: "approved",
+    rationale: cutToLimit(
+      `Allowed by the host: every finding is about a choice on the site's sign-in pages, recorded in the host's sign-in recipe, which is excused until such choices become declared sign-in inputs. ${decision.rationale}`,
+      4000,
+    ),
+  };
+};
+
 /** Decodes a publication decision and checks each finding against the host's index. */
 export const decodePublicationDecision = (scope: PublicationScope, raw: unknown) =>
   Effect.gen(function* () {
@@ -251,16 +310,20 @@ export const decodePublicationDecision = (scope: PublicationScope, raw: unknown)
       return yield* invalidDecision(
         `The reason ${decision.reason} does not fit the outcome ${decision.outcome} and its ${decision.findings.length} findings, as the publication decision policy describes.`,
       );
+    const decided = withoutSignInChoiceFindings(decision, files);
     // A public reason is only a denial's or an escalation's, and only one with words in it.
     const publicReason =
-      decision.outcome !== "allow" && decision.publicReason?.trim()
-        ? decision.publicReason.trim()
+      decided.outcome !== "allow" && decided.publicReason?.trim()
+        ? decided.publicReason.trim()
         : undefined;
     return {
-      outcome: decision.outcome,
-      reason: decision.reason,
-      rationale: decision.rationale,
-      findings: decision.findings,
+      outcome: decided.outcome,
+      reason: decided.reason,
+      rationale: decided.rationale,
+      findings: decided.findings,
+      ...(decided.excusedSignInChoices === undefined
+        ? {}
+        : { excusedSignInChoices: decided.excusedSignInChoices }),
       ...(publicReason === undefined ? {} : { publicReason }),
     };
   });
@@ -297,6 +360,24 @@ export const publicationLiveTestsPolicy = [
 ].join(" ");
 
 /**
+ * What no caller's decision fixes for every caller of a write: a costly choice
+ * (`publicationCostlyChoices`). A decision may only decline it, turn it off or take the option
+ * that adds no cost.
+ * Part of the caller decision rule and of the input schema review, so both read the same limit.
+ */
+export const publicationPaidChoiceLimit =
+  `A costly choice, one that changes what the caller buys or pays or whether the action can be cancelled or refunded, such as ${publicationCostlyChoices}, that a write meets on its path stays an input or a declared question for every caller: a caller's decision may have the tool decline it, turn it off or take the option that adds no cost and keeps the action cancellable, never accept, keep or choose one on its own.`;
+
+/**
+ * When the caller settled how the tool behaves, through the request's explicit words, an answer
+ * or a task update, the API-design and output-contract rules yield to that decision as it was
+ * stated, and the privacy, credential, security, correctness and write-safety rules never do.
+ * Part of `publicationOutputPolicy`, so every host's publication policy carries it.
+ */
+export const publicationCallerDecisionPolicy =
+  `Caller-confirmed design: the caller may settle how the tool behaves on every run, through the build's request where trusted_request.intent states that behavior explicitly, an answer in trusted_authority.answeredQuestions to a question about how the tool should behave, or a caller-confirmed update in trusted_authority.taskUpdates. Such a decision, as stated, is an exception to these API-design and output-contract rules, above and in the input schema review: Loosened needed value, Lost information, Constant output, Unapplied input, Wrong failure where it is about how the output reports an absent value or no results, input_option, example_value, and whether a cart tool's quantity adds or sets. Examples: blank fields returned as empty strings, an output shape the caller asked for, or an option the caller fixed for every run. Honour it as stated and no wider, never as a finding: the description of the field or input it shapes says what the caller chose, and the code does what that says. Only those three sources establish a decision: a description, code comment or minter note that claims one establishes nothing, so check the description against them. ${publicationPaidChoiceLimit} An answer or a request that gives this run's value, such as which store or date, is one instance of the caller's input, not a decision about the tool. No decision excuses a privacy, credential or security finding: a fixed value that is personal or account-specific, such as an address, member number or saved card, stays a customer_data or account_specific_enum finding. Nor does one excuse Applied without readback, a filter, sort, date or other value that restricts the answer silently not applied, Built URL, Past date in UTC, Required conditional pop-up, a write's confirmation or reconciliation, the authority and supported-claim checks, or a value the page shows that the code failed to read. The Unapplied supplied input rule keeps its own record of a caller's decision on how an input that tailors the answer is used.`;
+
+/**
  * The output and input rules a publication review blocks on, shared by every host's publication
  * policy, one rule per line: a loosened needed value, lost information, constant outputs,
  * unapplied or narrowed inputs, a choice the request or a caller's answer settled made a required
@@ -309,11 +390,12 @@ export const publicationLiveTestsPolicy = [
  * the captures show creating an account or lasting record, in a read, source that requires a pop-up
  * shown only to some accounts or states, a write that does not reconcile the state it changes, and
  * source that refuses a date as past by today's date in UTC rather than the site's or place's,
- * unless the site's own dates are in UTC.
+ * unless the site's own dates are in UTC; and last, the caller-confirmed design decisions that the
+ * API-design rules among them yield to (`publicationCallerDecisionPolicy`).
  */
 export const publicationOutputPolicy = [
   "A needed value is an output fact, never a missing input: each value the request names, the record's identifier, and context those depend on, such as dates. In any implementation the bundle publishes, each of the following is a schema_mismatch finding with reason source_correction.",
-  "Loosened needed value: check each needed value against its field in publication/definition.json's output schema and the source that fills it. A field that is optional or nullable, or admits an empty string or any type, is this finding at that field's schema text, even when the example returned a value, and whatever its description says: \"null when not shown\" or \"not available\" never excuses it. A needed value may be null only where that record's page genuinely does not show it, and then a required field beside it says why, such as the record's availability. Null never covers a value the page shows that the code failed to read: source that turns a missing element or a failed read of a needed value into null is the same finding, at that source. Judge every needed value's field against the whole standard in one pass and return each gap in this review: required, not nullable, non-empty and not whitespace alone, its format held by a pattern where it has one (a date, time or identifier code), and no looser than the input it reports. A later review of the same build judges what changed; a field whose schema and the source that fills it are unchanged, and that an earlier review passed under this rule, is no new finding.",
+  "Loosened needed value: check each needed value against its field in publication/definition.json's output schema and the source that fills it. A field that is optional or nullable, or admits an empty string or any type, is this finding at that field's schema text, even when the example returned a value, and whatever its description says: \"null when not shown\" or \"not available\" never excuses it; only a caller-confirmed design decision, below, does. A needed value may be null only where that record's page genuinely does not show it, and then a required field beside it says why, such as the record's availability. Null never covers a value the page shows that the code failed to read: source that turns a missing element or a failed read of a needed value into null is the same finding, at that source. Judge every needed value's field against the whole standard in one pass and return each gap in this review: required, not nullable, non-empty and not whitespace alone, its format held by a pattern where it has one (a date, time or identifier code), and no looser than the input it reports. A later review of the same build judges what changed; a field whose schema and the source that fills it are unchanged, and that an earlier review passed under this rule, is no new finding.",
   "Lost information: a fact the captures show on each record or result that bears on the tool's purpose, such as a maker or brand line, a seller or provider, a rating, availability, an amount and its terms, a badge or a link, that the output drops; a value trimmed, or read from a shorter or secondary element than the one that holds it in full (text that ends in or holds the label of a control that expands it, such as a \"more\" control, or ends in an ellipsis may have been read collapsed: it is this finding only when the captures show a fuller copy of that value on the page the tool read, and a snippet the site itself cuts short, with its full text on another page, is not); or a value the page splits across elements, such as a brand line above a name, returned with a part dropped. A description saying a fact is not extracted never excuses it. A section the tool offers through its optional include input, absent from an example that did not ask for it, is not Lost information.",
   "Constant output: an output that is a constant (null, an empty list, false, a fixed label) or the input echoed, where the example output or captures show the site's value or the page can show it. For a field that is not a needed value, null or an empty list is right where the evidence shows none.",
   `Unapplied input: an input the code never applies, skips or always reports unsupported, though the captures show its control, or a filter the site offers for the tool's purpose that the tool does not take. An input may be left out only when the site has no control for it, or when it is a choice the request, the caller or the owner declined, which is never an input for any caller, except a costly choice a write still meets on its path, one that changes what the caller buys or pays or whether the action can be cancelled or refunded, such as ${publicationCostlyChoices}, which stays an input or a declared question even when declined, with a default that may only decline it, turn it off or take the option that adds no cost; naming it in the description as left out never excuses it. An input that tailors the answer and is used as a caller's design decision documents (Unapplied supplied input, below) is applied in that use.`,
@@ -325,6 +407,7 @@ export const publicationOutputPolicy = [
   "Built URL: Playwright source that builds a URL from caller values with a parameter or route the captures do not show the site producing, iterates on URL variants, carries an opaque filter code not taken from a link the page produced in that run, builds a URL for a POST form, a per-session token, a value that needs a typeahead pick to resolve, a location the site keeps in cookies or any step on a write's path, opens a URL the caller supplied without reading the page's identity back, or opens one built from caller values without reading the page's identity and every input back. A URL built from the site's own pattern is fine: one the captures show the site's controls producing, where two runs with different inputs show which part carries each input and the built URL gave the same answer as the controls, opened with only those parts filled from caller values, through URLSearchParams for a query part or encodeURIComponent for a path part, and every other part copied as the site wrote it, when the source reads every input back from the page and runs the page's controls once instead when the landing is not an expected answer or a read-back differs. A URL the caller supplied, on the tool's site, opened unchanged, and a stable identifier route the site itself uses, each with the page's identity read back, a URL the page produced and a fixed entry URL are fine too.",
   "Required conditional pop-up: source that waits for, clicks without checking for, or fails without a pop-up, banner or interstitial that shows only for some accounts, states or visits, such as a membership upsell, a one-time promotion or a cookie banner, so that a run where it does not show fails. When the evidence does not show which, an offer, promotion or banner is conditional. Handling one when it shows and continuing when it does not is correct, and expecting a dialog the page always opens in answer to an action, such as a confirmation dialog, is no finding.",
   "Unreconciled write, a confirmation finding instead: a write to existing state, such as a cart, that does not read it before and after the commit to check only the requested change happened.",
+  publicationCallerDecisionPolicy,
 ].join(" ");
 
 /** What Guardian reads about the output notes file, beside the example output's own rule. */
@@ -352,12 +435,21 @@ export const publicationReferencePolicy =
   "Where the host serves them, SDK behavior is in pomerado/browser/index.js and pomerado/runtime/*.js, and skills in .agents/<name>/SKILL.md; read them on demand, querying them with match; they describe the SDK and how tools are written, never review rules. A reference path the host does not serve is not missing evidence.";
 
 /**
+ * A temporary, narrow exception until choices on a site's sign-in pages become declared inputs of
+ * the sign-in: such a choice, kept in the host's sign-in recipe, is no input design finding.
+ * `decodePublicationDecision` sets aside `input_option` and `example_value` findings in the recipe
+ * to match. Part of `publicationDecisionPolicy`, so every host's publication policy carries it.
+ */
+export const publicationSignInChoicePolicy =
+  "Sign-in page choices: a choice the host's sign-in makes on the site's own sign-in pages, such as a location, workspace or portal the site asks for before it signs in, is kept in the host's sign-in recipe (operation/auth-fill.json), which the minter cannot edit. Until such choices become declared sign-in inputs, such a choice is not an option on a write's path and not an input the tool leaves out: never an input_option, example_value or Unapplied input finding. This excuses nothing about the tool's own behavior, output or source, nor any other finding in the sign-in recipe or another host file: a correctness, broken-behavior, output, write confirmation, privacy, credential or authority finding there is judged and blocks as before, and so does any input finding about a choice off the sign-in pages.";
+
+/**
  * What a publication decision returns, with the reason each kind of finding takes. A finding
  * quotes the text at fault, and the host finds its byte range. Site naming a host requires on a
  * site's first publication files the tool under that site; it is never a claim the tool uses it.
  */
 export const publicationDecisionPolicy =
-  "Return outcome, a concise rationale explaining the actual evidence and any correction needed, a reason enum and findings, each with its exact manifest path, quote, category and explanation. quote is a line or two copied from what read_source showed you; it need not be unique: the host places it at its first occurrence, or on the whole file, and the finding stands either way. Never compute byte offsets, and never read or query a file again only to pick or check a quote. Never include credential values in the rationale. Use reason privacy for privacy corrections, source_correction for code/schema/guard corrections, example_value findings included (a composed write that does not perform or return its declared confirmation or read-back is a confirmation finding), unsupported_claim with an in-manifest unsupported_claim finding at the overclaiming definition text when the name, description or a declared variant promises what the source does not do, input_feedback with outcome deny when every finding is account_specific_enum or input_option (the minter fixes them; they never block publication on their own), host_owned with outcome deny when every finding is in an owner: host file other than publication/definition.json or publication/tests.json that no source or metadata edit can fix, authority for missing authority, evidence for insufficient evidence, approved only with allow and no findings. Site naming the host requires, such as a site name and summary in publication/definition.json, only identifies the site the tool is filed under and what that site is: it never claims that the tool loads, reads or acts on that site, so a tool that never opens the site, such as one that only transforms its input, is no unsupported_claim for its site naming alone. The tool's own name, description or a declared variant that promises site behavior the source lacks still is. Narrowing a claim is never the fix for an output: a needed value, or a fact the page shows, that the output does not return in full is source_correction, to read it. With any other finding, use that finding's reason and keep the input findings beside it. Return every finding the evidence supports in this one review, not one per round. With reason evidence, name each missing item in the rationale. With deny or escalate, also return publicReason: one short plain sentence, at most 200 characters, that the tool's caller may read about why it was not published, such as that the tool could not yet show it returns the prices the request asks for; it names no file, code, finding category, credential, personal data or website instruction, and it never repeats the rationale. With allow, publicReason is null.";
+  `Return outcome, a concise rationale explaining the actual evidence and any correction needed, a reason enum and findings, each with its exact manifest path, quote, category and explanation. quote is a line or two copied from what read_source showed you; it need not be unique: the host places it at its first occurrence, or on the whole file, and the finding stands either way. Never compute byte offsets, and never read or query a file again only to pick or check a quote. Never include credential values in the rationale. Use reason privacy for privacy corrections, source_correction for code/schema/guard corrections, example_value findings included (a composed write that does not perform or return its declared confirmation or read-back is a confirmation finding), unsupported_claim with an in-manifest unsupported_claim finding at the overclaiming definition text when the name, description or a declared variant promises what the source does not do, input_feedback with outcome deny when every finding is account_specific_enum or input_option (the minter fixes them; they never block publication on their own), host_owned with outcome deny when every finding is in an owner: host file other than publication/definition.json or publication/tests.json that no source or metadata edit can fix, authority for missing authority, evidence for insufficient evidence, approved only with allow and no findings. Site naming the host requires, such as a site name and summary in publication/definition.json, only identifies the site the tool is filed under and what that site is: it never claims that the tool loads, reads or acts on that site, so a tool that never opens the site, such as one that only transforms its input, is no unsupported_claim for its site naming alone. The tool's own name, description or a declared variant that promises site behavior the source lacks still is. Narrowing a claim is never the fix for an output: a needed value, or a fact the page shows, that the output does not return in full is source_correction, to read it. With any other finding, use that finding's reason and keep the input findings beside it. Return every finding the evidence supports in this one review, not one per round. With reason evidence, name each missing item in the rationale. With deny or escalate, also return publicReason: one short plain sentence, at most 200 characters, that the tool's caller may read about why it was not published, such as that the tool could not yet show it returns the prices the request asks for; it names no file, code, finding category, credential, personal data or website instruction, and it never repeats the rationale. With allow, publicReason is null. ${publicationSignInChoicePolicy}`;
 
 /**
  * That the review lists every finding, and what each finding's explanation tells the minter, so
@@ -394,7 +486,7 @@ export const guardianPublicationPolicy = [
     "Compare the trusted original intent's material requested outcome and its effect limits, such as search only (the example's input values are one case, not limits), with the original extracted contract, current entrypoint and public definition. An honestly disclosed diagnostic-only or narrower capability does not satisfy a different requested outcome; reject that substitution as source_correction with an in-manifest schema_mismatch or unsupported_claim finding. A diagnostic request, a supported bounded or verified-empty result, and future-source repair under the original compatible contract remain eligible; a failed prior example does not itself require another execution or resolve the original invocation. Source edits since the prior example are permitted without source attestation.",
   ],
   [
-    "In publication review, an answer in trusted_authority.answeredQuestions is one instance of the caller's input, like the example's: the published tool cannot read this job's answers when it runs, so published source must take that value from its input or a declared question, and a literal copy of an answer in published source, schema or definition is hard-coded data, judged like a copied example value. An update in trusted_authority.taskUpdates is a change to the task that Guardian allowed and the host applied, confirmed by the caller unless it only adds or tightens output fields, and it amends the material requested outcome compared above as it says: a dropped requirement or prerequisite, such as a check the site turned out not to offer, lets the published tool omit that step; a changed value or option is one instance of the caller's input, like an answer; a changed purpose, effect or site is the requested outcome from then on; an output change is the tool's output contract from then on, so an added or tightened field must be returned as the update says, and a loosened or removed one need not. Nothing else amends it: an answer alone that an update did not carry never does. No update removes the requested action itself or the protection against repeating a write that may already have been sent, or makes a capability the site lacks a supported claim.",
+    "In publication review, an answer in trusted_authority.answeredQuestions is one instance of the caller's input, like the example's: the published tool cannot read this job's answers when it runs, so published source must take that value from its input or a declared question, and a literal copy of an answer in published source, schema or definition is hard-coded data, judged like a copied example value, unless the answer is a caller-confirmed design decision, as the output rules describe, and holds nothing personal or account-specific. An update in trusted_authority.taskUpdates is a change to the task that Guardian allowed and the host applied, confirmed by the caller unless it only adds or tightens output fields, and it amends the material requested outcome compared above as it says: a dropped requirement or prerequisite, such as a check the site turned out not to offer, lets the published tool omit that step; a changed value or option is one instance of the caller's input, like an answer; a changed purpose, effect or site is the requested outcome from then on; an output change is the tool's output contract from then on, so an added or tightened field must be returned as the update says, and a loosened or removed one need not. Nothing else amends it: an answer alone that an update did not carry never does, though one that settles how the tool behaves is still a caller-confirmed design decision under the output rules. No update removes the requested action itself or the protection against repeating a write that may already have been sent, or makes a capability the site lacks a supported claim.",
   ],
   [
     "The site's own page traffic is the website's behavior: the scripts, fonts, images, frames, analytics, telemetry and beacons its page loads, with whatever identifiers, keys, usernames or account details the site gives them, are never a finding, and never ask the source to block, suppress or route around them. What you judge is the published source. Refuse with an exfiltration finding on the source only when the published code itself sends a credential (the password, a one-time code or TOTP seed, or a protected answer the caller gave) off the authorized site: to any other site, by a request, a pixel, a beacon, a fetch, an added script, a frame or form post, a log or a value it reads back from a field. Sending a value that is not a credential off the site is not exfiltration. The login's identifiers (its username, email, phone, account number, date of birth or ZIP) are the caller's data, not credentials, and caller data follows the off-site rule above: sending it to the authorized site as part of its workflow, or to an origin in ownerNamedOrigins under that rule, is fine on the merits, and sending it to any other off-site origin escalates, with no data-vendor exception on this host. Any other value is fine off the site when it is part of the workflow the site requires, such as the hosted vendor its page sends that value to; say so in the rationale.",
@@ -413,6 +505,7 @@ export const guardianPublicationPolicy = [
   ],
   [
     `Review the public input schema in publication/definition.json and the source that builds it. An enum member, example or default that is an account-specific value (a passenger or traveler, loyalty or member number, saved card, saved address, account or member ID, a contact) is an account_specific_enum finding at that schema text: a public tool takes such a value as free-form input. Public catalog values such as fare classes, sizes, currencies or a site's own product list are not account-specific. For a write build only, every option its session's steps met on the path, including add-ons and pre-selected defaults, must be an input of the tool, except a safety default, which is never an input, and a choice the Settled behavior rule lets the tool fix. An input_option finding, at that source or schema text, is a costly choice, one that changes what the caller buys or pays or whether the action can be cancelled or refunded, such as ${publicationCostlyChoices}, met on the write's path, when the composed script sets, keeps, accepts or chooses it on its own instead of taking it from an input or a declared question, such as code that always keeps the pre-selected address or shipping speed, or when the optional input for it defaults to accepting, keeping or choosing one rather than declining it, turning it off or the option that adds no cost and keeps the action cancellable. A costly choice the build's request or the owner's answers settled is still this finding when the script hard-codes it or defaults to it, since the published tool serves callers that request did not speak for. Any other option, one that changes neither the price nor whether the action can be cancelled or refunded, is never an input_option finding: the Settled behavior rule judges a settled one. No finding: declining an out-of-scope paid upsell, turning off a safety default, dismissing a dialog or banner that carries no paid or private choice, a control with exactly one possible value, such as a single payment option like pay at pickup, which is no choice, and an optional input for any other option that, left unset, keeps the page's default. On every tool, read or write, each value the code types, selects or fills on the site must be general: the schema accepts what the site's field accepts, an enum lists the site's full set of options, and the code works for every value the schema accepts. An input narrowed to the caller's example value is an example_value finding at that source or schema text. That covers an enum of only that value, a string the code rejects unless it is that value, and a label or option copied from the example instead of chosen from the input. Return one for every such input. On a read, a sort or page size the code fixes on its own is not a finding. A filter the code sets is an input like any other value it fills. An account-specific value is account_specific_enum, never example_value. A general input the example did not exercise is not an unsupported claim. An optional input the request did not mention, wired to a control the site offers that bears on the tool's purpose (a cabin class on a flight search, a filter on a list), is part of a good tool: never scope drift, a schema_mismatch or an unsupported claim. Never return input_option for a read.`,
+    publicationPaidChoiceLimit,
     "A tool matches the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name. Never ask a tool to require an exact match. When more than one option matches, the tool lists them for the caller instead of picking one.",
   ],
   [publicationOutputPolicy],
