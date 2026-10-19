@@ -346,9 +346,9 @@ test.describe("outcome race after an action", () => {
       `${saveOutcomes} committed: { response: { method: "POST" } },`,
       "action: () => save.click({ noWaitAfter: true }), deadline: Date.now() + 1000, noProgressMs: 8000,",
     );
-    // It ends at its deadline, long before the submit's answer at 6 s.
+    // It ends within its half-second grace of the deadline, long before the submit's answer at 6 s.
     expect(answer.reason).toBe("outcome_timeout");
-    expect(answer.ms).toBeLessThan(4000);
+    expect(answer.ms).toBeLessThan(2500);
   });
 
   test("a response outcome names at least one thing to match", async ({ page }) => {
@@ -500,11 +500,10 @@ test.describe("outcome race after an action", () => {
       `committed: { response: { method: "POST", status: 201 } }, alerted: { dialog: true },`,
       "",
       `(async () => {
-        // The alert opens just after the response; give it the moment it needs, then handle it.
-        await page.waitForEvent("dialog", { timeout: 1000 }).catch(() => undefined);
-        const held = result.dialog !== undefined;
+        // An alert that opened while the wait listened is handed back; one that opened after it
+        // stopped listening was dismissed by Playwright. Either way the page stays readable.
         await result.dialog?.dismiss();
-        return { held, readable: await page.evaluate(() => 1 + 1) };
+        return { readable: await page.evaluate(() => 1 + 1) };
       })()`,
     );
     expect(answer).toMatchObject({ outcome: "committed", extra: { readable: 2 } });
@@ -884,6 +883,21 @@ test.describe("readiness before acting", () => {
     const answer = await ready(page, `page.getByRole("button", { name: "Apply filters" })`, "stableMs: 100");
     expect(answer.waitedFor).toContain("moving");
     expect(answer.ms).toBeGreaterThanOrEqual(350);
+  });
+
+  test("a deadline ends the readiness wait in time even while a slow submit holds the page", async ({ page }) => {
+    await site(
+      page,
+      {
+        "/": `<form action="/api/records" method="post"><input name="title" value="x"><button id="save">Save</button></form>`,
+      },
+      (request) => (request.method() === "POST" ? { contentType: "text/html", body: "<p>Saved</p>", delayMs: 6000 } : undefined),
+    );
+    await page.locator("#save").click({ noWaitAfter: true });
+    const answer = await ready(page, `page.locator("#save")`, "deadline: Date.now() + 1000, noProgressMs: 8000");
+    // It ends within its half-second grace of the deadline, long before the submit's answer at 6 s.
+    expect(answer.reason).toBe("ready_timeout");
+    expect(answer.ms).toBeLessThan(2500);
   });
 
   test("a read-only field is not ready to type into when editable is asked", async ({ page }) => {

@@ -438,6 +438,8 @@ const waitForOutcomeResult = async (outcomes, options = {}) => {
     });
   let begun = Date.now();
   let key;
+  // How long the cleanup may take: 250 ms, and nothing past the wait's hard stop.
+  let cleanupMs = () => 250;
   try {
     if (options.action !== undefined) {
       key = "pomerado.outcomeWait." + Date.now() + "." + Math.random();
@@ -466,6 +468,11 @@ const waitForOutcomeResult = async (outcomes, options = {}) => {
     begun = Date.now();
     // deadline, a Date.now() time such as the call's own, bounds the wait wherever the action left it.
     const until = Math.min(begun + timeout, options.deadline ?? Infinity);
+    // Past the deadline, every page call shares outcomeWaitLateMs of grace and then ends: the wait
+    // never outlasts hardStop, however long the page holds it.
+    const hardStop = until + outcomeWaitLateMs;
+    const beforeStop = () => Math.max(0, hardStop - Date.now());
+    cleanupMs = () => Math.min(250, beforeStop());
     const unchangedMs = options.unchangedMs ?? waitLimits.unchanged;
     const unchangedFrom = begun + unchangedMs;
     // A page or frame the action is replacing can drop a look midway; the next look sees the new one.
@@ -476,12 +483,12 @@ const waitForOutcomeResult = async (outcomes, options = {}) => {
     // outcomes the page announced as events.
     const unblocked = (reading) => {
       reading.catch(() => undefined);
-      const bounded = waitBounded(reading, Math.max(until - Date.now(), 0) + outcomeWaitLateMs);
+      const bounded = waitBounded(reading, beforeStop());
       if (!candidates.some((candidate) => ["response", "dialog", "popup"].includes(candidate.kind))) return bounded;
       return Promise.race([
         bounded,
         events.dialogSignal.then(() => undefined),
-        events.hitSignal.then(() => waitBounded(reading, outcomeWaitGraceMs)),
+        events.hitSignal.then(() => waitBounded(reading, Math.min(outcomeWaitGraceMs, beforeStop()))),
       ]);
     };
     const look = () =>
@@ -573,10 +580,11 @@ const waitForOutcomeResult = async (outcomes, options = {}) => {
       if (events.dialogOpen() || events.anyHit()) continue;
       signature = current;
       if (now >= until) {
-        const seen = last ?? (await waitBounded(look(), outcomeWaitLateMs).catch(() => undefined)) ?? {};
+        const seen = last ?? (beforeStop() > 0 ? await look().catch(() => undefined) : undefined) ?? {};
         const failure = outcomeWaitFailure(
           "outcome_timeout",
-          " after " + Math.round(Math.max(0, until - begun)) + " ms: " + outcomeWaitSeen(seen) + "; " + progress.describe(),
+          " after " + Math.round(Math.max(0, until - begun)) + " ms: " +
+            (Object.keys(seen).length === 0 ? "the page could not be read" : outcomeWaitSeen(seen)) + "; " + progress.describe(),
           seen,
           { progress: progress.diagnostics() },
         );
@@ -619,9 +627,9 @@ const waitForOutcomeResult = async (outcomes, options = {}) => {
             globalThis[Symbol.for(key)]?.observer?.disconnect?.();
             delete globalThis[Symbol.for(key)];
           }, each),
-          250,
+          cleanupMs(),
         ).catch(() => undefined);
-    await progress.stop(inPage);
+    await progress.stop(inPage && cleanupMs() > 0);
   }
 };
 const waitForOutcome = async (outcomes, options = {}) => (await waitForOutcomeResult(outcomes, options)).outcome;
@@ -1070,7 +1078,9 @@ const waitForChange = async (fields, options = {}) => {
  * - `{ dialog: true | type | [types] }`: a native dialog opened, even one the action's own click
  *   raised. Page scripts stop while it is open, so it decides at once, and a dialog of a type no
  *   outcome names fails as `outcome_unknown`. The wait never accepts or dismisses it: a dialog
- *   that opened while it listened is on the result's or failure's `dialog`, whichever won.
+ *   that opened while it listened is on the result's or failure's `dialog`, whichever won. An
+ *   action still waiting to click when a dialog opens clicks once the dialog is handled, so
+ *   handle it before ending the call.
  * - `{ popup: true | (page) => boolean }`: the page opened a new tab or window.
  * - `{ announced: string | RegExp }`: a live region (`aria-live`, or the role `alert`, `status`,
  *   `log` or `alertdialog`) announced matching text after the action, as a screen reader hears
@@ -1117,8 +1127,9 @@ const waitForChange = async (fields, options = {}) => {
  * `() => window.jQuery?.active ?? 0`) returns a truthy count, and until `until()` is true. Once
  * anything held it back, ready must hold for `stableMs` (default `settle`), so a spinner that
  * flickers off between two requests does not count as gone. `expand` names the toggle of the
- * control's section: it clicks it once when it shows the section collapsed (`aria-expanded`
- * false, a closed `details`, or the control hidden), and never closes an open one. `dismiss`
+ * control's section: it clicks it once while the control is hidden and the toggle says the
+ * section is collapsed (`aria-expanded` false, or the summary of a closed `details`), so it never
+ * closes an open one. `dismiss`
  * names the close or skip controls of panels that open on their own, such as a tour, a what's-new
  * dialog or a cookie banner: it clicks one that shows, up to `dismissLimit` (5) times, and once
  * ready keeps a Playwright locator handler on each, so one that opens later is closed before the

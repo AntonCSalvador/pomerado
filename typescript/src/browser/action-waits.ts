@@ -504,7 +504,7 @@ const readyWaitInPage = (elements, spec) => {
   return { blockers, box, details };
 };
 // Whether a section toggle shows its section collapsed: aria-expanded="false", or the summary of a
-// closed details element; null when it says neither.
+// closed details element; null when it says neither, and then it is never clicked.
 const readyWaitCollapsed = (toggle) =>
   toggle.evaluate((element) => {
     const expanded = element.getAttribute("aria-expanded");
@@ -512,6 +512,7 @@ const readyWaitCollapsed = (toggle) =>
     const details = element.closest("details");
     return details !== null && element.localName === "summary" ? !details.open : null;
   });
+const readyWaitLateMs = 500;
 const readyWaitFailure = (reason, message, details) =>
   Object.assign(new Error(reason + message), { name: "ReadyWaitFailure", reason, ...details });
 const readyWaitSaid = (blockers, details, visible) =>
@@ -580,9 +581,9 @@ const waitForReady = async (target, options = {}) => {
     let quietBefore = false;
     while (true) {
       looks += 1;
-      // Every click and read is bounded by the deadline: a page held up by a pending navigation
-      // reads as absent until then.
-      const left = () => Math.max(1, until - Date.now());
+      // Every click and read is bounded by the deadline, with readyWaitLateMs of grace shared by
+      // all of them past it: a page held up by a pending navigation reads as absent until then.
+      const left = () => Math.max(1, until + readyWaitLateMs - Date.now());
       const read = async () => {
         // Close what opened on its own first: it may be what covers the control. After a click,
         // the panel gets a moment to close before it is clicked again.
@@ -595,12 +596,12 @@ const waitForReady = async (target, options = {}) => {
           await shown.waitFor({ state: "hidden", timeout: Math.min(1000, left()) }).catch(() => undefined);
         }
         const state = await target.evaluateAll(readyWaitInPage, spec);
-        // Expand only a section that holds the control hidden, and only once: a toggle that says
-        // it is expanded, or a control already showing or not yet there, is never clicked.
+        // Expand only a section that holds the control hidden, and only once, through a toggle
+        // that says it is collapsed: a control already showing or not yet there is never clicked.
         if (options.expand !== undefined && !expandTried && state.blockers[0] === "hidden" &&
             (await options.expand.filter({ visible: true }).count()) > 0) {
           const toggle = options.expand.filter({ visible: true }).first();
-          if ((await readyWaitCollapsed(toggle)) !== false) {
+          if ((await readyWaitCollapsed(toggle)) === true) {
             expandTried = true;
             expanded = true;
             await toggle.click({ timeout: Math.min(waitLimits.action, left()) });
@@ -620,7 +621,7 @@ const waitForReady = async (target, options = {}) => {
       try {
         const reading = read();
         reading.catch(() => undefined);
-        state = (await waitBounded(reading, Math.max(left(), 1000))) ?? { blockers: ["absent"] };
+        state = (await waitBounded(reading, left())) ?? { blockers: ["absent"] };
       } catch (error) {
         if (!waitContextLost(error)) throw error;
         state = { blockers: ["absent"] };
@@ -631,7 +632,9 @@ const waitForReady = async (target, options = {}) => {
       for (const blocker of state.blockers) waitedFor.add(blocker);
       if (state.blockers.length > 0) readySince = undefined;
       else readySince ??= now;
-      await progress.sample(state.blockers.includes("moving") ? ["control moving"] : []);
+      const sampling = progress.sample(state.blockers.includes("moving") ? ["control moving"] : []);
+      sampling.catch(() => undefined);
+      await waitBounded(sampling, left());
       // Ready once nothing holds it back on two looks with the same box. After anything held it
       // back, or a panel was closed, that must hold for stableMs too, so a spinner that flickers off
       // for a moment does not count as gone.
