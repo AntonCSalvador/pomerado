@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { expect, it } from "vitest";
 import type { SignInLogin } from "../../src/destinations/sign-in-recipe.js";
 import type { WebsiteCredentials } from "../../src/runtime/authentication.js";
-import { SignInRunFailed } from "../../src/runtime/sign-in-replay-steps.js";
+import { SignInRunFailed } from "../../src/runtime/sign-in-replay.js";
 import { makeRejectableLogin } from "../../src/standalone/session-sign-in.js";
 
 // The login a build's or run's sign-ins share, once the site rejected part of it.
