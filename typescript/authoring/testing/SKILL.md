@@ -227,7 +227,8 @@ case tests while time remained, holds publication back.
 Publication review starts only when at least 70% of the cases you ran on the code you publish pass. Inconclusive results count neither way.
 Deleting or changing a case after it failed does not hide the
 failure: the record keeps its last result as retired, and so does a failure that passes when run again on the same code, as
-flaky. A retired failure stops counting only on what the host can check: a case that passes the
+flaky. A rerun on the same code that ends inconclusive, such as a challenge, leaves the failure as
+the case's result. A retired failure stops counting only on what the host can check: a case that passes the
 same input after you change the code, with a result the old case's own expectation accepts
 (`excusedBy`; an `InvalidInput` refusal satisfies `error`), or an input schema bound on a value
 the input supplied (`outsideSchema`), which publication checks against the site's own field; a

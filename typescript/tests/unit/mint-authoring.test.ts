@@ -840,7 +840,7 @@ it("renders the pinned standalone authoring", async () => {
     ["92fc0b7671fa69255608725756172a9c4d7f2ceed5a7096a039a1025ea764a27", "core"],
     ["fb27753b30c3e53a0a51b07b13eedfbae2555e4abb861fe287a7f9d352018a7a", "search"],
     ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
-    ["1d3439a3a4ebd5585d3005861f0c0f174d0f3f94e39460e648effa7d1d17bd81", "testing"],
+    ["e770a897b9a1b07e51b2bc9d1a0dcb73d108d4da4c4b728cd320c86f9d932b09", "testing"],
     ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
     ["12b198d6503ef35853f9ff42aefefe641dc3b59c8b2a3e5a1424aabb4f6af2f4", "forms"],
     ["f17ddc96cd999764d5a203416b2318b43366bcbc7b3ae3e6912a4a35a720c2e4", "writes"],
