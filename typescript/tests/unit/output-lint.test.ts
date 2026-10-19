@@ -1,8 +1,13 @@
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
+import { outputNotes } from "../../src/mint/output-notes.js";
+import { contractJsonSchema } from "../../src/runtime/operation.js";
 import {
   applyOutputOverrides,
   controlLabelsFromAriaSnapshot,
+  fieldFill,
   lintOutput,
+  lintSchemas,
   type OutputCheck,
 } from "../../src/runtime/output-lint.js";
 
@@ -327,6 +332,117 @@ describe("output checks across a list's records", () => {
   it("flags repeated entries in a list of strings", () => {
     expect(checksOf({ tags: ["New", "Sale", "New"] })).toEqual(["tags[] duplicate_entries"]);
   });
+
+  it("flags an item ID, SKU or link that repeats within one list, even in two records", () => {
+    const results = [
+      { product_id: "P-100", title: "Desk lamp", url: "https://shop.example.com/p/100", seller_id: "S1" },
+      { product_id: "P-200", title: "Floor lamp", url: "https://shop.example.com/p/200", seller_id: "S1" },
+      { product_id: "P-100", title: "Desk lamp", url: "https://shop.example.com/p/100", seller_id: "S2" },
+    ];
+    const findings = lintOutput({ results }, { samples: true });
+    expect(findings).toContainEqual(
+      expect.objectContaining({ path: "results[].product_id", check: "duplicate_entries", count: 1, sample: "P-100", blocking: false }),
+    );
+    expect(checksOf({ results })).toContain("results[].url duplicate_entries");
+    // Another record's ID, such as the seller's, may repeat.
+    expect(checksOf({ results })).not.toContain("results[].seller_id duplicate_entries");
+    expect(checksOf({ items: [{ sku: "A1" }, { sku: "A1" }] })).toEqual(["items[].sku duplicate_entries"]);
+    expect(checksOf({ items: [{ sku: "A1" }, { sku: "A2" }] })).toEqual([]);
+  });
+
+  // Live test records keep each finding's check, and a worker of an earlier release restores
+  // them from a checkpoint with its own closed list of checks. The new findings use only checks
+  // that list holds, so a mixed rollout never meets a check it cannot decode.
+  it("reports repeated IDs and fields empty across runs only under checks earlier releases decode", () => {
+    const earlierReleaseChecks = new Set([
+      "script",
+      "css",
+      "markup",
+      "template_residue",
+      "json_text",
+      "invisible_chars",
+      "untrimmed",
+      "too_long",
+      "collapsed_text",
+      "card_text",
+      "duplicate_entries",
+      "duplicate_records",
+      "constant_field",
+      "empty_field",
+    ]);
+    const output = {
+      name: "Desk lamp",
+      description: null,
+      results: [
+        { product_id: "P-100", url: "https://shop.example.com/p/100" },
+        { product_id: "P-100", url: "https://shop.example.com/p/100" },
+      ],
+    };
+    const findings = lintOutput(output, { alsoTested: [fieldFill(output)] });
+    expect(findings.length).toBeGreaterThan(0);
+    for (const finding of findings) expect(earlierReleaseChecks).toContain(finding.check);
+  });
+});
+
+describe("empty fields across a detail record and the tool's tested runs", () => {
+  const detail = (description: string | null, rating: number | null) => ({
+    name: "Desk lamp",
+    description,
+    rating,
+    specs: { weight: null },
+  });
+
+  it("flags a single detail record's field only when every other tested run left it empty too", () => {
+    // One run alone is no evidence the read is wrong.
+    expect(checksOf(detail(null, 4.5))).toEqual([]);
+    expect(checksOf(detail(null, 4.5), { alsoTested: [fieldFill(detail(null, null))] })).toEqual([
+      "description empty_field",
+      "specs.weight empty_field",
+    ]);
+    // A run that never returned the field, such as a failed one, is no evidence either.
+    expect(checksOf(detail(null, 4.5), { alsoTested: [fieldFill({ name: "Desk lamp" })] })).toEqual([]);
+  });
+
+  it("leaves a detail field another tested run filled alone", () => {
+    const alsoTested = [fieldFill(detail("A lamp with a weighted base.", null)), fieldFill(detail(null, null))];
+    expect(checksOf(detail(null, null), { alsoTested })).toEqual([
+      "rating empty_field",
+      "specs.weight empty_field",
+    ]);
+  });
+
+  it("flags a list field empty in every tested run's records once they reach three", () => {
+    const results = (note: string | null) => ({ results: [{ title: "Mug", note }, { title: "Cup", note: null }] });
+    expect(checksOf(results(null))).toEqual([]);
+    expect(checksOf(results(null), { alsoTested: [fieldFill(results(null))] })).toEqual([
+      "results[].note empty_field",
+    ]);
+    expect(checksOf(results(null), { alsoTested: [fieldFill(results("Dishwasher safe"))] })).toEqual([]);
+  });
+
+  it("leaves a list's own paging fields alone", () => {
+    const page = {
+      results: [{ title: "Mug" }],
+      next_cursor: null,
+      next_cursor_expires_at: null,
+      has_more: false,
+      total_results: null,
+      list_changed: false,
+    };
+    expect(checksOf(page, { alsoTested: [fieldFill(page)] })).toEqual([]);
+  });
+
+  it("keeps a field fill to paths and counts, never values", () => {
+    expect(fieldFill({ ...detail(null, 4.5), results: [{ title: "Mug" }, { title: "" }] })).toEqual({
+      name: { records: 1, filled: 1 },
+      description: { records: 1, filled: 0 },
+      rating: { records: 1, filled: 1 },
+      specs: { records: 1, filled: 1 },
+      "specs.weight": { records: 1, filled: 0 },
+      results: { records: 1, filled: 1 },
+      "results[].title": { records: 2, filled: 1 },
+    });
+  });
 });
 
 describe("overrides", () => {
@@ -455,5 +571,238 @@ describe("bounded cost", () => {
     const cardText = large.find((finding) => finding.check === "card_text");
     expect(cardText).toMatchObject({ path: "results[].text", partial: true, blocking: false });
     expect(cardText?.count).toBeLessThan(3_000);
+  });
+});
+
+describe("advisory checks of the declared schemas", () => {
+  const schemaChecks = (input: unknown, output: unknown) =>
+    lintSchemas(input, output).map(({ path, check }) => `${path} ${check}`);
+  const date = Schema.String.pipe(Schema.pattern(/^\d{4}-\d{2}-\d{2}$/u));
+
+  it("flags a required string that accepts an empty string or whitespace alone", () => {
+    const output = contractJsonSchema(
+      Schema.Struct({
+        plain: Schema.String,
+        nonEmpty: Schema.NonEmptyString,
+        trimmed: Schema.Trimmed,
+        spaced: Schema.String.pipe(Schema.pattern(/^[\w ]*$/u)),
+        strict: Schema.NonEmptyTrimmedString,
+        dated: date,
+        kind: Schema.Literal("flight", "train"),
+        note: Schema.optional(Schema.String),
+        count: Schema.Number,
+      }),
+    );
+    expect(schemaChecks(undefined, output).sort()).toEqual([
+      "nonEmpty loose_text",
+      "plain loose_text",
+      "spaced loose_text",
+      "trimmed loose_text",
+    ]);
+  });
+
+  it("follows nested objects, arrays, references and nullable unions", () => {
+    const Leg = Schema.Struct({ carrier: Schema.String, code: Schema.NonEmptyTrimmedString });
+    const output = contractJsonSchema(
+      Schema.Struct({
+        trip: Schema.Struct({ legs: Schema.Array(Leg), tags: Schema.Array(Schema.String) }),
+        maybe: Schema.NullOr(Schema.String),
+      }),
+    );
+    expect(schemaChecks(undefined, output).sort()).toEqual([
+      "maybe loose_text",
+      "trip.legs[].carrier loose_text",
+      "trip.tags[] loose_text",
+    ]);
+  });
+
+  it("reads constraints beside a reference and in every branch of a union", () => {
+    const output = {
+      type: "object",
+      required: ["code", "either", "typed"],
+      properties: {
+        code: { $ref: "#/$defs/Text", pattern: "^[A-Z]{3}$" },
+        either: { anyOf: [{ type: "string", minLength: 1, pattern: "\\S" }, { type: "string" }] },
+        typed: { type: ["string", "null"], minLength: 2 },
+      },
+      $defs: { Text: { type: "string" } },
+    };
+    expect(schemaChecks(undefined, output)).toEqual(["either loose_text"]);
+  });
+
+  it("flags an output field looser than the input field of the same name", () => {
+    const input = contractJsonSchema(
+      Schema.Struct({
+        cabin: Schema.Literal("economy", "business"),
+        departDate: date,
+        origin: Schema.NonEmptyTrimmedString,
+        passengers: Schema.Number,
+        promo: Schema.optional(Schema.String),
+        seat: Schema.Literal("aisle", "window"),
+      }),
+    );
+    const output = contractJsonSchema(
+      Schema.Struct({
+        searched: Schema.Struct({
+          cabin: Schema.NonEmptyTrimmedString,
+          departDate: Schema.NonEmptyTrimmedString,
+          origin: Schema.Trimmed.pipe(Schema.pattern(/\S/u)),
+          passengers: Schema.optional(Schema.Number),
+          promo: Schema.optional(Schema.String),
+          seat: Schema.Literal("aisle", "window", "middle"),
+        }),
+        results: Schema.Array(
+          Schema.Struct({ departDate: Schema.NullOr(date), cabin: Schema.Literal("economy") }),
+        ),
+      }),
+    );
+    expect(schemaChecks(input, output).sort()).toEqual([
+      "results[].departDate looser_than_input",
+      "searched.cabin looser_than_input",
+      "searched.departDate looser_than_input",
+      "searched.origin looser_than_input",
+      "searched.passengers looser_than_input",
+      "searched.seat looser_than_input",
+    ]);
+  });
+
+  it("compares no field whose name more than one input field has", () => {
+    const input = contractJsonSchema(
+      Schema.Struct({
+        outbound: Schema.Struct({ date }),
+        inbound: Schema.Struct({ date }),
+      }),
+    );
+    const output = contractJsonSchema(Schema.Struct({ date: Schema.NonEmptyTrimmedString }));
+    expect(schemaChecks(input, output)).toEqual([]);
+  });
+
+  it("walks a schema that refers to itself once per definition, quickly and without repeats", () => {
+    const tree = {
+      type: "object",
+      required: ["root"],
+      properties: { root: { $ref: "#/$defs/Node" } },
+      $defs: {
+        Node: {
+          type: "object",
+          required: ["name", "left", "right"],
+          properties: {
+            name: { type: "string" },
+            left: { anyOf: [{ $ref: "#/$defs/Node" }, { type: "null" }] },
+            right: { $ref: "#/$defs/Node" },
+          },
+        },
+      },
+    };
+    const started = performance.now();
+    const findings = schemaChecks(tree, tree);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    // The same schema on both sides is no looser than itself.
+    expect(findings).toEqual(["root.name loose_text"]);
+
+    interface Comment {
+      readonly text: string;
+      readonly replies: readonly Comment[];
+    }
+    const Comment: Schema.Schema<Comment> = Schema.Struct({
+      text: Schema.String,
+      replies: Schema.Array(Schema.suspend((): Schema.Schema<Comment> => Comment)),
+    }).annotations({ identifier: "Comment" });
+    const thread = lintSchemas(undefined, contractJsonSchema(Schema.Struct({ root: Comment })));
+    expect(thread.map(({ path, check }) => `${path} ${check}`)).toEqual(["root.text loose_text"]);
+  });
+
+  it("reads whitespace alone as blank, and a null-only branch as nullable", () => {
+    const output = {
+      type: "object",
+      required: ["spaced", "maybe"],
+      properties: {
+        spaced: { type: "string", minLength: 1, pattern: "^[\\w\\t]+$|^\\n$" },
+        maybe: { anyOf: [{ type: "string" }, { const: null }] },
+      },
+    };
+    expect(schemaChecks(undefined, output).sort()).toEqual(["maybe loose_text", "spaced loose_text"]);
+  });
+
+  it("carries over only an input pattern that holds a format, never one for free text", () => {
+    const input = contractJsonSchema(
+      Schema.Struct({ query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)), code: date }),
+    );
+    const output = contractJsonSchema(
+      Schema.Struct({ query: Schema.NonEmptyTrimmedString, code: Schema.NonEmptyTrimmedString }),
+    );
+    expect(schemaChecks(input, output)).toEqual(["code looser_than_input"]);
+  });
+
+  it("never blocks, and reaches the publication notes beside the value checks", () => {
+    const inputSchema = contractJsonSchema(Schema.Struct({ cabin: Schema.Literal("economy") }));
+    const outputSchema = contractJsonSchema(
+      Schema.Struct({ cabin: Schema.NonEmptyTrimmedString, title: Schema.String }),
+    );
+    const notes = outputNotes({ output: { cabin: "economy", title: "A" }, outputSchema, inputSchema });
+    expect(notes.blocking).toEqual([]);
+    expect(notes.any).toBe(true);
+    const text = JSON.parse(notes.text) as { findings: { path: string; check: string }[] };
+    expect(text.findings.map(({ path, check }) => `${path} ${check}`).sort()).toEqual([
+      "cabin looser_than_input",
+      "title loose_text",
+    ]);
+    // A run's own output check never reports them.
+    expect(lintOutput({ cabin: "economy", title: "A" }, { outputSchema })).toEqual([]);
+  });
+});
+
+// A value in another notation than its field declares: a date field holding a timestamp or a
+// site's wording, or one status written two ways in one list.
+describe("output notation checks", () => {
+  const dated = contractJsonSchema(
+    Schema.Struct({
+      due: Schema.String.annotations({ jsonSchema: { format: "date" } }),
+      updated: Schema.String.annotations({ jsonSchema: { format: "date-time" } }),
+    }),
+  );
+
+  it("flags a date field holding anything but YYYY-MM-DD, and a timestamp not in ISO 8601", () => {
+    expect(
+      checksOf({ due: "2026-03-14T00:00:00Z", updated: "Mar 14, 2026 3:05 PM" }, { outputSchema: dated }),
+    ).toEqual(["due format_mismatch", "updated format_mismatch"]);
+    expect(checksOf({ due: "14/03/2026", updated: "2026-03-14" }, { outputSchema: dated })).toEqual([
+      "due format_mismatch",
+      "updated format_mismatch",
+    ]);
+  });
+
+  it("leaves dates and timestamps in their declared form, and a field that declares no format, alone", () => {
+    for (const updated of ["2026-03-14T15:05:00Z", "2026-03-14T15:05:00.250-07:00", "2026-03-14T15:05+05:30"])
+      expect(checksOf({ due: "2026-03-14", updated }, { outputSchema: dated })).toEqual([]);
+    expect(checksOf({ due: "Mar 14, 2026" })).toEqual([]);
+  });
+
+  it("flags a list field whose values differ only by letter case", () => {
+    const rows = [
+      { number: "1001", status: "paid" },
+      { number: "1002", status: "Paid" },
+      { number: "1003", status: "draft" },
+    ];
+    expect(checksOf({ invoices: rows })).toEqual(["invoices[].status case_variant"]);
+    expect(lintOutput({ invoices: rows }, { samples: true })[0]).toMatchObject({
+      path: "invoices[].status",
+      check: "case_variant",
+      count: 1,
+      sample: "Paid",
+      blocking: false,
+    });
+    // A list of strings already reports such a pair as a repeated entry.
+    expect(checksOf({ tags: ["urgent", "Urgent"] })).toEqual(["tags[] duplicate_entries"]);
+  });
+
+  it("leaves values in one notation, and long text, alone", () => {
+    const rows = [
+      { status: "paid", memo: "Paid in full by card on arrival at the front desk" },
+      { status: "paid", memo: "paid in full by card on arrival at the front desk" },
+      { status: "draft", memo: "Awaiting approval" },
+    ];
+    expect(checksOf({ invoices: rows })).not.toContain("invoices[].status case_variant");
+    expect(checksOf({ invoices: rows })).not.toContain("invoices[].memo case_variant");
   });
 });

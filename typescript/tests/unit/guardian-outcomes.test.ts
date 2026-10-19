@@ -2,6 +2,7 @@
 // (allow, deny or escalate) beside its own, so the model returns one its kind refuses; a review
 // that returns an outcome its kind refuses is retried with backoff as an outage, from the same
 // input, for as long as the retry budget lasts, instead of being told once which outcomes count;
+// a host kind's allow carries a label its policy gives only to a deny, and the host acts on it;
 // a write build's task update review reads its empty allowedEffects as a read-only build; a
 // caller's confirmed answer can't overturn a Guardian decision that held a step to their request.
 import { OpenAIProvider, setDefaultModelProvider, Usage } from "@openai/agents";
@@ -15,9 +16,11 @@ import {
 } from "../../src/guardian/execution-policy.js";
 import { guardianActions } from "../../src/guardian/review-contracts.js";
 import { guardianOutcomes } from "../../src/guardian/review-layout.js";
-import { makeGuardian } from "../../src/guardian/review.js";
+import { makeGuardian, ReviewFailure as ReviewFailureClass } from "../../src/guardian/review.js";
+import { workspaceOriginReview } from "../../src/guardian/sign-in-origin-reviews.js";
 import type {
   GuardianDiagnostics,
+  HostReview,
   PendingExecution,
   ReviewFailure,
   ReviewRetry,
@@ -259,4 +262,180 @@ it("lets a caller's confirmed answer overturn only a decision that held a step t
   expect(guardianExecutionPolicy(nativeExecutionEnvironment)).toContain(
     `An update never removes the requested action itself, allows repeating a write that may have committed, ${exception}`,
   );
+});
+
+const labelled = (outcome: string, label: string): ModelResponse["output"] => [
+  {
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [
+      {
+        type: "output_text",
+        text: JSON.stringify({
+          outcome,
+          rationale: `Synthetic ${outcome} ${label}.`,
+          reason: null,
+          findings: null,
+          label,
+          action: null,
+        }),
+      },
+    ],
+  },
+];
+
+// A host kind that ties its labels to its outcomes, readable so the host may correct it.
+const tiered: HostReview = {
+  kind: "synthetic_tier",
+  policy: "Synthetic tier policy: allow with label open or listed, deny with label closed.",
+  evidence: { origin: "https://acme.example.com" },
+  outcomes: ["allow", "deny"],
+  labels: ["open", "listed", "closed"],
+  outcomeLabels: { allow: ["open", "listed"], deny: ["closed"] },
+};
+
+it("tells a host kind once, in the same review, that its outcome does not carry that label, and takes the next", async () => {
+  const requests = scripted([labelled("allow", "closed"), labelled("allow", "listed")]);
+  const { names, diagnostics } = recording();
+  const reviewed = await Effect.runPromise(guardianWith(diagnostics).reviewHostKind(pending, tiered));
+  expect(reviewed.decision).toMatchObject({ outcome: "allow", label: "listed" });
+  expect(requests).toHaveLength(2);
+  expect(names.filter((name) => name === "guardian.started")).toHaveLength(1);
+  expect(names).not.toContain("guardian.review_retried");
+});
+
+it("ends a host kind that pairs an outcome with another outcome's label again after the correction", async () => {
+  const requests = scripted([
+    labelled("deny", "open"),
+    labelled("deny", "open"),
+    labelled("deny", "closed"),
+  ]);
+  const result = await Effect.runPromise(
+    Effect.either(
+      makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).reviewHostKind(
+        pending,
+        tiered,
+      ),
+    ),
+  );
+  expect(result).toMatchObject({ _tag: "Left", left: { code: "InvalidDecision" } });
+  expect(requests).toHaveLength(2);
+});
+
+it.each([
+  [{ outcome: "allow", label: "workspace" }, true],
+  [{ outcome: "allow", label: "shared_host" }, true],
+  [{ outcome: "deny", label: "unrecognized" }, true],
+  [{ outcome: "allow", label: "unrecognized" }, false],
+  [{ outcome: "deny", label: "workspace" }, false],
+  [{ outcome: "deny", label: "shared_host" }, false],
+] as const)("a workspace_origin decision %o is accepted: %s", async (raw, accepted) => {
+  const review = workspaceOriginReview({
+    siteOrigin: "https://app.example.com",
+    parent: "example.com",
+    candidateOrigin: "https://acme.example.com",
+    path: [],
+    sentBefore: "identifier",
+    intent: pending.screenedIntent,
+  });
+  const result = await Effect.runPromise(
+    Effect.either(
+      makeGuardian({
+        run: () => Effect.succeed({ ...raw, rationale: "Synthetic decision." }),
+      }).reviewHostKind(pending, review),
+    ),
+  );
+  expect(result).toMatchObject(
+    accepted
+      ? { _tag: "Right", right: { decision: raw } }
+      : { _tag: "Left", left: { code: "InvalidDecision" } },
+  );
+});
+
+it("gives an outcome, a decode and two read corrections in one review, and no more", async () => {
+  // The host's own read of the entrypoint fails, so an allow needs Guardian's read, which the
+  // scripted model never does.
+  let hostRead = true;
+  const reader = () =>
+    Effect.suspend(() => {
+      const host = hostRead;
+      hostRead = false;
+      return host
+        ? Effect.fail(new ReviewFailureClass({ code: "SourceUnavailable" }))
+        : readSource();
+    });
+  const requests = scripted([
+    decision("reword"),
+    // An execution allow without an action label does not decode.
+    decision("allow"),
+    decision("allow", "read"),
+    decision("allow", "read"),
+    decision("allow", "read"),
+    decision("allow", "read"),
+  ]);
+  const { names, diagnostics } = recording();
+  const result = await Effect.runPromise(
+    Effect.either(guardianWith(diagnostics).review(pending, reader)),
+  );
+  expect(result).toMatchObject({ _tag: "Left", left: { code: "EntrypointNotRead" } });
+  expect(requests).toHaveLength(5);
+  expect(names.filter((name) => name === "guardian.started")).toHaveLength(1);
+  expect(names).not.toContain("guardian.review_retried");
+});
+
+it("reviews a private host kind's undecodable decision once more, with no follow-up", async () => {
+  const labelled = (label: string): ModelResponse["output"] => [
+    {
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [
+        {
+          type: "output_text",
+          text: JSON.stringify({
+            outcome: "allow",
+            rationale: "Synthetic allow.",
+            reason: null,
+            findings: null,
+            label,
+            action: null,
+          }),
+        },
+      ],
+    },
+  ];
+  const request: HostReview = {
+    kind: "synthetic_private_kind",
+    policy: "Synthetic private policy.",
+    evidence: {},
+    outcomes: ["allow", "deny"],
+    labels: ["synthetic_label_a", "synthetic_label_b"],
+    private: true,
+  };
+  const run = async (responses: readonly ModelResponse["output"][]) => {
+    const requests = scripted(responses);
+    const { names, diagnostics } = recording();
+    const result = await Effect.runPromise(
+      Effect.either(guardianWith(diagnostics).reviewHostKind(pending, request, readSource)),
+    );
+    return { requests, names, result };
+  };
+  const recovered = await run([labelled("synthetic_label_c"), labelled("synthetic_label_a")]);
+  expect(recovered.result).toMatchObject({
+    _tag: "Right",
+    right: { decision: { label: "synthetic_label_a" } },
+  });
+  expect(recovered.names.filter((name) => name === "guardian.started")).toHaveLength(2);
+
+  // A third response the host would accept: a second retry would reach it.
+  const failed = await run([
+    labelled("synthetic_label_c"),
+    labelled("synthetic_label_c"),
+    labelled("synthetic_label_a"),
+  ]);
+  expect(failed.result).toMatchObject({ _tag: "Left", left: { code: "InvalidDecision" } });
+  expect(failed.requests).toHaveLength(2);
+  expect(failed.names.filter((name) => name === "guardian.started")).toHaveLength(2);
+  expect(failed.names.filter((name) => name === "guardian.review_retried")).toHaveLength(1);
 });

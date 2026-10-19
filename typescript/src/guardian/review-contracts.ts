@@ -28,6 +28,12 @@ export interface PublicationScope {
     readonly name: string;
     readonly description?: string;
   }[];
+  /**
+   * Files the review may read on demand that are not its evidence, such as the skills the minter
+   * followed, each with its byte length. None ships and none is in `files`, so no finding names
+   * one.
+   */
+  readonly references?: readonly { readonly path: string; readonly byteLength: number }[];
 }
 
 /**
@@ -39,6 +45,27 @@ export interface PublicationScope {
 export const guardianActions = ["read", "write", "authentication"] as const;
 export const GuardianAction = Schema.Literal(...guardianActions);
 export type GuardianAction = typeof GuardianAction.Type;
+
+/**
+ * What kind of refusal an execution review's deny or escalate is: `final` when no change to the
+ * source, input or evidence within the request's authority would make the step acceptable, and
+ * `correctable` otherwise. Only a `final` refusal lets the build end as a `policy` block. A deny
+ * or escalate without one, from a reviewer that predates it, counts as `final`, as every
+ * execution refusal did before.
+ */
+export const guardianRefusals = ["final", "correctable"] as const;
+export const GuardianRefusal = Schema.Literal(...guardianRefusals);
+export type GuardianRefusal = typeof GuardianRefusal.Type;
+
+/**
+ * A host fact an execution refusal may rest on, which the host checks against its own record:
+ * `retry_permission`, that the step may not run again; `committed_write`, that the step would
+ * commit a listed write again. A refusal whose ground the host's record contradicts, retry
+ * permission when trusted_execution_context.repeatableRead is true or a committed write for a
+ * step the review labels a read, is sent back once in the same review and is never final.
+ */
+export const guardianRefusalGrounds = ["retry_permission", "committed_write"] as const;
+export type GuardianRefusalGround = (typeof guardianRefusalGrounds)[number];
 
 /**
  * Input findings are feedback for the minter; they never block a publication on their own.

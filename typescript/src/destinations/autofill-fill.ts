@@ -27,7 +27,9 @@ import {
   type AutofillStep,
   type FillSlot,
   type AutofillStepReport,
+  hostSubmits,
   LocatedError,
+  notingHostTrust,
   Targets,
   untrustedTarget,
 } from "./autofill-step.js";
@@ -41,7 +43,15 @@ import { PageControls } from "./page-controls.js";
 /** One fill call's answer: a control that moved, an empty field the host typed, or its own. */
 const FillAnswer = Schema.Union(
   LocatedError,
-  Schema.Struct({ checked: Schema.Literal(false), url: Schema.String }),
+  /**
+   * A typed field holds nothing, or, before a submit, a code box (`field`) does not hold exactly
+   * one character.
+   */
+  Schema.Struct({
+    checked: Schema.Literal(false),
+    field: Schema.optional(Schema.Number),
+    url: Schema.String,
+  }),
   Schema.Struct({
     focused: Schema.Boolean,
     /** Why the field did not take the focus: the error focusing threw, or the tag that holds it. */
@@ -53,8 +63,14 @@ const FillAnswer = Schema.Union(
     ),
     located: Schema.optional(FoundIn),
     url: Schema.String,
+    /** When the primary page's document began loading, read once the field took the focus. */
+    document: Schema.optional(Schema.Number),
   }),
-  Schema.Struct({ dated: Schema.Boolean, url: Schema.String }),
+  Schema.Struct({
+    dated: Schema.Boolean,
+    url: Schema.String,
+    document: Schema.optional(Schema.Number),
+  }),
   /** The submit call found that the page sent what was typed itself (`pageSentCode`). */
   Schema.Struct({ pageSent: Schema.Literal(true), url: Schema.String }),
   Schema.Struct({
@@ -72,8 +88,16 @@ const Changed = Schema.Struct({
   located: Schema.optional(FoundAt),
   url: Schema.String,
 });
-/** A call the host refused, with the primary page then. */
-type Stop = { readonly refusal: AutofillRefusal; readonly url?: string | undefined };
+/**
+ * A call the host refused, with the primary page then. `left`: a submit call of a step with a
+ * submit found a field gone from the document the host typed in, which a new document may yet
+ * replace (`screenGone`).
+ */
+type Stop = {
+  readonly refusal: AutofillRefusal;
+  readonly url?: string | undefined;
+  readonly left?: true;
+};
 /** A fill call's answer once the host judged it: a refusal, or the call's own answer. */
 type CallAnswer = Exclude<FillAnswer, typeof LocatedError.Type> | Stop;
 
@@ -134,6 +158,17 @@ const resubmitted = (
   );
 };
 
+/**
+ * The step's code boxes, by field index: its code fields whose values are one character each, when
+ * there are two or more, as the host splits one code across one-character boxes. Otherwise none.
+ */
+const codeBoxes = (step: AutofillStep<FillSlot>, values: readonly string[]) => {
+  const boxes = step.fields.flatMap((field, index) =>
+    field.slot === "code" && Array.from(values[index] ?? "").length === 1 ? [index] : [],
+  );
+  return boxes.length > 1 ? boxes : [];
+};
+
 /** What the fill has done so far. */
 interface FillProgress {
   readonly statuses: AutofillFieldStatus[];
@@ -147,7 +182,18 @@ interface FillProgress {
   judgment: string | undefined;
   /** The id the page keeps where it was as each field was typed under (`pageSentCode`). */
   readonly typedAt: string;
+  /**
+   * The document the host typed the last field in, by when it began loading, which a submit call
+   * that finds the screen gone compares against (`screenGone`).
+   */
+  typedIn: number | undefined;
+  /** The origins `trustSignInUrl` trusted as the host judged again a control the page moved. */
+  readonly trusted: Set<string>;
 }
+
+/** The report's `trustedSignInOrigins`, when the fill's own judgments trusted any. */
+const trustedByHost = (progress: FillProgress) =>
+  progress.trusted.size === 0 ? {} : { trustedSignInOrigins: [...progress.trusted].sort() };
 
 const filledReport = (
   step: AutofillStep<FillSlot>,
@@ -167,6 +213,7 @@ const filledReport = (
   url,
   ...(refusal?.failureDetail === undefined ? {} : { failureDetail: refusal.failureDetail }),
   ...(progress.typed ? { typed: true as const } : {}),
+  ...trustedByHost(progress),
 });
 
 /** The labels a failed call that held a value keeps of its error, by their names in its context. */
@@ -217,6 +264,7 @@ const failedCall = (
         reason: "fill_call_failed",
         failureDetail: detail,
         ...(progress.typed || call.held !== undefined ? { typed: true as const } : {}),
+        ...trustedByHost(progress),
       }
     : { ...refused("page_unavailable"), failureDetail: detail };
 };
@@ -224,16 +272,20 @@ const failedCall = (
 /**
  * A control the host refused, or a field the host typed that holds nothing: a refusal before
  * anything was typed. After, the field about to be typed fails untyped, as a fill into it would, a
- * typed field left empty fails, and only the submit's recheck refuses the submit.
+ * typed field left empty fails, as does a code box that holds other than one character when the
+ * host is about to submit, and only the submit's recheck refuses the submit.
  */
 const stopped = (
   step: AutofillStep<FillSlot>,
   progress: FillProgress,
-  answer: Stop | { readonly checked: false; readonly url: string },
+  answer:
+    | Stop
+    | { readonly checked: false; readonly field?: number | undefined; readonly url: string },
   during: "field" | "submit",
 ): AutofillStepReport => {
   if ("checked" in answer) {
-    if (progress.check !== null) progress.statuses[progress.check] = "failed";
+    const failed = answer.field ?? progress.check;
+    if (failed !== null) progress.statuses[failed] = "failed";
     return filledReport(step, progress, "not_attempted", answer.url);
   }
   if (!progress.typed) return answer.refusal;
@@ -273,6 +325,12 @@ interface FillInput {
    * with no submit gives the page as long, at most `pageSendMs`, to send what was typed itself.
    */
   readonly settleMs?: number;
+  /**
+   * Whether the submit call reads the page's alerts just before its click, so its report counts
+   * the ones after it that are new (`newAlerts`). The read waits for every frame, so only a host
+   * that reads the count asks; a read that takes longer than `alertsBeforeMs` counts nothing.
+   */
+  readonly countNewAlerts?: boolean;
 }
 
 /**
@@ -280,6 +338,8 @@ interface FillInput {
  * field still to be typed must take typing: a refusal, or undefined to call again. A form that
  * changed how or where it submits, beyond an action's query or hash, and a page that changed them
  * a third time (`changes`, counted across every call the host makes again for it) are refused.
+ * Controls judged so are ones the host may act on, so the origins `trustSignInUrl` trusted for
+ * them join the fill's (`progress.trusted`).
  */
 const rejudge = (
   input: FillInput,
@@ -292,8 +352,13 @@ const rejudge = (
   const from = call.kind === "submit" ? input.step.fields.length : call.index;
   const judged = progress.judged;
   const named = evidenceOrigins(input, progress);
-  return (
-    untrustedTarget(changed, input.step, input.inspection, from, named) ??
+  const trusted = new Set<string>();
+  const trust = {
+    ...input.inspection,
+    trustSignInUrl: notingHostTrust(input.inspection.trustSignInUrl, trusted),
+  };
+  const refusal =
+    untrustedTarget(changed, input.step, trust, from, named) ??
     resubmitted(judged, changed, named) ??
     (changes >= 3
       ? withCheck(
@@ -301,21 +366,36 @@ const rejudge = (
           "change",
           targetEvidence(target === "submit" ? changed.submit : changed.fields[target], named),
         )
-      : undefined)
-  );
+      : undefined);
+  if (refusal === undefined) for (const origin of trusted) progress.trusted.add(origin);
+  return refusal;
 };
 
 /**
- * A submit call for a step with fields and no submit that found a field gone, or its popup closed:
- * once every field was typed, the page took the screen away itself, as a code widget does when it
- * sends what its last box completed. A step with a submit is the host's to click, so there the
- * same answer stays a refusal.
+ * A submit call that found the screen gone once every field was typed: `sent` when the page took
+ * it away itself. On a step with no submit, a field gone or its popup closed, as a code widget does
+ * when it sends what its last box completed. On a step with a submit or a submit key, only a field
+ * gone because a new document replaced the one the host typed the last field in (`typedIn`), as a
+ * form that submits itself on its last input does: the host's click or key press never ran, so
+ * nothing went out twice, and
+ * the sign-in's next check decides what the page sent. A field gone from that same document is
+ * `left`: a form that takes its fields away or puts a new path in the address with pushState
+ * loaded no new document, so it stays a refusal unless one loads within the host's wait.
  */
-const screenGone = (step: AutofillStep<FillSlot>, answer: typeof LocatedError.Type) =>
-  step.fields.length > 0 &&
-  step.submit === undefined &&
-  ((answer.error === "not_found" && typeof answer.target === "number") ||
-    answer.error === "popup_missing");
+const screenGone = (
+  step: AutofillStep<FillSlot>,
+  answer: typeof LocatedError.Type,
+  typedIn: number | undefined,
+): "sent" | "left" | undefined => {
+  if (step.fields.length === 0) return undefined;
+  const fieldGone = answer.error === "not_found" && typeof answer.target === "number";
+  if (!hostSubmits(step))
+    return fieldGone || answer.error === "popup_missing" ? "sent" : undefined;
+  if (!fieldGone) return undefined;
+  return typedIn !== undefined && answer.document !== undefined && answer.document !== typedIn
+    ? "sent"
+    : "left";
+};
 
 /**
  * One Kernel call of the fill, which first checks the field the host typed last. A call that finds
@@ -347,15 +427,19 @@ const fillCall =
           );
         if (answered._tag === "Left") return Either.left(answered.left);
         const answer = answered.right;
-        if ("error" in answer)
+        if ("error" in answer) {
+          const gone =
+            call.kind === "submit" ? screenGone(input.step, answer, progress.typedIn) : undefined;
           return Either.right<CallAnswer>(
-            call.kind === "submit" && screenGone(input.step, answer)
+            gone === "sent"
               ? { pageSent: true, url: answer.url ?? "" }
               : {
                   refusal: locatedRefusal(answer, evidenceOrigins(input, progress)),
                   url: answer.url,
+                  ...(gone === "left" ? { left: true as const } : {}),
                 },
           );
+        }
         if (!("changed" in answer)) return Either.right(answer);
         const changed = changedProperties(progress.judged, answer.changed);
         changes.count++;
@@ -396,9 +480,43 @@ const submitPollMs = 250;
 const unclicked = (answered: Either.Either<CallAnswer, Error>, submit: "disabled" | "none") =>
   Either.isRight(answered) && "submit" in answered.right && answered.right.submit === submit;
 
+/** A submit call that found a field gone from the document the host typed in (`screenGone`). */
+const leftOnly = (answered: Either.Either<CallAnswer, Error>) =>
+  Either.isRight(answered) && "left" in answered.right && answered.right.left === true;
+
 /** A submit call that found the page sent what was typed itself. */
 const pageSent = (answered: Either.Either<CallAnswer, Error>) =>
   Either.isRight(answered) && "pageSent" in answered.right;
+
+/**
+ * After a submit call of a step with a submit found its fields gone from the document the host
+ * typed in (`left`, a refusal): looks again for up to `sendMs`, the step's settle wait at most
+ * `pageSendMs`, in case a new document replaces it, as a form that hides itself while it sends what
+ * was typed, then loads the site's answer, does. Each look only reads the page, never clicks, so a
+ * look that fails, as one does while the page navigates, is a look lost. A look that finds the page
+ * sent what was typed reports that (`page`); one that finds the fields back, or the wait's end,
+ * leaves the first refusal standing.
+ */
+const awaitNewDocument = (
+  input: FillInput,
+  progress: FillProgress,
+  call: AutofillFillCall,
+  left: Either.Either<CallAnswer, Error>,
+  sendMs: number,
+  changes: { count: number },
+) =>
+  Effect.gen(function* () {
+    if (call.kind !== "submit") return left;
+    const since = Date.now();
+    const look: AutofillFillCall = { ...call, look: true };
+    while (Date.now() - since < sendMs) {
+      yield* Effect.sleep(submitPollMs);
+      const answered = yield* fillCall(input, progress, changes)(look);
+      if (pageSent(answered)) return answered;
+      if (Either.isRight(answered) && !leftOnly(answered)) return left;
+    }
+    return left;
+  });
 
 /**
  * The step's submit call, made again while the page keeps the submit disabled, for up to
@@ -409,19 +527,23 @@ const pageSent = (answered: Either.Either<CallAnswer, Error>) =>
  * fall between the calls. On a step with no submit the call only reads the page, so one that fails
  * there, as when the page navigates or draws itself again while the call reads it, is a look lost:
  * the host looks again, at least once after it, even past the wait. When a later look finds the
- * page sent what was typed, the fill reports that; otherwise the first failure stands.
+ * page sent what was typed, the fill reports that; otherwise the first failure stands. On a step
+ * with a submit whose fields are gone from the document the host typed in, the host looks again
+ * without clicking (`awaitNewDocument`).
  */
 const submitWhenEnabled = (input: FillInput, progress: FillProgress, call: AutofillFillCall) =>
   Effect.gen(function* () {
     const started = Date.now();
     const sendMs = input.step.fields.length > 0 ? Math.min(input.settleMs ?? 5_000, pageSendMs) : 0;
-    const readsOnly = input.step.submit === undefined && sendMs > 0;
+    const readsOnly = !hostSubmits(input.step) && sendMs > 0;
     let unsentSince: number | undefined;
     let lost: Either.Either<CallAnswer, Error> | undefined;
     let lastLost = false;
     const changes = { count: 0 };
     for (;;) {
       const answered = yield* fillCall(input, progress, changes)(call);
+      if (leftOnly(answered) && sendMs > 0)
+        return yield* awaitNewDocument(input, progress, call, answered, sendMs, changes);
       const failed = readsOnly && Either.isLeft(answered);
       const unsent = unclicked(answered, "none") || failed;
       if (unsent) unsentSince ??= Date.now();
@@ -510,6 +632,7 @@ const afterFieldCall = (
     if ("dated" in answer) {
       // A date's call may have changed the field even when it failed.
       progress.typed = true;
+      progress.typedIn = answer.document;
       progress.statuses.push(answer.dated ? "filled" : "failed");
       return answer.dated
         ? undefined
@@ -537,6 +660,7 @@ const afterFieldCall = (
         });
       if (typing.right === "inserted") {
         progress.typed = true;
+        progress.typedIn = answer.document;
         progress.statuses.push("filled");
         progress.check = index;
         return undefined;
@@ -561,12 +685,19 @@ const afterFieldCall = (
  * the submit. That click ran, though, so the report says so (`clicked`): the page's own handlers
  * ran on it, and what the step filled may have gone out. A submit the page keeps disabled is never
  * clicked: the host waits for the page to enable it once the fields are filled, and when it stays
- * disabled the report says so (`stayed_disabled`). On a step with fields and no submit, a page
- * that moves on once every field is typed sent what was typed itself (`page`), never a refusal:
+ * disabled the report says so (`stayed_disabled`). A step whose code the host typed one character
+ * per box into several code fields is submitted only once every box holds exactly one character;
+ * otherwise that box fails and the submit is not attempted. On a step with fields and no submit, a
+ * page that moves on once every field is typed sent what was typed itself (`page`), never a refusal:
  * the step's fields went away or were all disabled, its popup closed, its address moved to another
  * path, or a step of several fields came back emptied. The host gives the page up to `pageSendMs`
  * to do so, and a submit call that fails meanwhile is followed by another look (`submitWhenEnabled`).
- * A step with a submit is the host's to click, whatever its page does meanwhile.
+ * A step with a submit is the host's to click, whatever its page does meanwhile, unless a new
+ * document took the place of the one the host typed the last field in, and the step's fields went
+ * with it, before the click or within `pageSendMs` of a look that found them gone: the page sent
+ * the form itself (`page`, `screenGone`, `awaitNewDocument`), and the host clicks nothing. A form
+ * that locks, redraws itself or changes its address with pushState has sent nothing, and the host
+ * waits on it or refuses as before.
  * Guardian's refusals still come first: a control that moved off the site or changed how it
  * submits refuses the submit as before.
  */
@@ -585,6 +716,8 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
       judged: input.inspection.targets,
       judgment: input.inspection.judgment,
       typedAt: randomUUID(),
+      typedIn: undefined,
+      trusted: new Set(),
     };
     for (let index = 0; index < step.fields.length; index++) {
       const ended = yield* fillField(input, progress, index);
@@ -603,10 +736,12 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
           input.inspection.judgedBeforeTyping === undefined
             ? null
             : configuredOrigins(input.inspection),
+        codeBoxes: codeBoxes(step, input.values),
+        alertsBefore: input.countNewAlerts === true,
       }),
     );
     if (clicked._tag === "Left")
-      return failedCall(progress, clicked.left, { mayMutate: step.submit !== undefined });
+      return failedCall(progress, clicked.left, { mayMutate: hostSubmits(step) });
     const answer = clicked.right;
     if ("pageSent" in answer) return filledReport(step, progress, "page", answer.url);
     if ("refusal" in answer || "checked" in answer)

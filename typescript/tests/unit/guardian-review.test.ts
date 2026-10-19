@@ -24,6 +24,7 @@ import {
   diagnosticStorageFailure,
 } from "../../src/models/model-diagnostic-failure.js";
 import { EventUnavailable } from "../../src/runtime/errors.js";
+import { configureSiteIdentity } from "../../src/runtime/same-site.js";
 import { markedUpstreamPolicy, tenantPolicyCopies } from "../support/tenant-policy.js";
 
 const makeSourceReader = (root: string) =>
@@ -617,6 +618,27 @@ describe("OpenAI reviewer policy and trusted authority", () => {
       expect(policy).toContain(sentence);
   });
 
+  // The host asks the owner for a sign-in code or answer only while the step runs, after Guardian
+  // allowed it. A build deadlocked when Guardian refused such a step for want of an earlier code.
+  it("allows a host sign-in step's code or answer slot before any code is supplied", async () => {
+    const requests = readThenDecide({
+      outcome: "allow",
+      rationale: "Controlled source was read.",
+      action: "read",
+    });
+    await Effect.runPromise(
+      makeGuardian(reviewer(markedUpstreamPolicy)).review(pending, readEntrypoint),
+    );
+    const rule =
+      "into the fields the step names and clicks the step's submit, or presses its submitKey. The host fills a code, recovery_code or private_answer slot only after you allow the step, from a saved value or by asking the owner then. So allow such a step without an earlier code or answer. Judge it against the screen the file shows for it.";
+    for (const policy of [
+      requests[0]?.systemInstructions ?? "",
+      guardianExecutionPolicy(otherHost),
+      guardianExecutionPolicy(nativeExecutionEnvironment),
+    ])
+      expect(policy).toContain(rule);
+  });
+
   // A site's own trackers carry caller input off-site and its page saves recent searches, and a
   // host recording gap was read as an order to stop probing. None of these is the source's doing.
   it("tells Guardian page traffic and a recording gap are not the source's effects", async () => {
@@ -664,7 +686,7 @@ describe("OpenAI reviewer policy and trusted authority", () => {
 
   // A write whose own commit request went through was sent to another screen to prove it. The
   // page the commit left is that read-back, and a repeat of the write stays denied.
-  it("tells Guardian the page a commit left is the read-back when its commit request went through", async () => {
+  it("tells Guardian the page a commit left is enough for the read-back when its commit request went through", async () => {
     const requests = readThenDecide({
       outcome: "allow",
       rationale: "Controlled source was read.",
@@ -674,7 +696,7 @@ describe("OpenAI reviewer policy and trusted authority", () => {
       makeGuardian(reviewer(markedUpstreamPolicy)).review(pending, readEntrypoint),
     );
     const sentence =
-      "tell the agent to read back the result in a step that changes nothing. When that write's step shows its commit request went through, with a 2xx or 3xx status and no error after it, reading the page as it stands is that read-back; another page is not needed. Only a write the review found not_done may be done again.";
+      "When that write's step shows its commit request went through, with a 2xx or 3xx status and no error after it, reading the page as it stands is enough for the read-back, but it is never the only read-back allowed. Only a write the review found not_done may be done again.";
     for (const policy of [
       requests[0]?.systemInstructions ?? "",
       guardianExecutionPolicy(otherHost),
@@ -775,6 +797,76 @@ describe("OpenAI reviewer policy and trusted authority", () => {
       { scheme: "https", registrableDomain: "site.invalid" },
     ]);
     expect(input).not.toHaveProperty("trusted_execution_context.currentPage");
+  });
+
+  // A host's added private suffix makes each subdomain below it its own site, so another one is
+  // off the authorized site, and one the owner names is an owner-named origin.
+  it.each([
+    [[], "example.test", undefined],
+    [["apps.example.test"], "alpha.apps.example.test", ["https://beta.apps.example.test"]],
+  ])(
+    "with added private suffixes %j, Guardian's authorized site is %s",
+    async (privateSuffixes, registrableDomain, ownerNamed) => {
+      configureSiteIdentity({ privateSuffixes });
+      try {
+        const requests = readThenDecide({
+          outcome: "allow",
+          rationale: "Guarded on the site.",
+          action: "read",
+        });
+        await Effect.runPromise(
+          makeGuardian(reviewer("Synthetic upstream {{ tenant_policy_config }}")).review(
+            {
+              ...pending,
+              allowedOrigins: ["https://alpha.apps.example.test"],
+              requestedIntent: "Read the report at https://beta.apps.example.test/reports.",
+            },
+            readEntrypoint,
+          ),
+        );
+        const input = modelInput(requests);
+        expect(input).toHaveProperty("trusted_authority.allowedSites", [
+          { scheme: "https", registrableDomain },
+        ]);
+        if (ownerNamed === undefined)
+          expect(input).not.toHaveProperty("trusted_authority.ownerNamedOrigins");
+        else expect(input).toHaveProperty("trusted_authority.ownerNamedOrigins", ownerNamed);
+      } finally {
+        configureSiteIdentity({});
+      }
+    },
+  );
+
+  // With the parent domain as the allowed origin, its name covers the added suffix's hosts, so
+  // Guardian is told the suffixes the host added to the list below it, whose hosts the policy
+  // already keeps apart as hosts the list gives a registrable domain of their own.
+  it("names the added private suffixes below a parent-domain site", async () => {
+    configureSiteIdentity({ privateSuffixes: ["apps.example.test"] });
+    try {
+      const requests = readThenDecide({
+        outcome: "allow",
+        rationale: "Guarded on the site.",
+        action: "read",
+      });
+      await Effect.runPromise(
+        makeGuardian(reviewer("Synthetic upstream {{ tenant_policy_config }}")).review(
+          { ...pending, allowedOrigins: ["https://example.test"] },
+          readEntrypoint,
+        ),
+      );
+      expect(modelInput(requests)).toHaveProperty("trusted_authority.allowedSites", [
+        {
+          scheme: "https",
+          registrableDomain: "example.test",
+          addedPrivateSuffixes: ["apps.example.test"],
+        },
+      ]);
+      expect(requests[0]?.systemInstructions ?? "").toContain(
+        "except a host the list gives a registrable domain of its own",
+      );
+    } finally {
+      configureSiteIdentity({});
+    }
   });
 
   it("gives every execution review the exact payment frame origins", async () => {

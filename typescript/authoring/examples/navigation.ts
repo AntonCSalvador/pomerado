@@ -3,8 +3,8 @@ import { defineOperation, waitCode } from "../../src/browser/index.js";
 
 const RecordId = Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9_-]{1,100}$/));
 const Detail = Schema.Union(
-  Schema.Struct({ title: Schema.NonEmptyString }),
-  Schema.Struct({ refused: Schema.NonEmptyString }),
+  Schema.Struct({ title: Schema.NonEmptyTrimmedString }),
+  Schema.Struct({ refused: Schema.NonEmptyTrimmedString }),
   Schema.Struct({
     failure: Schema.Literal(
       "search_unavailable",
@@ -43,7 +43,7 @@ export const detailNavigation = defineOperation(
     }),
     output: Schema.Struct({
       record_id: RecordId.annotations({ description: "ID of the record read" }),
-      title: Schema.NonEmptyString.annotations({ description: "The record's title" }),
+      title: Schema.NonEmptyTrimmedString.annotations({ description: "The record's title" }),
     }),
   },
   async ({ kernel, sessionId, siteOrigin, siteDomain, input, errors }) => {
@@ -130,7 +130,7 @@ export const detailNavigation = defineOperation(
     if (!answer.success)
       throw new errors.OperationFailure(String(answer.error), { stderr: answer.stderr });
     const result = Schema.decodeUnknownSync(Detail)(answer.result);
-    if ("refused" in result) throw new errors.InvalidInput(result.refused);
+    if ("refused" in result) throw new errors.InvalidInput(result.refused, { field: "record_id" });
     if ("failure" in result) throw new errors.OperationFailure(result.failure);
     return { record_id: input.record_id, title: result.title };
   },
@@ -150,7 +150,7 @@ export const detailFromUrl = defineOperation(
     }),
     output: Schema.Struct({
       record_id: RecordId.annotations({ description: "ID of the record the page shows" }),
-      title: Schema.NonEmptyString.annotations({ description: "The record's title" }),
+      title: Schema.NonEmptyTrimmedString.annotations({ description: "The record's title" }),
     }),
   },
   async ({ kernel, sessionId, siteOrigin, siteDomain, input, errors }) => {
@@ -163,7 +163,9 @@ export const detailFromUrl = defineOperation(
         : url.protocol === "https:" &&
           (url.hostname === siteDomain || url.hostname.endsWith(`.${siteDomain}`));
     if (requested === null || requested.protocol !== "https:" || !onSite(requested))
-      throw new errors.InvalidInput("record_url must be an https page on this site");
+      throw new errors.InvalidInput("record_url must be an https page on this site", {
+        field: "record_url",
+      });
     // The record the link names, as the site's own links name it; the page must show the same one.
     const expected = requested.pathname.split("/").at(-1) ?? "";
     const answer = await kernel.browsers.playwright.execute(sessionId, {
@@ -212,7 +214,7 @@ export const detailFromUrl = defineOperation(
     if (!answer.success)
       throw new errors.OperationFailure(String(answer.error), { stderr: answer.stderr });
     const result = Schema.decodeUnknownSync(Detail)(answer.result);
-    if ("refused" in result) throw new errors.InvalidInput(result.refused);
+    if ("refused" in result) throw new errors.InvalidInput(result.refused, { field: "record_url" });
     if ("failure" in result) throw new errors.OperationFailure(result.failure);
     return { record_id: expected, title: result.title };
   },
@@ -225,7 +227,7 @@ const resultsRoute = { path: "/search", params: { q: "query" } } as const;
 
 const Found = Schema.Union(
   Schema.Struct({
-    rows: Schema.Array(Schema.Struct({ key: Schema.NonEmptyString, name: Schema.NonEmptyString })),
+    rows: Schema.Array(Schema.Struct({ key: Schema.NonEmptyTrimmedString, name: Schema.NonEmptyTrimmedString })),
     more: Schema.Boolean,
   }),
   Schema.Struct({
@@ -246,7 +248,7 @@ export const searchThenRead = defineOperation(
   {
     name: "search_rooms",
     input: Schema.Struct({
-      query: Schema.NonEmptyString.annotations({
+      query: Schema.NonEmptyString.pipe(Schema.pattern(/\S/u)).annotations({
         description: "Text to search rooms for",
         examples: ["room"],
       }),
@@ -257,8 +259,8 @@ export const searchThenRead = defineOperation(
     output: Schema.Struct({
       rooms: Schema.Array(
         Schema.Struct({
-          id: Schema.NonEmptyString.annotations({ description: "The room's ID on the site" }),
-          name: Schema.NonEmptyString.annotations({ description: "The room's name" }),
+          id: Schema.NonEmptyTrimmedString.annotations({ description: "The room's ID on the site" }),
+          name: Schema.NonEmptyTrimmedString.annotations({ description: "The room's name" }),
         }),
       ),
       more: Schema.Boolean.annotations({ description: "Whether the site lists more rooms" }),
@@ -342,7 +344,7 @@ export default defineOperation(
     name: "read_catalog_heading",
     input: Schema.Struct({}),
     output: Schema.Struct({
-      heading: Schema.NonEmptyString.annotations({ description: "The catalog page's heading" }),
+      heading: Schema.NonEmptyTrimmedString.annotations({ description: "The catalog page's heading" }),
     }),
   },
   async ({ kernel, sessionId, siteOrigin, siteDomain, errors, waitPastChallenge }) => {
@@ -395,7 +397,7 @@ export default defineOperation(
     }
     const result = Schema.decodeUnknownSync(
       Schema.Union(
-        Schema.Struct({ heading: Schema.NonEmptyString }),
+        Schema.Struct({ heading: Schema.NonEmptyTrimmedString }),
         Schema.Struct({ failure: Schema.Literal("unsupported_page") }),
       ),
     )(answer);

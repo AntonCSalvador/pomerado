@@ -20,6 +20,12 @@ type ProviderAuthErrorCode = typeof ManagedAuthErrorCode.Type | "unknown";
 // New sign-ins use autofill or a direct HTTP step, never a provider flow.
 type SignInFailureCode =
   | "AccountMismatch"
+  /**
+   * The site showed, once the login was sent, that the account is locked, suspended or disabled:
+   * an account-level rejection, which no correction of a field gets past. Sign-in is unavailable
+   * in the build, and it ends `account_locked`.
+   */
+  | "AccountLocked"
   | "AuthenticationFailed"
   /**
    * The host refused to type into a field of an autofill sign-in screen, or to keep typing it:
@@ -119,6 +125,8 @@ export interface SignInDiagnostic {
    * failure spends no sign-in allowance and the same sign-in may simply be tried again.
    */
   readonly nothingSubmitted?: true;
+  /** For `AccountLocked`: what the site said of the account, `locked` or `suspended`. */
+  readonly account?: "locked" | "suspended";
   /** For `AutofillRefused`: what the host refused to type, where, and which check refused it. */
   readonly hostRefusal?: HostRefusal;
   readonly identityErrorCode?: typeof IdentityErrorCode.Type;

@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { Effect } from "effect";
+import { Cause, Effect, Exit, Option, Schema } from "effect";
 import { readFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { describe, expect, it } from "vitest";
@@ -12,10 +12,16 @@ import {
   type ListCursorKeys,
   type ListCursorScope,
 } from "../../src/runtime/list-cursor.js";
+import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
+import { Deadline } from "../../src/runtime/deadline.js";
+import { defineOperation, executeOperation } from "../../src/runtime/operation.js";
+import { operationErrors } from "../../src/runtime/operation-failure.js";
 import {
   finishList,
   listCursorMaxLength,
   listCursorTtlMs,
+  listInputFields,
+  listOutputFields,
   listSeenMax,
   selectRows,
   startList,
@@ -41,7 +47,8 @@ const scope = (overrides: Partial<ListCursorScope> = {}): ListCursorScope => ({
 });
 const input = { query: "lamps", limit: 2 };
 type Row = { readonly id: string; readonly sponsored?: boolean };
-const keyOf = (row: Row) => (row.sponsored === true ? `sponsored:${row.id}` : row.id);
+const keyOf = (row: Row) => row.id;
+const promoted = (row: Row) => row.sponsored === true;
 const rows = (...ids: readonly string[]): Row[] => ids.map((id) => ({ id }));
 /** A run's input as a host that signs cursors hands it to the script. */
 const hosted = (value: object, host: ListHost = {}) => withListHost(value, host);
@@ -186,7 +193,8 @@ describe("a sealed cursor", () => {
   });
 
   it("treats an empty cursor as none", () => {
-    expect(admitListCursor({ ...input, cursor: "" }, scope())).toEqual({ ok: true, list: {} });
+    for (const value of [input, { ...input, cursor: "" }, { ...input, cursor: null }])
+      expect(admitListCursor(value, scope())).toEqual({ ok: true, list: {} });
     expect(startList(hosted({ ...input, cursor: "" }), { mechanism: "pages" }).position).toBe(
       undefined,
     );
@@ -200,17 +208,74 @@ it("keeps the host's channel out of anything that walks a run's input", () => {
   expect(startList(value, { mechanism: "pages" }).signed).toBe(true);
 });
 
-describe("a tool that pages with its own cursor", () => {
-  // A tool built before the runtime's cursors keeps its own continuation, which the host passes
-  // through untouched, and a runtime draft sent in as a cursor is refused.
-  it("gets its own cursor back unchanged, and its own next cursor reaches the caller", () => {
-    const legacy = { query: "lamps", cursor: "page=2" };
-    const admitted = admitListCursor(legacy, scope());
-    expect(admitted).toEqual({ ok: true, list: {} });
-    const output = { results: [], next_cursor: "page=3" };
-    expect(sealListOutput(output, legacy, scope())).toEqual({ output });
-    const ended = { results: [], next_cursor: null };
-    expect(sealListOutput(ended, legacy, scope())).toEqual({ output: ended });
+describe("a cursor the host did not sign", () => {
+  // Tools never make or read a cursor of their own: the host refuses every cursor it did not sign
+  // before the run starts, and a runtime draft sent in as a cursor too.
+  it("is refused as malformed, whatever its form", () => {
+    for (const cursor of [
+      "page=2",
+      "abc",
+      " ",
+      "pc1",
+      "pc1.k1",
+      "pc.k1.body.signature",
+      "x.k1.body.signature",
+      "PC1.k1.body.signature",
+      "pcd1",
+      2,
+      true,
+      { page: 2 },
+      ["page=2"],
+    ])
+      expect(admitListCursor({ ...input, cursor }, scope())).toMatchObject({
+        ok: false,
+        reason: "malformed",
+      });
+  });
+
+  it("never reaches the caller as a tool's next cursor, which the host would refuse", () => {
+    const legacy = { query: "lamps" };
+    const more = { results: [], next_cursor: "page=3", has_more: true };
+    expect(sealListOutput(more, legacy, scope())).toEqual({
+      output: {
+        results: [],
+        next_cursor: null,
+        next_cursor_expires_at: null,
+        has_more: true,
+        next_cursor_unavailable: "not_a_draft",
+      },
+      dropped: "not_a_draft",
+    });
+    // A tool that says the list has no more keeps saying so, with no reason for a missing cursor.
+    const ended = { results: [], next_cursor: "page=3", has_more: false };
+    expect(sealListOutput(ended, legacy, scope())).toEqual({
+      output: { results: [], next_cursor: null, next_cursor_expires_at: null, has_more: false },
+      dropped: "not_a_draft",
+    });
+    // A next cursor of another type is no runtime draft either, and an output without has_more
+    // counts as having more.
+    for (const next of [3, { page: 3 }])
+      expect(sealListOutput({ results: [], next_cursor: next }, legacy, scope())).toEqual({
+        output: {
+          results: [],
+          next_cursor: null,
+          next_cursor_expires_at: null,
+          has_more: true,
+          next_cursor_unavailable: "not_a_draft",
+        },
+        dropped: "not_a_draft",
+      });
+    const none = { results: [], next_cursor: null, has_more: false };
+    expect(sealListOutput(none, legacy, scope())).toEqual({ output: none });
+    const absent = { results: [] };
+    expect(sealListOutput(absent, legacy, scope())).toEqual({ output: absent });
+  });
+
+  it("names another host version for a cursor in another version's form", () => {
+    expect(admitListCursor({ ...input, cursor: "pc2.k1.body.signature" }, scope())).toMatchObject({
+      ok: false,
+      reason: "version",
+    });
   });
 
   it("refuses a runtime draft sent in as a cursor", () => {
@@ -233,6 +298,69 @@ describe("a tool that pages with its own cursor", () => {
     expect(() =>
       startList(hosted({ ...input, cursor: "page=2" }), { mechanism: "pages" }),
     ).toThrow(expect.objectContaining({ name: "InvalidInput", field: "cursor", kind: "malformed" }));
+  });
+});
+
+describe("an Effect operation's list", () => {
+  // An HTTP version is an Effect operation: its list's refusal reaches the host as the typed
+  // refusal, as a Kernel script's does, never as a defect.
+  const listTool = (mechanism: ListMechanism) =>
+    defineOperation({
+      name: "search_lamps",
+      input: Schema.Struct({ query: Schema.String, ...listInputFields }),
+      output: Schema.Struct({ results: Schema.Array(Schema.String), ...listOutputFields }),
+      run: (value) =>
+        Effect.gen(function* () {
+          const list = startList(value, { mechanism });
+          const page = finishList(list, {
+            rows: [],
+            keyOf: String,
+            next: null,
+            hasMore: false,
+            totalResults: null,
+            listChanged: false,
+          });
+          return { results: [], ...page };
+        }),
+    });
+  const execute = (mechanism: ListMechanism, value: object, list: ListHost) =>
+    Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const journal = yield* makeEffectJournal;
+        return yield* Effect.scoped(executeOperation(listTool(mechanism), value, { list })).pipe(
+          Effect.provideService(ExecutionContext, {
+            deadline: Deadline.after(),
+            journal,
+            events: { emit: () => Effect.void },
+            capture: { start: Effect.void, finish: Effect.void },
+          }),
+        );
+      }),
+    );
+  const failureOf = (exit: Exit.Exit<unknown, unknown>) => {
+    if (!Exit.isFailure(exit)) throw new Error("the run succeeded");
+    const failure = Cause.failureOption(exit.cause);
+    if (Option.isNone(failure)) throw new Error(`not a typed failure: ${Cause.pretty(exit.cause)}`);
+    return failure.value;
+  };
+
+  it("fails with the typed refusal for a cursor from before the tool paged another way", async () => {
+    const value = { ...input, cursor: cursorOf(pageOne()) };
+    const admitted = admitListCursor(value, scope());
+    if (!admitted.ok) throw new Error(`refused: ${admitted.reason}`);
+    const failure = failureOf(await execute("append", value, admitted.list));
+    expect(failure).toBeInstanceOf(operationErrors.InvalidInput);
+    expect(failure).toMatchObject({
+      field: "cursor",
+      kind: "mechanism_changed",
+      message: expect.stringContaining("This tool now pages the site another way"),
+    });
+  });
+
+  it("fails with the typed refusal for a cursor its host did not check", async () => {
+    const failure = failureOf(await execute("pages", { ...input, cursor: "page=2" }, {}));
+    expect(failure).toBeInstanceOf(operationErrors.InvalidInput);
+    expect(failure).toMatchObject({ field: "cursor", kind: "malformed" });
   });
 });
 
@@ -359,10 +487,25 @@ describe("the rows a later page returns", () => {
     });
   });
 
-  it("never repeat a returned row, and keep a sponsored copy of one", () => {
-    expect(continued([...rows("a", "b"), { id: "a", sponsored: true }, ...rows("c", "a")])).toEqual(
-      { rows: [{ id: "a", sponsored: true }, ...rows("c")], listChanged: true },
-    );
+  it("never repeat a returned row, and drop a sponsored copy of one without calling it a change", () => {
+    const later = continuing(cursorOf(pageOne()));
+    const sponsored = (id: string) => ({ id, sponsored: true });
+    expect(selectRows(later, [...rows("a", "b"), sponsored("a"), ...rows("c")], keyOf, { promoted })).toEqual({
+      rows: rows("c"),
+      listChanged: false,
+    });
+    // A sponsored copy ahead of its organic row on the same page gives way to it; a promoted row
+    // whose item the page shows only promoted stays in place.
+    expect(
+      selectRows(later, [...rows("a", "b"), sponsored("d"), sponsored("e"), ...rows("c", "d")], keyOf, {
+        promoted,
+      }),
+    ).toEqual({ rows: [sponsored("e"), ...rows("c", "d")], listChanged: false });
+    // An organic row a previous page returned is a change, as without `promoted`.
+    expect(selectRows(later, [...rows("a", "b", "c", "a")], keyOf, { promoted })).toEqual({
+      rows: rows("c"),
+      listChanged: true,
+    });
   });
 });
 
@@ -433,6 +576,29 @@ describe("finishList", () => {
       rows: rows("d"),
       listChanged: false,
     });
+  });
+
+  it("anchors a later page that returned no rows on the sponsored row it resumed after", () => {
+    const later = continuing(cursorOf(pageOne()));
+    const fields = finishList(later, {
+      rows: [],
+      keyOf,
+      promoted,
+      next: { page: 1, offset: 3, href: "https://www.example.test/s?q=lamps" },
+      hasMore: true,
+      totalResults: null,
+      listChanged: false,
+      resumeAfter: "x",
+      resumeAfterPromoted: true,
+    });
+    const resumed = continuing(
+      cursorOf(sealListOutput({ results: [], ...fields }, input, scope())),
+    );
+    expect(
+      selectRows(resumed, [...rows("a", "b"), { id: "x", sponsored: true }, ...rows("c")], keyOf, {
+        promoted,
+      }),
+    ).toEqual({ rows: rows("c"), listChanged: false });
   });
 
   it("refuses more rows than limit", () => {

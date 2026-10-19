@@ -189,6 +189,11 @@ export const CredentialQuestion = Schema.Struct({
   allowPasswordless: Schema.optional(Schema.Boolean),
   /** A verified mint may save a username-only login with explicit owner consent. */
   allowCodeSave: Schema.optional(Schema.Boolean),
+  /**
+   * The owner may answer without a login (`CredentialAnswer.declined`): they have no account on
+   * the site, or want only what it shows signed out. Absent, a login is the only answer.
+   */
+  allowDecline: Schema.optional(Schema.Boolean),
 });
 
 /**
@@ -295,6 +300,13 @@ const ConfirmAnswer = Schema.Struct({
   confirmed: Schema.Boolean,
   text: Schema.optional(Schema.String.pipe(Schema.maxLength(maximumAnswerLength))),
 });
+/**
+ * The owner's answer to a login request when they will not give one: they have no account on the
+ * site (`no_account`), or want only what the site shows signed out (`public_only`).
+ */
+export const LoginDecline = Schema.Literal("no_account", "public_only");
+export type LoginDecline = typeof LoginDecline.Type;
+
 export const CredentialAnswer = Schema.Struct({
   identifierKind: Schema.optional(Schema.Literal("username", "email", "phone", "account_number")),
   username: Schema.optional(
@@ -304,6 +316,11 @@ export const CredentialAnswer = Schema.Struct({
     Schema.String.pipe(Schema.minLength(1), Schema.maxLength(maximumCredentialPasswordLength)),
   ),
   saveLogin: Schema.Boolean,
+  /**
+   * The owner declined to give a login, where the question offers it (`allowDecline`): the
+   * answer then holds no identifier or password and saves nothing.
+   */
+  declined: Schema.optional(LoginDecline),
 });
 export type CredentialAnswer = typeof CredentialAnswer.Type;
 
@@ -440,6 +457,15 @@ const validateOne = (
     case "credential": {
       const decoded = decodeAs(CredentialAnswer, value);
       if (Either.isLeft(decoded)) return invalid("malformed");
+      // A decline is the whole answer: no login, nothing saved, and only where it is offered.
+      if (decoded.right.declined !== undefined) {
+        if (question.allowDecline !== true) return invalid("unexpected_answer");
+        const { username, password, identifierKind, saveLogin } = decoded.right;
+        if (username !== undefined || password !== undefined || identifierKind !== undefined)
+          return invalid("unexpected_answer");
+        if (saveLogin) return invalid("unexpected_answer");
+        return Either.right({ type: "credential", value: decoded.right });
+      }
       if (question.fields === "password" && decoded.right.username !== undefined)
         return invalid("username_not_allowed");
       if (question.fields === "username_password" && decoded.right.username === undefined)

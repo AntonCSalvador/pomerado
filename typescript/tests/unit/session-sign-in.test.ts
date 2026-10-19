@@ -5,6 +5,7 @@ import {
   boundedSignInAsker,
   boundedSignInHooks,
   executorBrowserRefusal,
+  markerCantTell,
   mintSessionSignIns,
   runSessionSignIns,
   sessionOnPage,
@@ -41,30 +42,56 @@ it("allows a run three automatic sign-ins per try and four per attempt", () => {
   );
 });
 
-it("reads a page as signed out only on the marker's own evidence and page", () => {
-  const recipe = { steps: [{ page: "https://login.example.test/sign-in" }], signedIn: {} };
+it("reads a page without the marker as can't tell unless the sign-in's own evidence shows it signed out", () => {
+  const recipe = {
+    steps: [
+      { page: "https://login.example.test/sign-in" },
+      { page: "https://example.test/verify" },
+    ],
+    signedIn: {},
+  };
   const onAccount = { steps: recipe.steps, signedIn: { urlPath: "/account" } };
   expect(sessionOnPage({ signedIn: true, url: "https://example.test/a" }, recipe)).toBe(
     "signed_in",
   );
+  // A screen of the site's own between the sign-in and its pages, such as an account picker,
+  // shows neither the marker nor the sign-in's form.
+  const chooser = { signedIn: false, url: "https://example.test/choose-account" } as const;
+  for (const failed of ["indicator_not_visible", "path_mismatch"] as const)
+    expect(sessionOnPage({ ...chooser, failed }, recipe)).toBe("unknown");
+  // The sign-in's own password field showing again, or one of its recorded screens, is signed out.
+  expect(sessionOnPage({ ...chooser, failed: "password_field_visible" }, recipe)).toBe(
+    "signed_out",
+  );
+  expect(
+    sessionOnPage(
+      { ...chooser, failed: "indicator_not_visible", passwordFieldVisible: true },
+      recipe,
+    ),
+  ).toBe("signed_out");
+  expect(
+    sessionOnPage(
+      { signedIn: false, failed: "indicator_not_visible", url: "https://example.test/verify?x=1" },
+      recipe,
+    ),
+  ).toBe("signed_out");
+  // A marker that names a path is signed out on that path, and says nothing elsewhere, the sign-in
+  // page's form included.
   for (const failed of [
     "indicator_not_visible",
     "path_mismatch",
     "password_field_visible",
   ] as const) {
-    expect(sessionOnPage({ signedIn: false, failed, url: "https://example.test/a" }, recipe)).toBe(
-      "signed_out",
-    );
     expect(
       sessionOnPage({ signedIn: false, failed, url: "https://example.test/account" }, onAccount),
     ).toBe("signed_out");
-    // A marker recorded on the account page says nothing on the login page the host opened.
     expect(
       sessionOnPage({ signedIn: false, failed, url: "https://example.test/login" }, onAccount),
     ).toBe("unknown");
   }
   for (const failed of ["page_unavailable", "selector_unsupported"] as const)
     expect(sessionOnPage({ signedIn: false, failed }, recipe)).toBe("unknown");
+  expect(sessionOnPage({ ...chooser, failed: "challenge_form_visible" }, recipe)).toBe("unknown");
   // An off-site page is signed out only when it is a recorded sign-in screen.
   expect(
     sessionOnPage(
@@ -78,6 +105,132 @@ it("reads a page as signed out only on the marker's own evidence and page", () =
       recipe,
     ),
   ).toBe("unknown");
+});
+
+it("counts a sign-in that ends where the page can't tell as signed in, and never one that ends signed out", () => {
+  const recipe = { steps: [{ page: "https://example.test/login" }], signedIn: {} };
+  const at = (url: string) => ({ signedIn: false, url }) as const;
+  expect(
+    markerCantTell({ ...at("https://example.test/choose-account"), failed: "indicator_not_visible" }, recipe),
+  ).toBe(true);
+  expect(markerCantTell({ ...at("https://other.test/pick"), failed: "off_site" }, recipe)).toBe(
+    true,
+  );
+  expect(
+    markerCantTell({ ...at("https://example.test/login"), failed: "indicator_not_visible" }, recipe),
+  ).toBe(false);
+  expect(
+    markerCantTell(
+      {
+        ...at("https://example.test/session-ended"),
+        failed: "indicator_not_visible",
+        passwordFieldVisible: true,
+      },
+      recipe,
+    ),
+  ).toBe(false);
+  for (const failed of ["page_unavailable", "selector_unsupported", "challenge_form_visible"] as const)
+    expect(markerCantTell({ ...at("https://example.test/choose-account"), failed }, recipe)).toBe(
+      false,
+    );
+  expect(markerCantTell({ signedIn: true, url: "https://example.test/" }, recipe)).toBe(false);
+  // A check with no address says nothing of where the sign-in ended.
+  expect(markerCantTell({ signedIn: false, failed: "indicator_not_visible" }, recipe)).toBe(false);
+});
+
+it("reads a sign-in that ends on its own screens or form as no can't tell, whatever path the marker names", () => {
+  const recipe = {
+    steps: [
+      { page: "https://example.test/login" },
+      { page: "https://example.test/login/password" },
+      { page: "https://example.test/login/security-question" },
+    ],
+    signedIn: { urlPath: "/account" },
+  };
+  const missing = (url: string) => ({ signedIn: false, url, failed: "indicator_not_visible" }) as const;
+  // Off the marker's path, a page that is none of the screens can't tell.
+  expect(markerCantTell(missing("https://example.test/choose-account"), recipe)).toBe(true);
+  // The recorded identifier and security-question screens did not get past the sign-in.
+  expect(markerCantTell(missing("https://example.test/login"), recipe)).toBe(false);
+  expect(markerCantTell(missing("https://example.test/login/security-question"), recipe)).toBe(
+    false,
+  );
+  // Nor did a page that shows the sign-in's own password field.
+  expect(
+    markerCantTell(
+      { ...missing("https://example.test/session-ended"), passwordFieldVisible: true },
+      recipe,
+    ),
+  ).toBe(false);
+  // A reset's check still reads those pages as before: a marker that names a path says nothing
+  // off it.
+  expect(sessionOnPage(missing("https://example.test/login"), recipe)).toBe("unknown");
+});
+
+it("normalizes non-root trailing slashes on recorded screens and marker paths", () => {
+  const recipe = {
+    steps: [
+      { page: "https://example.test/login" },
+      { page: "https://example.test/auth/" },
+    ],
+    signedIn: { urlPath: "/account" },
+  };
+  const missing = (url: string) => ({ signedIn: false, url, failed: "indicator_not_visible" }) as const;
+
+  // Recorded sign-in screen /login, observed URL /login/
+  expect(markerCantTell(missing("https://example.test/login/"), recipe)).toBe(false);
+
+  // Recorded sign-in screen /auth/, observed URL /auth
+  expect(markerCantTell(missing("https://example.test/auth"), recipe)).toBe(false);
+
+  // Configured marker path /account, observed URL /account/
+  expect(sessionOnPage(missing("https://example.test/account/"), recipe)).toBe("signed_out");
+
+  // Configured marker path /account/, observed URL /account
+  const slashMarkerRecipe = {
+    steps: [{ page: "https://example.test/login" }],
+    signedIn: { urlPath: "/account/" },
+  };
+  expect(sessionOnPage(missing("https://example.test/account"), slashMarkerRecipe)).toBe("signed_out");
+
+  // Root path / remains unchanged
+  const rootRecipe = {
+    steps: [{ page: "https://example.test/" }],
+    signedIn: { urlPath: "/account" },
+  };
+  expect(markerCantTell(missing("https://example.test/"), rootRecipe)).toBe(false);
+  expect(markerCantTell(missing("https://example.test"), rootRecipe)).toBe(false);
+
+  // An unrecorded intermediate post-login page still retains the intended unknown / markerCantTell behavior
+  expect(markerCantTell(missing("https://example.test/choose-account"), recipe)).toBe(true);
+  expect(sessionOnPage(missing("https://example.test/choose-account"), recipe)).toBe("unknown");
+});
+
+it("reads a marker that showed on a path differing only by a trailing slash as can't tell", () => {
+  const recipe = {
+    steps: [{ page: "https://example.test/login" }],
+    signedIn: { urlPath: "/account" },
+  };
+  // The marker showed at /account/, and the sign-in check compares the path exactly, so it failed
+  // with path_mismatch on a page that is signed in.
+  const shown = { signedIn: false, url: "https://example.test/account/", failed: "path_mismatch" } as const;
+  expect(sessionOnPage(shown, recipe)).toBe("unknown");
+  expect(markerCantTell(shown, recipe)).toBe(true);
+  // On the exact path a path_mismatch still reads signed out.
+  expect(
+    sessionOnPage({ ...shown, url: "https://example.test/account" }, recipe),
+  ).toBe("signed_out");
+});
+
+it("preserves origin matching so trailing-slash normalization does not match across origins", () => {
+  const recipe = {
+    steps: [{ page: "https://example.test/login" }],
+    signedIn: { urlPath: "/account" },
+  };
+  const missing = (url: string) => ({ signedIn: false, url, failed: "indicator_not_visible" }) as const;
+
+  expect(markerCantTell(missing("https://example.test/login/"), recipe)).toBe(false);
+  expect(markerCantTell(missing("https://other.test/login/"), recipe)).toBe(true);
 });
 
 it("fills a login into an execution's browser only while that execution waits in its own sign-in", () => {

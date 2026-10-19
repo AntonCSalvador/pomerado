@@ -15,7 +15,7 @@ import {
   providerKeyPattern,
 } from "../privacy/credential-policy.js";
 import { isSecretKey } from "../privacy/secret-keys.js";
-import { urlSpans } from "../privacy/url-spans.js";
+import { type UrlSpan, urlReaches, urlSpanAt, urlSpans } from "../privacy/url-spans.js";
 
 /**
  * Detailed failure record shared by every host failure class. The finite fields (`subCause`,
@@ -217,12 +217,24 @@ const bounds = {
 } as const;
 export const failureDetailBounds = bounds;
 
+/** A route at the start of the text (`/v1/items?page=2`) is kept like a URL, ending as one does. */
 const diagnosticUrlSpans = (text: string) => {
   const spans = urlSpans(text);
-  if (!text.startsWith("/")) return spans;
+  if (!text.startsWith("/") || text.startsWith("//")) return spans;
+  const route = urlSpanAt(text, 0);
+  return [route, ...spans.filter((span) => span.start >= route.end)];
+};
+
+/**
+ * What releases before URLs ended at field delimiters kept as URLs: each URL to the next space or
+ * quote, and a leading route to the first space or quote. Sorted, and never a screening exemption.
+ */
+const legacyUrlSpans = (text: string): UrlSpan[] => {
+  const reaches = urlReaches(text);
+  if (!text.startsWith("/")) return reaches;
   const separator = text.search(/[\s"'<>`]/);
   const routeEnd = separator === -1 ? text.length : separator;
-  return [{ start: 0, end: routeEnd }, ...spans.filter((span) => span.start >= routeEnd)];
+  return [{ start: 0, end: routeEnd }, ...reaches.filter((span) => span.start >= routeEnd)];
 };
 
 const withoutUrls = (text: string) => {
@@ -235,28 +247,67 @@ const withoutUrls = (text: string) => {
   return result + text.slice(cursor);
 };
 
+/**
+ * The length of `text` outside its URLs, for the stored bounds. A URL is also measured as releases
+ * before URLs ended at field delimiters measured it, so a record such a release bounded still
+ * decodes.
+ */
+const lengthOutsideUrls = (text: string) => {
+  const spans = diagnosticUrlSpans(text).concat(legacyUrlSpans(text));
+  spans.sort((left, right) => left.start - right.start);
+  let inside = 0;
+  let covered = 0;
+  for (const span of spans) {
+    inside += Math.max(0, span.end - Math.max(span.start, covered));
+    covered = Math.max(covered, span.end);
+  }
+  return text.length - inside;
+};
+
 const limitOutsideUrls = (text: string, max: number, tokenBoundary = false) => {
   if (text.length <= max) return { value: text, omitted: 0 };
   let value = "";
   let cursor = 0;
   let remaining = max;
   let omitted = 0;
+  // The last character appended, kept apart: reading it from `value`, a string built by `+=`,
+  // flattens that string each time, which is quadratic over many URLs.
+  let last = "";
+  const append = (piece: string) => {
+    value += piece;
+    if (piece !== "") last = piece.charAt(piece.length - 1);
+  };
   const appendPlain = (plain: string) => {
     if (remaining >= plain.length) {
-      value += plain;
+      append(plain);
       remaining -= plain.length;
       return;
     }
     const end = /[\uD800-\uDBFF]/.test(plain.charAt(remaining - 1)) ? remaining - 1 : remaining;
     const prefix = tokenBoundary ? plain.slice(0, end).replace(/\S*$/, "") : plain.slice(0, end);
-    value += prefix;
+    append(prefix);
     omitted += plain.length - prefix.length;
     remaining = 0;
   };
+  // A URL's characters an older release would not count as URL, such as a balanced closer it
+  // trimmed, are charged to the budget, so the result still fits that release's bound.
+  const legacy = legacyUrlSpans(text);
+  let next = 0;
+  const outsideLegacy = (span: UrlSpan) => {
+    while (next < legacy.length && (legacy[next]?.end ?? 0) <= span.start) next++;
+    let inside = 0;
+    for (let index = next; index < legacy.length; index++) {
+      const range = legacy[index];
+      if (range === undefined || range.start >= span.end) break;
+      inside += Math.min(range.end, span.end) - Math.max(range.start, span.start);
+    }
+    return span.end - span.start - inside;
+  };
   for (const span of diagnosticUrlSpans(text)) {
     appendPlain(text.slice(cursor, span.start));
-    if (omitted > 0 && value !== "" && !/\s$/.test(value)) value += " ";
-    value += text.slice(span.start, span.end);
+    remaining = Math.max(0, remaining - outsideLegacy(span));
+    if (omitted > 0 && last !== "" && !/\s/.test(last)) append(" ");
+    append(text.slice(span.start, span.end));
     cursor = span.end;
   }
   appendPlain(text.slice(cursor));
@@ -275,7 +326,7 @@ const truncate = (text: string, max: number) => {
  * JSON container, whose own leaves are screened where they are.
  */
 const credentialAssignment = new RegExp(
-  String.raw`([,;\s"'{(]|^)((?:[A-Za-z0-9]+[-_])*[A-Za-z0-9]*(?:${credentialNameSource}))(\\?["']?\s*[=:]\s*)(${bracketedValueSource}|\\?"(?:\\.|[^"\\])*\\?"|\\?"(?:\\.|[^"\\\r\n])*\\?|'[^']*'|[^\s;,"')}][^\s;,"')}]*)`,
+  String.raw`([,;|\s"'{()\]]|^)((?:[A-Za-z0-9]+[-_])*[A-Za-z0-9]*(?:${credentialNameSource}))(\\?["']?\s*[=:]\s*)(${bracketedValueSource}|\\?"(?:\\.|[^"\\])*\\?"|\\?"(?:\\.|[^"\\\r\n])*\\?|'[^']*'|[^\s;,"')}][^\s;,"')}]*)`,
   "gi",
 );
 /** A Key Vault or Secrets Manager response holds the secret itself under `value`. */
@@ -315,6 +366,9 @@ const authorizationHeader =
   /\b((?:proxy-)?authorization)(\s*[:=]\s*["']?)((?:[^\r\n"'\\]|(?<==[ \t]*)"[^"\r\n]*")*)/gi;
 const quotedRedaction = (value: string) =>
   value.startsWith("\\") ? '\\"[redacted]\\"' : '"[redacted]"';
+/** AWS access key IDs and provider API keys, by shape (`privacy/credential-policy.ts`). */
+const awsAccessKeyId = awsAccessKeyIdPattern();
+const providerKey = providerKeyPattern();
 
 /**
  * Deterministic credential redaction before the archive's own screening. It removes only
@@ -443,8 +497,8 @@ const redactBounded = (text: string, max: number, inputLimit: number): string =>
     )
     .replace(/\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/g, "[redacted_jwt]")
     .replace(/\beyJ[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]*){0,2}(?=\s*$)/g, "[redacted_jwt]")
-    .replace(awsAccessKeyIdPattern(), "[redacted_aws_key]")
-    .replace(providerKeyPattern(), (match: string) =>
+    .replace(awsAccessKeyId, "[redacted_aws_key]")
+    .replace(providerKey, (match: string) =>
       isProviderKey(match) ? "[redacted_token]" : match,
     )
     .replace(
@@ -505,7 +559,7 @@ export interface FailureDetail {
 
 const Token = Schema.String.pipe(Schema.pattern(/^[A-Za-z][A-Za-z0-9_.:/-]{0,95}$/));
 const BoundedText = (max: number) =>
-  Schema.String.pipe(Schema.filter((value) => withoutUrls(value).length <= max + 32));
+  Schema.String.pipe(Schema.filter((value) => lengthOutsideUrls(value) <= max + 32));
 const NonNegative = Schema.Number.pipe(Schema.finite(), Schema.nonNegative());
 const ContextKey = Schema.String.pipe(Schema.pattern(/^[A-Za-z][A-Za-z0-9_]{0,95}$/));
 const ContextValue = Schema.Union(

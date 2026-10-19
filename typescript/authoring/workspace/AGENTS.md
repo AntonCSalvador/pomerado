@@ -35,7 +35,9 @@ The workspace root is `/workspace`. Paths below are relative to it.
   header line with counts, then one route per line whose bodies are `{state, reason, path, bytes,
   sourceBytes}`, each read at its `path` (`reference/captures.md`). After each sign-in step whose
   submit the host clicked, `captures/after-submit/<step>.json` holds the next screen's controls,
-  never a value. Read-only.
+  never a value. An execution result over 16 KiB is saved whole to
+  `captures/results/<executionId>.json`, and its `observations` are a digest naming that file.
+  Read-only.
 - In maintenance only: `captures/original/index.json` and, when the observations say so,
   `failures/original/manifest.json` (`reference/maintenance.md`).
 
@@ -55,19 +57,21 @@ the source files, never captures.
   (`rg -n 'text' captures/`). Omit `workdir` or use `/workspace` or `.`; other workdirs, PTYs
   and `runAs` are rejected. Node, `rg` and the standard Unix tools are available.
   `reference/offline-commands.md` has the details.
-- `execute` runs your code with the host-bound input, or on a live test of a read signed out
-  with your own `testInput`, on a supplied facility: `liveBrowser`,
+- `execute` runs your code with the host-bound input, or on a read's live test with your own
+  `testInput`, on a supplied facility: `liveBrowser`,
   `savedDOM`, `savedHTTP` or `pureFiles`. Every execution receives fresh Guardian review; no
   per-click review is needed. When the host-bound input is empty (`{}`), write the tool's
   input from the request and the owner's answers and pass it as `exampleInput` (JSON text) on
   a read's example, or on each write act step that needs it (the first act step that passes it
   fixes it, and later steps repeat it or omit it and run it); each of its keys must be a schema
   input, required where the request needs it, and publication decodes that input.
-- `live_tests` runs the live tests of a read signed out when the host offers it: the cases you
-  design in `test/cases.json` from what you saw on the site, and every result, run in parallel
-  batches on reset pages, at least one case cold where the host has several browsers, on `src/tool.mjs` and on `src/tool-http.mjs`, each version keeping
-  its own results. Design them as soon as you know the page and its inputs, and read
-  .agents/testing/SKILL.md first. A signed-in read and a write run no live tests.
+- `live_tests` runs a read's live tests when the host offers it: the few combined cases you
+  design in `test/cases.json` from what you saw on the site, and every result, run in batches on
+  reset pages, on `src/tool.mjs` and on `src/tool-http.mjs`, each version keeping its own
+  results. A read signed out's run in parallel, at least one case cold where the host has
+  several browsers; a signed-in read's run on its own signed-in browser, on two distinct inputs
+  at most. Design them as soon as you know the page and its inputs, and read
+  .agents/testing/SKILL.md first. A write runs no live tests.
 - `retain_capture`, `finish_build` and `request_input` are described below and in their
   tool descriptions.
 - `report_blocked` ends the build as blocked when its task is impossible as asked (below).
@@ -166,10 +170,14 @@ than the controls, such as a record page at `/items/<id>` instead of crawling a 
 Either way, read the page's identity back from the page and fail if it does not match.
 
 When the controls flow lands on a URL the site produced, and two runs with different inputs show
-which parts of it carry which input, such as the query, dates, guests or party size, sort or a
-record's own identifier route, the tool may open that URL with the caller's values in those
-parts, built with `URLSearchParams` for a query part or `encodeURIComponent` for a path part and
-every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input
+which parts of it carry which input, such as the query, dates, guests or party size, sort,
+filters, a location the URL itself carries or a record's own identifier route, the tool enters
+at that URL with the caller's values in those parts when the mapping is reliable and clear: each
+part's valid values are known and readable in the URL, such as a sort or filter whose values
+become the input's enum, or a query the site encodes as typed. An opaque filter code still comes
+only from a link the page produced in this run (below). Otherwise it uses the page's controls.
+It builds that URL with `URLSearchParams` for a query part or `encodeURIComponent` for a path
+part and every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input
 back from the page, and when the landing is not an answer it named or a read-back differs, it
 runs the controls flow once instead, in a named function such as `throughControls`
 (`references/navigation.ts`). Never guess a parameter, never iterate on URL variants, and take an
@@ -186,34 +194,39 @@ with its query removed is a URL you wrote. A record's identifier route the site 
 as the canonical link its page declares, is not a trimmed link. When a site control does not
 offer the caller's value, wait for it, retry it or use another of the site's own controls, and return
 `InvalidInput` when the site shows the value does not exist. Never fall back to a guessed URL.
-This holds for `src/tool.mjs`, every fallback in it and your own probes. It does not cover the
-HTTP version (`src/tool-http.mjs`), which may build its requests from the caller's input.
+This holds for `src/tool.mjs`, every fallback in it and your own probes.<!-- pomerado:section agents.http-input-urls -->
 
 **Read back every input before returning.** Read the page's own display of each input the
 site shows, such as the date picker, selected time, party size, passengers, cabin, applied
 filters, sort and selected options, and refuse a mismatch: the tool throws `InputNotApplied`
 (.agents/core/SKILL.md) and never returns results for an input that did not apply; a control
-the tool could not find or read is `OperationFailure`. Four cases
+the tool could not find or read is `OperationFailure`. Five cases
 return results with what applied instead: a number on a scale the site steps returns its applied
 bound, a filter group the page disables for the results is reported as not offered, a value
 the page's choices do not hold returns the rows of a broader choice that covers it
 (.agents/search/SKILL.md), and an input that tailors the answer, such as a location, that the
 site still won't apply returns what the site showed with the applied value beside the caller's
-(.agents/core/SKILL.md, "Inputs that tailor the answer"). Echoed input, a
+(.agents/core/SKILL.md, "Inputs that tailor the answer"), and a search query the site corrected or
+rewrote, such as a spelling fix, returns the site's results with the query it searched as
+`applied_query` and `query_corrected` true, never silently (.agents/search/SKILL.md). Echoed
+input, a
 URL the tool built, a URL parameter, a box checked before the site applied it or the option's
 name elsewhere on the page does not show an input applied; read the site's committed state, such
 as the applied chip, the selected control or the results' own state, and compare its text with
 the input, or the option a proper noun matched, normalized for case, accents, whitespace and
 punctuation. A detail
 read also checks the page's stable identity (.agents/core/SKILL.md). Building or repairing a search or listing tool: read
-.agents/search/SKILL.md before you settle its inputs. Building a tool that reads or writes
-records or table rows in an app: read .agents/records/SKILL.md before you settle its output.
+.agents/search/SKILL.md before you settle its inputs.<!-- pomerado:section agents.user-defined-fields -->
 
 **Load large content progressively.** Know a file's size before reading it:<!-- pomerado:section agents.file-lengths --> every `read_source` result gives
 the file's `total`. Read a large file in parts with `read_source` offset and limit. From a
 probe, return only the slice you need, such as the relevant container, the matching rows and
 their count, never a whole page's text or every control on it. A filter panel's or option
-group's controls, once you open it, are such a slice.<!-- pomerado:section agents.large-content --> Search rather
+group's controls, once you open it, are such a slice. An execution result over 16 KiB comes
+back as a digest (`kind: "result_digest"`): its size, its shape with every array's length, its
+first items and its error fields whole, and the `path` of the file holding the whole result.
+Read that file in ranges with `read_source`, or search it with `rg -n` in an offline command,
+before you rely on anything the digest leaves out.<!-- pomerado:section agents.large-content --> Search rather
 than read whole files: `grep` your own files in an offline command<!-- pomerado:section agents.progressive-reads:start
 .
 pomerado:section agents.progressive-reads:end -->
@@ -228,9 +241,11 @@ account; never embed private literals or tokens in source.
 
 ## Try hard, then ask
 
-First use the request, the business input, earlier answers and what the page shows. Ask with
-`request_input`, one batch of typed questions whose answers come back to you while this attempt
-continues, when:
+First use the request, the business input, earlier answers and what the page shows. Ask no
+unnecessary question: when cheap exploring can answer it, such as opening a panel or a second
+record, explore instead. Then batch: ask everything you can foresee in one request, early, and
+add no question exploring could settle. Ask with `request_input`, one batch of typed questions
+whose answers come back to you while this attempt continues, when:
 
 1. the request has two plausible readings that would build different tools;
 2. a decision needs something only the user knows, such as which account, plan or item, and a
@@ -247,18 +262,23 @@ continues, when:
 6. how the tool should use an input that tailors the answer is genuinely ambiguous, such as
    whether a postal code sets the store or only finds nearby ones: ask the design question
    `input_use_<input>` (.agents/core/SKILL.md, "Inputs that tailor the answer");
-7. you would leave out or refuse a capability the site offers, such as a field or column type,
+7. the site never shows a value the request needs: ask before you build whether to build without
+   it or stop (.agents/core/SKILL.md, "Find contract gaps before your first example");
+8. you would leave out or refuse a capability the site offers, such as a field or column type,
    an option, or what a review finding asks for, because supporting it costs more, such as a
    lookup or an extra request: before narrowing, ask the owner one batched question that lists
-   every such capability, what supporting each would take and what you recommend, with one
-   question per capability and a "support it" or "leave it out" choice, never one question at a
-   time. Collect these while exploring and ask before the first `act` step when you can. A review
-   that offers refusal as an alternative fix is not the owner's choice.
+   every such capability, what supporting each would take and what you recommend: one
+   `multi_choice` with an option per capability and `minSelections` 0, where an unchecked one is
+   left out, never one question per capability. Collect these while exploring and ask before
+   the first `act` step when you can. A review that offers refusal as an alternative fix is not
+   the owner's choice. A field, input or output the request itself names is never such a
+   capability: support it, or end with `report_blocked` saying why the site cannot; never offer
+   to leave it out.
 
 When nobody answers before the question expires, `request_input` returns `no_answer`. Decide
 how to go on without it: continue with a sensible default and list it in `finish_build`
 `assumptions`, narrow the tool so it does not need the answer, or end with `report_blocked`,
-reason `policy`, when only the caller's answer would let the build go on. No answer is never
+reason `question_unanswered`, when only the caller's answer would let the build go on. No answer is never
 consent: it authorizes no write, sign-in or change of task, and `confirmedBy` never names it. Ask
 again only when the answer is essential: after two questions have gone unanswered, the next one
 left unanswered ends the build.
@@ -270,24 +290,28 @@ accept it in one step.
 
 The caller may answer every choice and multi_choice in their own words: their own text instead
 of an option, or a note beside the options they pick. The host always allows it, so never add an
-"other" option. Their words are their answer: follow them, and ask again if they leave the choice
-open.
+"other" option. Their words are their answer: follow them. If they leave the choice
+open, ask again once at most, then go on as when no answer comes.
 
 Never ask for a fact the site shows (a choice it offers is askable when the input leaves it
 open), for host or infrastructure failures, for permission to do what was requested, for
 credentials (the host asks for logins itself) or for CAPTCHAs. Asking which account or code
 channel to use is a different question and is expected, as the sign-in branch rule above says,
-and so is asking whether to support or leave out a capability the site offers (item 7), which is
+and so is asking whether to support or leave out a capability the site offers (item 8), which is
 a design question, not a request for permission.
-On a write, you never assume a missing business choice: ask about add-ons, pre-selected paid
-options and saved payment actually observed on the site, and about any other optional field
+On a write, you never assume a missing business choice: ask about each costly choice actually
+observed on the site, one that changes what the caller buys or pays or whether the action can be
+cancelled or refunded (paid add-ons and pre-selected paid options within the tool's purpose, a
+rate, fare or plan tier, a refundable or non-refundable option, shipping speed, saved payment and
+the delivery address), and about any other optional field
 only when the request's purpose clearly depends on its value (an unset optional input keeps the
 page's default; it is still a tool input). A control with exactly one possible value (a select or radio group with a single option),
 or one the input or an earlier answer already settles, is no choice: never ask about it. An
-add-on toggle, a pre-selected checkbox or a lone saved payment method is still a yes-or-no choice
-to ask about. A safety default (core skill) is neither: never ask about it, and the script turns it off. Read the path's options with read-only exploration where you can and settle them before
+add-on toggle, a pre-selected checkbox or a lone saved payment method or address is still a
+choice to ask about. A paid upsell outside the tool's purpose, such as a membership offered at
+checkout, is declined without asking, and never accepted without an input the caller set. A safety default (core skill) is neither: never ask about it, and the script turns it off. Read the path's options with read-only exploration where you can and settle them before
 the first act step where possible; a question during the session waits in place. Take a site default only for a choice that is not a
-credential, not a write and easy to reverse, and list it in `finish_build` `assumptions`. A full
+credential, not a write and easy to reverse, and list it in `finish_build` `assumptions`. On a write, prefer keeping the value the page already shows in an optional field that adds no cost over asking the caller to confirm or correct it: list it in `assumptions`, and it stays an optional input. Paid add-ons, pre-selected paid options, saved payment and the delivery address are still asked, as above. A full
 new login goes through execute purpose `authenticate`: an SMS, email or authenticator code that
 is part of signing in is a `code` field of its `signInStep`, which the host fills or asks the
 caller for, so never ask for it with `request_input`. The standalone code path, a
@@ -299,7 +323,19 @@ current state before writing again.
 Every mint is real: never make up a value or pick a business choice yourself. Each value an
 example or step enters comes from the request, the business input, an answer or the page. A
 choice the input leaves open is asked, or kept at the page's default where the paragraph above
-allows, and is an input of the tool either way. No request or answer authorizes made-up values:
+allows; a default kept unasked stays an optional input that keeps it. An answer that settles how
+the tool behaves, such as a sort order, a filter, which kind of record a write creates or whether
+a save runs the site's automation, is the tool's default, never a value every caller must send:
+when a caller could reasonably want another value, make it an optional input whose default is the
+answered value (`defaultedInput`, .agents/core/SKILL.md) and say so in its description; keep it
+fixed, with no input, only where varying it would be unsafe or meaningless. Never make it a
+required input or a question the tool asks when it runs. An answer that gives only this run's
+value, such as which customer or date, is this run's input. A choice that changes what the
+caller buys or pays, or whether the action can be cancelled or refunded, such as a paid add-on, a
+rate or plan tier, shipping speed, the payment method or the delivery address, stays a required
+input or a declared question for every caller: an answer may default it only to declining, off
+or the option that adds no cost, never to accepting, keeping or choosing one
+(.agents/core/SKILL.md, .agents/writes/SKILL.md). No request or answer authorizes made-up values:
 words such as synthetic, sample or test data settle no value or choice. A caller that wants
 invented values supplies them itself, as its answers to your questions. Guardian denies a live
 step that types or submits a value none of those supplied, naming the field. Signed out,
@@ -315,9 +351,9 @@ through the site's own list, writes it and compares IDs on the read-back; when t
 ID and no list to resolve one, it compares the label the read-back shows
 (.agents/writes/SKILL.md, "Check the read-back"). When you are unsure whether or how to solve
 it, ask the owner one `request_input` batch that holds every open point, rather than blocking
-the build or dropping the capability on your own (item 7 above). Leave out a capability the site
+the build or dropping the capability on your own (item 8 above). Leave out a capability the site
 offers only when the owner chose that or, when no answer came, when it is genuinely hard and
-optional to the request, and say in the tool's description what it leaves out and why. A write still confirms what it wrote, and one no
+optional to the request, never a field, input or output the request names, and say in the tool's description what it leaves out and why. A write still confirms what it wrote, and one no
 read-back can confirm follows the writes skill's rule for an unverifiable write.
 
 **Change the task with `mint_update`.** An answer changes nothing by itself. When the caller
@@ -415,6 +451,9 @@ conversation:
   answer as one instance of the caller's input. In published source that value comes from
   the tool's input or `ask()` (.agents/caller-input/SKILL.md), never a literal copied from
   the answer.
+- `reference/publication-review.md` holds the rules Guardian's publication review applies
+  to live tests and output, in the review's own words: read it while you explore, and gather
+  the evidence it asks for before your first `finish_build`.
 
 ## Reviews and retries
 
@@ -492,18 +531,29 @@ write's task is done once, in its act session, and uncertain private-field submi
 fenced, regardless of the read flag. An authentication submission with an unknown outcome is
 always fenced.
 
+Signed in, a filter or sort may be saved: some apps keep it with a saved view or setting, such
+as a table app that saves view filters with the view, and changing one there is a write. The
+page's own requests after the change show which: a save request beside the row fetch. A read
+prefers the page's own row query from the captures, the request the page sends for the rows<!-- pomerado:section agents.row-query-reference -->, to driving such a filter control. When it
+must use the control, the same step reads the prior value first and restores it in a
+finally-style block, so the revert runs on every path, errors and timeouts included. If the
+prior value cannot be read, use the page's own row query instead of the control. This holds
+during exploration too, not only in the published tool. A filter the site does not save stays
+part of the read.
+
 Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md). It designs
-its own cases at the start, from what it saw on the site: different real values unlike the
-example's, smart combinations and edge cases. It refines them once the example passes, and runs as
-many as it needs, in parallel batches, and runs the same cases as a batch on its HTTP version.
-Finish in this order: your last edit, every case again on each version you ship, then the example
-last, before `finish_build`. A signed-in read and a write do the original task: the read's
-example, or the write's act session, is the one run that proves the tool. They design no tests and
-run no live tests or offline test suites beyond it, and check their HTTP version once, against
-that run. A write still checks its composed script's read-back and comparison offline over what
-the session read (writes skill). The scope follows what the tool is now: a read that signs in or
-becomes a write keeps to the one run from then on, and a repair that rebuilds one as a read
-signed out tests it fully. Report skipped, unsupported or missing bodies honestly.
+its own cases at the start, from what it saw on the site: a handful, each covering as much as it
+can, led by one case that sets together every input the example left unset. It refines them once
+the example passes, runs them in parallel batches<!-- pomerado:section agents.http-cases -->. Finish in this order: your last edit, every case again on each version you ship, then
+the example last, before `finish_build`. A signed-in read runs that combined case, and a second
+only for inputs that cannot be set together: two distinct inputs at most, which the host
+enforces, on its own signed-in browser. A write does the original task: its act session is the
+one run that proves the tool. It designs no tests and runs no live tests or offline test suites
+beyond it<!-- pomerado:section agents.write-http-check -->. It still checks its composed
+script's read-back and comparison offline over what the session read (writes skill). The scope
+follows what the tool is now: a read that becomes a write keeps to the one run from then on, a read that signs in keeps to
+the signed-in bound, and a repair that rebuilds one as a read signed out tests it as one.
+Report skipped, unsupported or missing bodies honestly.
 
 <!-- pomerado:section agents.implementations -->
 
@@ -544,17 +594,26 @@ never with final text, which the host treats as unfinished work:
   requested field, use it; when they do not, ask the user one focused question with
   `request_input`. Report absence only when the evidence shows the site lacks it, and never
   invent a value or substitute a different field.
-- `policy`: in this attempt Guardian denied or escalated an execution the task needs, denied or
-  escalated a publication with reason `privacy` or `authority`, or with a `private_literal`,
-  `credential`, `customer_data`, `exfiltration`, `unsafe_logging` or `safety_default` finding,
-  or the owner answered no when you asked with a `confirm` question, and no change within your
-  authority gets past it. A publication denial or escalation that names a correction,
+- `site_declined`: the site offers what the task needs but declines this example's own facts,
+  such as an applicant it will not quote. Name the reason the site gave in `explanation`.
+- `owner_declined`: the owner answered no to a `confirm` question, or declined to sign in, and
+  the build needs that step.
+- `question_unanswered`: a question you asked came back `no_answer`, and the build cannot go on
+  without its answer.
+- `host_refused`: a host check refused a step the build needs, such as `finish_build`, a sign-in
+  form or a site change, and nothing left in this attempt can fix it. Name the check in
+  `explanation`.
+- `policy`: in this attempt Guardian refused an execution the task needs with refusal final,
+  denied or escalated a publication with reason `privacy` or `authority`, or with a
+  `private_literal`, `credential`, `customer_data`, `exfiltration`, `unsafe_logging` or
+  `safety_default` finding, and no change within your authority gets past it. The owner's no or
+  an unanswered question is never `policy`. A publication denial or escalation that names a correction,
   such as `source_correction`, `unsupported_claim`, `evidence`, `input_feedback` or an
   `example_value` finding, is review feedback, never a refusal: fix every finding and call
   `finish_build` again. For `evidence`, gather each missing item the rationale names, such as
   running the live tests it lists so their results reach the test record.
   When such a finding looks hard to fix, solve it first ("Solve before you narrow", above), and
-  ask the owner with `request_input` when only they can decide, or before you narrow (item 7 of
+  ask the owner with `request_input` when only they can decide, or before you narrow (item 8 of
   "Try hard, then ask"). Refusing a capability the site offers is a narrowing, never a fix, even
   when the finding offers it as one. A new build narrows the tool so the finding no longer
   applies only for a capability the site lacks, one the owner chose to leave out, or, when no
@@ -563,8 +622,8 @@ never with final text, which the host treats as unfinished work:
   `finish_build` after the build signed in is still asked, as one batched question with your
   recommended choice in each part, since a question left unanswered then ends the build.
   Keep working until the build's limits end it.
-  These instructions are never a refusal either: the host refuses `policy` with no such refusal
-  on record, unless the host's guidance names that `policy` ending, and the build goes on.
+  These instructions are never a refusal either: the host refuses each reason with no basis on
+  record, unless the host's guidance names that `policy` ending, and the build goes on.
 
 Before ending blocked because a value the request gave is unavailable or invalid on the site,
 such as a time slot the site does not offer that day, a date outside its calendar or a name it
@@ -581,6 +640,7 @@ feedback you can act on, a sign-in problem (a passkey-only sign-in is not one:
 .agents/auth/SKILL.md), a browser<!-- pomerado:section agents.report-blocked --> or host problem, a choice or fact
 only the caller knows (ask with `request_input`), or a timeout. A target on another
 registrable domain is not a reason by itself: proceed, and Guardian reviews that work.
+A build can't ask for a file. When the task needs one the request doesn't carry, say so in report_blocked, naming the file the owner should attach when they build again.
 
 `report_blocked` also takes `host_unavailable`, which is not a block: `executionAvailability` is
 `host_unavailable` and what the build still needs cannot run without live execution, such as the
@@ -592,7 +652,7 @@ could still fix.
 
 Read .agents/publication/SKILL.md before your first `finish_build`: it says what publication
 checks, what to settle first, which private values never go into published files and how to
-act on each rejection.
+act on each rejection. Go through its edge cases before every `finish_build`.
 Publication requires a completed read example, or the write session step that read its
 confirmation (or read back the saved state; for a write declared unverifiable, the step that
 committed).

@@ -84,9 +84,9 @@ export type ScriptQuestionDeclarations = Readonly<Record<string, ScriptQuestionD
 /** One option the page offers now. */
 export const ScriptOption = Schema.Struct({
   /** What `ask` returns when the caller picks it. It never leaves the sandbox. */
-  value: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(256)),
-  /** The option as the site shows it. */
-  label: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(256)),
+  value: Schema.String.pipe(Schema.minLength(1)),
+  /** The option as the site shows it. A long one reaches the caller shortened (`shownLabel`). */
+  label: Schema.String.pipe(Schema.minLength(1)),
   /**
    * A detail of the caller's own account, such as a saved card, a passenger or an address. Its
    * full label appears only on the protected page; the API and MCP show it masked.
@@ -133,9 +133,14 @@ export type AskSpecOf<Declaration> = Declaration extends {
  * `Undeclared`: an id the contract does not declare. `InvalidOptions`: options missing for a
  * choice, given for another type, duplicated, too many, or selection bounds they cannot meet.
  * The others mean the question could not be asked or its answer could not be used.
+ *
+ * `message`, when set, names the declared question, the option that stopped it by its number
+ * from 1, and what is wrong with that option in fixed words. It never holds an option's value or
+ * label. A failure the fixed words don't cover keeps only its code.
  */
 export class ScriptInputFailure extends Data.TaggedError("ScriptInputFailure")<{
   readonly code: "Unavailable" | "NoResponse" | "Unauthorized" | "Undeclared" | "InvalidOptions";
+  readonly message?: string;
 }> {}
 
 /** The runner's way to the host: the request out, the caller's raw answers back. */
@@ -151,25 +156,78 @@ interface Asked {
 
 const invalidOptions = () => new ScriptInputFailure({ code: "InvalidOptions" });
 
+/** What can be wrong with one option, in the fixed words a run's error may carry. */
+const optionProblem = {
+  emptyValue: "has an empty value",
+  emptyLabel: "has an empty label",
+  repeatedValue: "repeats another option's value",
+  extraField: "has a field options do not take",
+} as const;
+type OptionProblem = (typeof optionProblem)[keyof typeof optionProblem];
+
+/** Names the declared question, the option by its number from 1 and the fixed words. */
+const invalidOption = (id: string, index: number, problem: OptionProblem) =>
+  new ScriptInputFailure({
+    code: "InvalidOptions",
+    message: `Script question ${id} could not be asked because option ${index + 1} ${problem}.`,
+  });
+
+const optionFields = new Set(Object.keys(ScriptOption.fields));
+const decodeOption = Schema.decodeUnknownEither(ScriptOption, { onExcessProperty: "error" });
+/** What the fixed words say is wrong with an option `ScriptOption` refuses, when they cover it. */
+const problemOf = (option: unknown): OptionProblem | undefined => {
+  if (typeof option !== "object" || option === null || Array.isArray(option)) return undefined;
+  if (Object.keys(option).some((key) => !optionFields.has(key))) return optionProblem.extraField;
+  if (Reflect.get(option, "value") === "") return optionProblem.emptyValue;
+  if (Reflect.get(option, "label") === "") return optionProblem.emptyLabel;
+  return undefined;
+};
+/** The failure for refused options, named after the first refused one when the words cover it. */
+const refusedOptions = (id: string, given: unknown) => {
+  if (!Array.isArray(given)) return invalidOptions();
+  const index = given.findIndex((option) => Either.isLeft(decodeOption(option)));
+  const problem = index < 0 ? undefined : problemOf(given[index]);
+  return problem === undefined ? invalidOptions() : invalidOption(id, index, problem);
+};
+
 type GivenSpec = AskSpec | ReadonlyArray<ScriptOption>;
 /** The pre-unification call passed a choice's options directly. */
 const isOptionList = (spec: GivenSpec): spec is ReadonlyArray<ScriptOption> => Array.isArray(spec);
 
+/** The longest label the host takes (`InputOption`), in UTF-16 code units as it counts them. */
+const longestLabel = 256;
+/**
+ * A label the host can show: one past `longestLabel` keeps its start and ends in "…". The cut
+ * never splits a surrogate pair, so the start may be one code unit shorter. Options that read
+ * the same once cut stay apart, since the host names each by its own id.
+ */
+const shownLabel = (label: string) => {
+  if (label.length <= longestLabel) return label;
+  const end = longestLabel - 1;
+  const last = label.charCodeAt(end - 1);
+  return `${label.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end)}…`;
+};
+
 /** The page's options with host-opaque ids, and the value behind each id. */
-const offeredOptions = (given: ReadonlyArray<ScriptOption> | undefined) => {
+const offeredOptions = (id: string, given: ReadonlyArray<ScriptOption> | undefined) => {
   if (given === undefined) return Either.left(invalidOptions());
   const decoded = Schema.decodeUnknownEither(Schema.Array(ScriptOption), {
     onExcessProperty: "error",
   })(given);
-  if (Either.isLeft(decoded)) return Either.left(invalidOptions());
+  if (Either.isLeft(decoded)) return Either.left(refusedOptions(id, given));
   const options = decoded.right;
-  if (new Set(options.map((option) => option.value)).size !== options.length)
-    return Either.left(invalidOptions());
+  const seen = new Set<string>();
+  const repeated = options.findIndex(({ value }) => {
+    if (seen.has(value)) return true;
+    seen.add(value);
+    return false;
+  });
+  if (repeated >= 0) return Either.left(invalidOption(id, repeated, optionProblem.repeatedValue));
   return Either.right({
     values: new Map(options.map((option, index) => [`o${index + 1}`, option.value])),
     offered: options.map((option, index) => ({
       id: `o${index + 1}`,
-      label: option.label,
+      label: shownLabel(option.label),
       ...(option.accountSpecific === undefined ? {} : { accountSpecific: option.accountSpecific }),
       ...(option.maskedLabel === undefined ? {} : { maskedLabel: option.maskedLabel }),
     })),
@@ -189,7 +247,7 @@ const askedQuestion = (
       ? Either.right({ question, values: new Map<string, string>() })
       : Either.left(invalidOptions());
   if (!("type" in declaration))
-    return Either.map(offeredOptions(given), ({ values, offered }) => ({
+    return Either.map(offeredOptions(id, given), ({ values, offered }) => ({
       question: { id, type: "choice" as const, prompt: declaration.prompt, options: offered },
       values,
     }));
@@ -217,7 +275,7 @@ const askedQuestion = (
         ...(declaration.maxLength === undefined ? {} : { maxLength: declaration.maxLength }),
       });
     case "multi_choice":
-      return Either.flatMap(offeredOptions(given), ({ values, offered }) => {
+      return Either.flatMap(offeredOptions(id, given), ({ values, offered }) => {
         const minSelections = declaration.minSelections ?? 1;
         const maxSelections = Math.min(declaration.maxSelections ?? offered.length, offered.length);
         return minSelections > maxSelections
@@ -235,7 +293,7 @@ const askedQuestion = (
             });
       });
     case "choice":
-      return Either.map(offeredOptions(given), ({ values, offered }) => ({
+      return Either.map(offeredOptions(id, given), ({ values, offered }) => ({
         question: {
           id,
           type: "choice" as const,

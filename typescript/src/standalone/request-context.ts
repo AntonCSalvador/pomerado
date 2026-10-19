@@ -4,8 +4,10 @@ import { DateTime, Effect, Option, Schema } from "effect";
 import {
   guardianOutageRetry,
   makeGuardian,
+  refusalsOnHostGapsFail,
   ReviewFailure,
   type PendingExecution,
+  type ReviewTurn,
 } from "../guardian/review.js";
 import { makeOpenAIReviewer, nativeExecutionEnvironment } from "../guardian/openai.js";
 import {
@@ -13,7 +15,15 @@ import {
   type AnsweredQuestion,
   type PendingQuestion,
 } from "../guardian/question.js";
-import { makeSourceInspector } from "../guardian/source.js";
+import {
+  hostProvidedSource,
+  hostReference,
+  operationReviewSources,
+  sdkJavaScriptPath,
+  sdkReference,
+  sourceChunk,
+  type SdkFiles,
+} from "../guardian/source.js";
 import type { ExecutionEvidence } from "../mint/contracts.js";
 import { publicationScope, type PublicationReview } from "../mint/publication-review.js";
 import {
@@ -42,51 +52,78 @@ import type { StandaloneSession } from "./session.js";
 import { error } from "./errors.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { runtimeSourceEntry } from "../execution/runtime-sources.js";
-/** The folder a review's authored files sit in, where staged runs also link the SDK. */
-const operationPrefix = "operation/";
-/** The SDK's package path, as an import names it and as the staged package holds it. */
-const runtimePackagePaths = new Set(["pomerado/runtime", "node_modules/pomerado/runtime.js"]);
-/** A trusted SDK path: the package path reads the module it names. */
-const trustedPath = (path: string) =>
-  runtimePackagePaths.has(path) ? runtimeSourceEntry : path;
+/** The folder Guardian's publication policy names the SDK's modules under, `pomerado/`. */
+const packageFolder = "pomerado/";
 /**
- * Guardian's source reads: the review's own file at the path, else the trusted SDK's. Authored
- * source imports the SDK from inside `operation/`, as `../../runtime/index.js` from `src/`, so a
- * path there that no authored file holds reads the SDK file at the rest of the path. A bare
- * `pomerado/runtime` reads the module that package path names.
+ * The local host's SDK as Guardian's view keys it: each trusted module at the path the host
+ * stages it at, where authored source imports it from, again under `pomerado/`, and the staged
+ * package's `runtime.js` as the module it re-exports.
+ */
+const localSdk = (trustedSources: ReadonlyMap<string, string>): SdkFiles => {
+  const entry = trustedSources.get(runtimeSourceEntry);
+  return {
+    files: new Map([
+      ...trustedSources,
+      ...[...trustedSources].map(([path, text]) => [`${packageFolder}${path}`, text] as const),
+      ...(entry === undefined ? [] : [["node_modules/pomerado/runtime.js", entry] as const]),
+    ]),
+    runtimeEntry: entry === undefined ? undefined : `${packageFolder}${runtimeSourceEntry}`,
+  };
+};
+/**
+ * Guardian's source reads: the review's own file at the path, else the trusted SDK's, at its own
+ * path, under `operation/`, where authored source imports it as `../../runtime/index.js`, and a
+ * bare `pomerado/runtime` as the module it names (`operationReviewSources`). An SDK module spelled
+ * as TypeScript reads as its JavaScript. A guessed path under an SDK folder reads as where the SDK
+ * is (`sdkReference`). A read that finds no file names its kind, `host_sdk` for a file the host
+ * provides (`hostProvidedSource`), which the view always holds, so locally it is `workspace`.
  */
 export const sourceInspector = (
   session: Pick<StandaloneSession, "trustedSources" | "secrets">,
   sources: ReadonlyMap<string, string>,
-) => {
+): ReviewTurn["readSource"] => {
   const { trustedSources, secrets } = session;
-  return makeSourceInspector(
-    (path) => {
-      const text =
-        sources.get(path) ??
-        trustedSources.get(trustedPath(path)) ??
-        (path.startsWith(operationPrefix)
-          ? trustedSources.get(trustedPath(path.slice(operationPrefix.length)))
-          : undefined);
-      return text === undefined
-        ? Effect.fail(new ReviewFailure({ code: "SourceUnavailable" }))
-        : Effect.succeed(new TextEncoder().encode(text));
-    },
-    (_path, bytes) =>
-      secrets.assertAbsent(new TextDecoder().decode(bytes)).pipe(
-        Effect.as(new TextDecoder().decode(bytes)),
-        Effect.mapError(
-          (cause) =>
-            new ReviewFailure({
-              code: "SourceUnavailable",
-              failureDetail: failureDetail("guardian_dependency_failed", {
-                operation: "standalone.projectSource",
-                error: cause,
-              }),
+  const sdk = localSdk(trustedSources);
+  const readable = operationReviewSources(sdk.files, new Map());
+  for (const [path, text] of sources) readable.set(path, text);
+  const hostProvided = hostProvidedSource(sdk.files);
+  const readInstead = sdkReference(sdk);
+  return (path, offset) => {
+    const text = readable.get(path) ?? readable.get(sdkJavaScriptPath(path) ?? path);
+    if (text === undefined) {
+      // A guessed SDK path is answered with where the SDK is, not a failure Guardian must treat
+      // as unsafe omitted source.
+      const instead = offset === 0 ? readInstead(path) : undefined;
+      if (instead !== undefined) return Effect.succeed(hostReference(path, instead));
+      // Which kind of file failed: never the path, which the model chose.
+      const pathCategory = hostProvided(path) ? "host_sdk" : "workspace";
+      return Effect.fail(
+        new ReviewFailure({
+          code: "SourceUnavailable",
+          failureDetail: failureDetail("invalid_input", {
+            operation: "standalone.readSource",
+            context: { pathCategory, offset },
+          }),
+        }),
+      );
+    }
+    // The secret check refuses the same file on every read, so its refusal is no host gap a
+    // retry could clear: Guardian judges the step without that file.
+    return secrets.assertAbsent(text).pipe(
+      Effect.mapError(
+        (error) =>
+          new ReviewFailure({
+            code: "SourceUnavailable",
+            failureDetail: failureDetail("guardian_dependency_failed", {
+              operation: "standalone.projectSource",
+              error,
+              context: { offset },
             }),
-        ),
+          }),
       ),
-  );
+      Effect.andThen(sourceChunk(path, text, offset)),
+    );
+  };
 };
 /** The request's checked site and the navigation to it. Builds no Guardian. */
 export const requestSite = (session: StandaloneSession, request: Pick<PomeradoRequest, "url">) =>
@@ -211,7 +248,7 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
         .slice(siteSince)
         .some((execution) => execution.authentication?.state === "authenticated");
     const guardian = makeGuardian(
-      {
+      refusalsOnHostGapsFail({
         ...makeOpenAIReviewer(policy, false, {
           executionEnvironment: nativeExecutionEnvironment,
           ...(options.guardianProvider === undefined
@@ -219,7 +256,7 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
             : { modelProvider: options.guardianProvider }),
         }),
         retry: guardianOutageRetry,
-      },
+      }),
       undefined,
       {},
     );
@@ -288,9 +325,13 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
         const result = yield* guardian
           .review(turn, readSource)
           .pipe(Effect.mapError((failure) => reviewFailureOf(failure, dispatch)));
-        const { outcome, rationale } = result.decision;
+        const { outcome, rationale, refusal } = result.decision;
         if (outcome !== "allow")
-          return yield* reviewDenied(result.reviewId, { outcome, rationale });
+          return yield* reviewDenied(result.reviewId, {
+            outcome,
+            rationale,
+            ...(refusal === undefined ? {} : { refusal }),
+          });
         return result;
       });
     /**
@@ -307,7 +348,9 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
           ),
           input,
           note: publication.notes,
+          // References are readable but stay out of the index below.
           evidence: new Map([
+            ...(publication.references ?? []),
             ...[...(publication.baseline ?? [])].map(
               ([path, text]) => [`executed/${path}`, text] as const,
             ),
@@ -319,7 +362,11 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
             {
               ...turn,
               allowedEffects: publication.allowedEffects,
-              publication: publicationScope(publication.files, publication.evidence),
+              publication: publicationScope(
+                publication.files,
+                publication.evidence,
+                publication.references === undefined ? {} : { references: publication.references },
+              ),
             },
             readSource,
           )
@@ -533,6 +580,10 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
       /** The caller's input as the effective task has it. */
       get input() {
         return input;
+      },
+      /** The task updates this build applied, in order. */
+      get taskUpdates(): readonly ReviewedTaskUpdate[] {
+        return taskUpdates;
       },
       observations,
       review,

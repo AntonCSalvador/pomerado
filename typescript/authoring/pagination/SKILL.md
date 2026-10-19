@@ -17,8 +17,12 @@ Spread `listInputFields` into the input schema's fields and `listOutputFields` i
 schema's: `limit` (1 to 50, default 20) and `cursor`; `next_cursor`, `next_cursor_expires_at`,
 `has_more`, `total_results`, `list_changed` and, when a list with more has no cursor,
 `next_cursor_unavailable`. Never rename them or write your own. Return rows
-in the site's order; rows the site promotes stay in place, count toward `limit` and carry their
-mark as a boolean. `total_results` is the site's own exact count, null when it shows none or an
+in the site's order, each item once. A row's key is the item's own stable ID, such as a product
+number, SKU or listing ID, never its link text or position. When the site lists the same item
+twice, such as a sponsored copy of an organic result, return the organic row at its organic
+position and drop the copy. A promoted row whose item the page lists only as promoted stays in
+place, counts toward `limit` and carries `sponsored: true`; drop it only when the request asks
+for organic results only, and say so in the description. `total_results` is the site's own exact count, null when it shows none or an
 approximate one. The description says: "Returns up to `limit` results per call (default 20).
 When `next_cursor` is not null, call again within ten minutes with the same inputs and `cursor`
 set to it for the results that follow. When `list_changed` is true, results may repeat earlier
@@ -34,16 +38,16 @@ before the tool paged another way. Then let `readList` read the page and write t
 Never write, sign or parse a cursor yourself, and never put page text, a secret or an account's
 value into a position; row keys are hashed for you. A cursor's position is readable by whoever
 holds it, so it holds only the site's own link, token or scope and the numbers to reach the rows.
-A row's key is its stable ID; when the site shows a promoted copy of a row it also lists, give
-the copy its own key, such as `sponsored:` and the ID, so both stay.
 
 ## Read the page with `readList`
 
 `readList(list, reader)` does the paging; you write only the site actions. It returns
 `{ rows, output }`: return `rows` as the list and spread `output` into the result. The reader has
-`keyOf` and three functions, each one site action followed by a read of the first `count` rows,
+`keyOf`, `promoted` when the site marks rows sponsored (`(row) => row.sponsored`), and three
+functions, each one site action followed by a read of the first `count` rows,
 returning a segment: `{ rows, more, hasNext }`, plus `href`, `token`, `scope`, `totalResults` or
-`context` when the site gives them.
+`context` when the site gives them. With `promoted`, `readList` drops a sponsored copy of an item
+the rows it read show unpromoted, or an earlier page returned, and never counts it as a change.
 
 - `open(position, count)` reaches where this call starts. With no position it starts the list as
   the first call always does, such as running the search. With a position, the host has already
@@ -173,9 +177,10 @@ site shows the whole list.
 On a read signed out, run page one, then page two live with the cursor page one returned: page
 two continues the order and repeats no row. Where the site's page size is known, try a `limit`
 that ends inside a site page and check that page two finishes that page and continues on the
-next. Reach a last page, for example with a narrow query, and check that `next_cursor` is null
-(testing skill). A signed-in read proves the list with its example alone and reports later pages
-as untested. `references/pagination.ts` is a compiling pattern for a paged site with a Next link,
+next. Reach a last page where a case you already run ends on one, such as the combined case's
+narrow filters, and check that `next_cursor` is null (testing skill). A signed-in read runs page
+two within its combined case when its example did not, and reports what it did not reach as
+untested. `references/pagination.ts` is a compiling pattern for a paged site with a Next link,
 and for a "Show more" list (`readRooms`), both on `readList`; their reads are site logic.
 <!-- pomerado:section pagination.cursor-scope:start
 
