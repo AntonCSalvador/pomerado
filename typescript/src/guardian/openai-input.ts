@@ -2,10 +2,11 @@ import type { Agent, AgentInputItem, AgentOutputType } from "@openai/agents";
 import { RunContext, RunState } from "@openai/agents";
 import { Effect, Schema } from "effect";
 import type { ReviewTurn } from "./review.js";
-import { siteDomain } from "../runtime/same-site.js";
+import { separateSuffixes, siteDomain } from "../runtime/same-site.js";
 import { paymentFrameOrigins } from "../destinations/payment-frames.js";
 import { ownerNamedOrigins } from "./owner-named-origins.js";
 import { guardianModel } from "./model.js";
+import type { GuardianReasoningEffort } from "./model.js";
 import { guardianCompaction } from "./session.js";
 import { withReasoningContinuity } from "../models/reasoning-settings.js";
 import { reviewKindOf, reviewOutcomesOf } from "./review-layout.js";
@@ -35,13 +36,24 @@ export const guardianReviewInput = (
         ? {}
         : { unchangedSources: turn.sources.unchangedSources }),
     },
+    // The intent is in the instructions (trusted_request), the same for every review of a build.
     trusted_authority: {
-      intent: turn.pending.screenedIntent,
       allowedOrigins: turn.pending.allowedOrigins,
       // Derived from the screened origins, so no new text reaches the model.
       allowedSites: turn.pending.allowedOrigins.flatMap((origin) => {
         const registrableDomain = siteDomain(origin);
-        return registrableDomain === undefined ? [] : [{ scheme: "https", registrableDomain }];
+        if (registrableDomain === undefined) return [];
+        // The host's own private suffixes below the site: the policy's "a host the list gives a
+        // registrable domain of its own" covers each host under one. Named only when there is
+        // one, so the input is unchanged without.
+        const addedPrivateSuffixes = separateSuffixes(registrableDomain);
+        return [
+          {
+            scheme: "https",
+            registrableDomain,
+            ...(addedPrivateSuffixes.length === 0 ? {} : { addedPrivateSuffixes }),
+          },
+        ];
       }),
       allowedEffects: turn.pending.allowedEffects,
       answeredQuestions: absentWhenEmpty(
@@ -59,6 +71,10 @@ export const guardianReviewInput = (
       ...(reviewKindOf(turn.pending) === "execution" ? { paymentFrameOrigins } : {}),
     },
     ...extra,
+    // A later publication round: the prior round's decision and what changed since it.
+    ...(turn.sources?.publicationDelta === undefined
+      ? {}
+      : { publication_delta: turn.sources.publicationDelta }),
     ...(turn.pending.questionCandidate === undefined
       ? {}
       : {
@@ -76,7 +92,13 @@ export const guardianReviewInput = (
             ...(turn.pending.questionCandidate.publicationDecisions === undefined
               ? {}
               : { publicationDecisions: turn.pending.questionCandidate.publicationDecisions }),
+            ...(turn.pending.questionCandidate.decisionLedger === undefined
+              ? {}
+              : { decisionLedger: turn.pending.questionCandidate.decisionLedger }),
             ...(turn.pending.questionCandidate.scriptAsk === true ? { scriptAsk: true } : {}),
+            ...(turn.pending.questionCandidate.buildEffect === undefined
+              ? {}
+              : { buildEffect: turn.pending.questionCandidate.buildEffect }),
           },
         }),
     ...(turn.pending.updateCandidate === undefined
@@ -99,17 +121,23 @@ export const guardianReviewInput = (
     untrusted_step_results: turn.pending.stepResults,
   });
 
-export const guardianReviewSettings = (turn: ReviewTurn) =>
+/**
+ * One review's model settings. `effort` is the host's pick for this review, medium when it
+ * picks none. The request's reasoning effort can change the provider's hidden instructions,
+ * so the first review at an effort other than the previous review's may read the session's
+ * history without its cached prefix.
+ */
+export const guardianReviewSettings = (
+  turn: ReviewTurn,
+  effort: GuardianReasoningEffort = guardianModel.modelSettings.reasoning.effort,
+) =>
   withReasoningContinuity({
     ...guardianModel.modelSettings,
-    ...(turn.session
-      ? {
-          reasoning: {
-            ...guardianModel.modelSettings.reasoning,
-            context: "all_turns" as const,
-          },
-        }
-      : {}),
+    reasoning: {
+      ...guardianModel.modelSettings.reasoning,
+      effort,
+      ...(turn.session ? { context: "all_turns" as const } : {}),
+    },
     parallelToolCalls: true,
     ...(turn.session
       ? {
@@ -146,9 +174,66 @@ export const guardianFollowUpState = <TContext, TOutput extends AgentOutputType>
     return new RunState(new RunContext<TContext>(), continuedInput, agent, maxTurns);
   });
 
-export const SourceInput = Schema.Struct({
+/** The most files one `read_source` call names in `paths`. */
+export const sourceReadMaxFiles = 10;
+/** One file's read: a chunk at an offset, or with `match` the slices around each occurrence. */
+export const SourceRead = Schema.Struct({
   path: Schema.String,
   offset: Schema.Int.pipe(Schema.nonNegative()),
   /** A word or phrase to find: the result is the slices around each match, not a chunk. */
   match: Schema.optional(Schema.NullOr(Schema.String)),
 });
+export type SourceRead = typeof SourceRead.Type;
+/**
+ * One `read_source` call: a single file in `path`, `offset` and `match`, or several in `paths`
+ * with the single-file fields null. A call recorded before `read_source` took several files has
+ * no `paths`, and may have no `match`.
+ */
+export const SourceInput = Schema.Struct({
+  path: Schema.NullOr(Schema.String),
+  offset: Schema.optional(Schema.NullOr(Schema.Int.pipe(Schema.nonNegative()))),
+  match: Schema.optional(Schema.NullOr(Schema.String)),
+  paths: Schema.optional(
+    Schema.NullOr(
+      Schema.Array(SourceRead).pipe(Schema.minItems(1), Schema.maxItems(sourceReadMaxFiles)),
+    ),
+  ),
+});
+/**
+ * The files one `read_source` call reads, in order, and whether it listed them in `paths`, or what
+ * to change in a call the host cannot read: a message for the model, since nothing was read.
+ */
+export const sourceReadsOf = (
+  input: unknown,
+):
+  | { readonly files: readonly SourceRead[]; readonly several: boolean }
+  | { readonly problem: string } => {
+  const decoded = Schema.decodeUnknownEither(SourceInput)(input);
+  if (decoded._tag === "Left") {
+    const paths: unknown =
+      typeof input === "object" && input !== null ? Reflect.get(input, "paths") : undefined;
+    return {
+      problem:
+        Array.isArray(paths) && paths.length > sourceReadMaxFiles
+          ? `Nothing was read: read_source reads at most ${sourceReadMaxFiles} files per call. Split paths into several calls of up to ${sourceReadMaxFiles} files each.`
+          : `Nothing was read: read_source takes path, a non-negative integer offset and match or null for one file, or paths listing 1 to ${sourceReadMaxFiles} such files with path, offset and match null. Correct the arguments and call it again.`,
+    };
+  }
+  const args = decoded.right;
+  const several = args.paths ?? null;
+  if (several === null)
+    return args.path === null
+      ? {
+          problem: `Nothing was read: name a file in path, or list up to ${sourceReadMaxFiles} files in paths.`,
+        }
+      : {
+          files: [{ path: args.path, offset: args.offset ?? 0, match: args.match ?? null }],
+          several: false,
+        };
+  return args.path !== null || (args.offset ?? null) !== null || (args.match ?? null) !== null
+    ? {
+        problem:
+          "Nothing was read: read one file with path, offset and match, or several with paths and path, offset and match null, not both in one call.",
+      }
+    : { files: several, several: true };
+};

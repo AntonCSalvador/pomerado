@@ -30,6 +30,8 @@ export const identityHost = "accounts.identity.test";
  * identifier screen's email to, as a marketing tag does. A browser maps it to the shop's server.
  */
 export const analyticsHost = "collect.analytics.test";
+/** The workspaces the account belongs to, which `workspaceChooser` offers after the sign-in. */
+export const shopWorkspaces = ["North Street", "Harbor"] as const;
 /** An account the shop has locked: it answers 423 whatever the password. */
 export const lockedShopAccount = {
   username: "grace@example.test",
@@ -43,6 +45,8 @@ interface ShopState extends StoreState {
   codePageLoads: number;
   /** Codes posted to the code screen. */
   codePosts: number;
+  /** Whether each code posted to the code screen was `shopCode`, whole, in order. */
+  codeMatches: boolean[];
   apiRequests: number;
   curlApiRequests: number;
   cartPosts: number;
@@ -64,6 +68,11 @@ interface ShopState extends StoreState {
   /** `after_input` keeps the sign-in button disabled until both fields hold input. */
   loginSubmit: "enabled" | "after_input";
   /**
+   * Whether the one-screen sign-in shows an error under its form, `#login-error`, once the shop
+   * refused its login, as a recipe's rejection marker names it.
+   */
+  loginError: boolean;
+  /**
    * The root page: `broken` drops its connection, so it never loads, and `hang` shows an image
    * whose request never answers, so its load never ends. `late` is an empty shell whose script
    * renders a header with an "Account" link, signed out too, `homeRenderMs` after it runs, and
@@ -84,10 +93,33 @@ interface ShopState extends StoreState {
    */
   loginCode: boolean;
   /**
+   * Whether the code screen's form has no button, so it submits only when Enter is pressed in its
+   * one field, as the browser submits a form of one text field.
+   */
+  codeSubmitsOnEnter: boolean;
+  /**
+   * How many one-character boxes the code screen splits `shopCode` across, one digit each, named
+   * `code-1` onward, under a Verify button; 0 for its one code field. Each box moves the focus to
+   * the next once it holds a digit, as such widgets do.
+   */
+  codeBoxes: number;
+  /**
    * What the one-screen sign-in shows a signed-in session: `form` its form, as any session sees
-   * it, `account` a redirect to the account page, as many sites answer a signed-in visit.
+   * it, `account` a redirect to the account page, as many sites answer a signed-in visit (to the
+   * workspace picker while `workspaceChooser` is on).
    */
   signedInLogin: "form" | "account";
+  /**
+   * Whether a signed-in session picks one of `shopWorkspaces` on `/choose-workspace` before the
+   * account page shows the account: the sign-in lands there, and the page shows neither the
+   * account nor a sign-in form, as an account or workspace picker does.
+   */
+  workspaceChooser: boolean;
+  /**
+   * Whether a signed-out visit to the orders or statements shows the sign-in form there, or only
+   * a "Please sign in" notice, which shows neither the marker nor a form.
+   */
+  signedOutShowsForm: boolean;
   /**
    * A path whose next load by a signed-in browser signs it out, as a site that keeps its session
    * in the page does on a full load: that load expires the session cookie and shows the signed-out
@@ -234,19 +266,20 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
   const loginPage: Route = (request, response) => {
     state.loginPageLoads += 1;
     if (state.signedInLogin === "account" && cookieOf(request, "shop_session") === signedIn) {
-      response.writeHead(303, { location: "/account" });
+      // With the workspace picker on, a signed-in visit lands on the picker, as the sign-in does.
+      response.writeHead(303, { location: state.workspaceChooser ? "/choose-workspace" : "/account" });
       return void response.end();
     }
     return html(
       response,
-      `<title>Sign in</title><form id="login"><input name="username"><input name="password" type="password"><button${state.loginSubmit === "after_input" ? " disabled" : ""}>Sign in</button></form>
+      `<title>Sign in</title><form id="login"><input name="username"><input name="password" type="password"><button${state.loginSubmit === "after_input" ? " disabled" : ""}>Sign in</button></form>${state.loginError ? `<p id="login-error" hidden>Wrong username or password</p>` : ""}
 <script>const csrf=document.cookie.match(/csrf_token=([^;]*)/)?.[1]??'';</script>${
         state.loginSubmit === "after_input"
           ? `
 <script>const form=document.querySelector('#login');form.addEventListener('input',()=>{form.querySelector('button').disabled=!(form.username.value&&form.password.value)})</script>`
           : ""
       }
-<script>document.querySelector('#login').addEventListener('submit',async event=>{event.preventDefault();const form=new FormData(event.target);const response=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify({username:form.get('username'),password:form.get('password')})});if(response.ok)location.href=(await response.json()).next??'/account'})</script>`,
+<script>document.querySelector('#login').addEventListener('submit',async event=>{event.preventDefault();const form=new FormData(event.target);const response=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify({username:form.get('username'),password:form.get('password')})});if(response.ok)location.href=(await response.json()).next??'/account';${state.loginError ? `else document.querySelector('#login-error').hidden=false;` : ""}})</script>`,
       { "set-cookie": cookiesFor(request) },
     );
   };
@@ -271,24 +304,75 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
       ],
     });
     response.end(
-      JSON.stringify(state.loginCode ? { ok: true, next: "/two-factor" } : { ok: true }),
+      JSON.stringify(
+        state.loginCode
+          ? { ok: true, next: "/two-factor" }
+          : state.workspaceChooser
+            ? { ok: true, next: "/choose-workspace" }
+            : { ok: true },
+      ),
     );
   };
   // The code screen: a GET shows its form, and the form's post with the code signs in. A wrong
   // code shows the form again under the error.
-  const codeForm = `<form method="post" action="/two-factor"><label>Code<input name="code" autocomplete="one-time-code"></label><button>Verify</button></form>`;
+  const codeBoxes = () =>
+    Array.from({ length: state.codeBoxes }, (_, at) => at + 1);
+  const codeForm = () =>
+    state.codeBoxes > 0
+      ? `<form method="post" action="/two-factor"><p>Enter the code we sent you</p><div class="code">${codeBoxes()
+          .map(
+            (box) =>
+              `<input id="code-${box}" name="code-${box}" maxlength="1" inputmode="numeric" aria-label="Digit ${box} of ${state.codeBoxes}"${box === 1 ? ' autocomplete="one-time-code"' : ""}>`,
+          )
+          .join("")}</div><button>Verify</button></form>
+<script>
+const boxes = [...document.querySelectorAll(".code input")];
+boxes.forEach((box, at) => box.addEventListener("input", () => {
+  if (box.value !== "" && boxes[at + 1]) boxes[at + 1].focus();
+}));
+</script>`
+      : `<form method="post" action="/two-factor"><label>Code<input name="code" autocomplete="one-time-code"></label>${state.codeSubmitsOnEnter ? "" : "<button>Verify</button>"}</form>`;
   const twoFactor: Route = async (request, response) => {
     if (request.method !== "POST") {
       state.codePageLoads += 1;
-      return html(response, `<title>Code</title>${codeForm}`);
+      return html(response, `<title>Code</title>${codeForm()}`);
     }
     state.codePosts += 1;
-    const code = new URLSearchParams(await readBody(request)).get("code");
+    const posted = new URLSearchParams(await readBody(request));
+    const code =
+      state.codeBoxes > 0
+        ? codeBoxes()
+            .map((box) => posted.get(`code-${box}`) ?? "")
+            .join("")
+        : posted.get("code");
+    state.codeMatches.push(code === shopCode);
     if (code !== shopCode || cookieOf(request, "shop_pending") !== pending)
-      return html(response, `<title>Code</title><p id='wrong-code'>Wrong code</p>${codeForm}`);
+      return html(response, `<title>Code</title><p id='wrong-code'>Wrong code</p>${codeForm()}`);
+    response.writeHead(303, {
+      location: state.workspaceChooser ? "/choose-workspace" : "/account",
+      "set-cookie": [`shop_session=${signedIn}; Path=/; Secure; HttpOnly; SameSite=Lax`],
+    });
+    response.end();
+  };
+  // The workspace picker: a signed-in session picks a workspace, which the account page then shows.
+  const workspaceOf = (request: IncomingMessage) => {
+    const picked = decodeURIComponent(cookieOf(request, "shop_workspace") ?? "");
+    return shopWorkspaces.find((workspace) => workspace === picked);
+  };
+  const chooseWorkspace: Route = async (request, response) => {
+    if (cookieOf(request, "shop_session") !== signedIn)
+      return html(response, "<title>Workspace</title><p id='signed-out'>Please sign in</p>");
+    if (request.method !== "POST")
+      return html(
+        response,
+        `<title>Choose a workspace</title><h1>Choose a workspace</h1><form method="post" action="/choose-workspace">${shopWorkspaces.map((workspace) => `<button name="workspace" value="${workspace}">${workspace}</button>`).join("")}</form>`,
+      );
+    const workspace = new URLSearchParams(await readBody(request)).get("workspace") ?? "";
     response.writeHead(303, {
       location: "/account",
-      "set-cookie": [`shop_session=${signedIn}; Path=/; Secure; HttpOnly; SameSite=Lax`],
+      "set-cookie": [
+        `shop_workspace=${encodeURIComponent(workspace)}; Path=/; Secure; HttpOnly; SameSite=Lax`,
+      ],
     });
     response.end();
   };
@@ -297,18 +381,26 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
       response,
       cookieOf(request, "shop_session") !== signedIn
         ? "<title>Account</title><p id='signed-out'>Please sign in</p>"
-        : state.accountRenderMs === 0
+        : state.workspaceChooser && workspaceOf(request) === undefined
+          ? "<title>Account</title><a href='/choose-workspace'>Choose a workspace</a>"
+          : state.workspaceChooser
+            ? `<title>Account</title><p id="account">${shopAccount.username}</p><p id="workspace">${workspaceOf(request) ?? ""}</p>`
+            : state.accountRenderMs === 0
           ? `<title>Account</title><p id="account">${shopAccount.username}</p>`
           : `<title>Account</title><main id="app"></main>
 <script>setTimeout(()=>{const account=document.createElement('p');account.id='account';account.textContent=${JSON.stringify(shopAccount.username)};document.querySelector('#app').append(account)},${state.accountRenderMs})</script>`,
     );
+  // A signed-out visit to a page behind the session shows the one-screen sign-in's form there,
+  // which is how a host tells the page signed out rather than one without the marker.
+  const signedOutNotice = (title: string) =>
+    `<title>${title}</title><p id='signed-out'>Please sign in</p>${state.signedOutShowsForm ? `<form action="/login"><input name="username"><input name="password" type="password"><button>Sign in</button></form>` : ""}`;
   // The account's orders, behind the same session as its account page.
   const orders: Route = (request, response) =>
     html(
       response,
       cookieOf(request, "shop_session") === signedIn
         ? `<title>Orders</title><p id="account">${shopAccount.username}</p><p id="orders">2 orders</p>`
-        : "<title>Orders</title><p id='signed-out'>Please sign in</p>",
+        : signedOutNotice("Orders"),
     );
   // The account's statements, 30 to a page with a Next link, behind the same session.
   const statements: Route = (request, response) => {
@@ -316,8 +408,7 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
     const page = Math.max(1, Number(url.searchParams.get("page") ?? "1"));
     const signedInNow = cookieOf(request, "shop_session") === signedIn;
     state.statementLoads.push({ page, signedIn: signedInNow });
-    if (!signedInNow)
-      return html(response, "<title>Statements</title><p id='signed-out'>Please sign in</p>");
+    if (!signedInNow) return html(response, signedOutNotice("Statements"));
     const rows = state.statements.slice((page - 1) * 30, page * 30);
     const next = page * 30 < state.statements.length ? `/statements?page=${page + 1}` : null;
     return html(
@@ -330,8 +421,10 @@ ${next === null ? "" : `<a rel="next" href="${next}">Next</a>`}`,
   // The sign-in's query goes on to the password screen: `hidden=N` puts N hidden text fields
   // ahead of its own field, `pad=N` puts N spaces ahead of the identifier its label echoes in
   // place of "Password for", `tag` marks its help links, so a test finds its own screen,
-  // `echo=none` shows the identifier only in the hidden field, and `stash=password` puts the
-  // account's password in its form's action, as page code that kept a typed value could.
+  // `echo=none` shows the identifier only in the hidden field, `stash=password` puts the
+  // account's password in its form's action, as page code that kept a typed value could, and
+  // `alert=1` shows an error naming the typed identifier beside a hidden one, and `alert=class` an
+  // error known only by its class and id.
   const queryOf = (request: IncomingMessage) =>
     new URL(request.url ?? "/", "https://www.shop.test").searchParams;
   const identifierScreen: Route = (request, response) =>
@@ -357,13 +450,18 @@ ${next === null ? "" : `<a rel="next" href="${next}">Next</a>`}`,
       { length: Number(queryOf(request).get("hidden") ?? 0) },
       (_, index) => `<input name="extra${index}" style="display:none">`,
     ).join("");
+    const alerts: Readonly<Record<string, string>> = {
+      "1": `<div role="alert">Check the password for ${typed}</div><p class="error-message" style="display:none">Hidden error</p>`,
+      class: `<div id="login_error" class="login_form__error">Check the password for ${typed}</div>`,
+    };
+    const alert = alerts[queryOf(request).get("alert") ?? ""] ?? "";
     const action =
       queryOf(request).get("stash") === "password"
         ? `/sign-in/session?next=${encodeURIComponent(shopAccount.password)}`
         : "/sign-in/session";
     html(
       response,
-      `<title>Password</title>${echo ? `<p>Signing in as ${typed}</p>` : ""}<form method="post" action="${action}"><input type="hidden" name="user" value="${typed}">${hidden}<label>${label}<input id="password" name="password" type="password" required placeholder="${echo ? typed : ""}"></label><input id="otp" style="display:none" aria-label="Code"><button id="sign-in">Sign in</button><button id="trouble" disabled>Trouble signing in</button></form><nav>${links}</nav>`,
+      `<title>Password</title>${echo ? `<p>Signing in as ${typed}</p>` : ""}${alert}<form method="post" action="${action}"><input type="hidden" name="user" value="${typed}">${hidden}<label>${label}<input id="password" name="password" type="password" required placeholder="${echo ? typed : ""}"></label><input id="otp" style="display:none" aria-label="Code"><button id="sign-in">Sign in</button><button id="trouble" disabled>Trouble signing in</button></form><nav>${links}</nav>`,
     );
   };
   // The password screen's form posts here: the shop's account signs in, any other is refused.
@@ -524,6 +622,7 @@ ${next === null ? "" : `<a rel="next" href="${next}">Next</a>`}`,
     ["/orders", orders],
     ["/statements", statements],
     ["/two-factor", twoFactor],
+    ["/choose-workspace", chooseWorkspace],
     ["/hang", hang],
     ["/identity-login", identityLogin],
     ["/v1/sign-in", identitySignIn],
@@ -563,6 +662,7 @@ export const startShop = async (directory: string): Promise<Shop> => {
     searchPageLoads: 0,
     codePageLoads: 0,
     codePosts: 0,
+    codeMatches: [],
     apiRequests: 0,
     curlApiRequests: 0,
     cartPosts: 0,
@@ -575,11 +675,16 @@ export const startShop = async (directory: string): Promise<Shop> => {
     api: "ok",
     curl: "ok",
     loginSubmit: "enabled",
+    loginError: false,
     home: "ok",
     homeRenderMs: 300,
     accountRenderMs: 0,
     loginCode: false,
+    codeSubmitsOnEnter: false,
+    codeBoxes: 0,
     signedInLogin: "form",
+    workspaceChooser: false,
+    signedOutShowsForm: true,
     signOutOn: undefined,
     statements: Array.from({ length: 45 }, (_, index) => `S${index + 1}`),
     statementLoads: [],

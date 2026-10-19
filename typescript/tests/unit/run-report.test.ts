@@ -133,6 +133,126 @@ describe("a run that returned", () => {
   });
 });
 
+// A write's output that failed its schema was produced after the write, so the run returns it
+// as drift: as its result once the write is confirmed, else as an unconfirmed write's output. A
+// read's is no result.
+describe("a write whose output failed its schema", () => {
+  const drifted = (journal: LocalOperationJournal, write?: WriteDeclaration) => ({
+    ...returned(journal, write),
+    output: { saved: "yes" },
+    outputDrift: true as const,
+  });
+  const declaration = { confirmation: "message", commits: ["save"] } as const;
+
+  it("returns a confirmed write's drifted output as its result", () => {
+    expect(settle("write", drifted(confirmedWrite, declaration))).toEqual(
+      Either.right({ saved: "yes" }),
+    );
+  });
+
+  it("returns the drifted output of a write that sent nothing", () => {
+    expect(settle("write", drifted(nothingSent, declaration))).toEqual(
+      Either.right({ saved: "yes" }),
+    );
+  });
+
+  it("keeps an unconfirmed write's drifted output, possibly applied", () => {
+    const failure = failureOf("write", drifted(commitSent, declaration));
+    expect(failure.outcome).toMatchObject({
+      code: "outcome_unknown",
+      writeStatus: "may_have_applied",
+      possibleCommit: true,
+    });
+    expect(failure.unconfirmed).toEqual({ output: { saved: "yes" } });
+    expect(failure.message).toMatch(readBack);
+  });
+
+  it("fails a write whose declared commits all stayed unsent as invalid, not applied", () => {
+    const failure = failureOf("write", drifted(commitNotEntered, declaration));
+    expect(failure.outcome).toMatchObject({
+      code: "invalid_output",
+      writeStatus: "not_applied",
+      possibleCommit: false,
+    });
+    expect(failure.unconfirmed).toBeUndefined();
+    expect(failure.message).not.toMatch(readBack);
+  });
+
+  // This host keeps no log of what the page sent after a pop-up's question went unanswered.
+  it("keeps the drifted output of a write after an unanswered pop-up, possibly applied", () => {
+    const settled = Effect.runSync(
+      Effect.either(returnedRun("write", drifted(commitNotEntered, declaration), true)),
+    );
+    if (Either.isRight(settled)) throw new Error("Expected a failed run");
+    expect(settled.left.outcome).toMatchObject({
+      code: "outcome_unknown",
+      writeStatus: "may_have_applied",
+      possibleCommit: true,
+    });
+    expect(settled.left.unconfirmed).toEqual({ output: { saved: "yes" } });
+  });
+
+  // Any other run's drifted output is no result: it fails as its invalid output always did.
+  it.each([
+    {
+      case: "a read",
+      declared: "read" as const,
+      outcome: { code: "invalid_output", writeStatus: null, possibleCommit: false },
+    },
+    // No effect named and no write declared: the run may have changed anything.
+    {
+      case: "an undeclared script",
+      declared: undefined,
+      outcome: { code: "outcome_unknown", writeStatus: null, possibleCommit: true },
+    },
+  ])("fails $case's drifted output as before", ({ declared, outcome }) => {
+    const failure = failureOf(declared, drifted({ effect: "possible", commits: [] }));
+    expect(failure.outcome).toMatchObject(outcome);
+    expect(failure.unconfirmed).toBeUndefined();
+    expect(failure).toEqual(
+      runOutcomeFailure(declared, "operation")(
+        new LocalOperationFailure(
+          "InvalidOutput",
+          { effect: "possible", commits: [] },
+          "InvalidOutput",
+        ),
+      ),
+    );
+  });
+});
+
+// A pop-up's question the caller left unanswered was dismissed and the run went on. This host
+// keeps no log of what the page sent, so a failure after it is no_response, as the hosted runner
+// reports it, and the commit marks prove nothing.
+describe("a run that failed after its caller left a pop-up's question unanswered", () => {
+  const fail = (error: unknown) => runOutcomeFailure("write", "operation", true)(error);
+
+  it.each([
+    {
+      case: "a script error whose commit was never entered",
+      error: new LocalOperationFailure("The save button was missing", commitNotEntered),
+      outcome: { code: "no_response", writeStatus: "may_have_applied", possibleCommit: true },
+    },
+    {
+      case: "a refused input whose commit was never entered",
+      error: new LocalOperationFailure("No such seat", commitNotEntered, "InvalidInput"),
+      outcome: { code: "no_response", writeStatus: "may_have_applied", possibleCommit: true },
+    },
+    {
+      case: "a failure with no journal",
+      error: new Error("Local operation child did not exit after result"),
+      outcome: { code: "no_response", writeStatus: "may_have_applied", possibleCommit: true },
+    },
+    {
+      case: "a script error before it called the browser",
+      error: new LocalOperationFailure("The cart was empty", nothingSent),
+      outcome: { code: "no_response", writeStatus: "not_attempted", possibleCommit: false },
+    },
+  ])("reports $case as no_response", ({ error, outcome }) => {
+    expect(fail(error).outcome).toMatchObject(outcome);
+  });
+});
+
 describe("a run that failed in its operation", () => {
   const fail = (declared: "read" | "write" | undefined, error: unknown) =>
     runOutcomeFailure(declared, "operation")(error);
@@ -173,21 +293,47 @@ describe("a run that failed in its operation", () => {
       error: new LocalOperationFailure("Fixture failure", nothingSent),
       outcome: { code: "execution_failed", writeStatus: "not_attempted", possibleCommit: false },
     },
-    // A browser step already ran, so an unentered commit mark proves nothing sent only for a
-    // refusal, as the other host's job view also counts it.
+    // The commit marks decide, whatever failed the write: one whose child reported every
+    // declared commit step unsent changed nothing.
     {
       case: "a script error after a browser step, whose commit was never entered",
       error: new LocalOperationFailure("Fixture failure", commitNotEntered),
-      outcome: { code: "outcome_unknown", writeStatus: "may_have_applied", possibleCommit: true },
+      outcome: { code: "execution_failed", writeStatus: "not_applied", possibleCommit: false },
     },
+    {
+      case: "invalid output after a browser step, whose commit was never entered",
+      error: new LocalOperationFailure("InvalidOutput", commitNotEntered, "InvalidOutput"),
+      outcome: { code: "invalid_output", writeStatus: "not_applied", possibleCommit: false },
+    },
+    // Only the child's own final report proves its marks unsent. The host's deadline, a child
+    // that exited or a result with host requests pending leaves the last streamed journal, which
+    // may miss a mark entered just before.
     {
       case: "an expired deadline after a browser step, whose commit was never entered",
       error: new LocalOperationFailure(
         "Local operation deadline expired; execution was not replayed",
         commitNotEntered,
+        undefined,
+        undefined,
+        undefined,
+        { reported: false },
       ),
       outcome: { code: "outcome_unknown", writeStatus: "may_have_applied", possibleCommit: true },
     },
+    {
+      case: "a child that exited before reporting, whose commit was never entered",
+      error: new LocalOperationFailure(
+        "Local operation child exited 1; completion uncertain",
+        commitNotEntered,
+        undefined,
+        undefined,
+        undefined,
+        { reported: false },
+      ),
+      outcome: { code: "outcome_unknown", writeStatus: "may_have_applied", possibleCommit: true },
+    },
+    // A question left unanswered says nothing about what the page sent before it, and this host
+    // has no request log to tell, so the write stays possibly applied.
     {
       case: "an unanswered question after a browser step, whose commit was never entered",
       error: new LocalOperationFailure("NoResponse", commitNotEntered, "NoResponse"),
@@ -197,11 +343,6 @@ describe("a run that failed in its operation", () => {
         writeStatus: "may_have_applied",
         possibleCommit: true,
       },
-    },
-    {
-      case: "invalid output after a browser step, whose commit was never entered",
-      error: new LocalOperationFailure("InvalidOutput", commitNotEntered, "InvalidOutput"),
-      outcome: { code: "outcome_unknown", writeStatus: "may_have_applied", possibleCommit: true },
     },
     // A refusal makes unentered marks prove nothing applied only while the write may have
     // dispatched. A recorded confirmation keeps the write applied, as the other host's job view

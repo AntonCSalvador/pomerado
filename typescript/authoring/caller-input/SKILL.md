@@ -20,7 +20,10 @@ an input that tailors the answer, which a read returns labeled with the value th
    `new errors.InvalidInput(message, { field })` at once, starting "Caller input error:" and
    naming the field and the rule. Such rules include:
    - an end date on or after its start date, and a check-out after its check-in;
-   - a date the task rules out, such as a departure before yesterday in UTC;
+   - a date the task rules out, such as a departure before today in its airport's time zone.
+     On a site with places in several time zones, use the place's zone when the tool knows it
+     before any site action, and otherwise refuse only a date that is past in every time zone,
+     such as one before yesterday in UTC (core skill);
    - a count within the site's own limits, such as a party size or quantity the site caps,
      found while building and stated in the message;
    - inputs that exclude each other, such as a store and a ZIP code where the site takes one;
@@ -48,6 +51,20 @@ an input that tailors the answer, which a read returns labeled with the value th
    - An option the page lists but greys out, such as a booked date or a sold-out size, on a
      read: not an error. Return it unavailable, with the page's reason and alternatives, and the
      run succeeds. A write throws `InvalidInput` with `available` instead.
+   - A write that declines the task because the caller's own limit or the page's state rules it
+     out, such as a total over the caller's price limit, an item out of stock, a variant the
+     page does not offer or a product number whose page names another item than the caller's:
+     `InvalidInput`, thrown before the mark of the commit it guards (writes skill). Pass
+     `field`, the input the caller would change, `kind`, the reason as a stable lowercase token
+     such as `over_price_limit`, `out_of_stock`, `variant_unavailable` or `item_mismatch`, and
+     `available` where the page lists choices, and give in the message the values the caller
+     needs, such as the total the page shows beside the limit. That is a refusal: the run
+     reports why, and that it changed nothing unless an earlier marked step ran, and the caller
+     can run again with corrected input. It differs from a failure, a tool that broke, and from
+     a write that may have changed the site and could not confirm it (both below). A write
+     returns a refusal as its output only when its output schema declares that refusal, and
+     only before its first mark (writes skill): any other output a write returns without
+     `verified()` reports a possible change.
    - A write whose steps may have changed the site and then failed or could not confirm the
      change: let it end as a possible change, which is never retried. Never throw
      `InvalidInput` or `InputNotApplied` to make it look untouched (writes skill).
@@ -65,7 +82,10 @@ Try first. Ask only for what the page or the caller uniquely knows at that point
 
 - a choice whose options exist only once the run reaches them: the open seats of the
   flight the caller just chose, the delivery slots for the cart the run just filled, or
-  which of the account's saved travelers or addresses to use;
+  which of the account's saved travelers, addresses or payment methods to use;
+- whether to take a paid add-on within the tool's purpose that the page shows on the way to a
+  commit when the input leaves it open, asked before the commit mark; a paid upsell outside the
+  tool's purpose is declined, never asked (writes skill);
 - which of several site entries the caller's value matches equally, such as a restaurant
   with several locations or a city with several airports, with those entries as the options.
   That is ambiguous, as is a near-miss name the site offers alternatives for: prefer not
@@ -79,7 +99,11 @@ Try first. Ask only for what the page or the caller uniquely knows at that point
 
 Never ask for a value the request, the input or an earlier answer already supplied, a private
 one included: use that value. Never undo an answer that declined something by doing it anyway
-or by offering it as an input (core skill). In the tool, take it from its input, or a private one, such as
+or by offering it as an input (core skill), except a costly choice a write still meets on its path,
+one that changes what the caller buys or pays or whether the action can be cancelled or refunded
+(a paid add-on within the tool's purpose, a rate, fare or plan tier, a refundable option, shipping
+speed, the payment method or the delivery address), which stays an input or a declared question
+(writes skill). In the tool, take it from its input, or a private one, such as
 part of an identity number, through a declared `secret` question, never a plain-text field.
 When question review finds a question redundant, remove the ask and use the supplied value; a
 reworded question still asks for it again. A placeholder that stands in for a redacted value,
@@ -197,14 +221,21 @@ on it.
   or offers fewer options than the selection bounds need.
 
 Let these failures end the run. Never catch one to pick a default, the first option or
-a guessed value. For a write, ask before its consequential step when the site allows
-it, so an unanswered question leaves the site unchanged. A hold or a cart the run made
+a guessed value. For a write, ask every question you can before its first commit step,
+reading options in a step that saves nothing, so an unanswered question leaves the site
+unchanged rather than holding a partial save. A question whose options the site shows only past
+a saved step, such as delivery slots for a cart that step filled, may come after it. A hold or a cart the run made
 before the question is reported as a possible change when no answer comes.
 
 ## During a mint
 
 A read build's example run, or a write build's `act` step, asks the build's owner
-through the same request, and the answer comes back to the running script. Guardian
+through the same request, and the answer comes back to the running script. Ask the owner each
+decision once per build: one a declared question will ask during the run needs no
+`request_input` of your own first. The host reuses an earlier answer to a choice,
+multi_choice, text or confirm question, never a secret, code or login, for a later ask with the
+same id, type, prompt and options, so keep a declared question unchanged between runs unless its
+review asks for a rewording. Guardian
 reviews each question first. When it asks for a rewording, nobody is asked, the `ask`
 fails and the execution's result carries `scriptQuestion` with Guardian's rationale:
 change the declared question as it says and execute again. If the owner does not answer

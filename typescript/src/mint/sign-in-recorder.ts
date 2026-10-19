@@ -4,6 +4,7 @@ import { lostTyping, maySend, typingRefusal } from "../destinations/autofill-ref
 import type {
   AutofillInspection,
   AutofillScreens,
+  AutofillSlot,
   AutofillSignedIn,
   AutofillStep,
   AutofillStepReport,
@@ -32,6 +33,9 @@ import {
   type SignInRecord,
   type SignInValueHooks,
 } from "../destinations/sign-in-recipe.js";
+import type { AutofillPopup } from "../destinations/autofill-contracts.js";
+import { isSecondFactor } from "../destinations/autofill-recipe.js";
+import { codeBoxesRefusal } from "../destinations/autofill-step.js";
 import type { CredentialRejectedField, WebsiteCredentials } from "../runtime/authentication.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { InputRequestFailure } from "../runtime/input-request.js";
@@ -70,7 +74,8 @@ const refusedStep = (
     | "credential_already_filled"
     | "nothing_rejected"
     | "selector_names_contact"
-    | "page_names_contact",
+    | "page_names_contact"
+    | "marker_not_visible",
   target: number,
   nextStep: string,
 ): SignInStepResult => ({ result: { step: { outcome: "refused", reason, target }, nextStep } });
@@ -90,14 +95,26 @@ const filledNotices = {
   page: "The host filled the fields, and the page may have sent them itself: once the last field was filled, the screen moved on, emptied its fields or stopped taking typing before the host clicked anything. Explore read-only to read the next screen (never read a field the host filled), then send its signInStep, or signInStep.signedIn with what shows the site signed in.",
 } as const;
 
+/** What the minter does after a step whose submit key the host pressed. */
+const keyNotices = {
+  failed:
+    "The host filled the fields, but its press of the step's submitKey failed. Never press it yourself: explore read-only to see the page (never read a field the host filled), then continue with the next signInStep, or signedIn.",
+  clicked:
+    "The host filled the fields and pressed the step's submitKey in the last field. Explore read-only to read the next screen (never read a field the host filled), then send its signInStep, or signInStep.signedIn with what shows the site signed in.",
+} as const;
+
 /** What the minter does after a screen the host inspected and maybe filled. */
-const stepNotice = (report: AutofillStepReport) => {
+const stepNotice = (report: AutofillStepReport, step?: Pick<AutofillStep, "submitKey">) => {
+  if (report.outcome === "refused" && report.codeBoxes !== undefined)
+    return `This screen splits its code across ${report.codeBoxes.boxes} one-character boxes, and the step's code fields named only the boxes at places ${report.codeBoxes.named.join(", ")}, in that order (codeBoxes.named, counted from 1). The host typed and clicked nothing, so nothing reached the site, no code was asked for and no sign-in was spent. Send the step again with one code field per box, all ${report.codeBoxes.boxes} of them in order from the first box to the last; the host asks for the code once and types one character into each box.`;
   if (report.outcome === "refused")
     return `The host typed and clicked nothing (${report.reason}), so nothing reached the site and no sign-in was spent. Correct the step from the page's evidence, ${recovery}.`;
   if (lostTyping(report))
     return "The host lost the answer of the call that typed a field, so that field may hold its value. The host never clicked the submit. It never retries a fill by itself. Explore read-only to see the page, then continue with the next signInStep.";
   if (report.outcome === "uncertain")
     return `The host lost the fill call's answer: the fields and the submit may have reached the site. It never retries a fill by itself. Explore read-only to see the page, then continue with the next signInStep, ${recovery}.`;
+  if (step?.submitKey !== undefined && (report.submit === "failed" || report.submit === "clicked"))
+    return keyNotices[report.submit];
   return filledNotices[report.submit];
 };
 
@@ -282,6 +299,15 @@ export const makeSignInRecorder = <E>(input: {
   /** The site as a question names it: its host, without `www.`. */
   readonly site: string;
   readonly carries: SecretMatcher;
+  /**
+   * Whether `selector` shows on the page now, on the origin of `page` (the sign-in's latest
+   * screen); it checks an account rejection's element. Absent, the host takes the minter's word.
+   */
+  readonly markerVisible?: (
+    selector: string,
+    page: string,
+    popup?: AutofillPopup,
+  ) => Effect.Effect<boolean, E>;
   readonly refuseIndicator?: (
     indicator: AutofillSignedIn,
   ) => Readonly<Record<string, unknown>> | undefined;
@@ -456,6 +482,11 @@ export const makeSignInRecorder = <E>(input: {
         const inspected = yield* browser.inspect(step);
         if ("outcome" in inspected)
           return { report: inspected, result: { nextStep: stepNotice(inspected) } };
+        // A code split across one-character boxes goes out whole only when the step names every
+        // box, so a step that names part of them is sent back before Guardian or the owner sees it.
+        const partial = codeBoxesRefusal(step, inspected);
+        if (partial !== undefined)
+          return { report: partial, result: { nextStep: stepNotice(partial) } };
         const entry = open === undefined ? entryOf(inspected.url ?? inspected.page) : undefined;
         yield* input.review(step, inspected);
         if (
@@ -515,6 +546,17 @@ export const makeSignInRecorder = <E>(input: {
           stopHearing = browser.onRequest(tracker.heard);
         }
         const record = open;
+        // A screen of this sign-in that asks for the password an earlier one took, beside a
+        // second factor none of its earlier screens took, records the refill, which a run's
+        // replay then makes in the same place, and only there.
+        const earlier = (which: (slot: AutofillSlot) => boolean) =>
+          record.steps.some((taken) => taken.fields.some((field) => which(field.slot)));
+        const reasked =
+          !opened &&
+          refills.includes("password") &&
+          earlier((slot) => slot === "password") &&
+          !earlier(isSecondFactor) &&
+          step.fields.some((field) => isSecondFactor(field.slot));
         armStep(
           record,
           step,
@@ -523,6 +565,9 @@ export const makeSignInRecorder = <E>(input: {
           tracker.sequence(),
           browser.authenticationOrigins,
         );
+        const armed = record.steps.at(-1);
+        if (reasked && armed !== undefined)
+          record.steps[record.steps.length - 1] = { ...armed, refills: ["password"] };
         const report = yield* browser.fill({ step, values: filledValues, inspection: inspected });
         yield* tracker.settled;
         // A fill refused or not attempted cannot have sent what it held.
@@ -563,7 +608,7 @@ export const makeSignInRecorder = <E>(input: {
           return yield* autofillRefusalFailure(refusal, {
             nothingSubmitted: record.mayHaveSent !== true && record.submittedSlots.size === 0,
           });
-        return { report, result: { nextStep: stepNotice(report) } };
+        return { report, result: { nextStep: stepNotice(report, step) } };
       }).pipe(
         Effect.ensuring(
           Effect.sync(() => {
@@ -696,6 +741,42 @@ export const makeSignInRecorder = <E>(input: {
         };
       });
 
+    /**
+     * The site showed the account itself locked or suspended, at `selector`. Only a sign-in that
+     * sent the login's identifier can be refused for its account, and only an element that shows
+     * now counts; then no correction gets past it, and sign-in ends in the build.
+     */
+    const accountRejectedStep = (account: "locked" | "suspended", selector: string) =>
+      Effect.gen(function* () {
+        if (![...sent.keys()].some(isIdentifier))
+          return refusedStep(
+            "nothing_rejected",
+            0,
+            "No identifier was sent in this sign-in, so the site cannot have refused its account. Explore read-only to see the page, then send the next signInStep.",
+          );
+        const screen = open?.steps.at(-1);
+        if (
+          input.markerVisible !== undefined &&
+          (screen === undefined ||
+            !(yield* input.markerVisible(selector, screen.page, screen.popup)))
+        )
+          return refusedStep(
+            "marker_not_visible",
+            0,
+            "The element the selector names does not show on the page now, so the host cannot take the account as refused. Explore read-only, name the visible element whose text says the account is locked or suspended, and send the step again.",
+          );
+        close();
+        return yield* new MintFailure({
+          code: "Unavailable",
+          authentication: {
+            phase: "credential_submit",
+            code: "AccountLocked",
+            account,
+            afterSubmission: true,
+          },
+        });
+      });
+
     const signedIn = (indicator: AutofillSignedIn) =>
       Effect.gen(function* () {
         yield* tracker.settled;
@@ -756,7 +837,10 @@ export const makeSignInRecorder = <E>(input: {
           loginUrl = entryOf(given) ?? loginUrl;
           if ("fields" in step) return fill(step, beforeFill);
           if ("approval" in step) return approval(step);
-          if ("rejected" in step) return rejectedStep(step.rejected.slot);
+          if ("rejected" in step)
+            return "slot" in step.rejected
+              ? rejectedStep(step.rejected.slot)
+              : accountRejectedStep(step.rejected.account, step.rejected.selector);
           return signedIn(step.signedIn);
         }),
       /**

@@ -1,10 +1,5 @@
 import { Data, Effect, Schema } from "effect";
-import type {
-  SecretMatcher,
-  SignInLogin,
-  SignInRecipe,
-  SignInValueHooks,
-} from "../destinations/sign-in-recipe.js";
+import type { SignInLogin, SignInRecipe } from "../destinations/sign-in-recipe.js";
 import { MintFailure } from "../mint/contracts.js";
 import { CredentialRejectedField, type WebsiteCredentials } from "../runtime/authentication.js";
 import { failureDetail } from "../runtime/failure-detail.js";
@@ -22,14 +17,15 @@ import {
   type SessionSignInLimits,
   type SessionSignInRefusal,
 } from "../runtime/session-sign-in.js";
+import { makeAutofillRetryState } from "../runtime/autofill-correction.js";
+import type { AutofillReplayTiming, AutofillRetryState } from "../runtime/autofill-replay-steps.js";
 import {
+  type RunSignInSecrets,
   signInForRun,
   SignInRunFailed,
   type SignInReplayBrowser,
 } from "../runtime/sign-in-replay.js";
-import type { SignInReplayTiming } from "../runtime/sign-in-replay-steps.js";
-import { askingValueHooks } from "../runtime/sign-in-values.js";
-import { localSignInLogin, makeSignInBrowser, repeatedLoginFailure } from "./authentication.js";
+import { localSignInLogin, makeSignInBrowser } from "./authentication.js";
 import type { StandaloneSession } from "./session.js";
 
 /** Why the local host could not leave the page signed in, and what failed. */
@@ -112,10 +108,10 @@ export const makeRejectableLogin = <E>(
   };
   /** The part of the login the last correction asked for. */
   let corrected: LoginField | undefined;
-  const correct = (field: CredentialRejectedField, held: WebsiteCredentials) =>
+  const correct = (field: CredentialRejectedField, held: WebsiteCredentials, triesLeft?: number) =>
     Effect.suspend(() => {
       corrected = loginFieldOf(field) ?? corrected;
-      return base.correct(field, held);
+      return base.correct(field, held, triesLeft);
     }).pipe(
       Effect.flatMap((answer) => {
         const again = repeats(answer);
@@ -185,6 +181,14 @@ export interface RecordedSignIn {
 }
 
 /**
+ * The workspace origin a run's sign-in learned for its login, held in memory for that run only:
+ * the local host keeps no login between runs, so it pins nothing past one.
+ */
+export interface RunWorkspace {
+  origin: string | undefined;
+}
+
+/**
  * The local host's automatic sign-in on the browser an operation holds. It checks the recorded
  * marker on the current page without moving it, and only when the page reads signed out does it
  * sign in again: first a check that types nothing (the recipe's account page, then a value-free
@@ -196,12 +200,17 @@ export const makeLocalSessionSignIn = (options: {
   readonly browser: SignInReplayBrowser<Error>;
   /** The sign-in to replay, once one was recorded and verified. */
   readonly recorded: () => RecordedSignIn | undefined;
-  /** The login the host already holds, read once per build or run, which a rejection marks. */
-  readonly login: RejectableLogin<unknown>;
-  readonly values: SignInValueHooks<Error>;
-  /** The asker `login` and `values` ask through. */
+  /**
+   * The login the host already holds, read once per build or run; a build's marks what the site
+   * rejected (`failed`).
+   */
+  readonly login: Pick<RejectableLogin<unknown>, "login"> &
+    Partial<Pick<RejectableLogin<unknown>, "failed">>;
+  /** The asker `login` and the sign-in's own questions ask through. */
   readonly asks: BoundableAsk;
-  readonly carries: SecretMatcher;
+  readonly secrets: RunSignInSecrets;
+  /** The values the site rejected and the corrections asked, across this host's sign-ins. */
+  readonly retryState?: AutofillRetryState;
   readonly site: string;
   readonly siteOrigin: string;
   readonly limits: SessionSignInLimits;
@@ -212,7 +221,14 @@ export const makeLocalSessionSignIn = (options: {
    * attempt; a new count by default.
    */
   readonly spent?: { attempt: number; scope: number };
-  readonly timing?: SignInReplayTiming;
+  readonly timing?: AutofillReplayTiming;
+  /** The login's workspace origin under a recipe's workspace relation; each sign-in updates it. */
+  readonly workspace?: RunWorkspace;
+  /**
+   * Whether a sign-in again may end on a page that can't tell, as a read's may, asked at each
+   * sign-in, since a build's effect may change from read to write between them.
+   */
+  readonly allowCantTell?: () => boolean;
 }) => {
   const spent = options.spent ?? { attempt: 0, scope: 0 };
   const replayBrowser = (bound: SessionSignInBound | undefined) =>
@@ -235,12 +251,24 @@ export const makeLocalSessionSignIn = (options: {
         entryUrl: sign.entryUrl,
         browser: replayBrowser(bound),
         login,
-        values: options.values,
-        carries: options.carries,
+        ask: options.asks.ask,
+        secrets: options.secrets,
         site: options.site,
         siteOrigin: options.siteOrigin,
         ...(options.timing === undefined ? {} : { timing: options.timing }),
-      }),
+        ...(options.retryState === undefined ? {} : { retryState: options.retryState }),
+        ...(options.allowCantTell?.() === true ? { allowCantTell: true } : {}),
+        ...(options.workspace?.origin === undefined
+          ? {}
+          : { workspaceOrigin: options.workspace.origin }),
+      }).pipe(
+        Effect.tap((signedIn) =>
+          Effect.sync(() => {
+            if (options.workspace !== undefined && signedIn.workspaceOrigin !== undefined)
+              options.workspace.origin = signedIn.workspaceOrigin;
+          }),
+        ),
+      ),
     );
   /** The recorded marker on the current page; no recorded sign-in says nothing. */
   const sessionOn = Effect.suspend(() => {
@@ -269,7 +297,7 @@ export const makeLocalSessionSignIn = (options: {
       const { signedIn, steps } = sign.recipe;
       if (signedIn.openPath !== undefined) {
         const check = yield* options.browser
-          .confirm(signedIn, steps, steps)
+          .confirm(signedIn, steps, steps, options.workspace?.origin)
           .pipe(Effect.mapError((error) => failed("session_sign_in_failed", "check_failed", error)));
         if (check.signedIn) return true;
       }
@@ -309,7 +337,7 @@ export const makeLocalSessionSignIn = (options: {
       spent.scope += 1;
       call.scope += 1;
       yield* replay(sign, bound, options.login.login).pipe(
-        Effect.tapError((error) => Effect.sync(() => options.login.failed(error))),
+        Effect.tapError((error) => Effect.sync(() => options.login.failed?.(error))),
         Effect.mapError((error) => failed("session_sign_in_failed", "replay_failed", error)),
       );
       return { signedInAgain: true, alreadySignedIn: false } as const;
@@ -415,18 +443,23 @@ export const mintSessionSignInFailure = (failed: SessionSignInFailed): MintFailu
  * A run's sign-in with its artifact's recorded sign-in: `before` signs in before the operation
  * runs, as every signed-in run does, and `hook` signs in again on the same browser whenever the
  * script's `ensureSignedIn` finds the page signed out, with the login `before` read. A run never
- * restores a saved session, so it saves none.
+ * restores a saved session, so it saves none. Only a read's sign-in may end on a page that can't
+ * tell: a write's needs its marker, as nothing checks the session again before the write commits.
+ * `workspace` holds the workspace origin the run's sign-in learned, for this run only.
  */
 export const makeRunSignIn = (
   session: StandaloneSession,
   signIn: RecordedSignIn,
   siteOrigin: string,
   authenticationOrigins: readonly string[],
+  effect?: "read" | "write",
 ) => {
+  const allowCantTell = effect === "read";
   const { browser, ask, secrets } = session;
   // The site as the owner's questions name it: its host, without `www.`.
   const site = new URL(siteOrigin).hostname.replace(/^www\./u, "");
   const asks = makeBoundableAsk(ask);
+  const workspace: RunWorkspace = { origin: undefined };
   const signInBrowser = makeSignInBrowser({
     page: browser,
     keyboard: browser.keyboard,
@@ -435,32 +468,40 @@ export const makeRunSignIn = (
     onRequest: browser.onRequest,
     typing: session.signInTyping,
   });
-  const login = makeRejectableLogin(
-    localSignInLogin({ ask: asks.ask, register: secrets.register, siteOrigin }),
-    repeatedLoginFailure,
-  );
-  const values = askingValueHooks({ ask: asks.ask, register: secrets.register, site, siteOrigin });
+  const login = { login: localSignInLogin({ ask: asks.ask, register: secrets.register, siteOrigin }) };
+  // One run's sign-ins share what the site rejected, as one attempt's do in every host.
+  const retryState = makeAutofillRetryState();
   const before = signInForRun({
     recipe: signIn.recipe,
     entryUrl: signIn.entryUrl,
     browser: signInBrowser,
     login: login.login,
-    values,
-    carries: secrets.carries,
+    ask: asks.ask,
+    secrets,
     site,
     siteOrigin,
-  });
+    retryState,
+    allowCantTell,
+  }).pipe(
+    Effect.tap((signedIn) =>
+      Effect.sync(() => {
+        workspace.origin = signedIn.workspaceOrigin;
+      }),
+    ),
+  );
   const again = makeLocalSessionSignIn({
     browser: signInBrowser,
     recorded: () => signIn,
     login,
-    values,
     asks,
-    carries: secrets.carries,
+    secrets,
+    retryState,
     site,
     siteOrigin,
     limits: runSessionSignIns,
     scope: "attempt",
+    workspace,
+    allowCantTell: () => allowCantTell,
   });
-  return { before, hook: again.hook };
+  return { before, hook: again.hook, workspace };
 };

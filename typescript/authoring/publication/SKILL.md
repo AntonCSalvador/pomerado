@@ -52,6 +52,9 @@ pomerado:section publication.metadata-readers:end -->:
 
 ## Check before `finish_build`
 
+Before your first `finish_build`, prefer checking the tool against each rule the request states
+for its inputs, outputs and refusals.
+
 Guardian reports what it finds in rounds, and each round costs minutes, so settle all of these
 first:
 
@@ -90,9 +93,13 @@ first:
   that narrows, orders or configures what the tool returns, a location included, is an optional
   input, even one the request never mentioned and one you never asked about (core skill, the
   input schema). The one exception is a choice the request, the caller or the owner declined,
-  which is never an input for any caller (core skill). Guardian counts such an input as part of
-  the tool, never as scope drift or an unsupported claim. Each input you accept is applied and read
-  back (core skill, the input schema, and `AGENTS.md`; the search skill for a search). An input
+  which is never an input for any caller (core skill), unless it is a costly choice a write still
+  meets on its path, one that changes what the caller buys or pays or whether the action can be
+  cancelled or refunded (a paid add-on within the tool's purpose, a rate, fare or plan tier, a
+  refundable option, shipping speed, the payment method or the delivery address), which stays an
+  input or a declared question (writes skill). Guardian counts such an input as
+  part of the tool, never as scope drift or an unsupported claim. Each input you accept is
+  applied and read back (core skill, the input schema, and `AGENTS.md`; the search skill for a search). An input
   that tailors the answer, such as a location, store or vehicle, that the site won't apply
   returns what the site showed with the applied value beside the caller's and the site's
   message, which review accepts in place of a refusal (core skill, "Inputs that tailor the
@@ -105,19 +112,41 @@ first:
   record lacked that fact. A field the code never reads is a defect, not a limit to disclose,
   and a fact the page shows is never listed as unsupported instead of being returned.
 - **Coverage.** `coverage` says what exercised each behavior: live (the example or the act
-  session, and a read signed out's live tests, with the input each ran, such as page 1 of one
+  session, and a read's live tests, with the input each ran, such as page 1 of one
   query), offline only where a read signed out ran such checks (fixture<!-- pomerado:section publication.saved-http --> and parser tests, synthetic cases such as page boundaries included) and untested (such as
-  a later page, a query with no results or another layout, live). Name each exposed input under
+  a later page or another layout, live). Name each exposed input under
   the run that set it, or under untested (testing skill). An offline or synthetic check never
   stands in for a live one. For a read signed out, the host adds its own line from its record of
   your live test cases and gives the review that record (`publication/tests.json`): each case's
   purpose, input, expectation and result on the source you publish, and what you listed under
   `notTested` with why. Guardian judges the tool's claims no passing case tests, and failing and
   stale cases, and checks every `notTested` reason against the captures and the request. A
-  signed-in read or a write reports its one run, the example or the act session, and lists what
-  that run did not exercise as untested without testing it; the review judges that run alone.
+  signed-in read reports its example and its combined case, and gets the same host record of the
+  cases it ran signed in; the review judges a failing case but never a gap. A write reports its
+  one run, the act session, and lists what that run did not exercise as untested without testing
+  it; the review judges that run alone.
 - **Errors.** A thrown message states the cause the code observed, such as a status or a missing
   element, never a guessed one.
+- **Edge cases.** Review misses these most often, so check each before every `finish_build`; the
+  name in brackets is the rule a miss comes back under:
+  - a search or filter with no results returns the empty result, never a throw ("Wrong
+    failure");
+  - every applied filter or option is read back from the page as the value the site applied,
+    such as the chosen option's label, never `true` ("Applied without readback");
+  - a requested value the site does not offer throws `InvalidInput` with the site's choices, and
+    one the page ignored throws `InputNotApplied` unless it tailors the answer (core skill) or is
+    a search query the site corrected, returned with `applied_query` and `query_corrected` (search
+    skill); with
+    no results a sort has nothing to apply, so return the empty result ("Unapplied supplied
+    input");
+  - a free-text place, name or venue that matches several of the site's options lists them for
+    the caller instead of picking one (core skill, the input schema);
+  - a check that refuses a past date compares with today in the site's time zone, or the
+    place's, not with today in UTC (core skill) ("Past date in UTC");
+  - in a read signed out, each declared input is used, or changed from its default, by a passing
+    case, and a case whose expectation you changed because the site itself gave another answer
+    for that input names the capture of that answer, such as the site's no-results page for that
+    search, in its `purpose` and in `coverage` (testing skill).
 - **Write options.** Each option on the path is an input even when the caller left the choice to
   you; the script never takes the first, the alphabetically first or a hard-wired value.
 - **Login URL.** A signed-in tool publishes the `loginUrl` you signed in from, and every run opens
@@ -142,7 +171,8 @@ pomerado:section publication.host-owned:end --> the
   host's; you cannot edit them. `publication/definition.json` changes only through your source
   schemas and `finish_build` metadata<!-- pomerado:section publication.host-bundle-files -->. For a finding in any other of them, fix the source that caused it (a read's
   example evidence changes only with a fresh example the host allows); otherwise report it, and
-  never call `finish_build` again with nothing changed. A rejection with `reason` `host_owned`
+  never call `finish_build` again with nothing changed. A finding in `publication/tests.json` is
+  about your cases: fix the cases, the source or `coverage`. A rejection with `reason` `host_owned`
   means every finding is in such a file, a host defect no source edit fixes: the host ends the
   attempt as its own failure, so never edit a host file or call `finish_build` again for it. A
   separate finding that names an editable source or metadata cause can be corrected on the same
@@ -170,9 +200,17 @@ pomerado:section publication.saved-files:end -->.
    - the input schema: no account-specific value (a passenger, loyalty or member number, saved
      card or address, account ID) as an enum member, example or default; every input as general
      as the site's field, never narrowed to the example's value; on a write, every option the
-     session met on the path is an input, and an add-on, pre-selected paid option or saved
-     payment is explicit, never left to the page's default;
+     session met on the path is an input or a settled default, and a costly choice, one that
+     changes what the caller buys or pays or whether the action can be cancelled or refunded
+     (core skill), is an input or a run-time question whose default may only decline it, never
+     left to the page's default or hard-coded from the build's request or answers, which spoke
+     for one caller; a paid upsell outside the tool's purpose is declined;
+   - a pop-up that shows only for some accounts, states or visits is handled when present and
+     never required;
    - declared questions ask only what the page or the caller uniquely knows, never a login;
+   - a write runs every check that can refuse, such as a limit on its total, before the mark of
+     the commit it guards, and refuses with `InvalidInput`, or returns a refusal its output
+     schema declares before its first mark, never in an undeclared output shape;
    - a composed write reproduces the session's flow and returns the confirmation or read-back it
      declares, without committing twice.
 

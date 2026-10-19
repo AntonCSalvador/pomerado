@@ -5,6 +5,7 @@ import { readScopedFile } from "../filesystem/read.js";
 import { MintFailure } from "./contracts.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { hostedFeaturesPreamble } from "../hosted-features.js";
+import { publicationLiveTestsPolicy, publicationOutputPolicy } from "../guardian/publication.js";
 
 const catalog = [
   {
@@ -32,7 +33,7 @@ const catalog = [
   {
     name: "testing",
     description:
-      "Only for a read signed out: design live test cases and run them in parallel. A signed-in read or a write skips it and proves its tool with one run",
+      "For a read: design a few combined live test cases and run them. A read signed out runs a handful; a signed-in read runs one combined filter case, two at most. A write skips it and proves its tool with one run",
     references: [],
   },
   {
@@ -85,6 +86,18 @@ const catalog = [
  * `workspace/` prefix.
  */
 const workspaceGuideFiles = [{ path: "README.md", sectionKey: "guide" }] as const;
+
+/**
+ * The publication review's rules for live tests and output, installed in the workspace for the
+ * minter to read while it explores, so it gathers that evidence before its first publication
+ * instead of learning it from a denial. It is the text every host's publication policy includes,
+ * not a copy, so a change to a rule reaches the minter in the same release. No host render
+ * applies: it is not authoring text.
+ */
+const publicationReviewRules = {
+  path: "reference/publication-review.md",
+  text: [publicationLiveTestsPolicy, publicationOutputPolicy].join("\n\n"),
+} as const;
 
 export interface WorkspaceGuide {
   /** The workspace `AGENTS.md`, which is also the minting model's instructions. */
@@ -177,6 +190,7 @@ export const loadWorkspaceGuide = (
     const files = new Map([["AGENTS.md", instructions]]);
     for (const { path, sectionKey } of workspaceGuideFiles)
       files.set(path, yield* readGuideFile(directory, path, sectionKey, render));
+    files.set(publicationReviewRules.path, publicationReviewRules.text);
     return { instructions, files };
   });
 
@@ -220,6 +234,25 @@ export const loadAuthoringSkills = (
         code: "Unavailable",
       }),
   });
+
+/**
+ * Each skill's text at the path the minter reads it, `.agents/<name>/SKILL.md`, for a review that
+ * may read the skills the minter followed. A skill whose content is not inline text is left out.
+ */
+export const skillReferenceFiles = (
+  skills: readonly SkillDescriptor[],
+): ReadonlyMap<string, string> =>
+  new Map(
+    skills.flatMap(({ name, content }) => {
+      const text =
+        typeof content === "string"
+          ? content
+          : content instanceof Uint8Array
+            ? new TextDecoder().decode(content)
+            : undefined;
+      return text === undefined ? [] : [[`.agents/${name}/SKILL.md`, text] as const];
+    }),
+  );
 
 /**
  * The local host's authoring: standalone text, with the hosted features its minter is to ignore on

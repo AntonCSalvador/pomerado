@@ -5,6 +5,17 @@ description: Guarded native/custom selection, dynamic choices and consequential 
 
 # Author the site's behavior
 
+Prefer one question round per form page. Before the first `act` step, read what is already
+visible on the page, and read the page's own scripts or<!-- pomerado:section forms.step-rules --> responses that describe the form
+(field lists, validation rules, step definitions) to anticipate what later steps ask, then ask
+up front, in one `request_input`, for every field you can see or anticipate that the input does
+not settle. On each later page, first fill every value the request, the input and earlier
+answers supply, including the choices that reveal follow-up fields, then read the page and ask
+everything still open on it in one `request_input`, rather than a question per field. A field
+that appears only after an answer is asked in place, with `request_input` during the session,
+or as a declared `ask` in the next step's script for a choice that exists only on that page.
+Check the page again after the answer.
+
 Use Playwright locators and frame chains inside the call. Check unique target identity
 separately from visibility/readiness and semantic completion. Arm relevant event
 waiters before triggers, in the same call. Native dialogs go to the host through
@@ -138,6 +149,14 @@ When an overlay such as a cookie or consent banner covers the target, dismiss it
 control that declines optional cookies, such as Reject all or Necessary only, when the banner
 shows one, and otherwise with any of its controls, accept included.
 
+Decide whether each pop-up, banner or interstitial is conditional or always triggered. A
+conditional one shows only for some accounts, states or visits, such as a cookie banner, a
+one-time promotion or a membership upsell shown only to non-members: check for it, resolve it
+when it shows, and continue without error when it does not, as one outcome beside the page's
+next state. Never wait for it or require it. One the page always opens in answer to an action,
+such as a confirmation dialog a button always opens, may be expected. A pop-up the session met
+once is conditional unless the page shows it always follows that action.
+
 Type each date-only input and output as the runtime's `CalendarDate`, imported beside
 `formControlsCode`, never a bare `YYYY-MM-DD` pattern, which accepts `2026-02-30`. It checks
 the format and that the date exists, the check `fillDate` makes, so the host refuses an
@@ -146,8 +165,11 @@ narrow it to the example's date or a guessed window. A rule of the task or the s
 a range that ends before it starts, a past date or a booking limit, is the tool's own check:
 fail as `InvalidInput` with a message naming the field and the rule, before any site action
 when the input alone breaks it, and when the site refuses the date. Start the message with
-"Caller input error:" when the refusal is obvious, as the core skill says, and count a date as
-past only when it is before yesterday in UTC.
+"Caller input error:" when the refusal is obvious, and count a date as past only when it is
+before today in the site's time zone, both as the core skill says. A site with places in
+several time zones uses the place's zone when the tool knows it before any site action.
+When it doesn't know the zone, refuse only a date that is past in every time zone, such as one
+before yesterday in UTC.
 
 Date ranges, calendar-only pickers, validation messages, uploads, staged forms and
 autosave need site-specific semantic checks. A date field that takes typing goes
@@ -191,15 +213,6 @@ before entering a name, email or phone (core skill, "Inputs that tailor the answ
 - Walk every step for real, in the session, with the caller's values. Never infer a
   later step's fields, options or wording in place of reaching it; the page after
   "Continue" is evidence only once you are on it.
-- Before the first `act` step, read what is already visible on the page, and read the
-  page's own scripts or<!-- pomerado:section forms.step-rules --> responses that describe the form (field lists,
-  validation rules, step definitions) to anticipate what later steps ask. Use that to
-  ask for the values up front, in one `request_input`, for every field you can see or
-  anticipate that the input does not settle.
-- A step that asks for something you could not anticipate is asked in place when you
-  reach it, with `request_input` during the session, or as a declared `ask` in the
-  next step's script for a choice that exists only on that page. Check the page again
-  after the answer.
 - A step the site saved stays saved. If a step fails, read the page before running it
   again; redo it only when it did not finish.
 
@@ -229,6 +242,6 @@ does not authorize another submit.
 
 ## Standalone fixture checks
 
-Use the same supplied-input/observed-control rules and browser helper APIs. A read signed out may check pure parsers with `pureFiles` and supplied fixtures (testing skill); a signed-in read or a write proves its form flow with its one run, the example or the act session, and builds no fixture checks. Never invent a live field value merely to test a control.
+Use the same supplied-input/observed-control rules and browser helper APIs. A read signed out may check pure parsers with `pureFiles` and supplied fixtures (testing skill); a signed-in read proves its form flow with its example and its combined case, and a write with its act session, and neither builds fixture checks. Never invent a live field value merely to test a control.
 
 pomerado:section forms.fixture-checks:end -->

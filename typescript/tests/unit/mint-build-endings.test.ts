@@ -1,0 +1,1491 @@
+import {
+  makeMintContinuationFixture,
+  makeMintHarnessFixture,
+  portableJobSession,
+  readAllow,
+} from "../support/mint-fixtures.js";
+import { Usage } from "@openai/agents";
+import type { ModelRequest, ModelResponse } from "@openai/agents";
+import { Deferred, Effect, Fiber } from "effect";
+import { afterEach, expect, it } from "vitest";
+import { MintFailure } from "../../src/mint/contracts.js";
+import { makeOpenAIMinter } from "../../src/mint/openai.js";
+import { autofillRefusalFailure } from "../../src/mint/sign-in-failure.js";
+import { portableMintProjection } from "../support/portable-mint.js";
+
+/*
+ * How an unpublished build ends: each ending carries its own typed reason, so a host can tell the
+ * caller what stopped the build instead of reporting a missing publication. Every scenario runs
+ * the real minter loop on recorded model responses.
+ */
+
+const cleanups: (() => Promise<void>)[] = [];
+
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
+});
+
+const prose = (text = "I stopped before publication."): ModelResponse => ({
+  usage: new Usage({
+    requests: 1,
+    inputTokens: 2,
+    outputTokens: 1,
+    totalTokens: 3,
+  }),
+  output: [
+    {
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text }],
+    },
+  ],
+});
+
+const intentTools = new Set(["execute", "finish_build", "request_input", "report_blocked"]);
+
+const call = (name: string, input: unknown, id = name): ModelResponse => ({
+  usage: new Usage({
+    requests: 1,
+    inputTokens: 2,
+    outputTokens: 1,
+    totalTokens: 3,
+  }),
+  output: [
+    {
+      type: "function_call",
+      name,
+      callId: id,
+      arguments: JSON.stringify(
+        intentTools.has(name) && typeof input === "object" && input !== null && !("intent" in input)
+          ? { ...input, intent: `Synthetic ${name} purpose` }
+          : input,
+      ),
+      status: "completed",
+    },
+  ],
+});
+
+const ask = (prompt: string) => ({
+  questions: [{ id: "report", type: "text", prompt }],
+});
+
+const fixture = makeMintContinuationFixture(cleanups, portableJobSession, makeOpenAIMinter);
+
+it.each([
+  { reason: "question_unanswered", refusal: "no_question_unanswered" },
+  { reason: "owner_declined", refusal: "owner_not_declined" },
+] as const)(
+  "refuses $reason with nothing on record, then ends with it once its basis is recorded",
+  async ({ reason, refusal }) => {
+    const explanation = "The owner's answer is needed to choose the report, so this build stops.";
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("report_blocked", { reason, explanation }, "before"),
+          reason === "question_unanswered"
+            ? call("request_input", ask("Which report?"))
+            : call("request_input", {
+                questions: [
+                  {
+                    id: "proceed",
+                    type: "confirm",
+                    prompt: "May the tool do this?",
+                  },
+                ],
+              }),
+          call("report_blocked", { reason, explanation }, "after"),
+        ][index] ?? prose("Stopping."),
+      reason === "owner_declined"
+        ? {
+            askInput: () =>
+              Effect.succeed({
+                proceed: { type: "confirm", value: { confirmed: false } },
+              }),
+          }
+        : {},
+    );
+    const outcome = await f.run();
+    expect(JSON.stringify(f.requests[1]?.input)).toContain(refusal);
+    expect(outcome).toMatchObject({
+      build: "incomplete",
+      blocked: { reason, explanation },
+      stopReason: reason,
+    });
+  },
+);
+
+// A site that offers the task but declines the example's own facts ends under its own reason, with
+// the site's reason in the explanation its caller reads, not as a site that lacks the capability.
+it("ends a build the site declined for the example's own facts as site_declined", async () => {
+  const explanation =
+    "The site declined to quote this example applicant because it says they already hold a policy.";
+  const f = await fixture(
+    (_request, index) =>
+      [call("report_blocked", { reason: "site_declined", explanation })][index] ??
+      prose("Stopping."),
+  );
+  expect(await f.run()).toMatchObject({
+    build: "incomplete",
+    blocked: { reason: "site_declined", explanation },
+    stopReason: "site_declined",
+  });
+});
+
+// Guardian's refusal stays a policy block, even when a question also went unanswered.
+it("keeps a policy block that stands on a Guardian refusal", async () => {
+  const explanation = "Guardian refused the only way to reach the requested page.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("request_input", ask("Which report?")),
+        call("execute", {
+          purpose: "example",
+          target: "pureFiles",
+          entrypoint: "src/tool.ts",
+          fixtureRefs: [],
+          caseFilter: [],
+          maxWorkers: 1,
+          timeoutSeconds: 30,
+        }),
+        call("report_blocked", { reason: "policy", explanation }),
+      ][index] ?? prose("Stopping."),
+    {
+      preflight: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: {
+              outcome: "deny",
+              reviewId: "review_denied",
+              rationale: "Not allowed.",
+            },
+          }),
+        ),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "policy", explanation },
+    stopReason: "policy",
+  });
+});
+
+const pureExample = {
+  purpose: "example",
+  target: "pureFiles",
+  entrypoint: "src/tool.ts",
+  fixtureRefs: [],
+  caseFilter: [],
+  maxWorkers: 1,
+  timeoutSeconds: 30,
+};
+
+// Guardian's refusal of an execution often names a fix, such as removing a click or adding a site
+// guard, yet any refusal let the minter end the build as a policy block, and its caller read that a
+// safety review ruled the request out. Only a refusal Guardian marked final, or one from a
+// reviewer that marks none, as before, lets the build end as policy.
+it.each([
+  { refusal: "correctable", ends: false },
+  { refusal: "final", ends: true },
+  { refusal: undefined, ends: true },
+] as const)(
+  "lets an execution refusal marked $refusal end the build as policy: $ends",
+  async ({ refusal, ends }) => {
+    const explanation = "Guardian refused the only way to reach the requested page.";
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("execute", pureExample),
+          call("report_blocked", { reason: "policy", explanation }),
+        ][index] ?? prose("Stopping."),
+      {
+        reviewAndExecute: () =>
+          Effect.fail(
+            new MintFailure({
+              code: "ReviewDenied",
+              review: {
+                outcome: "deny",
+                reviewId: "review_denied",
+                rationale: "Remove the extra click before the read.",
+                ...(refusal === undefined ? {} : { refusal }),
+              },
+            }),
+          ),
+      },
+    );
+    const outcome = await f.run();
+    if (ends)
+      expect(outcome).toMatchObject({
+        blocked: { reason: "policy", explanation },
+        stopReason: "policy",
+      });
+    else {
+      expect(outcome).not.toHaveProperty("blocked");
+      expect(JSON.stringify(f.requests[2]?.input)).toContain("policy_not_refused");
+    }
+    // The minter reads the refusal's kind beside Guardian's rationale.
+    const rejected = JSON.stringify(f.requests[1]?.input);
+    if (refusal === undefined) expect(rejected).not.toContain("refusal\\\":");
+    else expect(rejected).toContain(`\\"refusal\\":\\"${refusal}\\"`);
+  },
+);
+
+const finishBuild = {
+  entrypoint: "src/tool.ts",
+  executionId: "execution_one",
+  metadata: { name: "read_public", description: "Read public data" },
+  coverage: "One actual example.",
+};
+const hostCheckRefused = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "autofill_recipe_not_verified",
+});
+const guardianCorrection = new MintFailure({
+  code: "ReviewDenied",
+  review: {
+    outcome: "deny",
+    reason: "source_correction",
+    reviewId: "review_correction",
+    rationale: "Read the price from the result row.",
+    findings: [],
+  },
+});
+const publicationOutage = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "registry_unavailable",
+});
+/** Advice the host gives once: finishing again with the same login URL publishes it. */
+const oneTimeLoginUrl = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "login_url_one_time",
+});
+/** Advice the host gives once: finishing again, or passing httpVersion, publishes the read. */
+const httpUntested = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "http_implementation_untested",
+});
+const httpStale = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "http_implementation_stale",
+});
+/** An infrastructure gap: the example's output was not available to publish. */
+const outputUnavailable = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "example_output_unavailable",
+});
+
+/** The result of the request's last call, as the minter reads it. */
+const lastResult = (request: ModelRequest | undefined) =>
+  JSON.stringify(Array.isArray(request?.input) ? request.input.at(-1) : request?.input);
+
+// A host check that refused a step the build needs, such as publication's own sign-in check,
+// left the minter only a policy block, and its caller read that a safety review ruled the request
+// out. It ends as host_refused, which stands only on a refusal the host itself recorded in this
+// attempt: never on Guardian's denial, an outage, an infrastructure gap or advice the host gives
+// once. Each refusal is a publish's, in order; an outage holds every blocked report back until a
+// review completes, so its case finishes again and Guardian's correction completes one.
+it.each([
+  { basis: "a host check", publish: [hostCheckRefused], ends: true },
+  { basis: "Guardian", publish: [guardianCorrection], ends: false },
+  { basis: "an outage", publish: [publicationOutage, guardianCorrection], ends: false },
+  { basis: "one-time login URL advice", publish: [oneTimeLoginUrl], ends: false },
+  { basis: "untested HTTP version advice", publish: [httpUntested], ends: false },
+  { basis: "stale HTTP version advice", publish: [httpStale], ends: false },
+  { basis: "an unavailable output", publish: [outputUnavailable], ends: false },
+])("ends as host_refused after $basis refused publication: $ends", async ({ publish, ends }) => {
+  const explanation = "Publication's sign-in check failed on a new browser, so no tool was published.";
+  let published = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("report_blocked", { reason: "host_refused", explanation }, "before"),
+        call("execute", pureExample),
+        ...publish.map((_, n) => call("finish_build", finishBuild, `finish_${n}`)),
+        call("report_blocked", { reason: "host_refused", explanation }, "after"),
+      ][index] ?? prose("Stopping."),
+    {
+      publish: () => Effect.fail(publish[published++] ?? guardianCorrection),
+      // After an unavailable output, a repeatable read may run a fresh example: the build goes on.
+      repeatableRead: publish[0] === outputUnavailable,
+    },
+  );
+  const outcome = await f.run();
+  expect(lastResult(f.requests[1])).toContain("host_not_refused");
+  if (ends)
+    expect(outcome).toMatchObject({
+      build: "incomplete",
+      blocked: { reason: "host_refused", explanation },
+      stopReason: "host_refused",
+    });
+  else {
+    expect(outcome).not.toHaveProperty("blocked");
+    expect(lastResult(f.requests[3 + publish.length])).toContain("host_not_refused");
+  }
+});
+
+const moveSite = [
+  call("request_input", {
+    questions: [{ id: "move", type: "confirm", prompt: "May the build move to the sister site?" }],
+  }),
+  call(
+    "mint_update",
+    {
+      summary: "Build on the sister site.",
+      changes: [{ setting: "site", origin: "https://other.example.test" }],
+      confirmedBy: ["move"],
+      recommend: "update",
+      intent: "The owner confirmed the task lives on the sister site.",
+    },
+    "update",
+  ),
+];
+
+const signIn = call("execute", { ...pureExample, purpose: "authenticate", target: "liveBrowser" });
+/** A sign-in the host refused to type into: the login would go where credentials may not. */
+const credentialTargetRefused = new MintFailure({
+  code: "Unavailable",
+  authentication: { phase: "credential_submit", code: "CredentialTargetRefused" },
+});
+/** The minter gives up the refused sign-in, so its blocked ending is no longer held back. */
+const giveUpSignIn = call("abandon_sign_in", { intent: "The host refused the sign-in form." });
+
+// The host's refusal of a sign-in or of a task update is on record too, and a policy report that
+// stands only on a host refusal is refused with the way to host_refused.
+it.each([
+  { basis: "a sign-in", steps: [signIn, giveUpSignIn] },
+  { basis: "a site change", steps: moveSite },
+])("ends as host_refused after the host refused $basis", async ({ steps }) => {
+  const explanation = "A Pomerado check refused the step this build needs.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        ...steps,
+        call("report_blocked", { reason: "policy", explanation }, "policy"),
+        call("report_blocked", { reason: "host_refused", explanation }, "host"),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: () => Effect.fail(credentialTargetRefused),
+      abandonSignIn: () => Effect.succeed({ outcome: "abandoned" as const }),
+      askInput: () => Effect.succeed({ move: { type: "confirm", value: { confirmed: true } } }),
+      reviewTaskUpdate: () =>
+        Effect.succeed({ outcome: "allow" as const, rationale: "Same task.", reviewId: "r1" }),
+      applyTaskUpdate: () =>
+        Effect.succeed({
+          outcome: "refused" as const,
+          reason: "change_unsupported",
+          notice: "This build cannot move to that site.",
+        }),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
+  const outcome = await f.run();
+  const policy = JSON.stringify(f.requests[steps.length + 1]?.input);
+  expect(policy).toContain("policy_not_refused");
+  expect(policy).toContain("Use host_refused");
+  expect(outcome).toMatchObject({
+    blocked: { reason: "host_refused", explanation },
+    stopReason: "host_refused",
+  });
+});
+
+// A refusal of the minter's own request is no host check refusing a step the build needs: the
+// minter fixes the request. An authenticate the host's preflight refused, as for a wrong target or
+// a missing sign-in step, grants no host_refused ending.
+it("grants no host_refused ending for an authenticate the preflight refused", async () => {
+  const explanation = "A Pomerado check refused the step this build needs.";
+  const f = await fixture(
+    (_request, index) =>
+      [signIn, call("report_blocked", { reason: "host_refused", explanation })][index] ??
+      prose("Stopping."),
+    {
+      preflight: (submitted) =>
+        Effect.succeed(
+          submitted.purpose === "authenticate"
+            ? { supported: false as const, reason: "The sign-in names no signInStep." }
+            : { supported: true as const },
+        ),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
+  const outcome = await f.run();
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(lastResult(f.requests[2])).toContain("host_not_refused");
+});
+
+const makeWrite = call(
+  "mint_update",
+  {
+    summary: "Make the build a write.",
+    changes: [{ setting: "effect", effect: "write" }],
+    confirmedBy: ["move"],
+    recommend: "update",
+    intent: "The owner confirmed the task writes.",
+  },
+  "update",
+);
+
+/** The host refused to type a field of the sign-in screen, by its `check`. */
+const autofillRefused = (check: string) =>
+  autofillRefusalFailure(
+    { check, field: 0, slot: "password", screen: { fields: ["#password"], submit: "#sign-in" } },
+    { nothingSubmitted: true },
+  );
+
+// A sign-in the host refused because the login would go where credentials may not is a host check
+// refusing a step the build needs. A selector the fill could not use, such as a field it did not
+// find or one that matched twice, is the minter's to correct: it grants no host_refused ending.
+it.each([
+  {
+    basis: "an unverified destination",
+    failure: new MintFailure({
+      code: "Unavailable",
+      authentication: { phase: "credential_submit", code: "CredentialTargetUnverified" },
+    }),
+    ends: true,
+  },
+  { basis: "the fill's destination check", failure: autofillRefused("destination"), ends: true },
+  { basis: "a field it did not find", failure: autofillRefused("not_found"), ends: false },
+  {
+    basis: "a selector that matched twice",
+    failure: autofillRefused("ambiguous_match"),
+    ends: false,
+  },
+])("ends as host_refused after a sign-in refused for $basis: $ends", async ({ failure, ends }) => {
+  const explanation = "A Pomerado check refused the sign-in this build needs.";
+  const f = await fixture(
+    (_request, index) =>
+      [signIn, giveUpSignIn, call("report_blocked", { reason: "host_refused", explanation })][
+        index
+      ] ?? prose("Stopping."),
+    {
+      reviewAndExecute: () => Effect.fail(failure),
+      abandonSignIn: () => Effect.succeed({ outcome: "abandoned" as const }),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
+  const outcome = await f.run();
+  expect(JSON.stringify(f.requests[2]?.input)).toContain("sign_in_abandoned");
+  if (ends)
+    expect(outcome).toMatchObject({
+      blocked: { reason: "host_refused", explanation },
+      stopReason: "host_refused",
+    });
+  else {
+    expect(outcome).not.toHaveProperty("blocked");
+    expect(lastResult(f.requests[3])).toContain("host_not_refused");
+  }
+});
+
+// The harness's own refusal of a task update, such as a site change in a build with no site or a
+// write build made a write again, refuses the minter's request, which it can fix. Only a change
+// the host refused to apply is a host check refusing a step: these grant no host_refused ending.
+it.each([
+  { refusal: "offline_build", steps: moveSite, request: {} },
+  {
+    refusal: "already_write",
+    steps: [moveSite[0], makeWrite],
+    request: { effect: "write", siteOrigin: "https://shop.example.test" },
+  },
+] as const)(
+  "grants no host_refused ending for an update the harness refused as $refusal",
+  async ({ refusal, steps, request }) => {
+    const explanation = "A Pomerado check refused the step this build needs.";
+    const f = await fixture(
+      (_request, index) =>
+        [...steps, call("report_blocked", { reason: "host_refused", explanation })][index] ??
+        prose("Stopping."),
+      {
+        askInput: () => Effect.succeed({ move: { type: "confirm", value: { confirmed: true } } }),
+        reviewTaskUpdate: () =>
+          Effect.succeed({ outcome: "allow" as const, rationale: "Same task.", reviewId: "r1" }),
+        applyTaskUpdate: () =>
+          Effect.succeed({
+            outcome: "refused" as const,
+            reason: "change_unsupported",
+            notice: "This build cannot take that change.",
+          }),
+      },
+      request,
+    );
+    const outcome = await f.run();
+    expect(JSON.stringify(f.requests[2]?.input)).toContain(`\\"reason\\":\\"${refusal}\\"`);
+    expect(outcome).not.toHaveProperty("blocked");
+    expect(lastResult(f.requests[3])).toContain("host_not_refused");
+  },
+);
+
+// A minter that stops answering with tools says why in its last answer. Its caller reads that
+// answer only after the pipeline a blocked explanation takes: host-private values removed and
+// Guardian's review of a blocked outcome allowing it.
+it("ends three tool-free answers as final_text_without_tool, with the reviewed last answer", async () => {
+  const reviewed: unknown[] = [];
+  const f = await fixture(
+    (_request, index) =>
+      index < 2
+        ? prose("Still looking.")
+        : prose("The site lists no prices for account acct-7731 without a membership."),
+    {
+      redactCallerText: (text) => text.replaceAll("acct-7731", "[account]"),
+      reviewQuestion: (candidate, context) =>
+        Effect.sync(() => {
+          reviewed.push({ candidate, blockedOutcome: context?.blockedOutcome });
+          return { outcome: "allow_business" as const, rationale: "Plain." };
+        }),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    stopReason: "final_text_without_tool",
+    stopExplanation: "The site lists no prices for account [account] without a membership.",
+  });
+  expect(JSON.stringify(reviewed)).not.toContain("acct-7731");
+  expect(reviewed).toEqual([expect.objectContaining({ blockedOutcome: true })]);
+});
+
+it("keeps no last answer Guardian did not allow", async () => {
+  const f = await fixture(() => prose("Call 555-0100 to finish this request."), {
+    reviewQuestion: () =>
+      Effect.succeed({
+        outcome: "reword" as const,
+        rationale: "It passes on a phone number.",
+      }),
+  });
+  const outcome = await f.run();
+  expect(outcome.stopReason).toBe("final_text_without_tool");
+  expect(outcome).not.toHaveProperty("stopExplanation");
+  expect(JSON.stringify(outcome)).not.toContain("555-0100");
+});
+
+it("ends an attempt that spent its model calls as turn_budget_spent", async () => {
+  const f = await fixture(
+    () => call("read_source", { path: "src/tool.ts", offset: null, limit: null }),
+    {},
+    {},
+    { modelCallCapacity: 4, segmentTurns: 2 },
+  );
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    stopReason: "turn_budget_spent",
+  });
+  expect(outcome).not.toHaveProperty("hostFailure");
+});
+
+it("names a published build's ending with no stop reason", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", {
+          purpose: "example",
+          target: "pureFiles",
+          entrypoint: "src/tool.ts",
+          fixtureRefs: [],
+          caseFilter: [],
+          maxWorkers: 1,
+          timeoutSeconds: 30,
+        }),
+        call("finish_build", {
+          entrypoint: "src/tool.ts",
+          executionId: "execution_one",
+          metadata: { name: "read_public", description: "Read public data" },
+          coverage: "One actual example.",
+        }),
+      ][index] ?? prose(),
+  );
+  const outcome = await f.run();
+  expect(outcome.build).toBe("published");
+  expect(outcome).not.toHaveProperty("stopReason");
+});
+
+// Guardian's public reason for a denial reaches the caller screened like their other text, and the
+// private rationale never does.
+it("carries Guardian's screened public reason on a publication denial", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", {
+          purpose: "example",
+          target: "pureFiles",
+          entrypoint: "src/tool.ts",
+          fixtureRefs: [],
+          caseFilter: [],
+          maxWorkers: 1,
+          timeoutSeconds: 30,
+        }),
+        call("finish_build", {
+          entrypoint: "src/tool.ts",
+          executionId: "execution_one",
+          metadata: { name: "read_public", description: "Read public data" },
+          coverage: "One actual example.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      redactCallerText: (text) => text.replaceAll("acct-7731", "[account]"),
+      publish: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: {
+              outcome: "deny",
+              reason: "privacy",
+              reviewId: "review_denied",
+              rationale: "Private rationale: src/tool.ts hard-codes a member number.",
+              findings: [],
+              publicReason: "The tool for acct-7731 would have published private details.",
+            },
+          }),
+        ),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome.publicationDenial).toEqual({
+    reason: "privacy",
+    publicReason: "The tool for [account] would have published private details.",
+  });
+  // What a caller reads; the host's own diagnostics keep the review as it came.
+  expect(JSON.stringify([outcome.summary, outcome.publicationDenial])).not.toContain(
+    "Private rationale",
+  );
+});
+
+const authenticate = {
+  purpose: "authenticate",
+  target: "liveBrowser",
+  entrypoint: "src/tool.ts",
+  fixtureRefs: [],
+  caseFilter: [],
+  maxWorkers: 1,
+  timeoutSeconds: 30,
+};
+
+const accountLocked = new MintFailure({
+  code: "Unavailable",
+  authentication: {
+    phase: "credential_submit",
+    code: "AccountLocked",
+    afterSubmission: true,
+  },
+});
+
+// The site said the account is locked: no retry or correction gets past it, so the build ends at
+// once, typed, with words its owner can act on and no operator code.
+it("ends a sign-in the site refused for its account as account_locked", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      index === 0 ? call("execute", authenticate) : prose("The account is locked."),
+    { reviewAndExecute: () => Effect.fail(accountLocked) },
+  );
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    recoveryReason: "sign_in_unavailable",
+    stopReason: "account_locked",
+  });
+  expect(outcome.summary).toContain("locked, suspended or disabled");
+  expect(outcome.summary).not.toMatch(/AccountLocked|credential_submit|receipts/u);
+  // The build ends with the failed sign-in itself, with no further model call.
+  expect(f.requests).toHaveLength(1);
+});
+
+// A sign-in that failed for good while an earlier receipt might still publish used to leave the
+// minter no ending: report_blocked was refused as an unresolved sign-in. It now ends the build
+// with the sign-in's own result.
+it("lets the minter end the build once sign-in is unavailable and a receipt was held back", async () => {
+  let executions = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", {
+          purpose: "example",
+          target: "pureFiles",
+          entrypoint: "src/tool.ts",
+          fixtureRefs: [],
+          caseFilter: [],
+          maxWorkers: 1,
+          timeoutSeconds: 30,
+        }),
+        call("execute", authenticate, "sign_in"),
+        call("report_blocked", {
+          reason: "site_lacks_capability",
+          explanation: "The account page cannot be reached without signing in.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: (_submitted, beforeDispatch = () => Effect.void) =>
+        executions++ === 0
+          ? beforeDispatch(readAllow).pipe(
+              Effect.as({
+                executionId: "execution_one",
+                status: "completed" as const,
+                effect: "verified" as const,
+                resultRef: "protected_result",
+                observations: { value: "public" },
+              }),
+            )
+          : Effect.fail(accountLocked),
+    },
+  );
+  const outcome = await f.run();
+  // report_blocked ended the build at once: no refusal went back for another model call.
+  expect(f.requests).toHaveLength(3);
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    recoveryReason: "sign_in_unavailable",
+    stopReason: "account_locked",
+  });
+  expect(outcome).not.toHaveProperty("blocked");
+});
+
+// The owner's summary of a failed sign-in is plain words: never the root cause's code or phase.
+it("words a failed sign-in's summary without operator codes", async () => {
+  const f = await fixture(
+    (_request, index) => (index === 0 ? call("execute", authenticate) : prose("Stopping.")),
+    {
+      reviewAndExecute: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "Unavailable",
+            authentication: {
+              phase: "credential_submit",
+              code: "AuthenticationFailed",
+              afterSubmission: true,
+            },
+            spentSignIn: "relogin_spent",
+          }),
+        ),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({
+    recoveryReason: "sign_in_unavailable",
+    stopReason: "sign_in_failed",
+  });
+  expect(outcome.summary).toContain("could not be signed in");
+  expect(outcome.summary).not.toMatch(/AuthenticationFailed|credential_submit|receipts/u);
+});
+
+/** A sign-in screen the host filled and submitted: it may have sent the login, and proves nothing. */
+const submittedScreen = {
+  executionId: "sign_in_screen",
+  status: "completed" as const,
+  effect: "possible" as const,
+  resultRef: "screen_result",
+  observations: { step: { outcome: "filled", submit: "clicked" } },
+};
+/** The host's own check after the sign-in: signed in, or not. */
+const signInCheck = (state: "authenticated" | "failed") => ({
+  executionId: `sign_in_check_${state}`,
+  status: "completed" as const,
+  effect: "not_sent" as const,
+  resultRef: "check_result",
+  authentication: { state, effect: "verified" as const },
+  observations: { signedIn: state === "authenticated" },
+});
+const declinedExample = {
+  reason: "site_declined",
+  explanation: "The site kept showing its sign-in screen, so it declined this example.",
+};
+
+/**
+ * A build that signs in through `steps`, one authenticate each, then sends `report`. A step that is
+ * a failure fails its authenticate before its dispatch fence, and `{ afterFence }` fails it past
+ * the fence.
+ */
+const signInThenDecline = (
+  steps: readonly (object | MintFailure)[],
+  overrides: Parameters<typeof fixture>[1] = {},
+  report: { readonly reason: string; readonly explanation: string } = declinedExample,
+) => {
+  let executions = 0;
+  return fixture(
+    (_request, index) =>
+      [
+        ...steps.map((_, step) => call("execute", authenticate, `sign_in_${step}`)),
+        call("report_blocked", report),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: (_submitted, beforeDispatch = () => Effect.void) => {
+        const step = steps[executions++] ?? submittedScreen;
+        if (step instanceof MintFailure) return Effect.fail(step);
+        const dispatched = beforeDispatch({ reviewId: "review_sign_in", action: "authentication" });
+        return "afterFence" in step && step.afterFence instanceof MintFailure
+          ? Effect.zipRight(dispatched, Effect.fail(step.afterFence))
+          : dispatched.pipe(Effect.as(step as typeof submittedScreen));
+      },
+      ...overrides,
+    },
+  );
+};
+
+// The site accepted the login, but the page load after it showed the sign-in form again: every
+// step reported filled and clicked, and nothing confirmed the sign-in. That is no site declining
+// the example, so the build ends as sign-in unavailable, in core's session_not_kept words, and
+// its caller is never told to change the request.
+it("ends a site_declined report as sign-in unavailable while the site did not keep the session", async () => {
+  const f = await signInThenDecline([submittedScreen, signInCheck("failed")], {
+    signInSessionLoss: () => "session_not_kept",
+  });
+  const outcome = await f.run();
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    recoveryReason: "sign_in_unavailable",
+    stopReason: "sign_in_failed",
+  });
+  expect(outcome.summary).toContain(
+    "accepted the login each time, but the signed-in session did not survive the page load",
+  );
+  // The report ended the build at once, with no further model call.
+  expect(f.requests).toHaveLength(3);
+});
+
+/** The minter's rejection report the host answered with no rejection marker it saw. */
+const rejectionUnconfirmed = {
+  executionId: "rejected_report",
+  status: "completed" as const,
+  effect: "not_sent" as const,
+  resultRef: "rejected_result",
+  authentication: { state: "failed" as const, effect: "verified" as const },
+  observations: { rejected: false, reason: "no_rejection_marker" },
+};
+
+// A login the site refused, whose message was gone before the host's rejection check: the host
+// reported no rejection marker and an unconfirmed sign-in. site_declined still ends as sign-in
+// unavailable, in the plain words a failed sign-in gets, since the host saw no accepted login.
+it("ends a site_declined report as sign-in unavailable after a sign-in that never confirmed", async () => {
+  const f = await signInThenDecline([submittedScreen, rejectionUnconfirmed]);
+  const outcome = await f.run();
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(outcome).toMatchObject({
+    recoveryReason: "sign_in_unavailable",
+    stopReason: "sign_in_failed",
+  });
+  expect(outcome.summary).toContain("could not be signed in");
+  expect(outcome.summary).not.toContain("did not survive");
+});
+
+// Every ending that tells the caller to change the request, or that the site or a check ruled it
+// out, is no truer than site_declined while the sign-in never confirmed. A Guardian refusal of an
+// earlier sign-in step, as of a field label, made a policy block possible, and a host check that
+// refused a sign-in form a host_refused one; each ended the build that way after a refused login
+// whose message had gone.
+const refusedLabel = new MintFailure({
+  code: "ReviewDenied",
+  review: { outcome: "deny", reviewId: "review_label", rationale: "Wrong field label." },
+});
+const refusedForm = autofillRefused("destination");
+it.each([
+  { reason: "site_lacks_capability", first: [] },
+  { reason: "policy", first: [refusedLabel] },
+  { reason: "host_refused", first: [refusedForm] },
+] as const)(
+  "ends a $reason report as sign-in unavailable while the sign-in never confirmed",
+  async ({ reason, first }) => {
+    const f = await signInThenDecline([...first, submittedScreen, rejectionUnconfirmed], {}, {
+      reason,
+      explanation: "The site's sign-in kept refusing, so this build cannot go on.",
+    });
+    const outcome = await f.run();
+    expect(outcome).not.toHaveProperty("blocked");
+    expect(outcome).toMatchObject({
+      recoveryReason: "sign_in_unavailable",
+      stopReason: "sign_in_failed",
+    });
+  },
+);
+
+// A sign-in the host confirmed, or one that sent nothing, leaves site_declined as it was: a screen
+// that sent nothing, one whose host found nothing to submit, and one that stopped past its
+// dispatch fence with nothing sent.
+const sentNothingPastFence = new MintFailure({
+  code: "Unavailable",
+  execution: { phase: "execute", reason: "provider_unavailable", dispatch: "not_sent" },
+});
+it.each([
+  { name: "a confirmed sign-in", steps: [submittedScreen, signInCheck("authenticated")] },
+  {
+    name: "a screen that sent nothing",
+    steps: [{ ...submittedScreen, effect: "not_sent" as const }],
+  },
+  {
+    name: "a failed sign-in step that sent nothing",
+    steps: [
+      {
+        ...submittedScreen,
+        effect: "not_sent" as const,
+        authentication: { state: "failed" as const, effect: "possible" as const },
+      },
+    ],
+  },
+  { name: "a step stopped past its fence before sending", steps: [{ afterFence: sentNothingPastFence }] },
+])("keeps site_declined after $name", async ({ steps }) => {
+  const f = await signInThenDecline(steps, { signInSessionLoss: () => "session_not_kept" });
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "site_declined" },
+    stopReason: "site_declined",
+  });
+});
+
+// The ending a report gets is decided first, by the checks every report passes: one with no basis
+// on record is refused and the build goes on, signed in or not. Only an ending those checks accept
+// becomes sign-in unavailable while the sign-in never confirmed.
+it.each([
+  { reason: "policy", refusal: "policy_not_refused" },
+  { reason: "host_refused", refusal: "host_not_refused" },
+])(
+  "refuses an unfounded $reason report after an unconfirmed sign-in as $refusal",
+  async ({ reason, refusal }) => {
+    const f = await signInThenDecline([submittedScreen], {}, {
+      reason,
+      explanation: "The site's sign-in kept refusing.",
+    });
+    const outcome = await f.run();
+    expect(outcome).not.toMatchObject({ recoveryReason: "sign_in_unavailable" });
+    expect(JSON.stringify(f.requests[2]?.input)).toContain(refusal);
+  },
+);
+
+// A policy report that stands only on the owner's no takes that name, and the owner's own no keeps
+// its ending, sign-in or not.
+it("ends a policy report that stands on the owner's no as owner_declined after an unconfirmed sign-in", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        signIn,
+        call("request_input", {
+          questions: [{ id: "go", type: "confirm", prompt: "May the build open the account page?" }],
+        }),
+        call("report_blocked", {
+          reason: "policy",
+          explanation: "The owner did not allow the account page.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: (_submitted, beforeDispatch = () => Effect.void) =>
+        beforeDispatch({ reviewId: "review_sign_in", action: "authentication" }).pipe(
+          Effect.as(submittedScreen),
+        ),
+      askInput: () => Effect.succeed({ go: { type: "confirm", value: { confirmed: false } } }),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "owner_declined" },
+    stopReason: "owner_declined",
+  });
+});
+
+// A build that moved to another site left the first site's sign-in behind with it.
+it("keeps site_declined after a move to another site that left an unconfirmed sign-in", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [signIn, ...moveSite, call("report_blocked", declinedExample)][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: (_submitted, beforeDispatch = () => Effect.void) =>
+        beforeDispatch({ reviewId: "review_sign_in", action: "authentication" }).pipe(
+          Effect.as(submittedScreen),
+        ),
+      askInput: () => Effect.succeed({ move: { type: "confirm", value: { confirmed: true } } }),
+      reviewTaskUpdate: () =>
+        Effect.succeed({ outcome: "allow" as const, rationale: "Same task.", reviewId: "r1" }),
+      applyTaskUpdate: () => Effect.succeed({ outcome: "applied" as const }),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "site_declined" },
+    stopReason: "site_declined",
+  });
+});
+
+// A login the site visibly rejected fails the sign-in: site_declined is refused until that is
+// resolved, as with any failed sign-in, so the owner is asked to fix the login.
+it("refuses site_declined while a rejected login is unresolved", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [call("execute", authenticate), call("report_blocked", declinedExample)][index] ??
+      prose("Stopping."),
+    {
+      reviewAndExecute: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "Unavailable",
+            authentication: {
+              phase: "credential_submit",
+              code: "CredentialsRejected",
+              afterSubmission: true,
+            },
+          }),
+        ),
+    },
+  );
+  const outcome = await f.run();
+  expect(JSON.stringify(f.requests[2]?.input)).toContain("sign_in_unresolved");
+  expect(outcome).not.toHaveProperty("blocked");
+});
+
+// The owner chose not to sign in: their answer comes back as a result, not a failed sign-in, the
+// host never signs in again, and the build may end as the owner's choice.
+it("hands a declined login back as a result and ends as owner_declined when the minter stops", async () => {
+  let signIns = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate, "first"),
+        call("execute", authenticate, "again"),
+        call("report_blocked", {
+          reason: "policy",
+          explanation: "Without signing in, the site shows no order history.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: () =>
+        Effect.suspend(() => {
+          signIns++;
+          return Effect.fail(new MintFailure({ code: "Unavailable", loginDeclined: "no_account" }));
+        }),
+    },
+  );
+  const outcome = await f.run();
+  const declined = JSON.stringify(f.requests[1]?.input);
+  expect(declined).toContain('\\"status\\":\\"login_declined\\"');
+  expect(declined).toContain('\\"declined\\":\\"no_account\\"');
+  expect(declined).not.toContain("authentication_unavailable");
+  // The second authenticate hears the same answer and runs nothing.
+  expect(signIns).toBe(1);
+  expect(JSON.stringify(f.requests[2]?.input)).toContain("login_declined");
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    blocked: { reason: "owner_declined" },
+    stopReason: "owner_declined",
+  });
+  expect(outcome).not.toHaveProperty("recoveryReason");
+});
+
+// A login request Guardian routed a question to may be declined too: the minter hears it and
+// builds the public part, and the host raises no further login request.
+it("hands a declined login request back with the public-only guidance", async () => {
+  let loginRequests = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("request_input", ask("What is your password?")),
+        call("request_input", ask("What is your password, please?"), "again"),
+        call("report_blocked", {
+          reason: "owner_declined",
+          explanation: "The owner chose not to sign in, and the site shows nothing signed out.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      // Guardian routes each password question to the host's login request, and allows the
+      // blocked explanation.
+      reviewQuestion: (candidate) =>
+        Effect.succeed(
+          candidate.questions[0]?.id === "blocked"
+            ? { outcome: "allow_business" as const, rationale: "Plain." }
+            : { outcome: "authentication" as const, rationale: "Asks for a login." },
+        ),
+      requestLogin: () =>
+        Effect.sync(() => {
+          loginRequests++;
+          return "public_only" as const;
+        }),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
+  const outcome = await f.run();
+  const answer = JSON.stringify(f.requests[1]?.input);
+  expect(answer).toContain('\\"declined\\":\\"public_only\\"');
+  expect(answer).toContain("without signing in");
+  expect(outcome).toMatchObject({ blocked: { reason: "owner_declined" } });
+  // The second login question hears the owner's answer again; nobody is asked twice.
+  expect(JSON.stringify(f.requests[2]?.input)).toContain("without signing in");
+  expect(loginRequests).toBe(1);
+});
+
+const failedSignIn = new MintFailure({
+  code: "Unavailable",
+  authentication: { phase: "login_poll", code: "AuthenticationFailed", afterSubmission: true },
+});
+const lacksPublicPart = {
+  reason: "site_lacks_capability",
+  explanation: "Signed out, the site shows no order history.",
+};
+
+// A sign-in the minter cannot get past may be given up, where the host allows it: the build goes
+// on signed out, so its blocked ending is no longer held back by the unresolved sign-in.
+it.each([
+  { outcome: "abandoned", status: "sign_in_abandoned", ends: true },
+  { outcome: "refused", status: "abandon_sign_in_refused", ends: false },
+] as const)(
+  "gives up a failed sign-in when the host allows it: $outcome",
+  async ({ outcome, status, ends }) => {
+    let abandons = 0;
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("execute", authenticate),
+          call("abandon_sign_in", { intent: "The account page cannot be signed in." }),
+          call("report_blocked", lacksPublicPart),
+        ][index] ?? prose("Stopping."),
+      {
+        reviewAndExecute: () => Effect.fail(failedSignIn),
+        abandonSignIn: () =>
+          Effect.sync(() => {
+            abandons++;
+            return outcome === "abandoned"
+              ? { outcome }
+              : { outcome, reason: "sign_in_required", notice: "This task needs the account." };
+          }),
+      },
+    );
+    const outcome_ = await f.run();
+    expect(abandons).toBe(1);
+    expect(JSON.stringify(f.requests[2]?.input)).toContain(status);
+    if (ends) expect(outcome_.blocked).toMatchObject({ reason: "site_lacks_capability" });
+    else {
+      expect(outcome_).not.toHaveProperty("blocked");
+      expect(JSON.stringify(f.requests[3]?.input)).toContain("sign_in_unresolved");
+    }
+  },
+);
+
+// The owner confirmed that the task runs signed out: once the update applies, a failed sign-in
+// holds nothing back.
+it("drops a failed sign-in once an update makes the task run signed out", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate),
+        call(
+          "request_input",
+          {
+            questions: [
+              {
+                id: "public",
+                type: "confirm",
+                prompt: "Should the tool read only what the site shows without signing in?",
+              },
+            ],
+          },
+          "ask",
+        ),
+        call(
+          "mint_update",
+          {
+            summary: "Read only what the site shows without signing in.",
+            changes: [
+              {
+                setting: "login",
+                change: "signed_out",
+                text: "Read only what the site shows signed out.",
+              },
+            ],
+            confirmedBy: ["public"],
+            recommend: "update",
+            intent: "The owner confirmed reading signed out.",
+          },
+          "update",
+        ),
+        call("report_blocked", lacksPublicPart),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: () => Effect.fail(failedSignIn),
+      askInput: () => Effect.succeed({ public: { type: "confirm", value: { confirmed: true } } }),
+      reviewTaskUpdate: () =>
+        Effect.succeed({ outcome: "allow" as const, rationale: "Confirmed.", reviewId: "r1" }),
+      applyTaskUpdate: () => Effect.succeed({ outcome: "applied" as const }),
+    },
+  );
+  const outcome = await f.run();
+  expect(JSON.stringify(f.requests[3]?.input)).toContain("runs signed out");
+  expect(outcome.blocked).toMatchObject({ reason: "site_lacks_capability" });
+});
+
+const harnessFixture = makeMintHarnessFixture(
+  cleanups,
+  { mode: "mint", intent: "Read public data", businessInput: {}, observations: [] },
+  portableJobSession,
+);
+
+// The host's hook has no guard of its own, so giving up the sign-in waits for the execution in
+// flight, a sign-in step included, and never runs beside it.
+it("never gives up a sign-in while an execution is in flight", async () => {
+  const order: string[] = [];
+  const f = await harnessFixture(
+    (turn) =>
+      Effect.gen(function* () {
+        const abandon = turn.actions.abandonSignIn;
+        if (abandon === undefined) throw new Error("Missing abandon_sign_in");
+        const signIn = yield* Effect.fork(turn.actions.execute(authenticate));
+        yield* Deferred.await(entered);
+        const giveUp = yield* Effect.fork(abandon({}));
+        // Let the request to give up run as far as it can while the sign-in is still in flight.
+        yield* Effect.yieldNow();
+        yield* Effect.sleep("20 millis");
+        order.push("sign_in_released");
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(signIn);
+        expect(JSON.parse(yield* Fiber.join(giveUp))).toMatchObject({
+          status: "sign_in_abandoned",
+        });
+      }),
+    {
+      reviewAndExecute: () =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.zipRight(Deferred.await(release)),
+          Effect.zipRight(Effect.fail(failedSignIn)),
+        ),
+      abandonSignIn: () =>
+        Effect.sync(() => {
+          order.push("abandoned");
+          return { outcome: "abandoned" as const };
+        }),
+    },
+  );
+  const entered = Effect.runSync(Deferred.make<void>());
+  const release = Effect.runSync(Deferred.make<void>());
+  await f.run();
+  expect(order).toEqual(["sign_in_released", "abandoned"]);
+});
+
+// Once a build gave up signing in, it stays signed out: another authenticate runs nothing and no
+// login is asked for, so the given-up sign-in never comes back unresolved.
+it.each(["tool", "update"] as const)(
+  "keeps a build signed out once it gave up signing in through the %s",
+  async (path) => {
+    let signIns = 0;
+    let loginRequests = 0;
+    const giveUp =
+      path === "tool"
+        ? [call("abandon_sign_in", { intent: "The sign-in cannot be resolved." })]
+        : [
+            call(
+              "request_input",
+              {
+                questions: [
+                  {
+                    id: "public",
+                    type: "confirm",
+                    prompt: "Should the tool read only what the site shows without signing in?",
+                  },
+                ],
+              },
+              "confirm",
+            ),
+            call(
+              "mint_update",
+              {
+                summary: "Read only what the site shows without signing in.",
+                changes: [
+                  {
+                    setting: "login",
+                    change: "signed_out",
+                    text: "Read only what the site shows signed out.",
+                  },
+                ],
+                confirmedBy: ["public"],
+                recommend: "update",
+                intent: "The owner confirmed reading signed out.",
+              },
+              "update",
+            ),
+          ];
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("execute", authenticate, "first"),
+          ...giveUp,
+          call("execute", authenticate, "again"),
+          call(
+            "request_input",
+            { questions: [{ id: "report", type: "text", prompt: "What is your password?" }] },
+            "login",
+          ),
+          call("report_blocked", lacksPublicPart),
+        ][index] ?? prose("Stopping."),
+      {
+        reviewAndExecute: () =>
+          Effect.suspend(() => {
+            signIns++;
+            return Effect.fail(failedSignIn);
+          }),
+        abandonSignIn: () => Effect.succeed({ outcome: "abandoned" as const }),
+        askInput: () => Effect.succeed({ public: { type: "confirm", value: { confirmed: true } } }),
+        reviewQuestion: (candidate) =>
+          Effect.succeed(
+            candidate.questions[0]?.id === "report"
+              ? { outcome: "authentication" as const, rationale: "Asks for a login." }
+              : { outcome: "allow_business" as const, rationale: "Plain." },
+          ),
+        requestLogin: () =>
+          Effect.sync(() => {
+            loginRequests++;
+            return "supplied" as const;
+          }),
+        reviewTaskUpdate: () =>
+          Effect.succeed({ outcome: "allow" as const, rationale: "Confirmed.", reviewId: "r1" }),
+        applyTaskUpdate: () => Effect.succeed({ outcome: "applied" as const }),
+      },
+    );
+    const outcome = await f.run();
+    expect(signIns).toBe(1);
+    expect(loginRequests).toBe(0);
+    const again = 1 + giveUp.length + 1;
+    expect(JSON.stringify(f.requests[again]?.input)).toContain("sign_in_abandoned");
+    expect(JSON.stringify(f.requests[again + 1]?.input)).toContain('\\"login\\":\\"abandoned\\"');
+    expect(outcome.blocked).toMatchObject({ reason: "site_lacks_capability" });
+  },
+);
+
+// A login the owner declined after an earlier sign-in failed leaves nothing to resolve: the
+// failed sign-in's guidance never comes back to contradict the owner's answer.
+it("gives no failed sign-in's guidance once the owner declined a login request", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate),
+        call(
+          "request_input",
+          { questions: [{ id: "report", type: "text", prompt: "What is your password?" }] },
+          "login",
+        ),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: () => Effect.fail(failedSignIn),
+      reviewQuestion: (candidate) =>
+        Effect.succeed(
+          candidate.questions[0]?.id === "report"
+            ? { outcome: "authentication" as const, rationale: "Asks for a login." }
+            : { outcome: "allow_business" as const, rationale: "Plain." },
+        ),
+      requestLogin: () => Effect.succeed("public_only" as const),
+    },
+  );
+  await f.run();
+  for (const request of f.requests.slice(2))
+    expect(JSON.stringify(request.input)).not.toContain("The last sign-in failed and nothing");
+});
+
+it("records no sign-in execution for a login the owner declined", async () => {
+  const f = await fixture(
+    (_request, index) => (index === 0 ? call("execute", authenticate) : prose("Stopping.")),
+    {
+      reviewAndExecute: () =>
+        Effect.fail(new MintFailure({ code: "Unavailable", loginDeclined: "public_only" })),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome.executions).toEqual([]);
+});
+
+// A public reason the host cannot screen never reaches the caller unscreened; the denial stands.
+it("drops a public reason whose screen failed and keeps the denial", async () => {
+  const projection = portableMintProjection();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", {
+          purpose: "example",
+          target: "pureFiles",
+          entrypoint: "src/tool.ts",
+          fixtureRefs: [],
+          caseFilter: [],
+          maxWorkers: 1,
+          timeoutSeconds: 30,
+        }),
+        call("finish_build", {
+          entrypoint: "src/tool.ts",
+          executionId: "execution_one",
+          metadata: { name: "read_public", description: "Read public data" },
+          coverage: "One actual example.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      projection: {
+        ...projection,
+        text: (value, area) =>
+          value.includes("unscreenable")
+            ? Effect.fail(new MintFailure({ code: "Unavailable" }))
+            : projection.text(value, area),
+      },
+      publish: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: {
+              outcome: "deny",
+              reason: "privacy",
+              reviewId: "review_denied",
+              rationale: "Synthetic refusal.",
+              findings: [],
+              publicReason: "An unscreenable sentence.",
+            },
+          }),
+        ),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome.publicationDenial).toEqual({ reason: "privacy" });
+});
+
+// The review of the minter's last answer never changes how the build ended: a failure, a defect
+// or a review that outlasts its bound keeps no explanation.
+it.each([
+  {
+    name: "failure",
+    review: () => Effect.fail(new MintFailure({ code: "ReviewUnavailable" })),
+  },
+  { name: "defect", review: () => Effect.die(new Error("Synthetic reviewer defect")) },
+  { name: "timeout", review: () => Effect.never },
+] as const)("keeps no last answer when its review ends in a $name", async ({ review }) => {
+  const f = await fixture(() => prose("The site lists no prices without a membership."), {
+    reviewQuestion: review,
+    stopExplanationReviewMs: 20,
+  });
+  const outcome = await f.run();
+  expect(outcome.stopReason).toBe("final_text_without_tool");
+  expect(outcome).not.toHaveProperty("stopExplanation");
+});
+
+// A login check the host could not run is the host's ending, not a failed sign-in.
+it("names a restored login-check ending host_unavailable", async () => {
+  const f = await harnessFixture(() => Effect.void, {
+    agentRecovery: {
+      initial: {
+        agent: {
+          version: 1,
+          sdkVersion: "0.18.0",
+          sdkState: "",
+          modelCalls: 0,
+          finalsWithoutTool: 0,
+          tools: [],
+        },
+        harness: {
+          executions: [],
+          purposes: [],
+          diagnostics: [],
+          exampleClaimed: false,
+          writeSession: "none",
+          unavailableOutputRefusals: 0,
+          unavailableCauseRecorded: false,
+          reviewUnavailableRetries: { execution: 0, publication: 0, question: 0 },
+          destinationEvidenceRefusals: 0,
+          inputFeedbackRounds: 0,
+          inputFeedbackPublicTool: false,
+          inputFeedbackCoverage: "",
+          providerUnavailableRetries: 0,
+          executionClosed: false,
+          captchaChecks: 0,
+          terminal: {
+            build: "incomplete",
+            recoveryReason: "login_check_unavailable",
+            summary: "The login could not be checked.",
+          },
+        },
+      },
+      save: () => Effect.void,
+    },
+  });
+  expect((await f.run()).stopReason).toBe("host_unavailable");
+});

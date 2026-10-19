@@ -313,6 +313,62 @@ test("a published read that declares no questions records an empty question set"
   }
 });
 
+test("a read's publication review gets a digest of each list in its output and lists its references", async () => {
+  const site = await startSite((_request, response) =>
+    html(
+      response,
+      "<title>Fixture</title><ul><li>Garden room</li><li>Harbour room</li><li>Attic room</li></ul>",
+    ),
+  );
+  const guardian = recordingGuardian();
+  try {
+    const { built } = await mint({
+      effect: "read",
+      url: site.url,
+      guardian,
+      turns: [
+        () =>
+          patch({
+            "src/tool.mjs": `import { Schema } from "effect";
+import { defineOperation } from "../runtime/index.js";
+export default defineOperation({name:"read_rooms",input:Schema.Struct({}),output:Schema.Struct({rooms:Schema.Array(Schema.Struct({name:Schema.String}))})},
+async ({kernel,sessionId}) => {
+  const response = await kernel.browsers.playwright.execute(sessionId,{code:"return await page.locator('li').allTextContents();",timeout_sec:5});
+  if(!response.success) throw new Error(String(response.error));
+  return {rooms:response.result.map((name) => ({name}))};
+});`,
+          }),
+        () => [call("execute", execution("example", "src/tool.mjs"), "example")],
+        (request) => finish(request, "finish", "example"),
+      ],
+    });
+    expect(built.build, JSON.stringify(built)).toBe("published");
+    const [review] = publications(guardian.reviews);
+    expect(JSON.parse(readOf(review, "publication/example-output.json") ?? "{}")).toMatchObject({
+      state: "available",
+      output: { rooms: [{ name: "Garden room" }, { name: "Harbour room" }, { name: "Attic room" }] },
+    });
+    expect(JSON.parse(readOf(review, "publication/output-digest.json") ?? "{}")).toMatchObject({
+      lists: [{ path: "rooms", records: 3, fields: { name: { withValue: 3, distinct: 3 } } }],
+    });
+    expect(observationsOf(review)).toContain(
+      "publication/output-digest.json summarizes every field of each list in the example output across all its records, including records past what publication/example-output.json keeps.",
+    );
+    const references = (
+      review?.input["trusted_publication"] as
+        | { readonly references?: readonly { readonly path: string }[] }
+        | undefined
+    )?.references;
+    expect(references?.length).toBeGreaterThan(0);
+    expect(references?.every(({ path }) => path.startsWith(".agents/"))).toBe(true);
+    expect(publicationOf(review!)?.some((file) => String(file["path"]).startsWith(".agents/"))).toBe(
+      false,
+    );
+  } finally {
+    await site.close();
+  }
+});
+
 test("an account-specific enum Guardian returns as input feedback is fixed and published", async () => {
   test.setTimeout(60_000);
   const site = await headingSite();
@@ -381,15 +437,65 @@ test("an account-specific enum Guardian returns as input feedback is fixed and p
     );
     const [first, second] = publications(guardian.reviews);
     expect(publications(guardian.reviews)).toHaveLength(2);
-    // Each review reads the example's actual output, bound to the source that ran.
+    // Each review reads the example's actual output as JSON, bound to the source that ran.
     expect(JSON.parse(readOf(first, "publication/example-output.json") ?? "{}")).toMatchObject({
       kind: "verified_example_output",
       executedEntrypoint: "executed/src/tool.mjs",
       state: "available",
-      output: JSON.stringify({ heading: "Public fixture" }),
+      output: { heading: "Public fixture" },
     });
     expect(readOf(second, definitionPath)).not.toContain("acct-4417");
     expect(observationsOf(second)).toContain("The source changed after the example ran");
+  } finally {
+    await site.close();
+  }
+});
+
+// An input the caller's request supplies is never silently dropped: the example ignores a key its
+// schema lacks, so the host names it after Guardian allows, and the tool that takes it publishes.
+test("an input the caller's request names that the schema drops comes back as input feedback", async () => {
+  test.setTimeout(60_000);
+  const site = await headingSite();
+  const guardian = recordingGuardian({ decide: () => "allow" });
+  const notesTool = headingTool.replace(
+    "input:Schema.Struct({})",
+    "input:Schema.Struct({notes:Schema.optional(Schema.String)})",
+  );
+  try {
+    const { built, last } = await mint({
+      effect: "read",
+      url: site.url,
+      guardian,
+      input: { notes: "Window seat" },
+      turns: [
+        () => patch({ "src/tool.mjs": headingTool }),
+        () => [call("execute", execution("example", "src/tool.mjs"), "example")],
+        (request) => finish(request, "finish_1", "example"),
+        () => [
+          {
+            type: "apply_patch_call",
+            callId: "take_notes",
+            status: "completed",
+            operation: {
+              type: "update_file",
+              path: "src/tool.mjs",
+              diff: `@@\n-${headingTool.split("\n")[2]}\n+${notesTool.split("\n")[2]}\n`,
+            },
+          },
+        ],
+        (request) => finish(request, "finish_2", "example"),
+      ],
+    });
+    expect(built.build, JSON.stringify(built)).toBe("published");
+    expect(built.artifact?.inputSchema).toMatchObject({ properties: { notes: { type: "string" } } });
+    const feedback = toolResult(last, "finish_1");
+    expect(feedback).toMatchObject({
+      status: "not_published",
+      reason: "input_feedback",
+      findings: [{ path: definitionPath, category: "example_input" }],
+    });
+    expect(JSON.stringify(feedback)).toContain('\\"notes\\"');
+    expect(publications(guardian.reviews)).toHaveLength(2);
   } finally {
     await site.close();
   }
@@ -542,7 +648,7 @@ test("a write's publication review reads each act step under publication/session
       executedEntrypoint: "publication/session/1/src/save.mjs",
       state: "available",
       screenedBytes: Buffer.byteLength(JSON.stringify({ saved: true })),
-      output: JSON.stringify({ saved: true }),
+      output: { saved: true },
     });
     expect(observationsOf(review)).toContain("This is a write build.");
     expect(observationsOf(review)).toContain("the agent's exampleInput");

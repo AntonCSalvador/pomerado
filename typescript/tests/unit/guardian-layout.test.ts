@@ -1,5 +1,6 @@
 // Failure modes covered: switching review kinds changes the instructions, tools or output format
-// and resends the conversation uncached; a review that never reads the host's wrapper fails
+// and resends the conversation uncached; a build's request is left out of the cached instructions
+// or repeated in every review message; a review that never reads the host's wrapper fails
 // although the agent's own file is in view; a skipped entrypoint read retries the whole review
 // with backoff; a compaction in the middle of a review keeps an earlier read; an unchanged source
 // is not marked as already read; session reviews drop their model diagnostics and token counts;
@@ -264,6 +265,81 @@ it("keeps instructions, tools and output format identical across all six review 
   });
 });
 
+it("sends a build's request once, in the instructions every review of the build shares", async () => {
+  const build = async (screenedIntent: string) => {
+    const requests = scripted([
+      [allow],
+      [decision({ outcome: "allow_business", rationale: "Only the owner knows the table." })],
+      [compact, read("after_compaction", "operation/operation.mjs")],
+      [allow],
+      [decision({ outcome: "allow", rationale: "Nothing private ships.", reason: "approved" })],
+    ]);
+    const guardian = makeGuardian(
+      makeOpenAIReviewer("Synthetic policy {{ tenant_policy_config }}", false, native),
+      undefined,
+      {},
+    );
+    const reader = sourcesOf(files());
+    const ofBuild = { ...pending, screenedIntent };
+    await Effect.runPromise(guardian.review(ofBuild, reader));
+    await Effect.runPromise(
+      guardian.reviewQuestion(
+        ofBuild,
+        {
+          questions: [{ id: "table", type: "text", prompt: "Which table?" }],
+          credentialsAvailable: false,
+        },
+        reader,
+      ),
+    );
+    await Effect.runPromise(guardian.review(ofBuild, reader));
+    await Effect.runPromise(
+      guardian.review(
+        {
+          ...ofBuild,
+          publication: {
+            files: [
+              {
+                path: "operation/operation.mjs",
+                byteLength: 64,
+                published: true,
+                current: true,
+                owner: "minter",
+              },
+            ],
+          },
+        },
+        reader,
+      ),
+    );
+    return requests;
+  };
+  const tables =
+    "Read the rows of the named table in a table app. If the table doesn't exist, tell callers which tables do.";
+  const hours = "Read the listed opening hours";
+  const first = await build(tables);
+  const second = await build(hours);
+
+  // Every review of the build, a compaction included, sends the request in the same
+  // instructions, so the provider keeps them in the cached prefix.
+  expect(first).toHaveLength(5);
+  expect(new Set(first.map(prefixHash)).size).toBe(1);
+  const instructions = first[0]?.systemInstructions ?? "";
+  expect(instructions).toContain(JSON.stringify(tables));
+  // No review message repeats it, so the conversation carries it once.
+  for (const request of first) expect(JSON.stringify(request.input)).not.toContain("tell callers");
+  // Another build's request changes only its own text, after the shared policy, so the policy
+  // stays one cached prefix across builds.
+  const other = second[0]?.systemInstructions ?? "";
+  expect(other).not.toContain("tell callers");
+  expect(instructions.slice(0, instructions.indexOf(JSON.stringify(tables)))).toBe(
+    other.slice(0, other.indexOf(JSON.stringify(hours))),
+  );
+  expect(instructions.replace(JSON.stringify(tables), "")).toBe(
+    other.replace(JSON.stringify(hours), ""),
+  );
+});
+
 it("refuses an outcome the review kind may not return", async () => {
   const execution = await Effect.runPromise(
     Effect.either(
@@ -412,6 +488,212 @@ it("marks an executed source unchanged since Guardian read it, and not once it c
   expect(unchanged(requests[0])).toBeUndefined();
   expect(unchanged(requests[2])).toEqual(["operation/src/helper.mjs"]);
   expect(unchanged(requests[3])).toBeUndefined();
+});
+
+/** One read_source call that names several files. */
+const readMany = (
+  id: string,
+  files: readonly { path: string; offset?: number; match?: string }[],
+): ModelResponse["output"][number] => ({
+  type: "function_call",
+  callId: id,
+  name: "read_source",
+  status: "completed",
+  arguments: JSON.stringify({
+    path: null,
+    offset: null,
+    match: null,
+    paths: files.map(({ path, offset = 0, match = null }) => ({ path, offset, match })),
+  }),
+});
+/** The output a later model request shows for one tool call, parsed. */
+const callOutput = (request: ModelRequest | undefined, callId: string): string | undefined => {
+  const input = request?.input;
+  const item = (typeof input === "string" ? [] : (input ?? [])).find(
+    (entry) => entry.type === "function_call_result" && entry.callId === callId,
+  );
+  const output = item?.type === "function_call_result" ? item.output : undefined;
+  return typeof output === "string" ? output : (output as { text?: string } | undefined)?.text;
+};
+const callResult = (request: ModelRequest | undefined, callId: string): unknown => {
+  const text = callOutput(request, callId);
+  return text === undefined ? undefined : JSON.parse(text);
+};
+
+it("reads several files in one call, each with its own result, and counts each as read", async () => {
+  const requests = scripted([
+    [
+      readMany("several", [
+        { path: "operation/src/helper.mjs" },
+        { path: "operation/missing.mjs" },
+        { path: "operation/wrapped.mjs", match: "wrapper" },
+        { path: "./operation/wrapped.mjs" },
+      ]),
+    ],
+    [allow],
+    [allow],
+  ]);
+  const workspace = files();
+  const executed: PendingExecution = {
+    ...pending,
+    mintContext: {
+      repeatableRead: false,
+      operationSources: [...workspace.keys()],
+      executedSources: [
+        "operation/operation.mjs",
+        "operation/src/helper.mjs",
+        "operation/wrapped.mjs",
+      ],
+      browser: "active",
+      executions: [],
+    },
+  };
+  const guardian = makeGuardian(
+    makeOpenAIReviewer("{{ tenant_policy_config }}", false, native),
+    undefined,
+    {},
+  );
+  const reader = sourcesOf(workspace);
+  await Effect.runPromise(guardian.review(executed, reader));
+  expect(callResult(requests[1], "several")).toMatchObject({
+    kind: "untrusted_sources",
+    files: [
+      {
+        kind: "untrusted_source",
+        path: "operation/src/helper.mjs",
+        source: workspace.get("operation/src/helper.mjs"),
+      },
+      { path: "operation/missing.mjs", status: "unavailable" },
+      { kind: "untrusted_source_matches", path: "operation/wrapped.mjs", matchCount: 1 },
+      { kind: "untrusted_source", path: "operation/wrapped.mjs", hasMore: false },
+    ],
+  });
+  // The next review relies on both files the one call read whole.
+  await Effect.runPromise(guardian.review({ ...executed, screenedInput: '{"day":2}' }, reader));
+  expect(
+    (reviewRequest(requests[2]).trusted_review as { unchangedSources?: string[] }).unchangedSources,
+  ).toEqual(["operation/src/helper.mjs", "operation/wrapped.mjs"]);
+});
+
+it("leaves the files past a call's size limit unread, and out of the next review's unchanged sources", async () => {
+  const large = ["one", "two", "three", "four", "five"].map((name) => `operation/src/${name}.mjs`);
+  const requests = scripted([
+    [readMany("large", large.map((path) => ({ path })))],
+    [allow],
+    [allow],
+  ]);
+  const workspace = files();
+  for (const path of large) workspace.set(path, `// ${path}\n${"x".repeat(60_000)}`);
+  const executed: PendingExecution = {
+    ...pending,
+    mintContext: {
+      repeatableRead: false,
+      operationSources: [...workspace.keys()],
+      executedSources: ["operation/operation.mjs", ...large],
+      browser: "active",
+      executions: [],
+    },
+  };
+  const guardian = makeGuardian(
+    makeOpenAIReviewer("{{ tenant_policy_config }}", false, native),
+    undefined,
+    {},
+  );
+  const reader = sourcesOf(workspace);
+  await Effect.runPromise(guardian.review(executed, reader));
+  // Four results pass 200,000 characters, so the fifth file never starts.
+  expect(callResult(requests[1], "large")).toMatchObject({
+    kind: "untrusted_sources",
+    files: [
+      ...large.slice(0, 4).map((path) => ({ kind: "untrusted_source", path, hasMore: false })),
+      { path: large[4], status: "not_read" },
+    ],
+  });
+  await Effect.runPromise(guardian.review({ ...executed, screenedInput: '{"day":2}' }, reader));
+  expect(
+    (reviewRequest(requests[2]).trusted_review as { unchangedSources?: string[] }).unchangedSources,
+  ).toEqual(large.slice(0, 4));
+});
+
+it.each([
+  [
+    "names more files than one call reads",
+    {
+      path: null,
+      offset: null,
+      match: null,
+      paths: Array.from({ length: 11 }, (_, index) => ({
+        path: `operation/src/file-${index}.mjs`,
+        offset: 0,
+        match: null,
+      })),
+    },
+  ],
+  [
+    "sets both path and paths",
+    {
+      path: "operation/src/helper.mjs",
+      offset: 0,
+      match: null,
+      paths: [{ path: "operation/wrapped.mjs", offset: 0, match: null }],
+    },
+  ],
+])("tells Guardian how to fix a read_source call that %s, without reading", async (_, call) => {
+  const requests = scripted([
+    [
+      {
+        type: "function_call",
+        callId: "malformed",
+        name: "read_source",
+        status: "completed",
+        arguments: JSON.stringify(call),
+      },
+    ],
+    [allow],
+  ]);
+  const reader = sourcesOf(files());
+  const reads: string[] = [];
+  await Effect.runPromise(
+    makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).review(
+      pending,
+      (path, offset) => {
+        reads.push(path);
+        return reader(path, offset);
+      },
+    ),
+  );
+  // Only the host's own read of the entrypoint for the request.
+  expect(reads).toEqual([pending.entrypoint]);
+  const output = callOutput(requests[1], "malformed");
+  expect(output).toBeDefined();
+  expect(output).not.toMatch(/source unavailable/iu);
+});
+
+it("accepts an allow whose entrypoint Guardian read within a several-file call", async () => {
+  const requests = scripted([
+    [allow],
+    [
+      readMany("late_several", [
+        { path: "operation/src/helper.mjs" },
+        { path: "operation/operation.mjs" },
+      ]),
+    ],
+    [allow],
+  ]);
+  const reader = sourcesOf(files());
+  let entrypointReads = 0;
+  const reviewed = await Effect.runPromise(
+    makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).review(
+      pending,
+      (path, offset) =>
+        path === pending.entrypoint && ++entrypointReads === 1
+          ? Effect.fail(new ReviewFailure({ code: "SourceUnavailable" }))
+          : reader(path, offset),
+    ),
+  );
+  expect(reviewed.decision.outcome).toBe("allow");
+  expect(requests).toHaveLength(3);
+  expect(entrypointReads).toBe(2);
 });
 
 it("reports model diagnostics and token counts for session reviews", async () => {
@@ -819,6 +1101,8 @@ it("keeps an earlier private host kind's exchange out of a later review's failed
       }),
     ],
     [read("call_turn_limit", "operation/src/helper.mjs")],
+    // The turn after the limit offers no read; a model that still asks for one gets no decision.
+    [read("call_final_turn", "operation/src/helper.mjs")],
   ]);
   const timing: ModelDiagnosticTiming = {
     phase: "completed",

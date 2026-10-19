@@ -42,6 +42,13 @@ Such a URL was made for one sign-in; a run that replays it starts from spent val
 A login link often redirects through an identity provider and lands on an authorize URL with
 one-time parameters: record the link you clicked, not the page you landed on.
 
+On a site that signs each account in to its own workspace host (sign in at `app.example.com`,
+work at `acme.example.com`), record `loginUrl` on the shared sign-in host. Never type or hard-code
+a workspace or tenant host or slug in a page address, selector or source: the host records a
+workspace screen itself, and each run's sign-in goes to that account's own workspace. Its
+`loginUrl` carries no return address: no other URL, host or path to go to after sign-in in its
+query, fragment or path, since a host refuses such a link for a workspace site.
+
 # Discover the entry before authenticating
 
 1. Submit a bounded, anonymous, read-only `explore` with target `liveBrowser` on the authorized site
@@ -100,7 +107,8 @@ an earlier stage. The host acts only on the observed recorded screen. It skips a
 only when a later recorded page or distinct credential fields prove progression, or the published
 signed-in check verifies the session. A missing control, a timeout or a coincident Continue button
 on the same page does not prove an account choice happened. Record an authorized choice and its
-following Continue as separate steps.
+following Continue as separate steps. Prefer exercising a chooser step from both starts in the
+build, right after a sign-in and from a saved session already past the chooser.
 
 Call `execute` with purpose `authenticate`, target `liveBrowser` and a `signInStep` for the screen in
 front of you. Pass the site's own sign-in link as you clicked it (above) as `loginUrl` on the first
@@ -115,6 +123,22 @@ question has one visible match in that field's frame, supply its stable `questio
 its text. The host rereads the question before privately filling the answer. No answer reaches
 you, Guardian, generated code or the recipe. One-time and recovery codes keep their own slots.
 
+Every selector a `signInStep` sends, in `fields`, `submit`, `methods`, `questionSelector`,
+`rejectedMarkers` and `signedIn`, is a Playwright selector string, not a locator call as probes and
+the examples write. Prefer a stable `#id`, `[name=...]` or `data-testid=` selector. A role selector
+writes its options as attributes:
+
+- `role=button[name="Sign in"]` and `role=button[name="Sign in" s]` match that whole name, case
+  included: the string form of `getByRole("button", { name: "Sign in", exact: true })`.
+- `role=button[name="sign in" i]` matches the whole name ignoring case.
+- `role=button[name=/sign in/i]` matches a pattern.
+
+`exact` is an option of `getByRole` and `getByLabel`, never a selector attribute: `[exact]` or
+`[exact=true]` fails as an unknown attribute, and `[name="Sign in" exact]` fails to parse.
+`getByLabel` and `getByText` have no string form the host runs, since their `internal:` forms are
+refused: name such a field by its role and name, its `id`, its `name` or another stable
+attribute.
+
 - `fields`: each field the screen asks for, as a Playwright selector with exactly one visible match.
   A selector never reaches into another frame (no `>>` chains or `internal:` engines): the host finds
   each field in its own frame.
@@ -127,7 +151,14 @@ you, Guardian, generated code or the recipe. One-time and recovery codes keep th
     the step again to ask again.
   - `slot: "password"` for the password.
   - `slot: "code"` for a one-time or authenticator code. A saved authenticator seed answers it;
-    otherwise the host asks the caller for the code. Never ask for a code yourself.
+    otherwise the host asks the caller for the code. Never ask for a code yourself. A code split
+    into one-character boxes is one `code` field per box, every box from the first to the last, in
+    order, as a split date is one field per part (below), even when the page moves the focus to
+    the next box or takes a pasted code in the first. Count the boxes on the screen before you
+    send the step. The host asks once, types one character into each and submits only once each
+    box holds one. A step that names only some of the boxes, or names them out of order, comes
+    back refused as `code_boxes_incomplete`, typing nothing: its `codeBoxes` says how many boxes
+    the screen shows and which ones the step named; send the step again with all of them.
   - `slot: "date_of_birth"` for a date of birth, with `format`, how the field takes it, read from
     its placeholder, label, input mask or hint: `MM/DD/YYYY`, `DD/MM/YYYY`, `M/D/YYYY`,
     `D/M/YYYY`, `MM-DD-YYYY`, `DD-MM-YYYY`, `DD.MM.YYYY`, `YYYY-MM-DD`, `YYYY/MM/DD`, `MMDDYYYY`,
@@ -159,6 +190,8 @@ you, Guardian, generated code or the recipe. One-time and recovery codes keep th
   method order above. The tool's runs pick again from that list. A method's selector
   publishes with the tool, so it never names the masked phone number or address the option shows
   (such as `***-1234`): use the method's own words or a stable attribute.
+- `submitKey: "Enter"`, in place of `submit`: a code or password screen whose form has no submit
+  control and submits on Enter. The host presses Enter in the step's last field.
 - Every selector and submit you send publishes with the tool, as does each screen's page address.
   None may name this account's username, email or phone: not a "Continue as …" button's text, a
   data attribute holding it, or a placeholder for it. Name a control by its role, label or a stable
@@ -224,6 +257,27 @@ at most two correction questions per rejected field per sign-in. Only submitted,
 fields consume their counters; `username` and the saved login's matching primary identifier share one
 counter. Worker takeover preserves these counters and rejected-value history.
 
+If, once the login was sent, the site says the account itself is locked, suspended, disabled or
+closed, no field is wrong and no correction helps: send
+`signInStep: { rejected: { account: "locked", selector: "<the visible message>" } }`, or
+`account: "suspended"` for a suspended, disabled or closed account, naming the visible element
+whose text says so; the host checks it shows. The build then ends as `account_locked`; never send
+`rejected.slot` for it, retry the sign-in or ask for another login.
+
+When the owner declines a login request (`login_declined`, or `login_request` with `declined`), they
+have no account or want only what the site shows signed out. Never ask for a login or
+authenticate again in that build. Build the part of the request the site shows signed out; when
+that part is missing or much less than asked, ask with `request_input` before you build, naming
+what the site shows without signing in, whether to continue with it or stop. When they stop, or
+nothing useful is public, end with `report_blocked` reason `owner_declined`.
+
+When a sign-in failed and nothing in your authority resolves it, or the owner chose the public
+part, and the request can still be met, at least in part, signed out: where the host offers
+`abandon_sign_in`, call it, or record the owner's confirmed choice with `mint_update` change
+`login` `signed_out`. Either way the build goes on signed out, and you never authenticate again.
+The host refuses `abandon_sign_in` for a write build, a task that needs the account, or a sign-in
+that already verified.
+
 A rejected code permits at most two fresh-code corrections within the remaining sign-in time.
 This does not extend the unchanged password's limit of two sends, including sends before worker
 takeover. If a further known code correction would need a third unchanged-password send, the host
@@ -240,6 +294,11 @@ Flows vary. A login may be passwordless (identifier, then a code or a link), ask
 password, offer several code methods, or ask you to approve on another device. Record every screen
 the sign-in shows, a code screen included: the tool's runs replay only the screens you recorded and
 never look for another, so a run that meets a screen you did not record requests sign-in repair.
+Some sites answer the password with a screen that asks for it again together with a one-time
+code, the password field empty beside the code field: map that screen as one `signInStep` with
+both fields. The host fills the password there once more, records that the screen asks for it
+again, and each run enters it with the code on that screen alone. A screen that asks for the
+password again without a code is no such screen: treat it as a possible rejection.
 When an observed screen asks the caller to follow an email link or approve on another device,
 submit `signInStep: { approval: "email_link" }` or `{ approval: "device" }`, with the same popup
 relation if that screen is in the popup. The host asks the caller through a protected confirmation
@@ -311,6 +370,11 @@ shows.
 
 - Prefer stable attributes and names (`aria-label`, a role, visible text, a test id) over
   generated class names such as `css-1q2w3e`.
+- Send the marker as a selector string, as every sign-in step's selector is (above), such as
+  `role=link[name="Sign out"]`, never with `exact`. The signed-out check reads CSS (with
+  `:has-text()`, `:text-is()` and `:visible`), `text=`, `data-testid=` and `role=` with `name`,
+  and `level` for a heading; it cannot read other attributes. A selector that crosses frames
+  (`>>`, `internal:`) is refused.
 - Never send a `urlPath` alone on a single-page app, or for a page the site also serves signed
   out; never the login page's path.
 - Test it with `check_signed_in_marker` and choose another until every check passes:
@@ -328,8 +392,7 @@ shows.
   showed the sign-in form, the site keeps its session only in page memory or session storage, and
   the host signs in automatically at each operation start; the marker must still be site-wide.
 
-The published tool records the check with its screens, and each run decides whether its sign-in
-worked by that check alone: a run whose check fails requests sign-in repair before its operation.
+The published tool records the check with its screens.
 
 ## A sign-in refusal found by operation code
 

@@ -4,7 +4,9 @@ import { ReviewFailure } from "../../src/guardian/review.js";
 import { failureDetail } from "../../src/runtime/failure-detail.js";
 import {
   allowedEffectsFor,
+  cappedStepResult,
   contractExtractionNote,
+  explorationAllowedEffect,
   currentDateObservations,
   makeStepResults,
   mintReviewContext,
@@ -95,8 +97,12 @@ describe("allowedEffectsFor", () => {
     // A date or place the request gives as context must not become a filter Guardian enforces.
     for (const purpose of ["explore", "test", "example", "inspect", "residual"] as const)
       expect(allowedEffectsFor(live(purpose))).toEqual([
-        "Authorized repeatable reads, navigation, observation and transient search/query interactions, including query submission when its read semantics are established. Respect constraints the request states, such as a date range, filter, sort or limit. Context it gives, such as the current date or the caller's location, is not a constraint unless the request applies it. Navigating to and observing the site's public sign-in pages, including the site's own redirects to its sign-in origin, is allowed. Entering or submitting a username, email, phone number, password or code, submitting a sign-in step, or switching accounts is not: credential submission belongs only to the host-owned authenticate step. No autosave, holds, drafts, uploads, business commitments, account changes or other writes, even for exploration/test setup.",
+        "Authorized repeatable reads, navigation, observation and transient search/query interactions, including query submission when its read semantics are established. Respect constraints the request states, such as a date range, filter, sort or limit. Context it gives, such as the current date or the caller's location, is not a constraint unless the request applies it. Navigating to and observing the site's public sign-in pages, including the site's own redirects to its sign-in origin, is allowed. Clicking the site's own sign-in link or button to open its sign-in screen or dialog is navigation, even when the page says results need a login. Entering or submitting a username, email, phone number, password or code, submitting a sign-in step, or switching accounts is not: credential submission belongs only to the host-owned authenticate step. After the host has signed in, entering the caller's own input into a context step that asks for no username, email, phone number, password, code, date of birth, ZIP or security answer and does not verify who the user is, such as choosing a supplier, company, client or language, and continuing past it is navigation, not a sign-in step or an account switch. No autosave, holds, drafts, uploads, business commitments, account changes or other writes, even for exploration/test setup.",
       ]);
+  });
+
+  it("is the exploration text other hosts give their own exploration steps", () => {
+    expect(allowedEffectsFor(live("explore"))).toEqual([explorationAllowedEffect]);
   });
 
   it("gives a live sign-in step the sign-in text and every offline step the offline text", () => {
@@ -300,6 +306,16 @@ describe("makeStepResults", () => {
     expect(stepResults[5]?.result).toBe("Error: no Book button on the redirected page");
   });
 
+  it("caps one result at 4 KiB, cut on a character and marked", () => {
+    const marker = "…[truncated at 4 KiB]";
+    expect(cappedStepResult("a".repeat(4096))).toBe("a".repeat(4096));
+    const room = 4096 - new TextEncoder().encode(marker).byteLength;
+    expect(cappedStepResult("a".repeat(4097))).toBe(`${"a".repeat(room)}${marker}`);
+    // A two-byte character the cut splits is dropped whole, never kept as a replacement character.
+    const split = cappedStepResult(`${"a".repeat(room - 1)}é${"b".repeat(100)}`);
+    expect(split).toBe(`${"a".repeat(room - 1)}${marker}`);
+  });
+
   it("keeps step results out of question reviews", () => {
     const results = makeStepResults();
     results.record("step_1", { value: 1 });
@@ -338,13 +354,13 @@ describe("observations", () => {
 describe("reviewFailureOf", () => {
   it("preserves finite review phase before any browser or executor dispatch", () => {
     const failure = reviewFailureOf(
-      new ReviewFailure({ code: "Unavailable", reviewPhase: "review_deadline" }),
+      new ReviewFailure({ code: "Unavailable", reviewPhase: "review_computation" }),
       "not_sent",
     );
     expect(failure).toMatchObject({
       code: "ReviewUnavailable",
       reviewFailure: "Unavailable",
-      reviewPhase: "review_deadline",
+      reviewPhase: "review_computation",
       reviewDispatch: "not_sent",
     });
     expect(failure).not.toHaveProperty("modelOutage");

@@ -5,6 +5,7 @@ import {
   checkWriteSession,
   commitEvidenceOf,
   commitUncertain,
+  readBackFirst,
   sessionEnteredMarks,
   sessionSentWrite,
   uncertainCommit,
@@ -51,6 +52,42 @@ describe("an act step's commit evidence", () => {
     expect(verifyFirstNotice(0, "entered")).toBe(
       `This act step did not complete after ${uncertainCommit(0, "entered")}, so the write may already be committed. Before any further write, verify: run an act step that only reads the page or the account and learns whether the write happened. If it did, record it with verified() in that step and publish against it; never submit the write again. If the read-back shows nothing happened, you may submit the write again with the caller's values and read its confirmation. Either way, adjust the composed script to what actually works end to end. The host never resubmits a write for you.`,
     );
+  });
+});
+
+describe("the read-back an act step Guardian labelled a write asks for when it did not complete", () => {
+  /** The notice for a step that may have committed for `reason`. */
+  const notice = (reason: string) =>
+    `This act step did not complete after ${reason}, so the write may already be committed. Before any further write, verify: run an act step that only reads the page or the account and learns whether the write happened. When this step's stateChangingRequests shows its commit request to the site returned 2xx or 3xx, that step may read back the write's own result, the record it just created or changed: on the page as it stands, or looked up on another page such as a list. Check it shows no error or validation message, read what the output needs, and call verified() there. Reading is allowed; a second write is not. A 200 whose body reports an error, as GraphQL can, did not go through. Read the site's own proof for such a commit, as for an error status, since part of it may have applied. A 202, or a 2xx whose body says the work is queued, counts too: return the site's own status word for it, such as Queued, in the output. If the write happened, record it with verified() in that step and publish against it; never submit the write again. If the read-back shows nothing happened, you may submit the write again with the caller's values and read its confirmation. Either way, adjust the composed script to what actually works end to end. The host never resubmits a write for you.`;
+
+  it("asks for none when the step's marks show no commit step entered", () => {
+    expect(readBackFirst("not_entered")).toBeUndefined();
+  });
+
+  it("names why the step may have committed, then how to read back", () => {
+    expect(readBackFirst("entered")).toEqual({
+      verifyFirst: true,
+      notice: notice("its script entered a declared commit step"),
+    });
+    expect(readBackFirst("unreported")).toEqual({
+      verifyFirst: true,
+      notice: notice(
+        "it returned no result, as when its page was lost or its runner stopped, so the host cannot tell which commit steps it entered",
+      ),
+    });
+    // A script that declares no commit step, or reports no marks, may still have committed.
+    for (const commit of ["undeclared", undefined] as const)
+      expect(readBackFirst(commit)).toEqual({
+        verifyFirst: true,
+        notice: notice("Guardian labelled it a write"),
+      });
+  });
+
+  it("lets a commit request the site answered 2xx or 3xx read back the write's own result on any page", () => {
+    expect(readBackFirst("entered")?.notice).toContain(
+      "When this step's stateChangingRequests shows its commit request to the site returned 2xx or 3xx, that step may read back the write's own result, the record it just created or changed: on the page as it stands, or looked up on another page such as a list.",
+    );
+    expect(readBackFirst("entered")?.notice).toContain("Reading is allowed; a second write is not.");
   });
 });
 

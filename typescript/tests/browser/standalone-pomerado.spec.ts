@@ -1891,7 +1891,9 @@ if(!result.success||result.result!==true)throw new Error("Save not reached");ret
         name: "save_fixture",
         arguments: { input: {} },
       });
-      expect(result.isError, JSON.stringify(result) + connection.stderr()).toBeFalsy();
+      // A failed run, a write that may have applied included, is never a success: an error result
+      // whose job still tells the client whether to resubmit.
+      expect(result.isError, JSON.stringify(result) + connection.stderr()).toBe(true);
       expect(result.structuredContent).toEqual({
         job_id: expect.any(String),
         status: "failed",
@@ -2186,6 +2188,9 @@ export default defineOperation({name:"tenant_title",input:Schema.Struct({}),outp
           .filter((item) => "submitted_call" in item)
           .at(-1);
         if (current === undefined) throw new Error("Missing original Guardian execution input");
+        // The review of the minter's last answer for its caller decides nothing here.
+        if ("question_review" in current)
+          return [message(JSON.stringify({ outcome: "reword", rationale: "Not needed." }))];
         if (!inspected) {
           inspected = true;
           const submitted = Schema.decodeUnknownSync(Schema.Struct({ entrypoint: Schema.String }))(
@@ -2830,6 +2835,39 @@ test("a label padded so a typed identifier crosses the text limit leaves the fie
   for (const text of [saved ?? "", JSON.stringify(failed), JSON.stringify(mintRequests)])
     expect(piecesIn(text, longIdentifier)).toEqual([]);
 });
+
+const SavedAlerts = Schema.parseJson(
+  Schema.Struct({ alerts: Schema.optional(Schema.Array(Schema.String)) }),
+);
+
+// A screen's error can be gone by the time the agent looks, so the host keeps its visible alert
+// lines with the controls it saves after the submit, screened like control names: the typed
+// identifier the error names never reaches the file, and a hidden error is not kept. An error the
+// page marks only by its class and id counts too.
+for (const { alert, shown } of [
+  { alert: "1", shown: "an alert" },
+  { alert: "class", shown: "an error class" },
+])
+  test(`a submit's visible error text is saved with the next screen's controls, without the typed identifier: ${shown}`, async () => {
+    test.info().annotations.push({
+      type: "slow",
+      description: "Original SDKs, Chromium and a host autofill step through a real form navigation",
+    });
+    test.setTimeout(45_000);
+    const email = shopAccount.username;
+    const { saved, mintRequests } = await twoScreenSignIn({
+      identifier: email,
+      loginPath: `/sign-in?alert=${alert}`,
+      failNext: false,
+    });
+    expect(saved).toBeDefined();
+    const alerts = Schema.decodeUnknownSync(SavedAlerts)(saved).alerts ?? [];
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toContain("Check the password for");
+    expect(saved).not.toContain(email);
+    expect(saved).not.toContain("Hidden error");
+    expect(JSON.stringify(mintRequests)).not.toContain(email);
+  });
 
 test("a next screen whose first hundred controls are hidden still saves its visible sign-in field", async () => {
   test.info().annotations.push({

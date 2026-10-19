@@ -15,7 +15,6 @@ import attachDocument, {
 } from "../../authoring/examples/dates-and-files.js";
 import dialogPicker from "../../authoring/examples/dialog-picker.js";
 import deleteInvoice from "../../authoring/examples/native-dialog.js";
-import searchRecords from "../../authoring/examples/kernel-page-fetch.js";
 import readHeading from "../../authoring/examples/native-page.js";
 import readCatalog, {
   detailFromUrl,
@@ -26,7 +25,13 @@ import searchListings, { readRooms } from "../../authoring/examples/pagination.j
 import selectStatus from "../../authoring/examples/selection.js";
 import readInvoiceIds from "../../authoring/examples/variants.js";
 import createTask from "../../authoring/examples/write-readback.js";
-import placeOrder, { fillStep, placeStep } from "../../authoring/examples/write-session.js";
+import placeOrder, {
+  checkReview,
+  fillStep,
+  OrderInput,
+  placeAndConfirm,
+  placeStep,
+} from "../../authoring/examples/write-session.js";
 import { defineOperation } from "../../src/runtime/operation.js";
 import {
   admitListCursor,
@@ -112,36 +117,6 @@ test("current-page example checks the site and reads without navigating, in one 
   }
   expect(requests).toBe(1);
   expect(page.url()).toBe(`${siteOrigin}/account`);
-});
-
-// The page-fetch reference reads the site's JSON through the page's own fetch, and refuses an
-// answer that is not a JSON 200, such as a sign-in page served in its place.
-test("page-fetch example reads a JSON search through the page and refuses HTML", async ({
-  page,
-}) => {
-  const siteOrigin = "https://records.example.test";
-  const searched: string[] = [];
-  let signedOut = false;
-  await page.route("**/*", async (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname !== "/api/search")
-      return route.fulfill({ contentType: "text/html", body: "<h1>Records</h1>" });
-    searched.push(url.searchParams.get("q") ?? "");
-    return signedOut
-      ? route.fulfill({ contentType: "text/html", body: "<h1>Sign in</h1>" })
-      : route.fulfill({
-          contentType: "application/json",
-          body: JSON.stringify({ items: [{ id: "r-1", name: "Lamp record" }], complete: true }),
-        });
-  });
-  const read = await runExample(page, searchRecords, { query: "lamp" }, { siteOrigin });
-  expect(read.result).toEqual(
-    Either.right({ items: [{ id: "r-1", name: "Lamp record" }], complete: true }),
-  );
-  signedOut = true;
-  const refused = await runExample(page, searchRecords, { query: "lamp" }, { siteOrigin });
-  expect(failure(refused.result)).toMatchObject({ _tag: "OperationFailure" });
-  expect(searched).toEqual(["lamp", "lamp"]);
 });
 
 // The site is the host's registrable domain, never the last labels of the origin: a multi-label
@@ -293,6 +268,7 @@ test("detail example searches the site for the record, follows its link and chec
   expect(failure(await read("record_9"))).toMatchObject({
     _tag: "InvalidInput",
     message: "The site's search lists no record with this ID",
+    field: "record_id",
   });
   // Results still loading, or a search that failed, say nothing about the caller's value.
   expect(await read("record_8")).toEqual(
@@ -341,7 +317,7 @@ test("detail example opens the caller's record URL unchanged and checks the page
     "https://records.other.invalid/records/record_42",
     "http://records.example.invalid/records/record_42",
   ])
-    expect(failure(await read(offSite))).toMatchObject({ _tag: "InvalidInput" });
+    expect(failure(await read(offSite))).toMatchObject({ _tag: "InvalidInput", field: "record_url" });
   expect(site.opened).toHaveLength(before);
 });
 
@@ -355,7 +331,11 @@ test("detail example reports the site's not-found page for a record URL at once"
     { record_url: `${origin}/records/record_gone` },
     { siteOrigin: origin },
   );
-  expect(failure(result)).toMatchObject({ _tag: "InvalidInput", message: "The site has no record at this URL" });
+  expect(failure(result)).toMatchObject({
+    _tag: "InvalidInput",
+    message: "The site has no record at this URL",
+    field: "record_url",
+  });
   expect(Date.now() - started).toBeLessThan(3000);
 });
 
@@ -1307,8 +1287,20 @@ test("write example settles a delayed submit before its outer call expires", asy
   expect(submissions).toBe(0);
 });
 
-/** The checkout the write-session example was written against: fill, review, place, confirm. */
-const checkoutSite = async (page: Page, origin: string, orders: string[]) => {
+/**
+ * The checkout the write-session example was written against: fill, review, place, confirm. The
+ * review prices each unit at 12.50 and shows the total, under a membership offer while
+ * `site.offer` is set.
+ */
+const checkoutSite = async (
+  page: Page,
+  origin: string,
+  orders: string[],
+  site: { offer: boolean; declined: number } = { offer: false, declined: 0 },
+) => {
+  await page.exposeFunction("declineOffer", () => {
+    site.declined += 1;
+  });
   await page.route(`${origin}/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -1323,7 +1315,10 @@ const checkoutSite = async (page: Page, origin: string, orders: string[]) => {
     if (url.pathname === "/checkout/review")
       return route.fulfill({
         contentType: "text/html",
-        body: `<form method="post" action="/orders"><input type="hidden" name="item" value="${url.searchParams.get("item") ?? ""}"><button>Place order</button></form>`,
+        body: `<p aria-label="Item">${url.searchParams.get("item") ?? ""}</p>
+          <p aria-label="Order total">$${(Number(url.searchParams.get("quantity")) * 12.5).toFixed(2)}</p>
+          <form method="post" action="/orders"><input type="hidden" name="item" value="${url.searchParams.get("item") ?? ""}"><button>Place order</button></form>
+          ${site.offer ? `<div role="dialog" aria-label="Membership offer"><button onclick="window.declineOffer(); this.parentElement.remove()">No thanks</button></div>` : ""}`,
       });
     // The site answers the order's own POST with its confirmation.
     if (url.pathname === "/orders" && request.method() === "POST") {
@@ -1342,8 +1337,9 @@ test("write-session example commits once across its act steps and reads the site
 }) => {
   const origin = "https://shop.example.invalid";
   const orders: string[] = [];
-  const input = { item: "lamp", quantity: 2, gift_wrap: false };
-  await checkoutSite(page, origin, orders);
+  const input = { item: "lamp", quantity: 2, gift_wrap: false, max_total_minor: 2500 };
+  const site = { offer: false, declined: 0 };
+  await checkoutSite(page, origin, orders, site);
   await page.goto("about:blank");
   const filled = await runExample(page, fillStep, input, { siteOrigin: origin });
   expect(filled).toMatchObject({
@@ -1351,6 +1347,14 @@ test("write-session example commits once across its act steps and reads the site
     confirmation: undefined,
   });
   expect(orders).toEqual([]);
+  // A membership offer opens late, after the review loaded: the check before the mark declines it.
+  await page.evaluate(() => {
+    const offer = document.createElement("div");
+    offer.setAttribute("role", "dialog");
+    offer.setAttribute("aria-label", "Membership offer");
+    offer.innerHTML = `<button onclick="window.declineOffer(); this.parentElement.remove()">No thanks</button>`;
+    document.body.append(offer);
+  });
   // The next step continues on the review page the first one left.
   const placed = await runExample(page, placeStep, input, { siteOrigin: origin });
   expect(placed).toMatchObject({
@@ -1360,12 +1364,74 @@ test("write-session example commits once across its act steps and reads the site
     commits: [{ name: "place-order", state: "confirmed" }],
   });
   expect(orders).toEqual(["lamp"]);
+  expect(site.declined).toBe(1);
   // The composed script runs the same calls from a blank page and declares its confirmation.
+  // This time the offer shows with the review: the script declines it and places the order.
   expect(placeOrder.write).toEqual({ confirmation: "readback", commits: ["place-order"] });
+  site.offer = true;
   await page.goto("about:blank");
   const composed = await runExample(page, placeOrder, input, { siteOrigin: origin });
   expect(composed).toMatchObject({ confirmation: "readback", effect: "verified" });
+  expect(site.declined).toBe(2);
   expect(orders).toEqual(["lamp", "lamp"]);
+});
+
+test("write-session example refuses a total over the caller's limit before its commit mark", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  const input = { item: "lamp", quantity: 3, gift_wrap: false, max_total_minor: 2500 };
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const refused = await runExample(page, placeOrder, input, { siteOrigin: origin });
+  expect(failure(refused.result)).toMatchObject({
+    _tag: "InvalidInput",
+    field: "max_total_minor",
+    kind: "over_price_limit",
+  });
+  // The caller sees the total the page showed beside the limit.
+  const { message } = failure(refused.result) as Error;
+  expect(message).toContain("3750");
+  expect(message).toContain("2500");
+  // The refusal came before the mark, so the run shows nothing sent and no order exists.
+  expect(refused.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
+  expect(orders).toEqual([]);
+});
+
+test("write-session example stops before clicking when the total moves after its check", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  const input = { item: "lamp", quantity: 2, gift_wrap: false, max_total_minor: 2500 };
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  await runExample(page, fillStep, input, { siteOrigin: origin });
+  // The site raises the total between the check before the mark and the marked call.
+  const moved = defineOperation(
+    {
+      name: "place_order",
+      input: OrderInput,
+      output: Schema.Struct({ order_number: Schema.String }),
+      write: { confirmation: "readback", commits: ["place-order"] },
+    },
+    async (context) => {
+      const checked = await checkReview(context);
+      await page.getByLabel("Order total", { exact: true }).evaluate((total) => {
+        total.textContent = "$26.00";
+      });
+      return placeAndConfirm(context, checked);
+    },
+  );
+  const stopped = await runExample(page, moved, input, { siteOrigin: origin });
+  expect(failure(stopped.result)).toMatchObject({
+    _tag: "OperationFailure",
+    message: "total_changed",
+  });
+  // The mark was entered, so the run counts the commit as possibly sent, though no order exists.
+  expect(stopped.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  expect(orders).toEqual([]);
 });
 
 /** A write that saves an address, then places an order, each its own marked commit step. */

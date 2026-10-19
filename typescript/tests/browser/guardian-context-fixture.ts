@@ -98,7 +98,8 @@ export const executionIdOf = (request: ModelRequest | undefined, callId: string)
 /** One Guardian review as the reviewer model received it, and what it read. */
 export interface RecordedReview {
   readonly input: Readonly<Record<string, unknown>>;
-  readonly kind: "question" | "update" | "execution" | "publication";
+  /** `outcome`: the review of a build's outcome report, such as the minter's last answer. */
+  readonly kind: "question" | "outcome" | "update" | "execution" | "publication";
   readonly reads: Readonly<Record<string, unknown>>[];
   /** The reviewer's system instructions. */
   readonly instructions: string;
@@ -120,6 +121,14 @@ export const currentOf = (review: RecordedReview) =>
   contextOf(review)?.["currentExecution"] as Readonly<Record<string, unknown>> | undefined;
 export const authorityOf = (review: RecordedReview) =>
   review.input["trusted_authority"] as Readonly<Record<string, unknown>>;
+/** The build's request, which ends the instructions every review of the build shares. */
+export const intentOf = (review: RecordedReview) => {
+  const marker = "\ntrusted_request: ";
+  const at = review.instructions.lastIndexOf(marker);
+  return at < 0
+    ? undefined
+    : (JSON.parse(review.instructions.slice(at + marker.length)) as { intent?: unknown }).intent;
+};
 
 /**
  * A scripted Guardian that records each review's input. An execution review reads its entrypoint
@@ -155,12 +164,23 @@ export const recordingGuardian = (
       (value) => value["type"] === "function_call_result",
     );
     const question = "question_review" in input;
+    const outcome =
+      question &&
+      (input["question_review"] as Readonly<Record<string, unknown>>)["blockedOutcome"] === true;
     const update = "update_review" in input;
     const publication = "trusted_publication" in input;
     if (results.length === 0)
       reviews.push({
         input,
-        kind: question ? "question" : update ? "update" : publication ? "publication" : "execution",
+        kind: outcome
+          ? "outcome"
+          : question
+            ? "question"
+            : update
+              ? "update"
+              : publication
+                ? "publication"
+                : "execution",
         reads: [],
         instructions: request.systemInstructions ?? "",
       });

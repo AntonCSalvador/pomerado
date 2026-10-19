@@ -529,8 +529,8 @@ test("a run's replay asks the private answer on every run, from the question its
           typing: { typed: false },
         }),
         login: localSignInLogin({ ask, register: secrets.register, siteOrigin: site }),
-        values: askingValueHooks({ ask, register: secrets.register, site: "bank.example.test", siteOrigin: site }),
-        carries: secrets.carries,
+        ask,
+        secrets,
         site: "bank.example.test",
         siteOrigin: site,
       }),
@@ -539,7 +539,12 @@ test("a run's replay asks the private answer on every run, from the question its
   expect(await run()).toEqual({ alreadySignedIn: false });
   shown.question = "First school?";
   expect(await run()).toEqual({ alreadySignedIn: false });
-  expect(prompts).toEqual(["login", `First pet? (${site})`, "login", `First school? (${site})`]);
+  expect(prompts).toEqual([
+    "login",
+    "bank.example.test asks this security question: First pet?",
+    "login",
+    "bank.example.test asks this security question: First school?",
+  ]);
   for (const value of [...answers, login.password]) expectNotCarried(browser.calls, value);
 });
 

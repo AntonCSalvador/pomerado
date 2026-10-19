@@ -1,14 +1,16 @@
 import { posix } from "node:path";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
+import { fileURLToPath } from "node:url";
 import { localRuntimeAssets } from "../../src/execution/local-runtime-assets.js";
+import { loadStandaloneAuthoring, skillReferenceFiles } from "../../src/mint/skills.js";
 import { makeRunSecrets } from "../../src/inputs/secrets.js";
 import { sourceInspector } from "../../src/standalone/request-context.js";
 
 /** Guardian's reads over a review's own files, with the local host's trusted SDK. */
-const reader = async (sources: ReadonlyMap<string, string>) => {
+const reader = async (sources: ReadonlyMap<string, string>, secrets = makeRunSecrets()) => {
   const trustedSources = new Map(await Effect.runPromise(localRuntimeAssets));
-  const readSource = sourceInspector({ trustedSources, secrets: makeRunSecrets() }, sources);
+  const readSource = sourceInspector({ trustedSources, secrets }, sources);
   return {
     trustedSources,
     read: (path: string) =>
@@ -17,6 +19,16 @@ const reader = async (sources: ReadonlyMap<string, string>) => {
           Effect.match({
             onFailure: (failure) => ({ failure: failure.code }),
             onSuccess: (chunk) => ({ source: (JSON.parse(chunk) as { source: string }).source }),
+          }),
+        ),
+      ),
+    /** Which kind of file a failed read was, as the failure names it. */
+    failedCategory: (path: string) =>
+      Effect.runPromise(
+        readSource(path, 0).pipe(
+          Effect.match({
+            onFailure: (failure) => failure.failureDetail?.context?.["pathCategory"],
+            onSuccess: () => "read",
           }),
         ),
       ),
@@ -60,6 +72,82 @@ describe("Guardian's source reads on the local host", () => {
         pending.push(posix.normalize(posix.join(posix.dirname(path), specifier)));
     }
     expect(seen.size).toBeGreaterThan(1);
+  });
+
+  it("reads the SDK's modules under pomerado/, and a TypeScript spelling as the JavaScript that runs", async () => {
+    const { trustedSources, read } = await reader(new Map());
+    const operation = trustedSources.get("runtime/operation.js");
+    const entry = trustedSources.get("browser/index.js");
+    expect(operation).toBeDefined();
+    for (const path of [
+      "pomerado/runtime/operation.js",
+      "pomerado/runtime/operation.ts",
+      "pomerado/runtime/operation.d.ts",
+      "runtime/operation.ts",
+      "operation/pomerado/runtime/operation.d.ts",
+    ])
+      expect(await read(path), path).toEqual({ source: operation });
+    expect(await read("pomerado/browser/index.ts")).toEqual({ source: entry });
+  });
+
+  it("answers a guessed SDK path with where the SDK is, and still fails a missing authored file", async () => {
+    const { trustedSources, read, failedCategory } = await reader(new Map());
+    const entry = trustedSources.get("browser/index.js");
+    for (const guess of [
+      "pomerado/runtime/missing.ts",
+      "runtime/form-controls.js",
+      "operation/runtime/form-controls.js",
+    ]) {
+      const answer = await read(guess);
+      expect("source" in answer && JSON.parse(answer.source), guess).toEqual({
+        kind: "host_sdk_reference",
+        state: "not_an_sdk_file",
+        runtimeEntry: "pomerado/browser/index.js",
+        resolvedFrom: "pomerado/runtime",
+      });
+    }
+    expect(await read("pomerado/browser/index.js")).toEqual({ source: entry });
+    expect(await read("operation/src/missing.mjs")).toEqual({ failure: "SourceUnavailable" });
+    expect(await failedCategory("operation/src/missing.mjs")).toBe("workspace");
+  });
+
+  it("keeps a secret check's refusal of an SDK file out of the host's gaps", async () => {
+    // The check refuses the same file on every read, so a retry could never clear it.
+    const secrets = makeRunSecrets();
+    secrets.register("defineOperation");
+    const { read, failedCategory } = await reader(
+      new Map([["operation/src/tool.mjs", "export const defineOperation = 1;\n"]]),
+      secrets,
+    );
+    const paths = [
+      "runtime/operation.js",
+      "operation/pomerado/runtime/operation.js",
+      "operation/src/tool.mjs",
+    ];
+    for (const path of paths) expect(await read(path), path).toEqual({ failure: "SourceUnavailable" });
+    expect(await Promise.all(paths.map(failedCategory))).toEqual([undefined, undefined, undefined]);
+  });
+
+  it("reads an authored TypeScript file as written, never as the SDK's JavaScript", async () => {
+    const { read } = await reader(
+      new Map([["operation/runtime/operation.ts", "export const authored = 1;\n"]]),
+    );
+    expect(await read("operation/runtime/operation.ts")).toEqual({
+      source: "export const authored = 1;\n",
+    });
+  });
+
+  it("reads each of the minter's skills where the minter reads it", async () => {
+    const { skills } = await Effect.runPromise(
+      loadStandaloneAuthoring(fileURLToPath(new URL("../../authoring/", import.meta.url))),
+    );
+    const references = skillReferenceFiles(skills);
+    expect(references.size).toBe(skills.length);
+    const { read } = await reader(references);
+    // The skill is long, so its first chunk starts it.
+    const core = await read(".agents/core/SKILL.md");
+    expect("source" in core && core.source.length > 0).toBe(true);
+    expect(references.get(".agents/core/SKILL.md")?.startsWith("source" in core ? core.source : "-")).toBe(true);
   });
 
   it("reads an authored file before the SDK file at the same path", async () => {

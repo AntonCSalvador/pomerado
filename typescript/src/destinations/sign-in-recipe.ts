@@ -1,11 +1,19 @@
 import { Deferred, Effect, Either, FiberId, Option, Schema } from "effect";
-import type { AutofillApproval, AutofillPopup, RejectedMarker } from "./autofill-contracts.js";
+import type {
+  AutofillApproval,
+  AutofillPopup,
+  RejectedMarker,
+  SubmitKey,
+} from "./autofill-contracts.js";
 import {
   autofillRecipe,
   autofillRecipePath,
+  KeySubmitAutofillRecipe,
   LegacyAutofillRecipe,
   PopupAutofillRecipe,
   publishedAutofillRecipe,
+  WorkspaceAutofillRecipe,
+  type AutofillRecipeOrigins,
   type AutofillRecipeStep,
 } from "./autofill-recipe.js";
 import type {
@@ -25,6 +33,7 @@ import type {
 import type { CredentialRejectedField, WebsiteCredentials } from "../runtime/authentication.js";
 import type { InputAsker } from "../runtime/input-request.js";
 import { sameSite } from "../runtime/same-site.js";
+import { recordedScreenPage } from "../runtime/workspace-origin.js";
 
 /**
  * Version 3, which this host wrote for a private answer's question selector before it wrote that
@@ -43,17 +52,31 @@ export const SignInRecipeV3 = Schema.Struct({
     { message: () => "only a private answer names a question selector" },
   ),
 );
-/** A recipe this host reads: version 1 or 2 as every host writes it, or this host's version 3. */
-export const SignInRecipe = Schema.Union(LegacyAutofillRecipe, PopupAutofillRecipe, SignInRecipeV3);
+/**
+ * A recipe this host reads: version 1, 2, 4 or 5 as every host writes it, or this host's version 3.
+ */
+export const SignInRecipe = Schema.Union(
+  LegacyAutofillRecipe,
+  PopupAutofillRecipe,
+  SignInRecipeV3,
+  WorkspaceAutofillRecipe,
+  KeySubmitAutofillRecipe,
+);
 export type SignInRecipe = typeof SignInRecipe.Type;
 export type SignInRecipeStep = AutofillRecipeStep;
 
-const knownVersions: readonly unknown[] = [1, 2, 3];
+/** A recorded step's page on the given workspace origin, or as recorded. */
+export const resolvedPage = (step: SignInRecipeStep, workspace: string | undefined) =>
+  step.origin === "workspace" && workspace === undefined
+    ? undefined
+    : recordedScreenPage(step, workspace);
+
+const knownVersions: readonly unknown[] = [1, 2, 3, 4, 5];
 
 /**
  * A published recipe file read back: the recipe, `unknown_version` for a version this host does
- * not know, else `invalid`. Version 1 and 2 decode as every host reads them; version 3 is read
- * only here.
+ * not know, else `invalid`. Version 1, 2, 4 and 5 decode as every host reads them; version 3 is
+ * read only here.
  */
 export const decodeSignInRecipe = (text: string): SignInRecipe | "invalid" | "unknown_version" => {
   const shared = publishedAutofillRecipe(new Map([[autofillRecipePath, text]]));
@@ -75,35 +98,47 @@ export const decodeSignInRecipe = (text: string): SignInRecipe | "invalid" | "un
  * `minter` when the host's click failed and the minter clicked it itself.
  */
 export interface RecordedSignInStep {
+  /** `workspace` for a screen on the login's workspace host, whose `page` is then a path. */
+  readonly origin?: "workspace" | undefined;
   readonly popup?: AutofillPopup | undefined;
   readonly approval?: AutofillApproval | undefined;
   readonly rejectedMarkers?: readonly RejectedMarker[] | undefined;
   /** With each identifier field's accepted kinds, never a value. */
   readonly fields: readonly AutofillField[];
   readonly submit?: string | undefined;
+  /** The key pressed in the last field to submit its form, on a form with no submit control. */
+  readonly submitKey?: SubmitKey | undefined;
   readonly submittedBy?: "host" | "minter" | undefined;
   /** A two-factor method choice's recorded methods. */
   readonly methods?: AutofillStep["methods"];
+  /** The secrets an earlier screen took that this one asks for again with a second factor. */
+  readonly refills?: SignInRecipeStep["refills"];
   /** The page the step ran on, origin and path only. */
   readonly page: string;
 }
 
 /**
  * A verified sign-in's recipe, as `autofillRecipe` writes it, with only the signed-in indicator's
- * parts that are set.
+ * parts that are set, and version 4's workspace relation when given.
  */
 export const signInRecipe = (
   steps: readonly RecordedSignInStep[],
   signedIn: AutofillSignedIn,
+  origins: AutofillRecipeOrigins = {},
 ): SignInRecipe =>
-  autofillRecipe(steps, {
-    ...(signedIn.selector === undefined ? {} : { selector: signedIn.selector }),
-    ...(signedIn.urlPath === undefined ? {} : { urlPath: signedIn.urlPath }),
-    ...(signedIn.openPath === undefined ? {} : { openPath: signedIn.openPath }),
-  });
+  autofillRecipe(
+    steps,
+    {
+      ...(signedIn.selector === undefined ? {} : { selector: signedIn.selector }),
+      ...(signedIn.urlPath === undefined ? {} : { urlPath: signedIn.urlPath }),
+      ...(signedIn.openPath === undefined ? {} : { openPath: signedIn.openPath }),
+    },
+    origins,
+  );
 
 /** A recipe screen in `recipeStep`'s key order, whatever order it was read in. */
 const inStepOrder = (step: SignInRecipeStep): SignInRecipeStep => ({
+  ...(step.origin === undefined ? {} : { origin: step.origin }),
   page: step.page,
   ...(step.approval === undefined ? {} : { approval: step.approval }),
   ...(step.popup === undefined ? {} : { popup: step.popup }),
@@ -121,20 +156,26 @@ const inStepOrder = (step: SignInRecipeStep): SignInRecipeStep => ({
             : { questionSelector: field.questionSelector }),
         },
   ),
+  ...(step.refills === undefined ? {} : { refills: step.refills }),
   ...(step.submit === undefined ? {} : { submit: step.submit }),
+  ...(step.submitKey === undefined ? {} : { submitKey: step.submitKey }),
   ...(step.submittedBy === undefined ? {} : { submittedBy: step.submittedBy }),
   ...(step.methods === undefined ? {} : { methods: step.methods }),
 });
 
 /**
- * A recipe as `auth-fill.json` holds it: each screen in `recipeStep`'s key order, indented two
- * spaces, with no final newline. The same recipe is the same bytes from any host that writes it
- * this way.
+ * A recipe as `auth-fill.json` holds it: `version`, then version 4's or 5's `workspace`, then each
+ * screen in `recipeStep`'s key order (a workspace screen's `origin` first), indented two spaces,
+ * with no final newline. The same recipe is the same bytes from any
+ * host that writes it this way.
  */
 export const signInRecipeText = (recipe: SignInRecipe) =>
   JSON.stringify(
     {
       version: recipe.version,
+      ...((recipe.version !== 4 && recipe.version !== 5) || recipe.workspace === undefined
+        ? {}
+        : { workspace: { parent: recipe.workspace.parent } }),
       steps: recipe.steps.map(inStepOrder),
       signedIn: {
         ...(recipe.signedIn.selector === undefined ? {} : { selector: recipe.signedIn.selector }),
@@ -201,6 +242,73 @@ export interface SignInRequest {
   /** The browser's id for the tab that sent it, when the host knows it. */
   readonly ownerTargetId?: string | undefined;
 }
+
+/**
+ * Of each run of consecutive one-character values among `values`, every stretch exactly as long as
+ * a code split across boxes (`lengths`), joined in order: what such a code is once its boxes go out
+ * as separate values. A one-character value beside the boxes, such as a checkbox's `1`, stays out of
+ * the code.
+ */
+const oneCharacterRuns = (values: readonly unknown[], lengths: readonly number[]): string[] => {
+  const runs: string[] = [];
+  let run: string[] = [];
+  const end = () => {
+    for (const length of lengths)
+      for (let start = 0; start + length <= run.length; start++)
+        runs.push(run.slice(start, start + length).join(""));
+    run = [];
+  };
+  for (const value of values) {
+    const text = typeof value === "number" && Number.isInteger(value) ? String(value) : value;
+    if (typeof text === "string" && oneCharacter(text)) run.push(text);
+    else end();
+  }
+  end();
+  return runs;
+};
+
+/** The one-character runs (`oneCharacterRuns`) of a JSON value's arrays and objects, at any depth. */
+const jsonRuns = (value: unknown, lengths: readonly number[]): string[] => {
+  if (typeof value !== "object" || value === null) return [];
+  const values = Array.isArray(value) ? (value as unknown[]) : Object.values(value);
+  return [
+    ...oneCharacterRuns(values, lengths),
+    ...values.flatMap((item) => jsonRuns(item, lengths)),
+  ];
+};
+
+/**
+ * The texts a request carries a code split across one-character boxes in when it sends each box as
+ * a value of its own, as a form that posts each box as its own field does: each stretch of
+ * consecutive one-character values as long as a pending code (`lengths`), joined in order, of the
+ * URL's query, of a form-encoded body and of a JSON body's arrays and objects. A code sent whole is
+ * in the request's own text already. Held in memory only, like the request's body, and never
+ * logged.
+ */
+const splitCodeTexts = (
+  request: Pick<SignInRequest, "url" | "body">,
+  lengths: readonly number[],
+): string[] => {
+  if (lengths.length === 0) return [];
+  const params = (search: string) => [...new URLSearchParams(search).values()];
+  const query = URL.parse(request.url)?.search ?? "";
+  const body = request.body ?? "";
+  const parsed = Either.try(() => JSON.parse(body) as unknown);
+  const fromBody = Either.isRight(parsed)
+    ? jsonRuns(parsed.right, lengths)
+    : oneCharacterRuns(params(body), lengths);
+  return [...new Set([...oneCharacterRuns(params(query), lengths), ...fromBody])];
+};
+
+/** The lengths, in characters, of the pending codes long enough to have been typed one per box. */
+const pendingCodeLengths = (record: SignInRecord) => [
+  ...new Set(
+    [...record.pending]
+      .filter(([slot]) => slot === "code")
+      .map(([, value]) => Array.from(value).length)
+      .filter((length) => length > 1),
+  ),
+];
 
 /** Whether `texts` carry every expected value; the host's matching of registered values. */
 export type SecretMatcher = (
@@ -343,7 +451,11 @@ export const noteFormSubmit = (
   Effect.gen(function* () {
     const watch = record?.watch;
     if (record === undefined || watch === undefined) return [];
-    const texts = [request.url, request.body ?? ""];
+    const texts = [
+      request.url,
+      request.body ?? "",
+      ...splitCodeTexts(request, pendingCodeLengths(record)),
+    ];
     const carried: AutofillSlot[] = [];
     const script = scriptRequest(watch, sentAt, request);
     const judged = sentAsJudged(watch, sentAt, request);
@@ -466,6 +578,7 @@ export const armStep = (
       field.slot === "date_of_birth" ? { ...field, control: control(index) } : field,
     ),
     ...(step.submit === undefined ? {} : { submit: step.submit }),
+    ...(step.submitKey === undefined ? {} : { submitKey: step.submitKey }),
     ...(step.methods === undefined ? {} : { methods: step.methods }),
     page: inspection.page,
   });
@@ -547,11 +660,14 @@ export interface SignInBrowser<E> {
   /**
    * Checks the minter's signed-in indicator on the page: `screens` are every screen the build
    * filled, `challengeScreens` the current sign-in's, whose recorded challenges count.
+   * `openOrigin`, a same-site origin such as the login's workspace origin, is where the
+   * indicator's `openPath` opens; the site origin when absent.
    */
   readonly confirm: (
     indicator: AutofillSignedIn,
     screens: AutofillScreens,
     challengeScreens: AutofillScreens,
+    openOrigin?: string,
   ) => Effect.Effect<AutofillSignedInCheck, E>;
   /** Hears each request the page sends until the returned function stops it. */
   readonly onRequest: (listener: (request: SignInRequest) => void) => () => void;
@@ -565,10 +681,14 @@ export interface SignInLogin<E> {
   readonly held: () => WebsiteCredentials | undefined;
   /** The login, asked for once when none is held. */
   readonly values: Effect.Effect<WebsiteCredentials, E>;
-  /** A corrected login after the site rejected `field` of `held`. */
+  /**
+   * A corrected login after the site rejected `field` of `held`; `triesLeft`, this one included,
+   * when the sign-in bounds its corrections.
+   */
   readonly correct: (
     field: CredentialRejectedField,
     held: WebsiteCredentials,
+    triesLeft?: number,
   ) => Effect.Effect<WebsiteCredentials, E>;
 }
 

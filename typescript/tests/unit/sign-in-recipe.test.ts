@@ -9,8 +9,10 @@ import {
   openSignInRecord,
   recordStep,
   signInRecipe,
+  signInRecipeText,
   type SignInRequest,
 } from "../../src/destinations/sign-in-recipe.js";
+import { makeRunSecrets } from "../../src/inputs/secrets.js";
 
 const steps = [
   {
@@ -87,12 +89,59 @@ describe("decodeSignInRecipe", () => {
         signedIn,
       },
     ],
+    [
+      "version 4 with a workspace step",
+      {
+        version: 4,
+        workspace: { parent: "example.com" },
+        steps: [
+          { ...steps[0], page: "https://app.example.com/login" },
+          { origin: "workspace", ...steps[1], page: "/login/password" },
+        ],
+        signedIn: { selector: "#account-menu", openPath: "/settings" },
+      },
+    ],
+    [
+      "version 5 with a screen that asks for the password again beside a code",
+      {
+        version: 5,
+        steps: [
+          ...steps,
+          {
+            page: "https://example.test/login/password",
+            fields: [
+              { selector: "#password", slot: "password" },
+              { selector: "#code", slot: "code" },
+            ],
+            refills: ["password"],
+            submit: "#sign-in",
+          },
+        ],
+        signedIn,
+      },
+    ],
+    [
+      "version 5 with a code step its key submits",
+      {
+        version: 5,
+        steps: [
+          ...steps,
+          {
+            page: "https://example.test/login/code",
+            fields: [{ selector: "#code", slot: "code" }],
+            submitKey: "Enter",
+            submittedBy: "host",
+          },
+        ],
+        signedIn,
+      },
+    ],
   ])("reads %s", (_name, recipe) => {
     expect(decodeSignInRecipe(JSON.stringify(recipe))).toEqual(recipe);
   });
 
   it("refuses a version it does not know, so a run never drops what that version adds", () => {
-    expect(decodeSignInRecipe(JSON.stringify({ version: 4, steps, signedIn }))).toBe(
+    expect(decodeSignInRecipe(JSON.stringify({ version: 6, steps, signedIn }))).toBe(
       "unknown_version",
     );
   });
@@ -114,6 +163,146 @@ describe("decodeSignInRecipe", () => {
         ],
         signedIn,
       }),
+    ],
+    [
+      "a version 4 workspace step whose page names a host",
+      JSON.stringify({
+        version: 4,
+        workspace: { parent: "example.com" },
+        steps: [{ origin: "workspace", page: "https://acme.example.com/login", fields: [] }],
+        signedIn,
+      }),
+    ],
+    [
+      "a version 4 workspace step whose page is protocol-relative",
+      JSON.stringify({
+        version: 4,
+        workspace: { parent: "example.com" },
+        steps: [{ origin: "workspace", page: "//acme.example.com/login", fields: [] }],
+        signedIn,
+      }),
+    ],
+    ...[
+      ["a backslash", "/\\evil.example.com/login"],
+      ["a query", "/login?tenant=acme"],
+      ["a fragment", "/login#password"],
+      ["a dot segment", "/org/../login"],
+      ["an empty segment that opens with //", "//login"],
+    ].map(([name, page]) => [
+      `a version 4 workspace step whose page has ${String(name)}`,
+      JSON.stringify({
+        version: 4,
+        workspace: { parent: "example.com" },
+        steps: [{ origin: "workspace", page, fields: [] }],
+        signedIn,
+      }),
+    ]),
+    [
+      "a version 4 workspace step without the recipe's workspace",
+      JSON.stringify({
+        version: 4,
+        steps: [{ origin: "workspace", page: "/login", fields: [] }],
+        signedIn,
+      }),
+    ],
+    [
+      "a version 4 exact step whose page is a path",
+      JSON.stringify({ version: 4, workspace: { parent: "example.com" }, steps: [{ page: "/login", fields: [] }], signedIn }),
+    ],
+    [
+      "a version 4 parent that is not a lower-case host name",
+      JSON.stringify({ version: 4, workspace: { parent: "Example.com" }, steps, signedIn }),
+    ],
+    ...[
+      ["a submit", { submit: "#verify" }],
+      ["no field", { fields: [] }],
+    ].map(([name, change]) => [
+      `a version 5 key-submitted step with ${String(name)}`,
+      JSON.stringify({
+        version: 5,
+        steps: [
+          {
+            page: "https://example.test/login/code",
+            fields: [{ selector: "#code", slot: "code" }],
+            submitKey: "Enter",
+            ...Object(change),
+          },
+        ],
+        signedIn,
+      }),
+    ]),
+    [
+      "a version 5 recipe with a key this host does not know",
+      JSON.stringify({ version: 5, signInOrigins: ["https://id.example.net"], steps, signedIn }),
+    ],
+    [
+      "a version 4 recipe with a key this host does not know",
+      JSON.stringify({ version: 4, signInOrigins: ["https://id.example.net"], steps, signedIn }),
+    ],
+    [
+      "a version 4 step that refills the password",
+      JSON.stringify({
+        version: 4,
+        steps: [
+          ...steps,
+          {
+            page: "https://example.test/login/password",
+            fields: [
+              { selector: "#password", slot: "password" },
+              { selector: "#code", slot: "code" },
+            ],
+            refills: ["password"],
+          },
+        ],
+        signedIn,
+      }),
+    ],
+    [
+      "a version 5 step that refills the password with no second factor",
+      JSON.stringify({
+        version: 5,
+        steps: [...steps, { ...steps[1], refills: ["password"] }],
+        signedIn,
+      }),
+    ],
+    [
+      "a version 5 step that refills a field it does not take",
+      JSON.stringify({
+        version: 5,
+        steps: [
+          ...steps,
+          {
+            page: "https://example.test/login/code",
+            fields: [{ selector: "#code", slot: "code" }],
+            refills: ["password"],
+          },
+        ],
+        signedIn,
+      }),
+    ],
+    [
+      "a version 5 step that refills a code",
+      JSON.stringify({
+        version: 5,
+        steps: [
+          ...steps,
+          {
+            page: "https://example.test/login/code",
+            fields: [
+              { selector: "#password", slot: "password" },
+              { selector: "#code", slot: "code" },
+            ],
+            refills: ["code"],
+          },
+        ],
+        signedIn,
+      }),
+    ],
+    // A version 5 step key a host does not know is refused, not dropped: so a version 5 host
+    // that predates `refills` refuses a recipe that refills, rather than replaying it without.
+    [
+      "a version 5 step with a key this host does not know",
+      JSON.stringify({ version: 5, steps: [{ ...steps[0], submitAfter: 1 }], signedIn }),
     ],
   ])("refuses %s as invalid", (_name, text) => {
     expect(decodeSignInRecipe(text)).toBe("invalid");
@@ -185,6 +374,50 @@ describe("signInRecipe", () => {
         signedIn,
       ).version,
     ).toBe(1);
+  });
+
+  it("writes version 4 only for a workspace step or a workspace relation", () => {
+    const shared = { ...recorded, page: "https://app.example.com/login" };
+    const workspace = {
+      origin: "workspace" as const,
+      page: "/login/password",
+      fields: [{ selector: "#password", slot: "password" as const }],
+      submit: "#sign-in",
+    };
+    const relation = { workspace: { parent: "example.com" } };
+    expect(signInRecipe([shared], signedIn, {}).version).toBe(1);
+    expect(signInRecipe([shared], signedIn, relation).version).toBe(4);
+    const recipe = signInRecipe([shared, workspace], signedIn, relation);
+    const text = signInRecipeText(recipe);
+    expect(decodeSignInRecipe(text)).toEqual(recipe);
+    // The relation names the site's registrable domain and a path, never a workspace host.
+    expect(Object.keys(JSON.parse(text) as object)).toEqual([
+      "version",
+      "workspace",
+      "steps",
+      "signedIn",
+    ]);
+    expect(Object.keys((JSON.parse(text) as { steps: object[] }).steps[1] ?? {})[0]).toBe("origin");
+  });
+
+  it("writes version 5 only for a step its key submits, keeping a workspace relation", () => {
+    const code = {
+      page: "https://example.test/login/code",
+      fields: [{ selector: "#code", slot: "code" as const }],
+      submitKey: "Enter" as const,
+    };
+    expect(signInRecipe([recorded], signedIn).version).toBe(1);
+    const recipe = signInRecipe([recorded, code], signedIn, { workspace: { parent: "example.test" } });
+    expect(recipe).toMatchObject({ version: 5, workspace: { parent: "example.test" } });
+    expect(recipe.steps[1]).toEqual({ ...code });
+    const text = signInRecipeText(recipe);
+    expect(decodeSignInRecipe(text)).toEqual(recipe);
+    expect(Object.keys(JSON.parse(text) as object)).toEqual([
+      "version",
+      "workspace",
+      "steps",
+      "signedIn",
+    ]);
   });
 
   it("holds no value, question text, label or after-submit control", () => {
@@ -443,6 +676,60 @@ describe("the seen-sent rule", () => {
       expect(keptValue(boxes, ["2", "4", "6", "8", "1", "0"], 5)).toBe("246810");
       // A longer code field keeps its own value.
       expect(keptValue(codeStep, ["246810"], 0)).toBe("246810");
+    });
+
+    it("counts a code whose boxes a request sends as separate one-character values, in order, as carried whole", async () => {
+      const boxes = { fields: [1, 2, 3, 4, 5, 6].map((box) => ({ selector: `#otp-${box}`, slot: "code" as const })) };
+      const boxesScreen = { ...screen, targets: { fields: boxes.fields.map(() => target), submit: null } };
+      const digits = ["2", "4", "6", "8", "1", "0"];
+      const carried = async (request: SignInRequest) => {
+        const signIn = openSignInRecord();
+        armStep(signIn, boxes, boxesScreen, digits, 0, signInOrigins);
+        return Effect.runPromise(noteFormSubmit(signIn, 1, request, carries));
+      };
+      const boxed = (order: readonly string[]) =>
+        order.map((digit, at) => `d${at + 1}=${digit}`).join("&");
+      // Each box as its own form field, among other fields, and a JSON body's array or object.
+      expect(await carried(verifyRequest(`csrf=abc123&${boxed(digits)}&remember=on`))).toEqual(["code"]);
+      expect(await carried(verifyRequest(JSON.stringify({ otp: digits })))).toEqual(["code"]);
+      expect(await carried(verifyRequest(JSON.stringify({ otp: digits.map(Number) })))).toEqual(["code"]);
+      expect(
+        await carried(
+          verifyRequest(JSON.stringify({ form: Object.fromEntries(digits.map((digit, at) => [`d${at}`, digit])) })),
+        ),
+      ).toEqual(["code"]);
+      expect(
+        await carried(scriptRequest(`https://api.example.test/auth/email/verify?${boxed(digits)}`, "")),
+      ).toEqual(["code"]);
+      // Boxes out of order, one box short, or broken by another value carry no code.
+      expect(await carried(verifyRequest(boxed(["4", "2", "6", "8", "1", "0"])))).toEqual([]);
+      expect(await carried(verifyRequest(boxed(digits.slice(0, 5))))).toEqual([]);
+      expect(await carried(verifyRequest("d1=2&d2=4&d3=6&step=two&d4=8&d5=1&d6=0"))).toEqual([]);
+    });
+
+    it("keeps a one-character value beside the boxes out of the code, by the host's own matcher", async () => {
+      const boxes = { fields: [1, 2, 3, 4, 5, 6].map((box) => ({ selector: `#otp-${box}`, slot: "code" as const })) };
+      const boxesScreen = { ...screen, targets: { fields: boxes.fields.map(() => target), submit: null } };
+      const digits = ["2", "4", "6", "8", "1", "0"];
+      // The run's secrets, which count a code this short only as a whole token.
+      const secrets = makeRunSecrets();
+      secrets.register(digits.join(""));
+      const carried = async (request: SignInRequest) => {
+        const signIn = openSignInRecord();
+        armStep(signIn, boxes, boxesScreen, digits, 0, signInOrigins);
+        return Effect.runPromise(noteFormSubmit(signIn, 1, request, secrets.carries));
+      };
+      const boxed = digits.map((digit, at) => `d${at + 1}=${digit}`).join("&");
+      // A remember-me checkbox after the boxes, a hidden step number before them, both, and a
+      // JSON array with a flag at its end.
+      expect(await carried(verifyRequest(`${boxed}&remember=1`))).toEqual(["code"]);
+      expect(await carried(verifyRequest(`step=2&${boxed}`))).toEqual(["code"]);
+      expect(await carried(verifyRequest(`step=2&${boxed}&remember=1`))).toEqual(["code"]);
+      expect(await carried(verifyRequest(JSON.stringify({ otp: [...digits, "y"] })))).toEqual(["code"]);
+      // The code within a longer run of digits is still found; one box short, or out of order, is not.
+      expect(await carried(verifyRequest(`${boxed}&d7=5`))).toEqual(["code"]);
+      expect(await carried(verifyRequest(`step=2&${digits.slice(0, 5).map((digit, at) => `d${at}=${digit}`).join("&")}&remember=1`))).toEqual([]);
+      expect(await carried(verifyRequest("d1=4&d2=2&d3=6&d4=8&d5=1&d6=0&remember=1"))).toEqual([]);
     });
   });
 

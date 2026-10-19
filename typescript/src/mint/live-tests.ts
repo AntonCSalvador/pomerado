@@ -12,8 +12,9 @@ import { outputCheckMeaning, outputChecks, type OutputCheck } from "../runtime/o
  * on a fresh page that keeps its browser's site data, in parallel browsers where the host has
  * them, and the agent sees every result. Each case run says whether it started warm or cold (see
  * `LiveTestStart`).
- * Nothing here blocks publication: the publication review reads the record and judges the cases
- * against what the tool claims.
+ * The publication review reads the record and judges the cases against what the tool claims. The
+ * only rule here that holds publication back is `liveTestsShortfall`: a version whose cases
+ * mostly fail on the source it publishes is not sent to review at all.
  *
  * The same cases run on both versions of a read: the Playwright version (`src/tool.mjs`) and the
  * HTTP version (`src/tool-http.mjs`). Each version keeps its own result for each case, so a batch
@@ -26,6 +27,43 @@ export const liveTestCasesPath = "test/cases.json";
 export const liveTestsEvidencePath = "publication/tests.json";
 /** The most cases one batch runs: a payload bound, not a limit on testing. */
 export const maximumBatchCases = 50;
+/**
+ * The most distinct inputs a signed-in read runs live tests on in one build or repair, beyond its
+ * example: one combined case that sets every optional input the example left unset, and one more
+ * for inputs that cannot be set with the others. Running a counted input again, after a fix or on
+ * the HTTP version, is free. A read signed out has no such limit.
+ */
+export const signedInTestInputLimit = 2;
+
+/**
+ * A test input's identity for the signed-in limit: its JSON with object keys sorted, so the same
+ * input written in another key order is the same input. Array order counts.
+ */
+export const testInputKey = (input: unknown): string => canonical(input);
+
+/**
+ * The distinct inputs among `inputs`, as keys, that `counted` does not hold yet, in their first
+ * order. A batch that names one input in several cases counts it once.
+ */
+export const uncountedTestInputs = (
+  counted: readonly string[],
+  inputs: readonly unknown[],
+): readonly string[] =>
+  [...new Set(inputs.map(testInputKey))].filter((key) => !counted.includes(key));
+
+/**
+ * Why a signed-in read may not run live tests on `inputs` now, or undefined when it may: it has
+ * already run `counted` distinct inputs, and these would take it past `signedInTestInputLimit`.
+ */
+export const signedInTestInputRefusal = (
+  counted: readonly string[],
+  inputs: readonly unknown[],
+): string | undefined => {
+  const added = uncountedTestInputs(counted, inputs).length;
+  if (added === 0 || counted.length + added <= signedInTestInputLimit) return undefined;
+  const left = Math.max(0, signedInTestInputLimit - counted.length);
+  return `A signed-in read runs live tests on at most ${signedInTestInputLimit} distinct inputs in a build or repair, beyond its example: one combined case that sets every optional input the example left unset, and one more only when those inputs cannot all be set together. It has run ${counted.length}, and this would add ${added}${left === 0 ? "" : `; ${left} more may run`}. Running an input it already ran again, after a fix or on src/tool-http.mjs, is free. Merge the inputs into the cases already run, or list the rest under notTested and in coverage. Nothing was executed.`;
+};
 
 /** Which version of a read a case ran on. */
 export type LiveTestVersion = "playwright" | "http";
@@ -417,6 +455,26 @@ const resultShape = (output: unknown, list: PrimaryList | undefined) => {
   return { empty: false, got: "a result" };
 };
 
+/** A list read's rows in an output, or undefined when it holds no such list. */
+const rowsOf = (output: unknown, list: PrimaryList): readonly unknown[] | undefined => {
+  const items = list.field === undefined ? output : isRecord(output) ? output[list.field] : undefined;
+  return Array.isArray(items) ? items : undefined;
+};
+
+/**
+ * Whether a list's page two holds rows and every one of them was already on page one, as when the
+ * tool ignored the cursor and read page one again. A page two with one new row moves on.
+ */
+const repeatsPageOne = (run: LiveTestCaseRun, list: PrimaryList | undefined) => {
+  if (list === undefined || run.outcome.status !== "completed") return false;
+  if (run.followUp?.status !== "completed") return false;
+  const first = rowsOf(run.outcome.output, list);
+  const second = rowsOf(run.followUp.output, list);
+  if (first === undefined || second === undefined || second.length === 0) return false;
+  const seen = new Set(first.map(canonical));
+  return second.every((row) => seen.has(canonical(row)));
+};
+
 const inconclusiveDetail: Readonly<Record<LiveTestInconclusiveReason, string>> = {
   challenge: "The site challenged this browser; the host stopped the case. It does not count against the tool.",
   host: "The browser or the host failed, not the tool. Run the case again.",
@@ -462,7 +520,13 @@ export const judgeCase = (
       if (testCase.expect === "result")
         return shape.empty
           ? { ...base, verdict: "fail", detail: `${page}Expected results, but the tool returned ${shape.got}.` }
-          : { ...base, verdict: "pass" };
+          : repeatsPageOne(run, list)
+            ? {
+                ...base,
+                verdict: "fail",
+                detail: `${page}Every row page 2 returned was already on page 1: the tool read page 1 again instead of the page the cursor names. Fix how the tool applies its cursor.`,
+              }
+            : { ...base, verdict: "pass" };
       if (testCase.expect === "empty")
         return shape.empty
           ? { ...base, verdict: "pass" }
@@ -600,6 +664,11 @@ export interface LiveTestRecord {
   readonly retired?: true;
   /** A retired failure whose case, unchanged, did not fail when run again on the same source. */
   readonly flaky?: true;
+  /**
+   * The case ran while the read was signed in. A signed-in read's publication record holds only
+   * such results; ones from before its sign-in tested another session.
+   */
+  readonly signedIn?: true;
 }
 
 export const LiveTestRecord: Schema.Schema<LiveTestRecord> = Schema.Struct({
@@ -633,6 +702,7 @@ export const LiveTestRecord: Schema.Schema<LiveTestRecord> = Schema.Struct({
   nextPage: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   retired: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   flaky: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  signedIn: Schema.optionalWith(Schema.Literal(true), { exact: true }),
 });
 
 /** The first few items of an output, as compact text, for an excerpt. */
@@ -739,6 +809,8 @@ const retiredViews = (
     .map((testCase) => ({
       id: testCase.id,
       runs: runs(testCase.input, testCase.expect, testCase.next_page === true),
+      input: canonical([testCase.input, testCase.next_page === true]),
+      expect: testCase.expect,
     }));
   /**
    * A failure on earlier source that a case passing on the published source runs again with the
@@ -748,6 +820,17 @@ const retiredViews = (
     if (record.sourceDigest === sourceDigest || record.input === undefined) return undefined;
     const ran = runs(record.input, record.expect, record.nextPage === true);
     return passing.find((entry) => entry.runs === ran)?.id;
+  };
+  /**
+   * A failure on any source that a case passing on the published source runs again with the same
+   * input and another expectation. It is a lead, never an excuse by itself: the publication review
+   * excuses the failure only when a capture shows the site's own answer for that input matching
+   * the new expectation.
+   */
+  const changedExpectationBy = (record: LiveTestRecord) => {
+    if (record.input === undefined || record.expect === undefined) return undefined;
+    const input = canonical([record.input, record.nextPage === true]);
+    return passing.find((entry) => entry.input === input && entry.expect !== record.expect)?.id;
   };
   return [
     ...deleted.map((record) => [record, "deleted from the cases file"] as const),
@@ -764,11 +847,14 @@ const retiredViews = (
     ),
   ].map(([record, because]) => {
     const excuse = record.verdict === "fail" ? excusedBy(record) : undefined;
+    const changed =
+      record.verdict === "fail" && excuse === undefined ? changedExpectationBy(record) : undefined;
     return {
       id: record.id,
       retiredBecause: because,
       ...(record.flaky === true ? { flaky: true } : {}),
       ...(excuse === undefined ? {} : { excusedBy: excuse }),
+      ...(changed === undefined ? {} : { changedExpectationBy: changed }),
       ...(record.purpose === undefined ? {} : { purpose: record.purpose }),
       ...(record.expect === undefined ? {} : { expect: record.expect }),
       ...(record.input === undefined ? {} : { input: record.input }),
@@ -826,9 +912,15 @@ export const liveTestsEvidence = (options: {
   readonly versions: readonly LiveTestVersionResults[];
   /** The attempt ran out of time for live tests. */
   readonly outOfTime?: boolean;
+  /**
+   * The read signed in, so it ran live tests on at most `signedInTestInputLimit` inputs, and
+   * `versions` holds only results run signed in.
+   */
+  readonly signedIn?: boolean;
 }) => {
   const { file, versions } = options;
   const outOfTime = options.outOfTime === true;
+  const signedIn = options.signedIn === true;
   const cases = file.cases.map((testCase) => ({
     id: testCase.id,
     purpose: testCase.purpose,
@@ -896,7 +988,7 @@ export const liveTestsEvidence = (options: {
   const retiredFailures = retired.filter((entry) => entry.lastVerdict === "fail").length;
   const summary = nothing
     ? "Host live tests on the published source: none designed or run; beyond the example, nothing was tested live."
-    : `Host live tests on the published source: ${cases.length} case${cases.length === 1 ? "" : "s"}.${versionViews
+    : `Host live tests on the published source${signedIn ? `, signed in (at most ${signedInTestInputLimit} inputs)` : ""}: ${cases.length} case${cases.length === 1 ? "" : "s"}.${versionViews
         .map(
           (entry) =>
             ` ${versionName(entry.version)}${entry.entrypoint === undefined ? "" : ` (${entry.entrypoint})`}: ${Object.entries(
@@ -915,7 +1007,13 @@ export const liveTestsEvidence = (options: {
       kind: "host_live_tests",
       note: nothing
         ? "Written by the host, never by the minter. The minter designed and ran no live test case, so beyond the example nothing was tested live."
-        : "Written by the host from its own runs, never by the minter. The same cases run on each version of the tool: playwright, the Kernel script, and http, the HTTP version, for each version that ships: a version that does not ship, such as an HTTP version the minter ruled out, is not listed. versions names each version's entrypoint, the source digest its results are judged against, and its counts. Each case's results hold its result on each version, from that version's own batches: one version's run never counts for the other. Each case ran in a fresh script process on a page reset to the site's origin, after one Guardian review of its batch; purpose is the minter's account of what the case establishes. A result's start says how its browser started: cold, first on a new browser with an empty profile, as a caller the site remembers nothing about meets it; warm, on a browser that kept the site data earlier steps left. versions counts each version's coldPasses, the cases that passed cold; a host with one browser runs no case cold. status is against that version's source being published: stale means the source or the case changed after the case ran, and not_run means no batch ran it on that version. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists, by version, cases the minter deleted, failures it replaced by changing the case, and failures that did not repeat when the unchanged case ran again on the same source (flaky), with their last result; excusedBy names a case that passes the same input with the same expectation on that version's published source after the source changed.",
+        : "Written by the host from its own runs, never by the minter. The same cases run on each version of the tool: playwright, the Kernel script, and http, the HTTP version, for each version that ships: a version that does not ship, such as an HTTP version the minter ruled out, is not listed. versions names each version's entrypoint, the source digest its results are judged against, and its counts. Each case's results hold its result on each version, from that version's own batches: one version's run never counts for the other. Each case ran in a fresh script process on a page reset to the site's origin, after one Guardian review of its batch; purpose is the minter's account of what the case establishes. A result's start says how its browser started: cold, first on a new browser with an empty profile, as a caller the site remembers nothing about meets it; warm, on a browser that kept the site data earlier steps left. versions counts each version's coldPasses, the cases that passed cold; a host with one browser runs no case cold. status is against that version's source being published: stale means the source or the case changed after the case ran, and not_run means no batch ran it on that version. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists, by version, cases the minter deleted, failures it replaced by changing the case, and failures that did not repeat when the unchanged case ran again on the same source (flaky), with their last result; excusedBy names a case that passes the same input with the same expectation on that version's published source after the source changed; changedExpectationBy names a case that passes the same input with another expectation on that version's published source, for a failure on any source; it excuses nothing by itself.",
+      ...(signedIn
+        ? {
+            signedIn: true,
+            signedInNote: `This read signed in. It runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, each on the build's own signed-in browser, so none runs cold: a combined case that sets the optional inputs the example left unset, and one more only when those cannot be set together. Results list only cases run signed in; a case not_run, and notTested, is disclosure, not a gap.`,
+          }
+        : {}),
       ...(outOfTime ? { outOfTime: true } : {}),
       ...(options.fileProblem === undefined ? {} : { casesFileProblem: options.fileProblem }),
       versions: versionViews,
@@ -926,6 +1024,63 @@ export const liveTestsEvidence = (options: {
     coverage: `${summary}${outOfTime ? ` ${outOfTimeNote}` : ""}${
       options.fileProblem === undefined ? "" : ` ${options.fileProblem}`
     }`,
+  };
+};
+
+/**
+ * The share of the published version's counted cases, in percent, that must pass on its source
+ * before the harness sends a read's publication to review. Below it the review would hold
+ * publication back on the failing cases anyway, so it is not started. The bar sits below every
+ * case so that a case that is itself wrong, and not yet corrected, does not hold back the rest.
+ */
+export const reviewPassPercent = 70;
+
+/** The published version, when its live tests on its source pass below `reviewPassPercent`. */
+export interface LiveTestsShortfall {
+  readonly version: LiveTestVersion;
+  readonly entrypoint?: string;
+  /** Counted cases that pass. */
+  readonly passed: number;
+  /** Counted cases: those that pass or fail. */
+  readonly counted: number;
+  /** `passed` of `counted` in whole percent, rounded down, so 69.6% reads 69%. */
+  readonly percent: number;
+}
+
+/**
+ * Whether the version `finish_build` publishes, `published`, passes below `reviewPassPercent` on
+ * its source, from the publication record's `versions`; undefined when it reaches the bar.
+ *
+ * Its counted cases are the cases in `test/cases.json` as written now whose latest result on that
+ * version's published source is a pass or a fail, its `counts` in the record. Nothing else counts
+ * either way: an inconclusive result (a challenge, a site block, a host fault, the deadline) tested
+ * nothing about the tool; a stale or not_run case has no result on that source; and a retired case
+ * is no longer one of the cases. A version with no counted case reaches the bar: the review judges
+ * its coverage as before. Only the published version is held to it: the publication review
+ * judges an HTTP version beside a published Playwright version from its own results, as before.
+ * The harness does not apply the bar once the attempt ran out of time for live tests, or when no
+ * further batch fits, as after a host's batch cap, since no case can run again then.
+ */
+export const liveTestsShortfall = (
+  versions: readonly {
+    readonly version: LiveTestVersion;
+    readonly entrypoint?: string;
+    readonly counts: { readonly pass: number; readonly fail: number };
+  }[],
+  published: LiveTestVersion,
+): LiveTestsShortfall | undefined => {
+  const entry = versions.find((candidate) => candidate.version === published);
+  if (entry === undefined) return undefined;
+  const passed = entry.counts.pass;
+  const counted = passed + entry.counts.fail;
+  // Whole numbers, so 7 of 10 reaches 70% exactly.
+  if (counted === 0 || passed * 100 >= counted * reviewPassPercent) return undefined;
+  return {
+    version: entry.version,
+    ...(entry.entrypoint === undefined ? {} : { entrypoint: entry.entrypoint }),
+    passed,
+    counted,
+    percent: Math.floor((passed * 100) / counted),
   };
 };
 
