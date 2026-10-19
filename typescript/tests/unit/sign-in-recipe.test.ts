@@ -12,6 +12,7 @@ import {
   signInRecipeText,
   type SignInRequest,
 } from "../../src/destinations/sign-in-recipe.js";
+import { makeRunSecrets } from "../../src/inputs/secrets.js";
 
 const steps = [
   {
@@ -675,6 +676,60 @@ describe("the seen-sent rule", () => {
       expect(keptValue(boxes, ["2", "4", "6", "8", "1", "0"], 5)).toBe("246810");
       // A longer code field keeps its own value.
       expect(keptValue(codeStep, ["246810"], 0)).toBe("246810");
+    });
+
+    it("counts a code whose boxes a request sends as separate one-character values, in order, as carried whole", async () => {
+      const boxes = { fields: [1, 2, 3, 4, 5, 6].map((box) => ({ selector: `#otp-${box}`, slot: "code" as const })) };
+      const boxesScreen = { ...screen, targets: { fields: boxes.fields.map(() => target), submit: null } };
+      const digits = ["2", "4", "6", "8", "1", "0"];
+      const carried = async (request: SignInRequest) => {
+        const signIn = openSignInRecord();
+        armStep(signIn, boxes, boxesScreen, digits, 0, signInOrigins);
+        return Effect.runPromise(noteFormSubmit(signIn, 1, request, carries));
+      };
+      const boxed = (order: readonly string[]) =>
+        order.map((digit, at) => `d${at + 1}=${digit}`).join("&");
+      // Each box as its own form field, among other fields, and a JSON body's array or object.
+      expect(await carried(verifyRequest(`csrf=abc123&${boxed(digits)}&remember=on`))).toEqual(["code"]);
+      expect(await carried(verifyRequest(JSON.stringify({ otp: digits })))).toEqual(["code"]);
+      expect(await carried(verifyRequest(JSON.stringify({ otp: digits.map(Number) })))).toEqual(["code"]);
+      expect(
+        await carried(
+          verifyRequest(JSON.stringify({ form: Object.fromEntries(digits.map((digit, at) => [`d${at}`, digit])) })),
+        ),
+      ).toEqual(["code"]);
+      expect(
+        await carried(scriptRequest(`https://api.example.test/auth/email/verify?${boxed(digits)}`, "")),
+      ).toEqual(["code"]);
+      // Boxes out of order, one box short, or broken by another value carry no code.
+      expect(await carried(verifyRequest(boxed(["4", "2", "6", "8", "1", "0"])))).toEqual([]);
+      expect(await carried(verifyRequest(boxed(digits.slice(0, 5))))).toEqual([]);
+      expect(await carried(verifyRequest("d1=2&d2=4&d3=6&step=two&d4=8&d5=1&d6=0"))).toEqual([]);
+    });
+
+    it("keeps a one-character value beside the boxes out of the code, by the host's own matcher", async () => {
+      const boxes = { fields: [1, 2, 3, 4, 5, 6].map((box) => ({ selector: `#otp-${box}`, slot: "code" as const })) };
+      const boxesScreen = { ...screen, targets: { fields: boxes.fields.map(() => target), submit: null } };
+      const digits = ["2", "4", "6", "8", "1", "0"];
+      // The run's secrets, which count a code this short only as a whole token.
+      const secrets = makeRunSecrets();
+      secrets.register(digits.join(""));
+      const carried = async (request: SignInRequest) => {
+        const signIn = openSignInRecord();
+        armStep(signIn, boxes, boxesScreen, digits, 0, signInOrigins);
+        return Effect.runPromise(noteFormSubmit(signIn, 1, request, secrets.carries));
+      };
+      const boxed = digits.map((digit, at) => `d${at + 1}=${digit}`).join("&");
+      // A remember-me checkbox after the boxes, a hidden step number before them, both, and a
+      // JSON array with a flag at its end.
+      expect(await carried(verifyRequest(`${boxed}&remember=1`))).toEqual(["code"]);
+      expect(await carried(verifyRequest(`step=2&${boxed}`))).toEqual(["code"]);
+      expect(await carried(verifyRequest(`step=2&${boxed}&remember=1`))).toEqual(["code"]);
+      expect(await carried(verifyRequest(JSON.stringify({ otp: [...digits, "y"] })))).toEqual(["code"]);
+      // The code within a longer run of digits is still found; one box short, or out of order, is not.
+      expect(await carried(verifyRequest(`${boxed}&d7=5`))).toEqual(["code"]);
+      expect(await carried(verifyRequest(`step=2&${digits.slice(0, 5).map((digit, at) => `d${at}=${digit}`).join("&")}&remember=1`))).toEqual([]);
+      expect(await carried(verifyRequest("d1=4&d2=2&d3=6&d4=8&d5=1&d6=0&remember=1"))).toEqual([]);
     });
   });
 
