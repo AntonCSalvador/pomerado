@@ -210,9 +210,12 @@ export const guardedSubmit = (
     readonly settleMs: number;
     readonly inspection: string | undefined;
     readonly exempt: readonly string[] | null;
+    /** The step's code boxes the call checks each hold one character (`AutofillFillCall`). */
+    readonly codeBoxes?: readonly number[];
   },
 ): AutofillFillCall => ({
   kind: "submit",
+  ...(call.codeBoxes === undefined || call.codeBoxes.length === 0 ? {} : { codeBoxes: call.codeBoxes }),
   settleMs: call.settleMs,
   guardKey,
   guardCall: randomUUID(),

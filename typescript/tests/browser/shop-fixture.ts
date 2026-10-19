@@ -45,6 +45,8 @@ interface ShopState extends StoreState {
   codePageLoads: number;
   /** Codes posted to the code screen. */
   codePosts: number;
+  /** Whether each code posted to the code screen was `shopCode`, whole, in order. */
+  codeMatches: boolean[];
   apiRequests: number;
   curlApiRequests: number;
   cartPosts: number;
@@ -90,6 +92,12 @@ interface ShopState extends StoreState {
    * one field, as the browser submits a form of one text field.
    */
   codeSubmitsOnEnter: boolean;
+  /**
+   * How many one-character boxes the code screen splits `shopCode` across, one digit each, named
+   * `code-1` onward, under a Verify button; 0 for its one code field. Each box moves the focus to
+   * the next once it holds a digit, as such widgets do.
+   */
+  codeBoxes: number;
   /**
    * What the one-screen sign-in shows a signed-in session: `form` its form, as any session sees
    * it, `account` a redirect to the account page, as many sites answer a signed-in visit (to the
@@ -302,15 +310,37 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
   };
   // The code screen: a GET shows its form, and the form's post with the code signs in. A wrong
   // code shows the form again under the error.
+  const codeBoxes = () =>
+    Array.from({ length: state.codeBoxes }, (_, at) => at + 1);
   const codeForm = () =>
-    `<form method="post" action="/two-factor"><label>Code<input name="code" autocomplete="one-time-code"></label>${state.codeSubmitsOnEnter ? "" : "<button>Verify</button>"}</form>`;
+    state.codeBoxes > 0
+      ? `<form method="post" action="/two-factor"><p>Enter the code we sent you</p><div class="code">${codeBoxes()
+          .map(
+            (box) =>
+              `<input id="code-${box}" name="code-${box}" maxlength="1" inputmode="numeric" aria-label="Digit ${box} of ${state.codeBoxes}"${box === 1 ? ' autocomplete="one-time-code"' : ""}>`,
+          )
+          .join("")}</div><button>Verify</button></form>
+<script>
+const boxes = [...document.querySelectorAll(".code input")];
+boxes.forEach((box, at) => box.addEventListener("input", () => {
+  if (box.value !== "" && boxes[at + 1]) boxes[at + 1].focus();
+}));
+</script>`
+      : `<form method="post" action="/two-factor"><label>Code<input name="code" autocomplete="one-time-code"></label>${state.codeSubmitsOnEnter ? "" : "<button>Verify</button>"}</form>`;
   const twoFactor: Route = async (request, response) => {
     if (request.method !== "POST") {
       state.codePageLoads += 1;
       return html(response, `<title>Code</title>${codeForm()}`);
     }
     state.codePosts += 1;
-    const code = new URLSearchParams(await readBody(request)).get("code");
+    const posted = new URLSearchParams(await readBody(request));
+    const code =
+      state.codeBoxes > 0
+        ? codeBoxes()
+            .map((box) => posted.get(`code-${box}`) ?? "")
+            .join("")
+        : posted.get("code");
+    state.codeMatches.push(code === shopCode);
     if (code !== shopCode || cookieOf(request, "shop_pending") !== pending)
       return html(response, `<title>Code</title><p id='wrong-code'>Wrong code</p>${codeForm()}`);
     response.writeHead(303, {
@@ -620,6 +650,7 @@ export const startShop = async (directory: string): Promise<Shop> => {
     searchPageLoads: 0,
     codePageLoads: 0,
     codePosts: 0,
+    codeMatches: [],
     apiRequests: 0,
     curlApiRequests: 0,
     cartPosts: 0,
@@ -637,6 +668,7 @@ export const startShop = async (directory: string): Promise<Shop> => {
     accountRenderMs: 0,
     loginCode: false,
     codeSubmitsOnEnter: false,
+    codeBoxes: 0,
     signedInLogin: "form",
     workspaceChooser: false,
     signedOutShowsForm: true,

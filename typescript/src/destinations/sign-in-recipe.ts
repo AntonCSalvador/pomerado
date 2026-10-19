@@ -236,6 +236,51 @@ export interface SignInRequest {
   readonly ownerTargetId?: string | undefined;
 }
 
+/**
+ * Each run of two or more one-character values among `values`, in order, joined: what a code split
+ * across one-character boxes is once its boxes go out as separate values.
+ */
+const oneCharacterRuns = (values: readonly unknown[]): string[] => {
+  const runs: string[] = [];
+  let run: string[] = [];
+  const end = () => {
+    if (run.length > 1) runs.push(run.join(""));
+    run = [];
+  };
+  for (const value of values) {
+    const text = typeof value === "number" && Number.isInteger(value) ? String(value) : value;
+    if (typeof text === "string" && oneCharacter(text)) run.push(text);
+    else end();
+  }
+  end();
+  return runs;
+};
+
+/** The one-character runs (`oneCharacterRuns`) of a JSON value's arrays and objects, at any depth. */
+const jsonRuns = (value: unknown): string[] => {
+  if (typeof value !== "object" || value === null) return [];
+  const values = Array.isArray(value) ? (value as unknown[]) : Object.values(value);
+  return [...oneCharacterRuns(values), ...values.flatMap(jsonRuns)];
+};
+
+/**
+ * The texts a request carries a code split across one-character boxes in when it sends each box as
+ * a value of its own, as a form that posts each box as its own field does: each run of two or more
+ * consecutive one-character values, joined in order, of the URL's query, of a form-encoded body
+ * and of a JSON body's arrays and objects. A code sent whole is in the request's own text already.
+ * Held in memory only, like the request's body, and never logged.
+ */
+const splitCodeTexts = (request: Pick<SignInRequest, "url" | "body">): string[] => {
+  const params = (search: string) => [...new URLSearchParams(search).values()];
+  const query = URL.parse(request.url)?.search ?? "";
+  const body = request.body ?? "";
+  const parsed = Either.try(() => JSON.parse(body) as unknown);
+  const fromBody = Either.isRight(parsed)
+    ? jsonRuns(parsed.right)
+    : oneCharacterRuns(params(body));
+  return [...new Set([...oneCharacterRuns(params(query)), ...fromBody])];
+};
+
 /** Whether `texts` carry every expected value; the host's matching of registered values. */
 export type SecretMatcher = (
   expected: readonly string[],
@@ -377,7 +422,7 @@ export const noteFormSubmit = (
   Effect.gen(function* () {
     const watch = record?.watch;
     if (record === undefined || watch === undefined) return [];
-    const texts = [request.url, request.body ?? ""];
+    const texts = [request.url, request.body ?? "", ...splitCodeTexts(request)];
     const carried: AutofillSlot[] = [];
     const script = scriptRequest(watch, sentAt, request);
     const judged = sentAsJudged(watch, sentAt, request);

@@ -35,6 +35,7 @@ import {
 } from "../destinations/sign-in-recipe.js";
 import type { AutofillPopup } from "../destinations/autofill-contracts.js";
 import { isSecondFactor } from "../destinations/autofill-recipe.js";
+import { codeBoxesRefusal } from "../destinations/autofill-step.js";
 import type { CredentialRejectedField, WebsiteCredentials } from "../runtime/authentication.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { InputRequestFailure } from "../runtime/input-request.js";
@@ -104,6 +105,8 @@ const keyNotices = {
 
 /** What the minter does after a screen the host inspected and maybe filled. */
 const stepNotice = (report: AutofillStepReport, step?: Pick<AutofillStep, "submitKey">) => {
+  if (report.outcome === "refused" && report.codeBoxes !== undefined)
+    return `This screen splits its code across ${report.codeBoxes.boxes} one-character boxes, and the step's code fields named only the boxes at places ${report.codeBoxes.named.join(", ")}, in that order (codeBoxes.named, counted from 1). The host typed and clicked nothing, so nothing reached the site, no code was asked for and no sign-in was spent. Send the step again with one code field per box, all ${report.codeBoxes.boxes} of them in order from the first box to the last; the host asks for the code once and types one character into each box.`;
   if (report.outcome === "refused")
     return `The host typed and clicked nothing (${report.reason}), so nothing reached the site and no sign-in was spent. Correct the step from the page's evidence, ${recovery}.`;
   if (lostTyping(report))
@@ -479,6 +482,11 @@ export const makeSignInRecorder = <E>(input: {
         const inspected = yield* browser.inspect(step);
         if ("outcome" in inspected)
           return { report: inspected, result: { nextStep: stepNotice(inspected) } };
+        // A code split across one-character boxes goes out whole only when the step names every
+        // box, so a step that names part of them is sent back before Guardian or the owner sees it.
+        const partial = codeBoxesRefusal(step, inspected);
+        if (partial !== undefined)
+          return { report: partial, result: { nextStep: stepNotice(partial) } };
         const entry = open === undefined ? entryOf(inspected.url ?? inspected.page) : undefined;
         yield* input.review(step, inspected);
         if (
