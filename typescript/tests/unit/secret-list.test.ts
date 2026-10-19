@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { stripTypeScriptTypes } from "node:module";
 import { describe, expect, it } from "vitest";
 import {
   awsAccessKeyIdPattern,
@@ -141,11 +143,71 @@ describe("a key whose body holds another key's shape", () => {
     const key = `${fake("sk-", "A1B2C3D4E5F6G7H8IJKL-")}${fake("whsec_", "ABCDEFGH12345678+abc/def=")}`;
     expect(redactDiagnosticText(`x ${key} y`)).toBe("x [redacted_token] y");
   });
+
+  it("ends a signing secret read into a key before the next signing secret", () => {
+    const first = `${fake("sk-", "A1B2C3D4E5F6G7H8IJKL-")}${fake("whsec_", "ABCDEFGH12345678")}`;
+    const second = fake("whsec_", "QRSTUVWX12345678+abc/def=");
+    const text = `key ${first}=${second} end`;
+    expect(providerKeys(text)).toEqual([first, second]);
+    expect(redactDiagnosticText(text)).toBe("key [redacted_token]=[redacted_token] end");
+  });
+
+  it.each([
+    [
+      "at the start of its body",
+      fake("xoxb-", fake("sk-", "xoxb-1234567890_Tail0123456789abcdefXYZ")),
+    ],
+    [
+      "after a hyphen",
+      `${fake("xoxa-", "AAAAAAAAAA-")}${fake("xoxb-", fake("sk-", "A1B2C3D4E5F6G7H8_tail"))}`,
+    ],
+  ])("reads a model key into a Slack token shape %s, masked whole", (_, key) => {
+    const text = `key ${key} end`;
+    expect(providerKeys(text)).toEqual([key]);
+    expect(redactDiagnosticText(text)).toBe("key [redacted_token] end");
+  });
+
+  it("reads a long run of key shapes in time that grows with its length, not its square", () => {
+    const fastest = (text: string) => {
+      let best = Number.POSITIVE_INFINITY;
+      for (let round = 0; round < 5; round += 1) {
+        const started = performance.now();
+        providerKeys(text);
+        best = Math.min(best, performance.now() - started);
+      }
+      return best;
+    };
+    const short = fastest(fake("xoxb-", "-sk-".repeat(2500)));
+    const long = fastest(fake("xoxb-", "-sk-".repeat(10000)));
+    // Four times the text should take about four times as long, not sixteen.
+    expect(long / Math.max(short, 1)).toBeLessThan(10);
+  });
+
+  it("starts keys after no word character when a listed prefix does not start with one", async () => {
+    expect(providerKeyPattern().source.startsWith("\\b")).toBe(true);
+    const file = new URL("../../src/privacy/credential-policy.ts", import.meta.url);
+    const source = await readFile(file, "utf8");
+    const changed = source.replace('prefixes: ["bl_"]', 'prefixes: ["bl_", "$tok_"]');
+    expect(changed).not.toBe(source);
+    const policy = (await import(
+      `data:text/javascript,${encodeURIComponent(stripTypeScriptTypes(changed))}`
+    )) as typeof import("../../src/privacy/credential-policy.js");
+    const pattern = policy.providerKeyPattern();
+    expect(pattern.source.startsWith("(?<!\\w)")).toBe(true);
+    const key = fake("$tok_", "ABCDEFGH12345678abcd");
+    const found = (text: string, search: RegExp) =>
+      [...text.matchAll(search)].map((match) => [match.index, match[0]]);
+    expect(found(` ${key}`, pattern)).toEqual([[1, key]]);
+    expect(found(`a${key}`, pattern)).toEqual([]);
+    const wordBoundary = new RegExp(pattern.source.replace("(?<!\\w)", "\\b"), "gu");
+    expect(found(` ${key}`, wordBoundary)).toEqual([]);
+  });
 });
 
 // Every body read to its last character, each key checked as `isProviderKey` checks it: a key
 // found this way is masked whole by the policy's own pattern too. Only the one separator between
-// two keys written back to back stays, as above.
+// two keys written back to back stays, as above, where the first body could not read the second
+// key's prefix.
 describe("masking never falls below a body read to its last character", () => {
   const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   const shapes = credentialPolicy.providerKeys.flatMap((shape) =>
@@ -167,7 +229,9 @@ describe("masking never falls below a body read to its last character", () => {
   const spans = (text: string, pattern: RegExp, keep: (match: string) => boolean) =>
     [...text.matchAll(pattern)]
       .filter((match) => keep(match[0]))
-      .map((match) => ({ start: match.index, end: match.index + match[0].length }));
+      .map((match) => ({ start: match.index, end: match.index + match[0].length, key: match[0] }));
+  const shapeOf = (key: string) => shapes.find(({ prefix }) => key.startsWith(prefix));
+  const reads = (body: string, text: string) => new RegExp(`^[${body}]*$`, "u").test(text);
 
   // Key shapes written together with separators, lengths around each minimum.
   let seed = 7919;
@@ -195,7 +259,7 @@ describe("masking never falls below a body read to its last character", () => {
     let written = pick(["", " ", "-", "/"]);
     const parts = 2 + Math.floor(next() * 5);
     for (let part = 0; part < parts; part += 1) {
-      if (part > 0) written += pick(["-", "-", "-", "+", "/", "=", "_", " "]);
+      if (part > 0) written += pick(["-", "-", "-", "+", "/", "=", "_", " ", ""]);
       const set = pick(sets);
       written += pick(prefixes);
       for (let length = Math.floor(next() * 34); length > 0; length -= 1) written += pick([...set]);
@@ -209,10 +273,17 @@ describe("masking never falls below a body read to its last character", () => {
       const written = text();
       const mine = spans(written, providerKeyPattern(), isProviderKey);
       const masked = new Set(mine.flatMap(({ start, end }) => range(start, end)));
-      const joint = (index: number) =>
-        "-+/=".includes(written.charAt(index)) &&
-        mine.some(({ end }) => end === index) &&
-        mine.some(({ start }) => start === index + 1);
+      // One separator between two keys, where the first body could not read the second prefix.
+      const joint = (index: number) => {
+        const first = shapeOf(mine.find(({ end }) => end === index)?.key ?? "");
+        const second = shapeOf(mine.find(({ start }) => start === index + 1)?.key ?? "");
+        return (
+          "-+/=".includes(written.charAt(index)) &&
+          first !== undefined &&
+          second !== undefined &&
+          !reads(first.shape.body, second.prefix)
+        );
+      };
       const lost = spans(written, wholeBodies, wholeBodyKey)
         .flatMap(({ start, end }) => range(start, end))
         .filter((index) => !masked.has(index) && !joint(index));

@@ -218,59 +218,6 @@ const randomBodyCheck = (body: string, minBody: number) => {
 };
 
 /**
- * The keys that `outer`'s body could not read whole after one of its separators: a prefix holds a
- * character the body lacks (`whsec_…/ghp_…`), or the key's own body does (`xoxb-…-sk-…_…`). Each
- * is checked as `isProviderKey` checks a match: its length, and a random body where its shape
- * needs one. A random body only takes in keys that need no random body. `whole` reads each key to
- * the end of its body. Prefixes with the same checks share one alternative.
- */
-const unreadableKeys = (outer: KeyShape, whole: boolean) => {
-  const prefixesByCheck = new Map<string, string[]>();
-  for (const inner of credentialPolicy.providerKeys) {
-    if (isRandomShape(outer) && isRandomShape(inner)) continue;
-    const body = characters(inner.body);
-    const random = isRandomShape(inner) ? randomBodyCheck(inner.body, inner.minBody) : "";
-    const check = `(?=${body}{${String(inner.minBody)}})${random}`;
-    const rest = whole ? `${body}+` : "";
-    const wider = printable.some((c) => reads(inner.body, c) && !reads(outer.body, c));
-    const stops = `(?=${body}*?(?!${characters(outer.body)})${body})`;
-    for (const prefix of inner.prefixes) {
-      const unread = !reads(outer.body, prefix);
-      if (!unread && !wider) continue;
-      const key = unread ? `${check}${rest}` : `${check}${stops}${rest}`;
-      prefixesByCheck.set(key, [...(prefixesByCheck.get(key) ?? []), prefix]);
-    }
-  }
-  return [...prefixesByCheck].map(([check, prefixes]) => `${oneOf(prefixes)}${check}`).join("|");
-};
-
-/**
- * A key body: at least `minBody` of its characters, read as far as they run, so no key loses its
- * tail. A `-`, `+`, `/` or `=` ends the body only before a key the body could not read whole, so
- * both keys are found and masked whole (`whsec_…/ghp_…`). Any other key shape after a separator
- * is more of the same key (`sk-proj-…-bl_…_…`). A part shorter than `minBody` before such a key
- * still counts on its own wherever the body's characters, read through every separator, run
- * `minBody` long.
- *
- * A random body is never cut, since its first part may not be random alone. It reads a key it
- * could not read whole into itself, and `isProviderKey` accepts a match that holds a key.
- */
-const bodyPattern = (shape: KeyShape) => {
-  const { body, minBody } = shape;
-  const separators = separatorsOf(body);
-  const unreadable = separators === "" ? "" : unreadableKeys(shape, isRandomShape(shape));
-  if (unreadable === "") return `${characters(body)}{${String(minBody)},}`;
-  const reach = `(?=${characters(body)}{${String(minBody)}})`;
-  const word = characters(body.slice(0, body.length - separators.length));
-  const separator = escapedClass(separators);
-  return isRandomShape(shape)
-    ? `${reach}(?:${word}|${separator}(?:${unreadable})?)*`
-    : `${reach}(?:${word}|${separator}(?!${unreadable}))*`;
-};
-const providerShapes = credentialPolicy.providerKeys.flatMap((shape) =>
-  shape.prefixes.map((prefix) => ({ prefix, random: isRandomShape(shape) })),
-);
-/**
  * A word start: no letter, digit or `_` before the key. Before a letter, digit or `_`, which every
  * listed prefix starts with, `\b` is that same boundary, and the engine reads it faster.
  */
@@ -279,6 +226,98 @@ const wordStart = credentialPolicy.providerKeys.every(({ prefixes }) =>
 )
   ? "\\b"
   : "(?<!\\w)";
+
+/** Whether `inner`'s body holds a character that `outer`'s body lacks. */
+const widerBody = (inner: KeyShape, outer: KeyShape) =>
+  printable.some((character) => reads(inner.body, character) && !reads(outer.body, character));
+
+/**
+ * The keys of the listed shapes that `select` picks, by prefix, as one alternation. `check` checks
+ * each as `isProviderKey` does: its length, and a random body where its shape needs one. A key read
+ * `into` another body is read to the end of its own. Prefixes with the same rest share one term.
+ */
+const keyTerms = (
+  select: (inner: KeyShape, prefix: string) => boolean,
+  check: boolean,
+  into?: KeyShape,
+): string => {
+  const prefixesByRest = new Map<string, string[]>();
+  for (const inner of credentialPolicy.providerKeys) {
+    const prefixes = inner.prefixes.filter((prefix) => select(inner, prefix));
+    if (prefixes.length === 0) continue;
+    const body = characters(inner.body);
+    const random = check && isRandomShape(inner) ? randomBodyCheck(inner.body, inner.minBody) : "";
+    const length = check ? `(?=${body}{${String(inner.minBody)}})` : "";
+    const rest = `${length}${random}${into === undefined ? "" : bodyLoop(inner, into)}`;
+    prefixesByRest.set(rest, [...(prefixesByRest.get(rest) ?? []), ...prefixes]);
+  }
+  return [...prefixesByRest].map(([rest, prefixes]) => `${oneOf(prefixes)}${rest}`).join("|");
+};
+
+/**
+ * A key body after its prefix, read as far as its characters run, so no key loses its tail. A
+ * key written in the body that the body could not read whole is read whole by its own rule:
+ *
+ * - A random body is never cut, since its first part may not be random alone. After a separator
+ *   it reads such a key that needs no random body into itself (`sk-…-whsec_…+…`), and
+ *   `isProviderKey` accepts a match that holds a key.
+ * - Any other body, at each word start in it, reads in a key whose prefix it reads but whose
+ *   body it does not (`xoxb-…-sk-…_…`). A separator ends it only before a key whose prefix it
+ *   cannot read (`whsec_…/ghp_…`), so both keys are found and masked whole. Read `within` another
+ *   body, it ends only before a key that body cannot read whole either (`sk-…-whsec_…=whsec_…`).
+ *
+ * Every other key shape is more of the same key (`sk-proj-…-bl_…_…`).
+ */
+function bodyLoop(shape: KeyShape, within: KeyShape = shape): string {
+  const { body } = shape;
+  const separators = separatorsOf(body);
+  const all = `${characters(body)}*`;
+  if (separators === "") return all;
+  const word = characters(body.slice(0, body.length - separators.length));
+  const separator = escapedClass(separators);
+  if (isRandomShape(shape)) {
+    const held = keyTerms(
+      (inner, prefix) => !isRandomShape(inner) && (!reads(body, prefix) || widerBody(inner, shape)),
+      true,
+      shape,
+    );
+    return held === "" ? all : `(?:${word}|${separator}(?:${held})?)*`;
+  }
+  const take = keyTerms(
+    (inner, prefix) => reads(body, prefix) && widerBody(inner, shape),
+    false,
+    shape,
+  );
+  const cut = keyTerms(
+    (inner, prefix) =>
+      !reads(body, prefix) && (!reads(within.body, prefix) || widerBody(inner, within)),
+    true,
+  );
+  if (take === "" && cut === "") return all;
+  const taken = take === "" ? "" : `${wordStart}(?:${take})|`;
+  return `(?:${taken}${word}|${separator}${cut === "" ? "" : `(?!${cut})`})*`;
+}
+
+/**
+ * A key body: at least `minBody` of its characters, then the body as `bodyLoop` reads it. A part
+ * shorter than `minBody` before a key the body stops at still counts on its own wherever the
+ * body's characters, read through every separator, run `minBody` long.
+ */
+const bodyPattern = (shape: KeyShape) => {
+  const all = characters(shape.body);
+  const loop = bodyLoop(shape);
+  return loop === `${all}*`
+    ? `${all}{${String(shape.minBody)},}`
+    : `(?=${all}{${String(shape.minBody)}})${loop}`;
+};
+// Only a body with a separator can hold another key after one.
+const providerShapes = credentialPolicy.providerKeys.flatMap((shape) =>
+  shape.prefixes.map((prefix) => ({
+    prefix,
+    random: isRandomShape(shape),
+    holds: separatorsOf(shape.body) !== "",
+  })),
+);
 // One alternative per shape, its prefixes in list order, keeps the pattern short.
 const providerKeySource = `${wordStart}(?:${credentialPolicy.providerKeys
   .map((shape) => `${oneOf(shape.prefixes)}${bodyPattern(shape)}`)
@@ -315,7 +354,9 @@ export const isProviderKey = (match: string): boolean => {
   const shape = providerShapes.find((candidate) => match.startsWith(candidate.prefix));
   return (
     shape !== undefined &&
-    (!shape.random || isRandomKeyBody(match.slice(shape.prefix.length)) || heldKey.test(match))
+    (!shape.random ||
+      isRandomKeyBody(match.slice(shape.prefix.length)) ||
+      (shape.holds && heldKey.test(match)))
   );
 };
 
