@@ -283,12 +283,12 @@ export const noticeRequest = (id: string, source: InputSource, message: string):
 });
 
 const Text = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(maximumAnswerLength));
-const ChoiceAnswer = Schema.Union(
+export const ChoiceAnswer = Schema.Union(
   OptionId,
   Schema.Struct({ other: Text }),
   Schema.Struct({ option: OptionId, note: Schema.optional(Text) }),
 );
-const MultiChoiceAnswer = Schema.Union(
+export const MultiChoiceAnswer = Schema.Union(
   Schema.Array(OptionId),
   Schema.Struct({
     options: Schema.Array(OptionId),
@@ -296,7 +296,7 @@ const MultiChoiceAnswer = Schema.Union(
     note: Schema.optional(Text),
   }),
 );
-const ConfirmAnswer = Schema.Struct({
+export const ConfirmAnswer = Schema.Struct({
   confirmed: Schema.Boolean,
   text: Schema.optional(Schema.String.pipe(Schema.maxLength(maximumAnswerLength))),
 });

@@ -71,6 +71,11 @@ export interface PendingQuestion {
    * once, for real, before it publishes. Its allowedEffects stays empty on purpose.
    */
   readonly buildEffect?: "read" | "write";
+  /**
+   * Host fact: the host asks the owner which sign-in method to use together with the login it
+   * requests, or takes the one a saved login or the screen fixes, so the agent never asks it.
+   */
+  readonly signInMethodByHost?: true;
 }
 
 const reviewedOption = <E>(
@@ -102,6 +107,7 @@ export const questionForReview = <E>(
     readonly decisionLedger?: DecisionLedger;
     readonly scriptAsk?: true;
     readonly buildEffect?: "read" | "write";
+    readonly signInMethodByHost?: true;
   },
   screen: (text: string) => Effect.Effect<string, E>,
 ): Effect.Effect<PendingQuestion, E> =>
@@ -156,6 +162,7 @@ export const questionForReview = <E>(
       ...(facts.decisionLedger === undefined ? {} : { decisionLedger: facts.decisionLedger }),
       ...(facts.scriptAsk === true ? { scriptAsk: true as const } : {}),
       ...(facts.buildEffect === undefined ? {} : { buildEffect: facts.buildEffect }),
+      ...(facts.signInMethodByHost === true ? { signInMethodByHost: true as const } : {}),
     };
   });
 

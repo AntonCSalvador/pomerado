@@ -6328,6 +6328,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             executionContext: yield* executionContext(),
             websiteAuthentication: {
               credentialsAvailable: dependencies.websiteCredentialsAvailable === true,
+              ...(dependencies.signInMethodByHost === true
+                ? {
+                    signInMethod:
+                      "The host asks the caller which sign-in method to use together with the login it requests, or takes the one the saved login or the screen fixes. Never ask the method with request_input: list every method a sign-in screen offers in that signInStep's methods.",
+                  }
+                : {}),
               instruction:
                 dependencies.websiteCredentialsAvailable === true
                   ? `Credential values are private host input. When the task needs the account (AGENTS.md, 'Sign in only when the task needs it'), discover the login entry, then call execute purpose authenticate with its loginUrl${dependencies.autofillSignIn ? " and a signInStep for each sign-in screen" : ""} before the business example. You cannot request credentials; if the site cannot be reached, report that instead of starting sign-in. Codes and other sign-in steps during authenticate go to the caller through the host: a text, email or authenticator code that is part of signing in is a code field of the signInStep, never a request_input question.`

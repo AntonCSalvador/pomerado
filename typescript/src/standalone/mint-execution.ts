@@ -51,6 +51,7 @@ import { mintListScope, refusedCursor } from "./list-cursors.js";
 import { readBackFirst } from "../mint/write-session.js";
 import { commitEvidenceOf, type CommitEvidence } from "../runtime/run-outcome.js";
 import { InputRequestFailure, type InputAsker } from "../runtime/input-request.js";
+import type { ScriptQuestionDeclarations } from "../runtime/script-input.js";
 import { siteDomain } from "../runtime/same-site.js";
 import { probeCallCode } from "../runtime/host-execute.js";
 import type { BrowserExecute } from "../runtime/browser-execution.js";
@@ -64,9 +65,10 @@ import {
 } from "./sign-in-origin-question.js";
 import type { MintState } from "./mint-state.js";
 import {
+  declaredDecisions,
   keptScriptAnswers,
-  reusedScriptAnswers,
   scriptQuestionKeys,
+  settledScriptAnswers,
 } from "../mint/script-answer-reuse.js";
 import { error, mintError } from "./errors.js";
 import { mintSessionSignInFailure, type SessionSignInFailed } from "./session-sign-in.js";
@@ -264,6 +266,7 @@ const scriptQuestions = (
   entrypoint: string,
   input: unknown,
   sourceMap: ReadonlyMap<string, string>,
+  declared: ScriptQuestionDeclarations,
 ) => {
   const { context, mintAsk, scriptAnswers } = state;
   const { projection } = state.session;
@@ -271,8 +274,22 @@ const scriptQuestions = (
   let unanswered = false;
   const scriptAsk: InputAsker = (candidate, bounds) =>
     Effect.gen(function* () {
-      const question = yield* questionForReview(
+      // What the owner already answered in this build is never asked again: the same question,
+      // or the decision its declaration names, whether the agent or a script asked it, however
+      // long ago and whether or not a step entered a commit since. Nobody is asked, so Guardian
+      // reviews only what is left, and the reused answers are already the owner's latest in its
+      // list (`keptScriptAnswers`, `keptAgentAnswers`).
+      const keys = yield* scriptQuestionKeys(candidate, (text) => projection.text(text));
+      const decisions = declaredDecisions(candidate, declared);
+      const { reused, remaining } = settledScriptAnswers(
         candidate,
+        keys,
+        scriptAnswers.kept,
+        decisions,
+      );
+      if (remaining === undefined) return reused;
+      const question = yield* questionForReview(
+        remaining,
         { credentialsAvailable: false, scriptAsk: true },
         projection.text,
       );
@@ -289,23 +306,10 @@ const scriptQuestions = (
         };
         return yield* Effect.fail(new InputRequestFailure({ code: "Unauthorized" }));
       }
-      // The same question asked again reuses the owner's answer, however long ago they gave it
-      // and whether or not a step entered a commit since. Guardian reviewed this ask all the same,
-      // and the reused answer reaches later reviews as a fresh one does. It is always the owner's
-      // latest answer to its prompt (`forgetScriptAnswers`), so it never replaces a newer one in
-      // Guardian's list.
-      const keys = yield* scriptQuestionKeys(candidate, (text) => projection.text(text));
-      const answers =
-        reusedScriptAnswers(candidate, keys, scriptAnswers.kept) ??
-        (yield* mintAsk(candidate, bounds).pipe(
-          Effect.tap((fresh) =>
-            Effect.sync(() => {
-              scriptAnswers.kept = keptScriptAnswers(scriptAnswers.kept, keys, fresh);
-            }),
-          ),
-        ));
-      yield* context.answered(candidate, answers);
-      return answers;
+      const fresh = yield* mintAsk(remaining, bounds);
+      scriptAnswers.kept = keptScriptAnswers(scriptAnswers.kept, keys, fresh, decisions);
+      yield* context.answered(remaining, fresh);
+      return { ...reused, ...fresh };
     }).pipe(
       Effect.mapError((cause) =>
         cause instanceof InputRequestFailure
@@ -608,7 +612,8 @@ const authoredExecution = (
       // Guardian allowed the step on this input, so the session runs it from here on.
       if (selected.mark === "intent_derived") writeSession.input = selected.input;
     }
-    const questions = scriptQuestions(state, execution.entrypoint, input, sourceMap);
+    const declared = draftQuestionDeclarations(execution.entrypoint, entrypointSource);
+    const questions = scriptQuestions(state, execution.entrypoint, input, sourceMap, declared);
     const { scriptAsk } = questions;
     // The confirm popups the owner accepts during this execution, host-only.
     const accepted: ObservedConfirm[] = [];
@@ -663,10 +668,7 @@ const authoredExecution = (
                 target: live ? "browser" : "pureFiles",
                 dispatchAtFirstCall: true,
                 ask: scriptAsk,
-                declaredQuestions: draftQuestionDeclarations(
-                  execution.entrypoint,
-                  entrypointSource,
-                ),
+                declaredQuestions: declared,
                 decideDialog: keepingAcceptedConfirms(
                   makeDialogDecider(mintAsk, secrets.redact),
                   accepted,

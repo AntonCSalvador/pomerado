@@ -462,8 +462,9 @@ test("a later step reuses the owner's answer to its script's question", async ()
     later: "return { approve: await ask('approve') };",
   });
   expect(scriptAsks).toHaveLength(1);
-  // Guardian reviewed the later step's ask, and later reviews hold the owner's answer it reused.
-  expect(guardian.reviews.filter((review) => review.kind === "question")).toHaveLength(2);
+  // Nobody was asked the second time, so only the first ask was reviewed as a question; later
+  // reviews hold the owner's answer it reused.
+  expect(guardian.reviews.filter((review) => review.kind === "question")).toHaveLength(1);
   expect(authorityOf(executions(guardian.reviews).at(-1)!)["answeredQuestions"]).toEqual([
     { id: "approve", question: approvalPrompt, answer: { confirmed: true } },
   ]);
@@ -486,8 +487,8 @@ test("a step reuses the owner's answer each time its script asks the same questi
       "const first = await ask('approve'); enteringCommit('submit'); return { first, second: await ask('approve') };",
   });
   expect(scriptAsks).toHaveLength(1);
-  // Guardian reviewed each of the three asks.
-  expect(guardian.reviews.filter((review) => review.kind === "question")).toHaveLength(3);
+  // Only the one ask that reached the owner was reviewed as a question.
+  expect(guardian.reviews.filter((review) => review.kind === "question")).toHaveLength(1);
   // Both asks got the owner's yes.
   const observed: unknown = JSON.parse(String(toolResult(last, "later")?.["observations"]));
   expect(observed).toMatchObject({
@@ -495,7 +496,7 @@ test("a step reuses the owner's answer each time its script asks the same questi
   });
 });
 
-test("a later step asks the owner again once the owner answered its prompt anew", async () => {
+test("a later step reuses the owner's newer answer to the agent's same question", async () => {
   test.setTimeout(90_000);
   const { asked, scriptAsks } = await laterAsk({
     first: askThenFail,
@@ -509,11 +510,55 @@ test("a later step asks the owner again once the owner answered its prompt anew"
       ],
     ],
   });
-  expect(asked.map((request) => request.source)).toEqual(["script", "agent", "script"]);
-  expect(scriptAsks).toHaveLength(2);
+  // The agent asked the same question after the script did; the later step reuses that answer.
+  expect(asked.map((request) => request.source)).toEqual(["script", "agent"]);
+  expect(scriptAsks).toHaveLength(1);
 });
 
-test("a script's question after a task update asks the owner again", async () => {
+test("a script's question that names the agent's earlier question takes the owner's answer", async () => {
+  test.setTimeout(90_000);
+  const site = await startSite((_request, response) =>
+    html(response, "<title>Fixture</title><h1>Public fixture</h1>"),
+  );
+  const guardian = recordingGuardian();
+  try {
+    const { last, asked } = await mint({
+      effect: "read",
+      url: site.url,
+      guardian,
+      answer: () => ({ terms: { confirmed: true } }),
+      turns: [
+        () => [
+          call("request_input", {
+            intent: "Ask the caller about the terms",
+            questions: [{ id: "terms", type: "confirm", prompt: approvalPrompt }],
+          }),
+        ],
+        () =>
+          patch({
+            "explore/ask.mjs": `import { Schema } from "effect";
+import { defineOperation } from "../runtime/index.js";
+export default defineOperation({name:"approve_terms",input:Schema.Unknown,output:Schema.Unknown,questions:{accept:{type:"confirm",prompt:"Accept the terms shown?",decision:"terms"}}},
+async ({ ask }) => ({ accept: await ask("accept") }));`,
+          }),
+        () => [call("execute", execution("explore", "explore/ask.mjs"), "ask")],
+      ],
+    });
+    expect(asked.map((request) => request.source)).toEqual(["agent"]);
+    // Only the agent's question was reviewed: the script's reached nobody.
+    expect(guardian.reviews.filter((review) => review.kind === "question")).toHaveLength(1);
+    const observed: unknown = JSON.parse(String(toolResult(last, "ask")?.["observations"]));
+    expect(observed).toMatchObject({ output: { accept: { confirmed: true } } });
+    // Guardian keeps the owner's answer to the question the owner saw, never the script's wording.
+    expect(authorityOf(executions(guardian.reviews).at(-1)!)["answeredQuestions"]).toEqual([
+      { id: "terms", question: approvalPrompt, answer: { confirmed: true } },
+    ]);
+  } finally {
+    await site.close();
+  }
+});
+
+test("a script's question after a task update reuses the owner's answer", async () => {
   test.setTimeout(90_000);
   const site = await startSite((_request, response) =>
     html(response, "<title>Fixture</title><h1>Public fixture</h1>"),
@@ -542,7 +587,7 @@ async ({ ask }) => ({ approve: await ask("approve") }));`,
     });
     expect(toolResult(last, "update")).toMatchObject({ status: "updated" });
     expect(toolResult(last, "after")).toMatchObject({ status: "completed" });
-    expect(asked.map((request) => request.source)).toEqual(["script", "agent", "script"]);
+    expect(asked.map((request) => request.source)).toEqual(["script", "agent"]);
   } finally {
     await site.close();
   }

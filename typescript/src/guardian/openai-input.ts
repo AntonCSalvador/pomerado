@@ -99,6 +99,9 @@ export const guardianReviewInput = (
             ...(turn.pending.questionCandidate.buildEffect === undefined
               ? {}
               : { buildEffect: turn.pending.questionCandidate.buildEffect }),
+            ...(turn.pending.questionCandidate.signInMethodByHost === true
+              ? { signInMethodByHost: true }
+              : {}),
           },
         }),
     ...(turn.pending.updateCandidate === undefined

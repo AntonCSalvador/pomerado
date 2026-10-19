@@ -23,12 +23,20 @@ import {
 
 const Prompt = ConfirmQuestion.fields.prompt;
 const Selections = Schema.Int.pipe(Schema.between(0, 50));
+/**
+ * The decision the question asks the owner, by the id of the build's earlier question about it,
+ * the agent's own or another script question's with the same `decision`. While a build runs, an
+ * ask reuses the owner's latest answer to that decision instead of asking again; a published
+ * tool's run asks its caller every time. A secret never names one.
+ */
+const decision = { decision: Schema.optional(QuestionId) };
 
 export const ScriptQuestionDeclaration = Schema.Union(
   Schema.Struct({
     type: Schema.Literal("choice"),
     prompt: Prompt,
     allowOther: Schema.optional(Schema.Boolean),
+    ...decision,
   }),
   Schema.Struct({
     type: Schema.Literal("multi_choice"),
@@ -37,16 +45,19 @@ export const ScriptQuestionDeclaration = Schema.Union(
     minSelections: Schema.optional(Selections),
     /** Every offered option when absent; never more than the page offers. */
     maxSelections: Schema.optional(Selections),
+    ...decision,
   }),
   Schema.Struct({
     type: Schema.Literal("text"),
     prompt: Prompt,
     maxLength: TextQuestion.fields.maxLength,
+    ...decision,
   }),
   Schema.Struct({
     type: Schema.Literal("confirm"),
     prompt: Prompt,
     followUp: ConfirmQuestion.fields.followUp,
+    ...decision,
   }),
   Schema.Struct({
     type: Schema.Literal("secret"),
