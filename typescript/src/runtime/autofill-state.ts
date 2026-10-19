@@ -33,6 +33,17 @@ export interface SentIdentifiers {
 }
 
 /**
+ * The page the browser is on, read without moving it: whether its document has parsed, a shape of
+ * its DOM that changes as the page renders (its address, element count and text length), and the
+ * HTTP status its navigation got, when the browser reports one.
+ */
+export interface PageState {
+  readonly parsed: boolean;
+  readonly shape: string;
+  readonly status?: number;
+}
+
+/**
  * The host's sign-in calls on the browser a sign-in runs on: `inspect` finds a step's controls and
  * judges where they submit, `fill` types the host's values into them and clicks the submit, `check`
  * reads the signed-in marker alone, and `confirm` checks it and verifies the login as the host
@@ -88,6 +99,16 @@ export interface AutofillHooks<E = unknown, V extends string = string> {
   readonly challenge?: Effect.Effect<
     { readonly outcome: "cleared" | "failed"; readonly vendor: V } | undefined
   >;
+  /**
+   * Whether this browser started on a new, empty profile, never a saved one that may already be
+   * signed in: only then is a page it shows before any sign-in a signed-out page.
+   */
+  readonly startedEmpty?: boolean;
+  /**
+   * The primary tab as it is, read without moving it: whether its document parsed, a shape of
+   * its DOM and its navigation's HTTP status, for a check's settling.
+   */
+  readonly pageState?: () => Effect.Effect<PageState | undefined>;
 }
 
 /** The host's masking of the values a sign-in types, and its check of a text for them. */
