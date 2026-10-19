@@ -201,6 +201,27 @@ describe("a key whose body holds another key's shape", () => {
     expect(long / Math.max(short, 1)).toBeLessThan(10);
   });
 
+  it("stays linear when a pattern is built on its source with more after it", () => {
+    const source = providerKeyPattern().source;
+    const run = "a".repeat(40);
+    const texts = [
+      `${fake("sk-", run)}!`,
+      `${fake("xoxb-", run)}!`,
+      `${fake("whsec_", run.toUpperCase())}!`,
+      `${fake("xoxb-", run)}-${fake("ghp_", "A".repeat(20))}`,
+    ];
+    for (const after of ["$", "(?![\\w-])"]) {
+      const composed = new RegExp(`(?:${source})${after}`, "u");
+      for (const text of texts) {
+        const started = performance.now();
+        composed.test(text);
+        // Trying every split of a run would take hours here; reading each run whole takes well
+        // under a millisecond.
+        expect(performance.now() - started).toBeLessThan(1000);
+      }
+    }
+  });
+
   it("starts keys after no word character when a listed prefix does not start with one", async () => {
     expect(providerKeyPattern().source.startsWith("\\b")).toBe(true);
     const file = new URL("../../src/privacy/credential-policy.ts", import.meta.url);
