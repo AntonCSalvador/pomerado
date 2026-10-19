@@ -663,7 +663,7 @@ export interface LiveTestRecord {
   readonly nextPage?: true;
   /** A failing result the minter replaced by changing the case; kept for the publication review. */
   readonly retired?: true;
-  /** A retired failure whose case, unchanged, did not fail when run again on the same source. */
+  /** A retired failure whose case, unchanged, passed when run again on the same source. */
   readonly flaky?: true;
   /**
    * The case ran while the read was signed in. A signed-in read's publication record holds only
@@ -788,10 +788,9 @@ export const caseView = (
 };
 
 /**
- * Where a published input schema rejects an input, and by which rule: `path` is a JSON pointer into
- * the input, such as `/query`, and `keyword` the JSON Schema keyword it breaks, such as
- * `maxLength`. A missing required input or an input the schema does not declare points at that
- * input's own name.
+ * Where a published input schema bounds a value an input supplied, and by which rule: `path` is a
+ * JSON pointer into the input, such as `/query`, and `keyword` the JSON Schema keyword it breaks,
+ * such as `maxLength`. A property the schema does not take points at that property's own name.
  */
 export interface OutsideSchema {
   readonly path: string;
@@ -802,9 +801,41 @@ export interface OutsideSchema {
 const pointerSegment = (name: string) => name.replaceAll("~", "~0").replaceAll("/", "~1");
 
 /**
+ * Keywords under which a subschema applies only on a condition, such as one branch of `anyOf`. An
+ * error there, and the combinator's own, can stand for something the input lacks, such as a field
+ * one branch requires, so it never shows the schema bounding a value the input supplied.
+ */
+const conditionalKeywords = new Set([
+  "anyOf",
+  "oneOf",
+  "not",
+  "if",
+  "then",
+  "else",
+  "dependencies",
+  "dependentSchemas",
+]);
+/** Keywords whose next schema path segment is a property or definition name, not a keyword. */
+const namingKeywords = new Set(["properties", "patternProperties", "$defs", "definitions"]);
+
+const underCondition = (schemaPath: string) => {
+  const segments = schemaPath.split("/");
+  return segments.some(
+    (segment, index) =>
+      conditionalKeywords.has(segment) && !namingKeywords.has(segments[index - 1] ?? ""),
+  );
+};
+
+/**
  * A check of inputs against a tool's published input schema (`outsideSchema`), or undefined when
- * the schema cannot be compiled, which leaves every input inside it. Validated with the same Ajv
- * the MCP server uses; formats are not checked, since a tool's own decoding does not check them.
+ * there is no schema or it cannot be compiled, which leaves every input inside it. It marks an
+ * input only where an error points at a value the input supplied: a bound on that value, such as
+ * `maxLength`, `pattern`, `enum`, `type` or `minimum`, or `additionalProperties` on a property it
+ * gave. A field the schema newly requires, an error at the input's root, and one under a
+ * conditional subschema hold whatever the supplied values are, so they mark nothing. Every error
+ * is read, not only the first. It uses the classic (draft-07) Ajv engine the MCP SDK ships, with
+ * formats unchecked, since a tool's own decoding does not check them; the SDK's server validator
+ * reports only a message, so it cannot name the path.
  */
 const publishedInputCheck = (
   inputSchema: unknown,
@@ -814,7 +845,7 @@ const publishedInputCheck = (
     try {
       return new Ajv({
         strict: false,
-        allErrors: false,
+        allErrors: true,
         validateSchema: false,
         validateFormats: false,
         logger: false,
@@ -827,22 +858,17 @@ const publishedInputCheck = (
   if (validate === undefined) return undefined;
   return (input) => {
     if (validate(input)) return undefined;
-    const error = validate.errors?.[0];
-    if (error === undefined) return undefined;
-    const params: Readonly<Record<string, unknown>> = error.params;
-    const named =
-      error.keyword === "required"
-        ? params["missingProperty"]
-        : error.keyword === "additionalProperties"
-          ? params["additionalProperty"]
-          : undefined;
-    return {
-      path:
-        typeof named === "string"
-          ? `${error.instancePath}/${pointerSegment(named)}`
-          : error.instancePath,
-      keyword: error.keyword,
-    };
+    for (const error of validate.errors ?? []) {
+      if (underCondition(error.schemaPath)) continue;
+      const params: Readonly<Record<string, unknown>> = error.params;
+      const extra = params["additionalProperty"];
+      if (error.keyword === "additionalProperties" && typeof extra === "string")
+        return { path: `${error.instancePath}/${pointerSegment(extra)}`, keyword: error.keyword };
+      // A bound's instancePath points at the value it judged, which the input supplied.
+      if (error.instancePath !== "" && error.keyword !== "required")
+        return { path: error.instancePath, keyword: error.keyword };
+    }
+    return undefined;
   };
 };
 
@@ -869,26 +895,71 @@ const refusalSatisfies = (expectation: LiveTestExpectation, record: LiveTestReco
   );
 };
 
-const refusalExpectation = (expectation: LiveTestExpectation) =>
-  expectation === "invalid_input" || expectation === "error";
+/** A way a retired failure that still counts can stop counting. */
+type ClearingWay = "changedExpectationBy" | "excusedBy" | "outsideSchema";
+
+/**
+ * The site's own answer for the input that a `changedExpectationBy` lead needs a capture of, by
+ * the lead's expectation: its results, its no-results state or its own controls refusing it.
+ */
+type SiteAnswer = "results" | "no_results" | "refusal";
+
+const siteAnswerFor = (expectation: LiveTestExpectation): SiteAnswer =>
+  expectation === "result" ? "results" : expectation === "empty" ? "no_results" : "refusal";
+
+/**
+ * The response statuses that show a site refusing an input itself, for its shape or size. Never
+ * 401, 403, 404, 405 or 429, which answer access, a missing page, a method or a rate.
+ */
+const siteRefusalStatuses = [400, 413, 414, 422] as const;
+
+/** What a capture of each site answer must show, for the record's `clearedBy` note. */
+const siteAnswerCapture: Readonly<Record<SiteAnswer, string>> = {
+  results:
+    "the site's own results for this exact input: a page reached through the site's own controls or a URL they produce, that reads back the input as the site applied it and lists the site's results for it",
+  no_results:
+    "the site's own no-results state for this exact input: a page reached through the site's own controls or a URL they produce, that reads back the input as the site applied it",
+  refusal:
+    "the site's own controls refusing this exact input: its own validation message for it on its own form, or, where the captures hold the site's responses, a 400, 413, 414 or 422 response to the request its own form sent with it; never the request this tool made, and never a 401, 403, 404, 405 or 429",
+};
 
 /**
  * How a retired failure that still counts can stop counting, for the record's `clearedBy`: the
- * evidence a `changedExpectationBy` lead needs, or that no lead applies yet.
+ * ways open to it, the site answer its `changedExpectationBy` lead needs a capture of, and a note.
+ * `outsideSchema` is a way only when the host read the version's input schema.
  */
-const clearedByNote = (
+const clearedBy = (
   record: LiveTestRecord,
   lead: { readonly id: string; readonly expect: LiveTestExpectation } | undefined,
+  schemaRead: boolean,
 ) => {
-  const fix =
+  const ways: ClearingWay[] = [
+    "changedExpectationBy",
+    "excusedBy",
+    ...(schemaRead ? ["outsideSchema" as const] : []),
+  ];
+  const others = [
     record.expect === undefined
       ? "a case that passes this input after a source change with the expectation this case had (excusedBy)"
-      : `a case that passes this input after a source change with a result that expect ${record.expect} accepts (excusedBy)`;
-  if (lead !== undefined && refusalExpectation(lead.expect))
-    return `changedExpectationBy ${lead.id}, with a capture of the site itself refusing this exact input: a 4xx client-error response, or the site's own validation message, for the request this run made, named in ${lead.id}'s purpose or the coverage text; never a challenge, block, 5xx, timeout or loading page. Otherwise a schema bound (outsideSchema) or ${fix}.`;
-  if (lead !== undefined && lead.expect === "empty")
-    return `changedExpectationBy ${lead.id}, with a capture of the site's own no-results state for this exact input, named in ${lead.id}'s purpose or the coverage text. Otherwise a schema bound (outsideSchema) or ${fix}.`;
-  return `none: only a schema bound (outsideSchema), site-refusal evidence for a passing case of this input that expects invalid_input or error (changedExpectationBy), or ${fix} clears it.`;
+      : `a case that passes this input after a source change with a result that expect ${record.expect} accepts (excusedBy)`,
+    ...(schemaRead
+      ? [
+          "a bound in the published input schema on a value this input supplies, only where the site itself bounds that value (outsideSchema)",
+        ]
+      : []),
+  ].join("; or ");
+  if (lead === undefined)
+    return {
+      ways,
+      note: `No passing case of this input expects another answer. Clears by ${others}; or a passing case of this input whose new expectation a capture shows the site giving: its own results, its own no-results state or its own controls refusing it (changedExpectationBy).`,
+    };
+  const siteAnswer = siteAnswerFor(lead.expect);
+  return {
+    ways,
+    siteAnswer,
+    ...(siteAnswer === "refusal" ? { refusalStatuses: siteRefusalStatuses } : {}),
+    note: `changedExpectationBy ${lead.id} clears it with a capture of ${siteAnswerCapture[siteAnswer]}; never a challenge, sign-in, blocked or loading page; named in ${lead.id}'s purpose or the coverage text. Otherwise ${others}.`,
+  };
 };
 
 /**
@@ -961,7 +1032,7 @@ const retiredViews = (
         [
           record,
           record.flaky === true
-            ? "failed, then did not fail when run again unchanged on the same source: flaky"
+            ? "failed, then passed when run again unchanged on the same source: flaky"
             : current.has(record.id)
               ? "changed after it failed"
               : "changed after it failed, then deleted",
@@ -983,7 +1054,7 @@ const retiredViews = (
       ...(bound === undefined ? {} : { outsideSchema: bound }),
       ...(excuse === undefined ? {} : { excusedBy: excuse }),
       ...(lead === undefined ? {} : { changedExpectationBy: lead.id }),
-      ...(counts ? { clearedBy: clearedByNote(record, lead) } : {}),
+      ...(counts ? { clearedBy: clearedBy(record, lead, outside !== undefined) } : {}),
       ...(record.purpose === undefined ? {} : { purpose: record.purpose }),
       ...(record.expect === undefined ? {} : { expect: record.expect }),
       ...(record.input === undefined ? {} : { input: record.input }),
@@ -1152,7 +1223,7 @@ export const liveTestsEvidence = (options: {
       kind: "host_live_tests",
       note: nothing
         ? "Written by the host, never by the minter. The minter designed and ran no live test case, so beyond the example nothing was tested live."
-        : "Written by the host from its own runs, never by the minter. The same cases run on each version of the tool: playwright, the Kernel script, and http, the HTTP version, for each version that ships: a version that does not ship, such as an HTTP version the minter ruled out, is not listed. versions names each version's entrypoint, the source digest its results are judged against, and its counts. Each case's results hold its result on each version, from that version's own batches: one version's run never counts for the other. Each case ran in a fresh script process on a page reset to the site's origin, after one Guardian review of its batch; purpose is the minter's account of what the case establishes. A result's start says how its browser started: cold, first on a new browser with an empty profile, as a caller the site remembers nothing about meets it; warm, on a browser that kept the site data earlier steps left. versions counts each version's coldPasses, the cases that passed cold; a host with one browser runs no case cold. status is against that version's source being published: stale means the source or the case changed after the case ran, and not_run means no batch ran it on that version. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists, by version, cases the minter deleted, failures it replaced by changing the case, and failures that did not repeat when the unchanged case ran again on the same source (flaky), with their last result. A retired failure stops counting when the host marks it outsideSchema or names its excusedBy. outsideSchema means that version's published input schema rejects the failure's input, at path (a JSON pointer into the input) by keyword (the JSON Schema rule it breaks), so the tool no longer claims that input. excusedBy names a case that passes the same input on that version's published source after the source changed, with the same expectation or with a refusal the failure's own expectation accepts, such as InvalidInput for a case that expected error. changedExpectationBy names a case that passes the same input with another expectation on that version's published source, for a failure on any source; it excuses nothing by itself. clearedBy, on each retired failure that still counts, says what can clear it: the evidence its changedExpectationBy needs, or none yet.",
+        : "Written by the host from its own runs, never by the minter. The same cases run on each version of the tool: playwright, the Kernel script, and http, the HTTP version, for each version that ships: a version that does not ship, such as an HTTP version the minter ruled out, is not listed. versions names each version's entrypoint, the source digest its results are judged against, and its counts. Each case's results hold its result on each version, from that version's own batches: one version's run never counts for the other. Each case ran in a fresh script process on a page reset to the site's origin, after one Guardian review of its batch; purpose is the minter's account of what the case establishes. A result's start says how its browser started: cold, first on a new browser with an empty profile, as a caller the site remembers nothing about meets it; warm, on a browser that kept the site data earlier steps left. versions counts each version's coldPasses, the cases that passed cold; a host with one browser runs no case cold. status is against that version's source being published: stale means the source or the case changed after the case ran, and not_run means no batch ran it on that version. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists, by version, cases the minter deleted, failures it replaced by changing the case, and failures that passed when the unchanged case ran again on the same source (flaky), with their last result. A retired failure stops counting when the host marks it outsideSchema or names its excusedBy. outsideSchema means that version's published input schema bounds a value the failure's input supplied, at path (a JSON pointer into the input) by keyword (the JSON Schema rule it breaks), so the tool no longer claims that input; a field the schema newly requires never marks it. excusedBy names a case that passes the same input on that version's published source after the source changed, with the same expectation or with a refusal the failure's own expectation accepts, such as InvalidInput for a case that expected error. changedExpectationBy names a case that passes the same input with another expectation on that version's published source, for a failure on any source; it excuses nothing by itself. clearedBy, on each retired failure that still counts, says what can clear it: ways, the ways open to it; siteAnswer, when it has a changedExpectationBy, the site's own answer for that input a capture must show (results, no_results or refusal), with refusalStatuses for a refusal; and a note.",
       ...(signedIn
         ? {
             signedIn: true,

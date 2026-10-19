@@ -769,6 +769,29 @@ it("keeps a failure that passed when run again on the same code as flaky", async
   expect(record.retired[0]).not.toHaveProperty("excusedBy");
 });
 
+// A challenge or a site block on the rerun tests nothing about the tool, so it neither shows the
+// failure was a race nor clears it: the failure keeps counting as the case's result.
+it("keeps a failure counting when its rerun on the same code is inconclusive", async () => {
+  const blocked = { status: "inconclusive" as const, reason: "challenge" as const };
+  const record = (await batchesThenPublish(
+    (batch) => ({ "other-store": batch === 0 ? emptyList : blocked }),
+    [
+      {
+        "src/tool.ts": toolSource,
+        "test/cases.json": JSON.stringify(withPassing(JSON.parse(otherStore("result")), 3)),
+      },
+      {},
+    ],
+  )) as unknown as {
+    readonly retired: readonly Record<string, unknown>[];
+    readonly cases: readonly { readonly id: string; readonly results: Record<string, unknown> }[];
+  };
+  expect(record.retired).toEqual([]);
+  expect(record.cases.find((entry) => entry.id === "other-store")?.results).toMatchObject({
+    playwright: { status: "fail" },
+  });
+});
+
 const oneCase = (id: string, expectation: string, input: object) =>
   JSON.stringify(
     withPassing(
@@ -777,40 +800,104 @@ const oneCase = (id: string, expectation: string, input: object) =>
     ),
   );
 const longQuery = { query: "lamp ".repeat(60) };
-/** The search schemas with the query bounded as the site's own search field is. */
-const boundedQuery = {
+/** The search schemas with the query bounded at `maxLength`, and any `more` of the input schema. */
+const queryBoundedAt = (maxLength: number, more: Record<string, unknown> = {}) => ({
   ...schemas,
   input: {
     ...schemas.input,
-    properties: { ...schemas.input.properties, query: { type: "string", minLength: 1, maxLength: 100 } },
+    properties: { ...schemas.input.properties, query: { type: "string", minLength: 1, maxLength } },
+    ...more,
   },
+});
+/** The search schemas with the query bounded as the site's own search field is. */
+const boundedQuery = queryBoundedAt(100);
+type Retired = Record<string, unknown> & {
+  readonly clearedBy?: { readonly ways: readonly string[]; readonly siteAnswer?: string };
 };
-type Retired = Record<string, unknown> & { readonly clearedBy?: string };
+const stillCounting = (record: { readonly retired: readonly Record<string, unknown>[] }) =>
+  record.retired.filter((entry) => "clearedBy" in entry).length;
+const siteRefused = { status: "failed" as const, errorClass: "HttpError", frame: "src/tool.ts:9" };
+const oneResult = {
+  status: "completed" as const,
+  output: { results: [{ name: "Lamp" }], has_next_page: false, next_cursor: null },
+};
+
+/**
+ * Runs `input` as a case that fails on the first source, whose schemas are `first`, deletes it with
+ * a source edit, and publishes against `published`, the schemas the edited source declares.
+ */
+const retiredUnder = (input: object, published: ToolSchemas, first: ToolSchemas = schemas) =>
+  batchesThenPublish(
+    { "old-input": siteRefused },
+    [
+      { "src/tool.ts": toolSource, "test/cases.json": oneCase("old-input", "result", input) },
+      {
+        "src/tool.ts": `${toolSource}// schema changed\n`,
+        "test/cases.json": JSON.stringify(withPassing({ cases: [] }, 3)),
+      },
+    ],
+    (batch) => (batch === 0 ? first : published),
+  );
 
 // A failure whose input the published schema now refuses tests an input the tool no longer
 // claims. The host reads that from the schema itself, so no relabelled case is involved.
 it("stops counting a retired failure once the published schema rejects its input", async () => {
-  const siteRefused = { status: "failed" as const, errorClass: "HttpError", frame: "src/tool.ts:9" };
-  const record = await batchesThenPublish(
-    { "long-query": siteRefused },
-    [
-      { "src/tool.ts": toolSource, "test/cases.json": oneCase("long-query", "result", longQuery) },
-      {
-        "src/tool.ts": `${toolSource}// bounded\n`,
-        "test/cases.json": JSON.stringify(withPassing({ cases: [] }, 3)),
-      },
-    ],
-    (batch) => (batch === 0 ? schemas : boundedQuery),
-  );
+  const record = await retiredUnder(longQuery, boundedQuery);
   expect(record.retired).toEqual([
     expect.objectContaining({
-      id: "long-query",
+      id: "old-input",
       lastVerdict: "fail",
       outsideSchema: { path: "/query", keyword: "maxLength" },
     }),
   ]);
   expect(record.retired[0]).not.toHaveProperty("clearedBy");
   expect(record.coverage).toContain("0 of those failures still count.");
+});
+
+// A bound the schema puts on a value the old input supplied is the claim that changed. Every
+// other error holds for the input's values: a field the schema newly requires, or a rule over the
+// whole input, would mark every old case outside while the schema still accepts what it sent.
+it("marks a retired failure outsideSchema only where the schema bounds a value it supplied", async () => {
+  const zipRequired = {
+    ...schemas,
+    input: {
+      ...schemas.input,
+      required: ["query", "zip"],
+      properties: { ...schemas.input.properties, zip: { type: "string" } },
+    },
+  };
+  const newlyRequired = await retiredUnder({ query: "lamp" }, zipRequired);
+  expect(newlyRequired.retired[0]).not.toHaveProperty("outsideSchema");
+  expect(stillCounting(newlyRequired)).toBe(1);
+
+  const eitherIdentifier = queryBoundedAt(1000, {
+    anyOf: [{ required: ["zip"] }, { required: ["store_id"] }],
+  });
+  const wholeInputRule = await retiredUnder({ query: "lamp" }, eitherIdentifier);
+  expect(wholeInputRule.retired[0]).not.toHaveProperty("outsideSchema");
+  expect(stillCounting(wholeInputRule)).toBe(1);
+
+  const loosened = await retiredUnder(longQuery, schemas, queryBoundedAt(400));
+  expect(loosened.retired[0]).not.toHaveProperty("outsideSchema");
+  expect(stillCounting(loosened)).toBe(1);
+
+  // Every error counts, not the first: the new required field beside the bound on the query.
+  const boundedAndRequired = await retiredUnder(
+    longQuery,
+    queryBoundedAt(100, { required: ["zip", "query"] }),
+  );
+  expect(boundedAndRequired.retired[0]).toMatchObject({
+    outsideSchema: { path: "/query", keyword: "maxLength" },
+  });
+  expect(stillCounting(boundedAndRequired)).toBe(0);
+
+  const closed = await retiredUnder(
+    { query: "lamp", store: "Mill Street" },
+    queryBoundedAt(1000, { additionalProperties: false }),
+  );
+  expect(closed.retired[0]).toMatchObject({
+    outsideSchema: { path: "/store", keyword: "additionalProperties" },
+  });
 });
 
 // A refusal satisfies an expectation of error as judgeCase judges it, so a case that now refuses
@@ -833,8 +920,54 @@ it("excuses a failure that expected error by a later InvalidInput for the same i
   expect(record.retired).toEqual([
     expect.objectContaining({ id: "store-refused", lastVerdict: "fail", excusedBy: "store-not-listed" }),
   ]);
-  expect(record.retired[0]).not.toHaveProperty("clearedBy");
-  expect(record.coverage).toContain("0 of those failures still count.");
+  expect(stillCounting(record)).toBe(0);
+});
+
+// On the same source the refusal and the failure come from the same code: the pass shows the
+// relabel, not a fix, so it is only a lead the review checks against the site.
+it("never excuses a failure by a refusal that passes on the same source", async () => {
+  const input = { query: "lamp", store: "Nowhere Street" };
+  const record = await batchesThenPublish(
+    (batch) =>
+      batch === 0
+        ? { "store-refused": { status: "failed", errorClass: "TimeoutError", frame: "src/tool.ts:14" } }
+        : { "store-not-listed": { status: "invalid_input", field: "store", available: ["Mill Street"] } },
+    [
+      { "src/tool.ts": toolSource, "test/cases.json": oneCase("store-refused", "error", input) },
+      { "test/cases.json": oneCase("store-not-listed", "invalid_input", input) },
+    ],
+  );
+  const [retired] = record.retired as Retired[];
+  expect(retired).toMatchObject({ id: "store-refused", changedExpectationBy: "store-not-listed" });
+  expect(retired).not.toHaveProperty("excusedBy");
+  expect(retired?.clearedBy?.siteAnswer).toBe("refusal");
+});
+
+// InputNotApplied passes a case that expects error, but a case that expects invalid_input passes
+// only on InvalidInput, so it shows a different answer, not the old expectation met.
+it("never excuses an invalid_input failure by an InputNotApplied pass", async () => {
+  const input = { query: "lamp", store: "Nowhere Street" };
+  const record = await batchesThenPublish(
+    (batch) =>
+      batch === 0
+        ? { "store-unlisted": oneResult }
+        : { "store-not-applied": { status: "failed", errorClass: "InputNotApplied", frame: "src/tool.ts:14" } },
+    [
+      { "src/tool.ts": toolSource, "test/cases.json": oneCase("store-unlisted", "invalid_input", input) },
+      {
+        "src/tool.ts": `${toolSource}// reports the store unapplied\n`,
+        "test/cases.json": oneCase("store-not-applied", "error", input),
+      },
+    ],
+  );
+  const [retired] = record.retired as Retired[];
+  expect(retired).toMatchObject({
+    id: "store-unlisted",
+    lastVerdict: "fail",
+    changedExpectationBy: "store-not-applied",
+  });
+  expect(retired).not.toHaveProperty("excusedBy");
+  expect(stillCounting(record)).toBe(1);
 });
 
 it("says how a retired failure that still counts can be cleared", async () => {
@@ -862,13 +995,40 @@ it("says how a retired failure that still counts can be cleared", async () => {
   const retired = record.retired as Retired[];
   const relabelled = retired.find((entry) => entry.id === "other-store");
   const deleted = retired.find((entry) => entry.id === "sort-price");
-  expect(relabelled).toMatchObject({ lastVerdict: "fail", changedExpectationBy: "other-store" });
+  expect(relabelled).toMatchObject({
+    lastVerdict: "fail",
+    changedExpectationBy: "other-store",
+    clearedBy: { ways: ["changedExpectationBy", "excusedBy", "outsideSchema"], siteAnswer: "no_results" },
+  });
   expect(relabelled).not.toHaveProperty("excusedBy");
-  expect(relabelled?.clearedBy).toContain("changedExpectationBy other-store");
-  expect(relabelled?.clearedBy).toContain("no-results state");
-  expect(deleted).toMatchObject({ lastVerdict: "fail" });
-  expect(deleted?.clearedBy).toMatch(/^none: /u);
-  expect(record.coverage).toContain("2 of those failures still count.");
+  expect(deleted).toMatchObject({
+    lastVerdict: "fail",
+    clearedBy: { ways: ["changedExpectationBy", "excusedBy", "outsideSchema"] },
+  });
+  expect(deleted?.clearedBy).not.toHaveProperty("siteAnswer");
+  expect(stillCounting(record)).toBe(2);
+});
+
+// A no-results case the site answers with near matches expects results once the minter sees
+// them; the lead stands on the site's own results for that input, as an empty lead does on its
+// no-results state.
+it("names the site's own results as what a lead that now expects results needs", async () => {
+  const misspelt = { query: "lmap" };
+  const record = await batchesThenPublish(
+    { "misspelt-query": oneResult },
+    [
+      { "src/tool.ts": toolSource, "test/cases.json": oneCase("misspelt-query", "empty", misspelt) },
+      { "test/cases.json": oneCase("misspelt-query", "result", misspelt) },
+    ],
+  );
+  const [retired] = record.retired as Retired[];
+  expect(retired).toMatchObject({
+    id: "misspelt-query",
+    lastVerdict: "fail",
+    expect: "empty",
+    changedExpectationBy: "misspelt-query",
+    clearedBy: { siteAnswer: "results" },
+  });
 });
 
 // Changing a case to expect what a regression now returns is the minter's own account. It
@@ -895,17 +1055,17 @@ it("never lets a case relabelled to a regression's result excuse the failure", a
   });
   expect(retired).not.toHaveProperty("excusedBy");
   expect(retired).not.toHaveProperty("outsideSchema");
-  expect(retired?.clearedBy).toContain("changedExpectationBy listed-store");
-  expect(record.coverage).toContain("1 of those failures still counts.");
+  expect(stillCounting(record)).toBe(1);
 });
 
-// The review accepts the site's own refusal of the input as evidence for a case that now expects
-// a refusal; the record tells it, and the minter, which capture that has to be.
-it("names the site-refusal capture a refusal lead needs, and never a 5xx or a challenge", async () => {
+// A refusal lead stands only on the site's own controls refusing the input, by a status that
+// says the input itself was refused. The failing run's own request is the tool's, so a bug in it
+// can draw the same status.
+it("names the site's own refusal, by an input-shaped status only, as what a refusal lead needs", async () => {
   const record = await batchesThenPublish(
     (batch) =>
       batch === 0
-        ? { "long-query": { status: "failed", errorClass: "HttpError", frame: "src/tool.ts:9" } }
+        ? { "long-query": siteRefused }
         : { "long-query": { status: "failed", errorClass: "InputNotApplied", frame: "src/tool.ts:9" } },
     [
       { "src/tool.ts": toolSource, "test/cases.json": oneCase("long-query", "result", longQuery) },
@@ -916,9 +1076,11 @@ it("names the site-refusal capture a refusal lead needs, and never a 5xx or a ch
     ],
   );
   const [retired] = record.retired as Retired[];
-  expect(retired).toMatchObject({ id: "long-query", changedExpectationBy: "long-query" });
-  expect(retired?.clearedBy).toContain("4xx");
-  expect(retired?.clearedBy).toContain("never a challenge, block, 5xx");
+  expect(retired).toMatchObject({
+    id: "long-query",
+    changedExpectationBy: "long-query",
+    clearedBy: { siteAnswer: "refusal", refusalStatuses: [400, 413, 414, 422] },
+  });
 });
 
 it("publishes with the gaps when too little time is left for a batch, and the record says so", async () => {

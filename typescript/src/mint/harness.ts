@@ -3977,12 +3977,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             const records = recordsFor(request.entrypoint);
             const version = liveTestVersion(request.entrypoint);
             const previous = records.get(run.id);
+            const rerun =
+              previous?.caseDigest === digestOfCase && previous.sourceDigest === sourceDigest;
+            // An inconclusive rerun, such as a challenge or a site block, tested nothing about
+            // the tool, so a failure it follows on the same source and case keeps counting.
+            const keepsFailure =
+              rerun && previous.verdict === "fail" && judged.verdict === "inconclusive";
             // A failure the run replaces stays in the record: the case changed after it, or it
-            // did not fail again on the same source and case, which shows it is flaky.
-            const flaky =
-              previous?.caseDigest === digestOfCase &&
-              previous.sourceDigest === sourceDigest &&
-              judged.verdict !== "fail";
+            // passed when run again on the same source and case, which shows it is flaky.
+            const flaky = rerun && judged.verdict === "pass";
             if (
               previous !== undefined &&
               previous.verdict === "fail" &&
@@ -4002,29 +4005,30 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               for (const dropped of ofVersion.slice(0, Math.max(0, ofVersion.length - maximumBatchCases)))
                 liveTestReplaced.splice(liveTestReplaced.indexOf(dropped), 1);
             }
-            records.set(run.id, {
-              id: run.id,
-              entrypoint: request.entrypoint,
-              caseDigest: digestOfCase,
-              sourceDigest,
-              verdict: judged.verdict,
-              got: judged.got,
-              ...(judged.detail === undefined ? {} : { detail: judged.detail }),
-              ...(judged.errorClass === undefined ? {} : { errorClass: judged.errorClass }),
-              ...(message === undefined ? {} : { message }),
-              ...(judged.frame === undefined ? {} : { frame: judged.frame }),
-              ...(judged.refusal === undefined ? {} : { refusal: judged.refusal }),
-              ...(excerpt === undefined ? {} : { excerpt }),
-              ...(outputChecks === undefined ? {} : { outputChecks }),
-              durationMs: Math.max(0, Math.round(run.durationMs)),
-              ...(run.lane === undefined ? {} : { lane: run.lane }),
-              ...(run.start === undefined ? {} : { start: run.start }),
-              input: testCase.input,
-              purpose: testCase.purpose,
-              expect: testCase.expect,
-              ...(testCase.next_page === true ? { nextPage: true } : {}),
-              ...(signedInBatch ? { signedIn: true as const } : {}),
-            });
+            if (!keepsFailure)
+              records.set(run.id, {
+                id: run.id,
+                entrypoint: request.entrypoint,
+                caseDigest: digestOfCase,
+                sourceDigest,
+                verdict: judged.verdict,
+                got: judged.got,
+                ...(judged.detail === undefined ? {} : { detail: judged.detail }),
+                ...(judged.errorClass === undefined ? {} : { errorClass: judged.errorClass }),
+                ...(message === undefined ? {} : { message }),
+                ...(judged.frame === undefined ? {} : { frame: judged.frame }),
+                ...(judged.refusal === undefined ? {} : { refusal: judged.refusal }),
+                ...(excerpt === undefined ? {} : { excerpt }),
+                ...(outputChecks === undefined ? {} : { outputChecks }),
+                durationMs: Math.max(0, Math.round(run.durationMs)),
+                ...(run.lane === undefined ? {} : { lane: run.lane }),
+                ...(run.start === undefined ? {} : { start: run.start }),
+                input: testCase.input,
+                purpose: testCase.purpose,
+                expect: testCase.expect,
+                ...(testCase.next_page === true ? { nextPage: true } : {}),
+                ...(signedInBatch ? { signedIn: true as const } : {}),
+              });
             verdicts[judged.verdict] = (verdicts[judged.verdict] ?? 0) + 1;
             if (attemptBound && judged.verdict === "inconclusive" && judged.got === "deadline")
               liveTestsOutOfTime = true;
@@ -5369,7 +5373,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     repeatableRead,
                   },
                   (error.code === "ReviewDenied" && error.review?.reason === "evidence"
-                    ? "Not published yet: Guardian needs more evidence to judge this publication, and the rationale names each missing item. Gather each one within your authority, such as running the live tests or cases it names so their results reach the test record, and fix every finding, then call finish_build again. Missing evidence is not a refusal and never a reason for a policy block. The existing example and result remain recorded."
+                    ? "Not published yet: Guardian needs more evidence to judge this publication, and the rationale names each missing item. Gather each one within your authority, such as running the live tests or cases it names so their results reach the test record, or exploring the site's own controls for a capture it names, and fix every finding, then call finish_build again. A retired failure in publication/tests.json clears only by a way its clearedBy lists: running the same cases again on the same source clears none. Missing evidence is not a refusal and never a reason for a policy block. The existing example and result remain recorded."
                     : error.code === "ReviewDenied" && error.review !== undefined
                       ? "Not published: Guardian blocked this publication. Each finding's explanation says what is wrong, the evidence and the fix, at its file and byte range. Fix every finding and each missing item the rationale names, then call finish_build again with the same executionId. The existing example and result remain recorded."
                       : "Not published. The existing example and result remain recorded. Source edits and another finish_build publication review may continue; this does not guarantee the failure is repairable.") +

@@ -5,6 +5,7 @@ import {
   cursorPairOf,
   decodeCasesFile,
   judgeCase,
+  liveTestsEvidence,
   primaryListOf,
   signedInTestInputRefusal,
   testInputKey,
@@ -229,5 +230,34 @@ describe("the signed-in test input bound", () => {
     // A batch that would add two inputs when one is left runs nothing.
     expect(signedInTestInputRefusal([first], [{ query: "desk" }, { query: "chair" }])).toBeDefined();
     expect(signedInTestInputRefusal([], [combined, { query: "desk" }, { query: "chair" }])).toBeDefined();
+  });
+});
+
+describe("liveTestsEvidence", () => {
+  // A host that read no input schema cannot mark a failure outsideSchema, so the record never
+  // offers that way out.
+  it("offers no schema bound as a way out when the host read no input schema", () => {
+    const failed = {
+      id: "deleted-case",
+      caseDigest: "case",
+      sourceDigest: "earlier",
+      verdict: "fail" as const,
+      got: "TimeoutError",
+      durationMs: 1,
+      input: { query: "lamp" },
+      expect: "result" as const,
+    };
+    const { record } = liveTestsEvidence({
+      file: { cases: [] },
+      versions: [
+        { version: "playwright", sourceDigest: "published", records: new Map([[failed.id, failed]]) },
+      ],
+    });
+    expect(record.retired).toEqual([
+      expect.objectContaining({
+        id: "deleted-case",
+        clearedBy: expect.objectContaining({ ways: ["changedExpectationBy", "excusedBy"] }),
+      }),
+    ]);
   });
 });
