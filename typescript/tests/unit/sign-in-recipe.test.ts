@@ -101,6 +101,25 @@ describe("decodeSignInRecipe", () => {
       },
     ],
     [
+      "version 5 with a screen that asks for the password again beside a code",
+      {
+        version: 5,
+        steps: [
+          ...steps,
+          {
+            page: "https://example.test/login/password",
+            fields: [
+              { selector: "#password", slot: "password" },
+              { selector: "#code", slot: "code" },
+            ],
+            refills: ["password"],
+            submit: "#sign-in",
+          },
+        ],
+        signedIn,
+      },
+    ],
+    [
       "version 5 with a code step its key submits",
       {
         version: 5,
@@ -218,6 +237,71 @@ describe("decodeSignInRecipe", () => {
     [
       "a version 4 recipe with a key this host does not know",
       JSON.stringify({ version: 4, signInOrigins: ["https://id.example.net"], steps, signedIn }),
+    ],
+    [
+      "a version 4 step that refills the password",
+      JSON.stringify({
+        version: 4,
+        steps: [
+          ...steps,
+          {
+            page: "https://example.test/login/password",
+            fields: [
+              { selector: "#password", slot: "password" },
+              { selector: "#code", slot: "code" },
+            ],
+            refills: ["password"],
+          },
+        ],
+        signedIn,
+      }),
+    ],
+    [
+      "a version 5 step that refills the password with no second factor",
+      JSON.stringify({
+        version: 5,
+        steps: [...steps, { ...steps[1], refills: ["password"] }],
+        signedIn,
+      }),
+    ],
+    [
+      "a version 5 step that refills a field it does not take",
+      JSON.stringify({
+        version: 5,
+        steps: [
+          ...steps,
+          {
+            page: "https://example.test/login/code",
+            fields: [{ selector: "#code", slot: "code" }],
+            refills: ["password"],
+          },
+        ],
+        signedIn,
+      }),
+    ],
+    [
+      "a version 5 step that refills a code",
+      JSON.stringify({
+        version: 5,
+        steps: [
+          ...steps,
+          {
+            page: "https://example.test/login/code",
+            fields: [
+              { selector: "#password", slot: "password" },
+              { selector: "#code", slot: "code" },
+            ],
+            refills: ["code"],
+          },
+        ],
+        signedIn,
+      }),
+    ],
+    // A version 5 step key a host does not know is refused, not dropped: so a version 5 host
+    // that predates `refills` refuses a recipe that refills, rather than replaying it without.
+    [
+      "a version 5 step with a key this host does not know",
+      JSON.stringify({ version: 5, steps: [{ ...steps[0], submitAfter: 1 }], signedIn }),
     ],
   ])("refuses %s as invalid", (_name, text) => {
     expect(decodeSignInRecipe(text)).toBe("invalid");
