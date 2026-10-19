@@ -141,6 +141,11 @@
       "import": "./dist/typescript/src/destinations/autofill-refusal.js",
       "default": "./dist/typescript/src/destinations/autofill-refusal.js"
     },
+    "./core/destinations/autofill-refusal-evidence": {
+      "types": "./dist/typescript/src/destinations/autofill-refusal-evidence.d.ts",
+      "import": "./dist/typescript/src/destinations/autofill-refusal-evidence.js",
+      "default": "./dist/typescript/src/destinations/autofill-refusal-evidence.js"
+    },
     "./core/destinations/autofill-step": {
       "types": "./dist/typescript/src/destinations/autofill-step.d.ts",
       "import": "./dist/typescript/src/destinations/autofill-step.js",
@@ -506,6 +511,76 @@
       "import": "./dist/typescript/src/runtime/authentication.js",
       "default": "./dist/typescript/src/runtime/authentication.js"
     },
+    "./core/runtime/autofill-correction": {
+      "types": "./dist/typescript/src/runtime/autofill-correction.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-correction.js",
+      "default": "./dist/typescript/src/runtime/autofill-correction.js"
+    },
+    "./core/runtime/autofill-fresh-values": {
+      "types": "./dist/typescript/src/runtime/autofill-fresh-values.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-fresh-values.js",
+      "default": "./dist/typescript/src/runtime/autofill-fresh-values.js"
+    },
+    "./core/runtime/autofill-rejection": {
+      "types": "./dist/typescript/src/runtime/autofill-rejection.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-rejection.js",
+      "default": "./dist/typescript/src/runtime/autofill-rejection.js"
+    },
+    "./core/runtime/autofill-replay": {
+      "types": "./dist/typescript/src/runtime/autofill-replay.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-replay.js",
+      "default": "./dist/typescript/src/runtime/autofill-replay.js"
+    },
+    "./core/runtime/autofill-replay-code-screen": {
+      "types": "./dist/typescript/src/runtime/autofill-replay-code-screen.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-replay-code-screen.js",
+      "default": "./dist/typescript/src/runtime/autofill-replay-code-screen.js"
+    },
+    "./core/runtime/autofill-replay-fill": {
+      "types": "./dist/typescript/src/runtime/autofill-replay-fill.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-replay-fill.js",
+      "default": "./dist/typescript/src/runtime/autofill-replay-fill.js"
+    },
+    "./core/runtime/autofill-replay-pages": {
+      "types": "./dist/typescript/src/runtime/autofill-replay-pages.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-replay-pages.js",
+      "default": "./dist/typescript/src/runtime/autofill-replay-pages.js"
+    },
+    "./core/runtime/autofill-replay-screens": {
+      "types": "./dist/typescript/src/runtime/autofill-replay-screens.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-replay-screens.js",
+      "default": "./dist/typescript/src/runtime/autofill-replay-screens.js"
+    },
+    "./core/runtime/autofill-replay-session": {
+      "types": "./dist/typescript/src/runtime/autofill-replay-session.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-replay-session.js",
+      "default": "./dist/typescript/src/runtime/autofill-replay-session.js"
+    },
+    "./core/runtime/autofill-replay-steps": {
+      "types": "./dist/typescript/src/runtime/autofill-replay-steps.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-replay-steps.js",
+      "default": "./dist/typescript/src/runtime/autofill-replay-steps.js"
+    },
+    "./core/runtime/autofill-replay-workspace": {
+      "types": "./dist/typescript/src/runtime/autofill-replay-workspace.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-replay-workspace.js",
+      "default": "./dist/typescript/src/runtime/autofill-replay-workspace.js"
+    },
+    "./core/runtime/autofill-state": {
+      "types": "./dist/typescript/src/runtime/autofill-state.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-state.js",
+      "default": "./dist/typescript/src/runtime/autofill-state.js"
+    },
+    "./core/runtime/autofill-unrecorded-code": {
+      "types": "./dist/typescript/src/runtime/autofill-unrecorded-code.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-unrecorded-code.js",
+      "default": "./dist/typescript/src/runtime/autofill-unrecorded-code.js"
+    },
+    "./core/runtime/autofill-values": {
+      "types": "./dist/typescript/src/runtime/autofill-values.d.ts",
+      "import": "./dist/typescript/src/runtime/autofill-values.js",
+      "default": "./dist/typescript/src/runtime/autofill-values.js"
+    },
     "./core/runtime/capture-diagnostic": {
       "types": "./dist/typescript/src/runtime/capture-diagnostic.d.ts",
       "import": "./dist/typescript/src/runtime/capture-diagnostic.js",
@@ -626,6 +701,11 @@
       "import": "./dist/typescript/src/runtime/login-values.js",
       "default": "./dist/typescript/src/runtime/login-values.js"
     },
+    "./core/runtime/login-field-asks": {
+      "types": "./dist/typescript/src/runtime/login-field-asks.d.ts",
+      "import": "./dist/typescript/src/runtime/login-field-asks.js",
+      "default": "./dist/typescript/src/runtime/login-field-asks.js"
+    },
     "./core/runtime/kernel-operation": {
       "types": "./dist/typescript/src/runtime/kernel-operation.d.ts",
       "import": "./dist/typescript/src/runtime/kernel-operation.js",
@@ -666,6 +746,11 @@
       "import": "./dist/typescript/src/runtime/provider-metadata.js",
       "default": "./dist/typescript/src/runtime/provider-metadata.js"
     },
+    "./core/runtime/run-login": {
+      "types": "./dist/typescript/src/runtime/run-login.d.ts",
+      "import": "./dist/typescript/src/runtime/run-login.js",
+      "default": "./dist/typescript/src/runtime/run-login.js"
+    },
     "./core/runtime/run-outcome": {
       "types": "./dist/typescript/src/runtime/run-outcome.d.ts",
       "import": "./dist/typescript/src/runtime/run-outcome.js",
@@ -700,6 +785,11 @@
       "types": "./dist/typescript/src/runtime/script-input.d.ts",
       "import": "./dist/typescript/src/runtime/script-input.js",
       "default": "./dist/typescript/src/runtime/script-input.js"
+    },
+    "./core/runtime/sign-in-telemetry": {
+      "types": "./dist/typescript/src/runtime/sign-in-telemetry.d.ts",
+      "import": "./dist/typescript/src/runtime/sign-in-telemetry.js",
+      "default": "./dist/typescript/src/runtime/sign-in-telemetry.js"
     },
     "./core/runtime/source-syntax": {
       "types": "./dist/typescript/src/runtime/source-syntax.d.ts",

@@ -1,0 +1,394 @@
+import { Effect } from "effect";
+import type {
+  AutofillInspection,
+  AutofillField,
+  AutofillRefusal,
+  AutofillScreens,
+  AutofillSignedIn,
+  AutofillSignedInCheck,
+  AutofillSlot,
+  AutofillStep,
+  AutofillStepReport,
+  ExtraSecretSlot,
+  IdentifierKind,
+  SecretSlot,
+} from "../destinations/autofill-step.js";
+import type { AutofillRecipeStep } from "../destinations/autofill-recipe.js";
+import type { ControlIdentity } from "../destinations/autofill-page-code.js";
+import { report, type SignInReportContext } from "./sign-in-telemetry.js";
+
+/**
+ * Where a signed-in check of a tool with a workspace relation runs: the origin its account page
+ * opens on, and, for `confirm`, the workspace origin its identity verification pins to the login.
+ */
+export interface SignInCheckAt {
+  readonly origin: string;
+  readonly workspace?: string;
+}
+
+/** The identifiers besides the username a sign-in submitted, which a host may bind to the login. */
+export interface SentIdentifiers {
+  readonly email?: string;
+  readonly phone?: string;
+}
+
+/**
+ * The host's sign-in calls on the browser a sign-in runs on: `inspect` finds a step's controls and
+ * judges where they submit, `fill` types the host's values into them and clicks the submit, `check`
+ * reads the signed-in marker alone, and `confirm` checks it and verifies the login as the host
+ * does. `E` is the host's failure; `V` names a challenge vendor.
+ */
+export interface AutofillHooks<E = unknown, V extends string = string> {
+  readonly inspect: (step: AutofillStep) => Effect.Effect<AutofillRefusal | AutofillInspection, E>;
+  readonly fill: (input: {
+    readonly step: AutofillStep;
+    readonly values: readonly string[];
+    readonly inspection: AutofillInspection;
+  }) => Effect.Effect<AutofillStepReport>;
+  /** The marker check alone, which verifies nothing: a replay polls it. */
+  readonly check: (
+    indicator: AutofillSignedIn,
+    screens: AutofillScreens,
+    challengeScreens?: AutofillScreens,
+    at?: SignInCheckAt,
+  ) => Effect.Effect<AutofillSignedInCheck>;
+  /**
+   * The marker check that ends a sign-in: a password field of the sign-in's own `screens` left on
+   * the page fails it, as does a recorded code, recovery-code or security-answer control of
+   * `challengeScreens` (`screens` when absent) that still shows. A host may verify the identifiers
+   * the sign-in sent when the marker holds.
+   */
+  readonly confirm: (
+    indicator: AutofillSignedIn,
+    identifiers: SentIdentifiers,
+    screens: AutofillScreens,
+    challengeScreens?: AutofillScreens,
+    at?: SignInCheckAt,
+  ) => Effect.Effect<AutofillSignedInCheck, E>;
+  /** Opens a page on the sign-in's tab, as a replay starts from the login URL. */
+  readonly open: (url: string) => Effect.Effect<void, E>;
+  /** Reads a recorded error marker without reading a field's value or verifying a login. */
+  readonly markerVisible?: (
+    selector: string,
+    screenPage: string,
+    popup?: AutofillStep["popup"],
+  ) => Effect.Effect<boolean, E>;
+  /**
+   * Lets a replay that sent the login cleanly and ended on a page that can't tell, such as an
+   * account picker the site shows before the marker, go on signed in. A host may check the
+   * identifiers the sign-in used, binding nothing. Absent, such a replay fails its sign-in check.
+   */
+  readonly confirmCantTell?: (identifiers: SentIdentifiers) => Effect.Effect<void, E>;
+  /** Hears each same-site load that failed, as it fails; returns the removal. */
+  readonly onLoadFailure?: (listener: (failure: unknown) => void) => () => void;
+  /**
+   * A recorded screen that never showed: the host's look for a challenge on the page and its work
+   * on one it confirms there; undefined when none shows.
+   */
+  readonly challenge?: Effect.Effect<
+    { readonly outcome: "cleared" | "failed"; readonly vendor: V } | undefined
+  >;
+}
+
+/** The host's masking of the values a sign-in types, and its check of a text for them. */
+export interface SecretBroker {
+  readonly register: (value: {
+    readonly kind: "secret";
+    readonly entity: RegisteredEntity;
+    readonly value: string;
+  }) => Effect.Effect<void, unknown>;
+  readonly registeredSecretMatches: (text: string) => Effect.Effect<readonly unknown[], unknown>;
+}
+
+/** The entity a value the host asked or computed is registered under, for its placeholder. */
+export type RegisteredEntity =
+  | "EMAIL"
+  | "PHONE"
+  | "ACCOUNT_NUMBER"
+  | "DATE_OF_BIRTH"
+  | "ZIP"
+  | "RECOVERY_CODE"
+  | "ONE_TIME_CODE"
+  | "SECURITY_ANSWER";
+
+/**
+ * A host's record of the security answers it typed from the login's saved answers, which it keeps
+ * to flag one the site refused. The shared sign-in code tells it when a screen's values start
+ * resolving (`begin`), when that screen's fill starts (`arm`) and returns (`settle`, which fields
+ * it reached), and when its values were submitted (`submitted`). A host without saved answers
+ * keeps none.
+ */
+export interface SecurityAnswerFills {
+  readonly begin: () => void;
+  readonly arm: (step: AutofillStep, values: readonly string[]) => void;
+  readonly settle: (step: AutofillStep, filled: readonly boolean[]) => void;
+  readonly submitted: () => void;
+}
+
+/**
+ * One screen of an autofill sign-in as the host ran it, value-free: what a run replays.
+ * `submittedBy` is `minter` when the host's click failed and the minter clicked it itself.
+ */
+interface AutofillRecordedStep {
+  readonly popup?: AutofillRecipeStep["popup"];
+  readonly approval?: AutofillRecipeStep["approval"];
+  readonly rejectedMarkers?: AutofillRecipeStep["rejectedMarkers"];
+  /**
+   * With each identifier field's accepted, held and sent kinds, never a value, and what named each
+   * control when the host inspected it (`identity`), for the signed-in check alone.
+   */
+  readonly fields: readonly (AutofillField & { readonly identity?: ControlIdentity })[];
+  readonly submit?: string;
+  readonly submittedBy?: "host" | "minter";
+  /** A two-factor method choice's recorded methods. */
+  readonly methods?: AutofillRecipeStep["methods"];
+  /** The page the step ran on, origin and path only. */
+  readonly page: string;
+}
+
+/** A recorded screen as the minter reads it back: without what only the signed-in check uses. */
+export const withoutIdentity = (step: AutofillRecordedStep): AutofillRecordedStep => ({
+  ...step,
+  fields: step.fields.map(({ identity: _identity, ...field }) => field),
+});
+
+/**
+ * The attempt's open autofill sign-in: the browser hooks it runs on and its steps so far.
+ * Read-only looks run between its steps, and its later steps and its `signedIn` spend no further
+ * sign-in.
+ */
+export interface AutofillSignInState<E = unknown, V extends string = string> {
+  readonly hooks: AutofillHooks<E, V>;
+  /**
+   * Each screen as the host ran it, value-free: what a run replays. `submittedBy` is `minter` when
+   * the host's click failed and the minter clicked it itself.
+   */
+  readonly steps: AutofillRecordedStep[];
+  /**
+   * Values a screen filled that no submit has sent yet, by slot, held in memory only and never
+   * logged, until a submit is clicked or the minter goes on (`settleMinterSubmit`).
+   */
+  readonly filled: Map<AutofillSlot, string>;
+  /**
+   * Slots filled on a screen whose submit was clicked after the fill, by the host or, after the
+   * host's click failed, by the minter once it went on, or whose fill's answer was lost.
+   * `signedIn` needs an identifier and a password or code among them.
+   */
+  readonly submittedSlots: Set<AutofillSlot>;
+  /** The identifiers besides the username submitted, which a host may bind to the login. */
+  readonly sentIdentifiers: { email?: string; phone?: string; accountNumber?: string };
+  /** Set once a screen's host click ran or its fill's answer was lost: it may have sent a value. */
+  mayHaveSent?: true;
+  /**
+   * The host's record of saved security answers a fill typed, which counts one as sent once its
+   * screen's submit was clicked (`submitFilled`).
+   */
+  readonly securityAnswers?: SecurityAnswerFills;
+}
+
+export const isIdentifier = (slot: AutofillSlot): slot is IdentifierKind =>
+  slot === "username" || slot === "email" || slot === "phone" || slot === "account_number";
+/**
+ * A security answer (`private_answer`): read or asked for each screen that asks one, and never
+ * held as filled, so no sign-in counts it toward `signedIn`; only a saved one is tracked as sent,
+ * by the host's record of security answers.
+ */
+const isPrivateAnswer = (slot: AutofillSlot): slot is "private_answer" => slot === "private_answer";
+/** The secrets a sign-in fills at most twice (a password or code) or once (any other). */
+export type AutofillSecret = Exclude<SecretSlot, "private_answer">;
+/** Whether a field's slot is a tracked secret's: the password, a code or an extra secret. */
+export const isSecret = (slot: AutofillSlot): slot is AutofillSecret =>
+  !isIdentifier(slot) && !isPrivateAnswer(slot);
+/** The secrets that prove the login: a sign-in verifies only once a submit sent one. */
+export const provesLogin = (slot: AutofillSlot) => slot === "password" || slot === "code";
+/**
+ * Whether a sign-in submitted the login's identifier and its password or code (`submittedSlots`:
+ * a submit clicked after the fill, `submitFilled`), or passed a step the owner approves: the proof
+ * the host's sign-in needs before its indicator may verify the login, and a replay's
+ * `loginProved`.
+ */
+export const submittedLoginProof = (
+  state: Pick<AutofillSignInState, "submittedSlots" | "steps">,
+) => {
+  const submitted = [...state.submittedSlots];
+  return (
+    submitted.some(isIdentifier) &&
+    (submitted.some(provesLogin) || state.steps.some((step) => step.approval !== undefined))
+  );
+};
+/**
+ * A date of birth, ZIP or recovery code: the site checks it, but it never proves the login. A
+ * dropdown sends an option's own value, never the text the host chose, so it counts as
+ * filled, and is never filled again in the sign-in, once its fill reached the page.
+ */
+export const isExtraSecret = (
+  slot: AutofillSlot,
+): slot is Exclude<ExtraSecretSlot, "private_answer"> =>
+  slot === "date_of_birth" || slot === "zip" || slot === "recovery_code";
+
+/**
+ * The filled values went out with a submit clicked after the fill, by the host or the minter, or a
+ * lost answer may have sent them: each counts as submitted, an email, phone or account number is
+ * one a host may bind, and a saved security answer typed on the way counts as sent. Returns the
+ * slots it moved.
+ */
+export const submitFilled = (state: AutofillSignInState): readonly AutofillSlot[] => {
+  const moved = [...state.filled.keys()];
+  for (const [slot, value] of state.filled) {
+    if (slot === "email" || slot === "phone") state.sentIdentifiers[slot] = value;
+    if (slot === "account_number") state.sentIdentifiers.accountNumber = value;
+    state.submittedSlots.add(slot);
+  }
+  state.filled.clear();
+  state.securityAnswers?.submitted();
+  return moved;
+};
+
+/**
+ * The minter went on from a screen whose fill reached the page but no host click sent: it clicked
+ * that screen's submit itself, which records the screen as submitted by the minter, or the screen
+ * had none and sent itself, as a code box that submits on its last digit does, or its values went
+ * with the next screen's submit. Either way they count as submitted once the minter goes on.
+ */
+export const settleMinterSubmit = (state: AutofillSignInState): readonly AutofillSlot[] => {
+  if (state.filled.size === 0) return [];
+  const last = state.steps.at(-1);
+  if (last?.submit !== undefined && last.submittedBy === undefined)
+    state.steps[state.steps.length - 1] = { ...last, submittedBy: "minter" };
+  return submitFilled(state);
+};
+
+/**
+ * Whether a text carries a secret the broker holds, for what armStep records of a control; a
+ * broker that cannot tell is reported and counts it as carrying one.
+ */
+export const registeredSecretIn =
+  (
+    broker: Pick<SecretBroker, "registeredSecretMatches">,
+    context: Pick<SignInReportContext, "component" | "correlation">,
+  ) =>
+  (text: string) =>
+    broker.registeredSecretMatches(text).pipe(
+      Effect.map((found) => found.length > 0),
+      Effect.catchAll((error) =>
+        report
+          .failure(error, {
+            ...context,
+            operation: "broker.registeredSecretMatches",
+            phase: "autofill_step",
+            subCause: "autofill_step_failed",
+          })
+          .pipe(Effect.as(true)),
+      ),
+    );
+
+/**
+ * What named a control when the inspection read it, and nothing else of it, so the signed-in
+ * check knows that control from another its selector matches: none when any of it carries a
+ * secret the broker holds (`secretIn`), such as a typed password page code copied into a
+ * placeholder, since that check sends it to the browser in its code.
+ */
+const namedControl = (
+  named: ControlIdentity | undefined,
+  secretIn: (text: string) => Effect.Effect<boolean>,
+) =>
+  Effect.gen(function* () {
+    if (named === undefined) return undefined;
+    const { label, ariaLabel, placeholder, type, autocomplete, name, id } = named;
+    const identity: ControlIdentity = {
+      label,
+      ariaLabel,
+      placeholder,
+      type,
+      autocomplete,
+      name,
+      id,
+    };
+    for (const text of [label, ariaLabel, placeholder, type, autocomplete, name, id])
+      if (text !== null && (yield* secretIn(text))) return undefined;
+    return identity;
+  });
+
+/** `armStep` once what named each control is screened (`identities`, per field). */
+const armScreened = (
+  state: AutofillSignInState,
+  step: AutofillStep,
+  inspection: Pick<AutofillInspection, "page" | "targets">,
+  values: readonly string[],
+  identities: readonly (ControlIdentity | undefined)[],
+) => {
+  step.fields.forEach((field, index) => {
+    if (!isExtraSecret(field.slot) && !isPrivateAnswer(field.slot))
+      state.filled.set(field.slot, values[index] ?? "");
+  });
+  // A date of birth records the control the host found for it, never its value.
+  const control = (index: number) => {
+    const found = inspection.targets.fields[index]?.control;
+    return found === undefined || found === "other" ? undefined : found;
+  };
+  const identified = (field: AutofillField, index: number) => {
+    const identity = identities[index];
+    return identity === undefined ? field : { ...field, identity };
+  };
+  state.steps.push({
+    ...(step.popup === undefined ? {} : { popup: step.popup }),
+    ...(step.rejectedMarkers === undefined ? {} : { rejectedMarkers: step.rejectedMarkers }),
+    fields: step.fields.map((field, index) =>
+      identified(
+        field.slot === "date_of_birth" ? { ...field, control: control(index) } : field,
+        index,
+      ),
+    ),
+    ...(step.submit === undefined ? {} : { submit: step.submit }),
+    ...(step.methods === undefined ? {} : { methods: step.methods }),
+    page: inspection.page,
+  });
+  state.securityAnswers?.arm(step, values);
+};
+
+/**
+ * Records a fill about to run and holds the step's values as filled until a submit goes out
+ * (`submitFilled`). Each field keeps what named its control (`namedControl`), and a saved security
+ * answer among the values counts as typed from here.
+ */
+export const armStep = (
+  state: AutofillSignInState,
+  step: AutofillStep,
+  inspection: Pick<AutofillInspection, "page" | "targets"> & {
+    readonly screen?: { readonly fields: readonly ControlIdentity[] };
+  },
+  values: readonly string[],
+  /** Whether a control's naming carries a secret the broker holds (`registeredSecretIn`). */
+  secretIn: (text: string) => Effect.Effect<boolean>,
+) =>
+  Effect.forEach(step.fields, (_, index) =>
+    namedControl(inspection.screen?.fields[index], secretIn),
+  ).pipe(Effect.map((identities) => armScreened(state, step, inspection, values, identities)));
+
+/**
+ * Records what a fill did once it returns: a field it did not fill is not held as filled, nor a
+ * saved security answer typed, a step that reached nothing leaves the recipe, and a step the host
+ * clicked records it. Returns whether anything reached the page.
+ */
+export const recordStep = (
+  state: AutofillSignInState,
+  step: AutofillStep,
+  stepReport: AutofillStepReport,
+) => {
+  const filled = step.fields.map(
+    (_, index) =>
+      stepReport.outcome === "uncertain" ||
+      (stepReport.outcome === "filled" && stepReport.fields[index]?.status === "filled"),
+  );
+  step.fields.forEach((field, index) => {
+    if (!filled[index] && !state.submittedSlots.has(field.slot)) state.filled.delete(field.slot);
+  });
+  state.securityAnswers?.settle(step, filled);
+  const reached = filled.includes(true);
+  const submit = stepReport.outcome === "filled" ? stepReport.submit : stepReport.outcome;
+  const last = state.steps.at(-1);
+  if (!reached && submit !== "clicked" && submit !== "uncertain") state.steps.pop();
+  else if (submit === "clicked" && last)
+    state.steps[state.steps.length - 1] = { ...last, submittedBy: "host" };
+  return reached || submit === "clicked" || submit === "uncertain";
+};

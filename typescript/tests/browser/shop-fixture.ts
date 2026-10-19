@@ -66,6 +66,11 @@ interface ShopState extends StoreState {
   /** `after_input` keeps the sign-in button disabled until both fields hold input. */
   loginSubmit: "enabled" | "after_input";
   /**
+   * Whether the one-screen sign-in shows an error under its form, `#login-error`, once the shop
+   * refused its login, as a recipe's rejection marker names it.
+   */
+  loginError: boolean;
+  /**
    * The root page: `broken` drops its connection, so it never loads, and `hang` shows an image
    * whose request never answers, so its load never ends. `late` is an empty shell whose script
    * renders a header with an "Account" link, signed out too, `homeRenderMs` after it runs, and
@@ -254,14 +259,14 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
     }
     return html(
       response,
-      `<title>Sign in</title><form id="login"><input name="username"><input name="password" type="password"><button${state.loginSubmit === "after_input" ? " disabled" : ""}>Sign in</button></form>
+      `<title>Sign in</title><form id="login"><input name="username"><input name="password" type="password"><button${state.loginSubmit === "after_input" ? " disabled" : ""}>Sign in</button></form>${state.loginError ? `<p id="login-error" hidden>Wrong username or password</p>` : ""}
 <script>const csrf=document.cookie.match(/csrf_token=([^;]*)/)?.[1]??'';</script>${
         state.loginSubmit === "after_input"
           ? `
 <script>const form=document.querySelector('#login');form.addEventListener('input',()=>{form.querySelector('button').disabled=!(form.username.value&&form.password.value)})</script>`
           : ""
       }
-<script>document.querySelector('#login').addEventListener('submit',async event=>{event.preventDefault();const form=new FormData(event.target);const response=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify({username:form.get('username'),password:form.get('password')})});if(response.ok)location.href=(await response.json()).next??'/account'})</script>`,
+<script>document.querySelector('#login').addEventListener('submit',async event=>{event.preventDefault();const form=new FormData(event.target);const response=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify({username:form.get('username'),password:form.get('password')})});if(response.ok)location.href=(await response.json()).next??'/account';${state.loginError ? `else document.querySelector('#login-error').hidden=false;` : ""}})</script>`,
       { "set-cookie": cookiesFor(request) },
     );
   };
@@ -626,6 +631,7 @@ export const startShop = async (directory: string): Promise<Shop> => {
     api: "ok",
     curl: "ok",
     loginSubmit: "enabled",
+    loginError: false,
     home: "ok",
     homeRenderMs: 300,
     accountRenderMs: 0,

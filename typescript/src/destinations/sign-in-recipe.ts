@@ -27,6 +27,7 @@ import type {
 import type { CredentialRejectedField, WebsiteCredentials } from "../runtime/authentication.js";
 import type { InputAsker } from "../runtime/input-request.js";
 import { sameSite } from "../runtime/same-site.js";
+import { recordedScreenPage } from "../runtime/workspace-origin.js";
 
 /**
  * Version 3, which this host wrote for a private answer's question selector before it wrote that
@@ -56,6 +57,12 @@ export const SignInRecipe = Schema.Union(
 );
 export type SignInRecipe = typeof SignInRecipe.Type;
 export type SignInRecipeStep = AutofillRecipeStep;
+
+/** A recorded step's page on the given workspace origin, or as recorded. */
+export const resolvedPage = (step: SignInRecipeStep, workspace: string | undefined) =>
+  step.origin === "workspace" && workspace === undefined
+    ? undefined
+    : recordedScreenPage(step, workspace);
 
 const knownVersions: readonly unknown[] = [1, 2, 3, 4];
 
@@ -589,10 +596,14 @@ export interface SignInLogin<E> {
   readonly held: () => WebsiteCredentials | undefined;
   /** The login, asked for once when none is held. */
   readonly values: Effect.Effect<WebsiteCredentials, E>;
-  /** A corrected login after the site rejected `field` of `held`. */
+  /**
+   * A corrected login after the site rejected `field` of `held`; `triesLeft`, this one included,
+   * when the sign-in bounds its corrections.
+   */
   readonly correct: (
     field: CredentialRejectedField,
     held: WebsiteCredentials,
+    triesLeft?: number,
   ) => Effect.Effect<WebsiteCredentials, E>;
 }
 

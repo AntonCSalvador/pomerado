@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Duration, Effect, Either } from "effect";
 import { expect, it } from "vitest";
 import type { AutofillInspection, AutofillSignedInCheck } from "../../src/destinations/autofill-step.js";
 import type { SignInRecipe, SignInRequest } from "../../src/destinations/sign-in-recipe.js";
@@ -12,7 +12,6 @@ import {
   type SignInReplayBrowser,
   type WorkspaceOriginEvent,
 } from "../../src/runtime/sign-in-replay.js";
-import { askingValueHooks } from "../../src/runtime/sign-in-values.js";
 import { localSignInLogin } from "../../src/standalone/authentication.js";
 
 // A run's sign-in on a synthetic workspace SaaS: the identifier screen is on the shared host
@@ -234,8 +233,9 @@ const signIn = (
         entryUrl: at.entryUrl ?? `${siteOrigin}/login`,
         browser: fake.browser,
         login: localSignInLogin({ ask, register: secrets.register, siteOrigin }),
-        values: askingValueHooks({ ask, register: secrets.register, site: "app.example.com", siteOrigin }),
-        carries: secrets.carries,
+        ask,
+        secrets,
+        markerSettle: { within: Duration.millis(20), interval: Duration.millis(5) },
         site: "app.example.com",
         siteOrigin,
         ...(workspaceOrigin === undefined ? {} : { workspaceOrigin }),
