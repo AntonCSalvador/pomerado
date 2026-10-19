@@ -194,9 +194,10 @@ const refused = (reason: CursorRefusal): ListCursorAdmission => ({
  * these inputs and this caller, unexpired, whose site link is on the tool's site. A host refuses
  * the run at once on `ok: false`, as an input the caller fixes, with nothing provisioned and no
  * repair; on `ok: true` it runs the script with the input unchanged and `list` beside it. An
- * input without a cursor, or with an empty one, gets no position. A cursor in another form is
- * the tool's own and passes unchanged, with no position; a runtime draft sent as a cursor is
- * refused, since only this host may turn one into a position.
+ * input without a cursor, or with an empty or null one, gets no position. Any other cursor this
+ * host did not sign is refused: tools never make or read a cursor of their own, so one in another
+ * form, or that is not a string, is `malformed`, and so is a runtime draft sent as a cursor, since
+ * only this host may turn one into a position.
  */
 export const admitListCursor = (input: unknown, scope: ListCursorScope): ListCursorAdmission => {
   const cursor: unknown =
@@ -204,13 +205,13 @@ export const admitListCursor = (input: unknown, scope: ListCursorScope): ListCur
       ? Reflect.get(input, "cursor")
       : undefined;
   if (cursor === undefined || cursor === null || cursor === "") return { ok: true, list: {} };
-  if (typeof cursor !== "string") return { ok: true, list: {} };
-  if (cursor.startsWith(listDraftPrefix)) return refused("malformed");
+  if (typeof cursor !== "string") return refused("malformed");
   const parts = cursor.split(".");
   const [prefix, keyId, body, signature] = parts;
-  if (prefix === undefined || !/^pc\d+$/u.test(prefix) || parts.length < 2)
-    return { ok: true, list: {} };
-  if (prefix !== wirePrefix) return refused("version");
+  if (prefix !== wirePrefix) {
+    const otherVersion = prefix !== undefined && /^pc\d+$/u.test(prefix) && parts.length >= 2;
+    return refused(otherVersion ? "version" : "malformed");
+  }
   if (
     cursor.length > listCursorMaxLength ||
     parts.length !== 4 ||
@@ -265,11 +266,11 @@ export type DroppedListCursor = Extract<
 /**
  * Signs the `next_cursor` a run's output holds and fills `next_cursor_expires_at`,
  * `listCursorTtlMs` (ten minutes) from `now`. `input` is the caller's input for the run, as sent.
- * Only a runtime draft is signed; a next cursor in any other form is the tool's own and the
- * output passes unchanged. A draft that does not decode, or whose site link is off the tool's
- * site, is dropped: `next_cursor` becomes null, `has_more` stays true, and both
- * `next_cursor_unavailable` and `dropped` say why. Every valid draft fits in a cursor, so none is
- * dropped for its size.
+ * Only a runtime draft is signed; a next cursor in any other form is left in the output as it
+ * is, and `admitListCursor` refuses it if a caller sends it back. A draft that does not decode,
+ * or whose site link is off the tool's site, is dropped: `next_cursor` becomes null, `has_more`
+ * stays true, and both `next_cursor_unavailable` and `dropped` say why. Every valid draft fits in
+ * a cursor, so none is dropped for its size.
  */
 export const sealListOutput = (
   output: unknown,

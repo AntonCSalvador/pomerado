@@ -187,7 +187,8 @@ describe("a sealed cursor", () => {
   });
 
   it("treats an empty cursor as none", () => {
-    expect(admitListCursor({ ...input, cursor: "" }, scope())).toEqual({ ok: true, list: {} });
+    for (const value of [input, { ...input, cursor: "" }, { ...input, cursor: null }])
+      expect(admitListCursor(value, scope())).toEqual({ ok: true, list: {} });
     expect(startList(hosted({ ...input, cursor: "" }), { mechanism: "pages" }).position).toBe(
       undefined,
     );
@@ -201,17 +202,37 @@ it("keeps the host's channel out of anything that walks a run's input", () => {
   expect(startList(value, { mechanism: "pages" }).signed).toBe(true);
 });
 
-describe("a tool that pages with its own cursor", () => {
-  // A tool built before the runtime's cursors keeps its own continuation, which the host passes
-  // through untouched, and a runtime draft sent in as a cursor is refused.
-  it("gets its own cursor back unchanged, and its own next cursor reaches the caller", () => {
-    const legacy = { query: "lamps", cursor: "page=2" };
-    const admitted = admitListCursor(legacy, scope());
-    expect(admitted).toEqual({ ok: true, list: {} });
-    const output = { results: [], next_cursor: "page=3" };
-    expect(sealListOutput(output, legacy, scope())).toEqual({ output });
-    const ended = { results: [], next_cursor: null };
-    expect(sealListOutput(ended, legacy, scope())).toEqual({ output: ended });
+describe("a cursor the host did not sign", () => {
+  // Tools never make or read a cursor of their own: the host refuses every cursor it did not sign
+  // before the run starts, and a runtime draft sent in as a cursor too.
+  it("is refused as malformed, whatever its form", () => {
+    for (const cursor of [
+      "page=2",
+      "abc",
+      " ",
+      "pc1",
+      "pc1.k1",
+      "pc.k1.body.signature",
+      "x.k1.body.signature",
+      "PC1.k1.body.signature",
+      "pcd1",
+      2,
+      true,
+      { page: 2 },
+      ["page=2"],
+    ])
+      expect(admitListCursor({ ...input, cursor }, scope())).toEqual({
+        ok: false,
+        reason: "malformed",
+        message: expect.stringContaining("The cursor is not one this tool returned."),
+      });
+  });
+
+  it("names another host version for a cursor in another version's form", () => {
+    expect(admitListCursor({ ...input, cursor: "pc2.k1.body.signature" }, scope())).toMatchObject({
+      ok: false,
+      reason: "version",
+    });
   });
 
   it("refuses a runtime draft sent in as a cursor", () => {

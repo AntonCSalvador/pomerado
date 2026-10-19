@@ -27,18 +27,6 @@ const referenceTool = async () =>
   ).replace('"../../src/browser/index.js"', '"../runtime/index.js"');
 
 /**
- * A tool that pages with its own cursor, as tools did before the runtime's cursors: the host
- * passes its cursor and its next cursor through untouched.
- */
-const ownCursorTool = `import { Schema } from "effect";
-import { defineOperation } from "../runtime/index.js";
-export default defineOperation({
-  name: "own_cursor",
-  input: Schema.Struct({ cursor: Schema.optional(Schema.String) }),
-  output: Schema.Struct({ received: Schema.NullOr(Schema.String), next_cursor: Schema.NullOr(Schema.String) }),
-}, async ({ input }) => ({ received: input.cursor ?? null, next_cursor: "page=" + (Number((input.cursor ?? "page=1").slice(5)) + 1) }));`;
-
-/**
  * A listing site that pages `pageSize` rows at a time behind a search form, with a Next link. Its
  * `listings` are the rows in the site's order; a test changes them between calls.
  */
@@ -112,18 +100,18 @@ test("a list pages by signed cursors across changes and refuses a stale cursor b
             timeoutMs: 20_000,
             listCursors: { now: () => now },
           });
-          const runTool = (content: string, input: Record<string, unknown>) =>
-            service.run(
-              {
-                entrypoint: "src/tool.mjs",
-                files: [{ path: "src/tool.mjs", content }],
-                inputSchema: {},
-                outputSchema: {},
-              },
-              { url: site.url, intent: "Search the listings", effect: "read", input },
-            );
           const run = (input: Record<string, unknown>) =>
-            runTool(source, input).pipe(Effect.map((output) => output as Page));
+            service
+              .run(
+                {
+                  entrypoint: "src/tool.mjs",
+                  files: [{ path: "src/tool.mjs", content: source }],
+                  inputSchema: {},
+                  outputSchema: {},
+                },
+                { url: site.url, intent: "Search the listings", effect: "read", input },
+              )
+              .pipe(Effect.map((output) => output as Page));
           const ids = (page: Page) => page.results.map((row) => row.id);
 
           const first = yield* run({ query: "lamps", limit: 2 });
@@ -163,14 +151,8 @@ test("a list pages by signed cursors across changes and refuses a stale cursor b
           const across = yield* run({ query: "lamps", limit: 3, cursor: boundary.next_cursor });
           expect(ids(across)).toEqual(["L4", "L5", "L6"]);
 
-          // A tool's own cursor reaches it unchanged, and its own next cursor reaches the caller.
-          expect(yield* runTool(ownCursorTool, { cursor: "page=2" })).toEqual({
-            received: "page=2",
-            next_cursor: "page=3",
-          });
-
-          // A cursor past its ten minutes, one sent with other inputs, or a position written by hand ends
-          // the run before the site.
+          // A cursor past its ten minutes, one sent with other inputs, a position written by hand,
+          // or a cursor in a form the host never signs ends the run before the site.
           const before = site.requests();
           now += listCursorTtlMs;
           const expired = yield* Effect.flip(
@@ -194,10 +176,12 @@ test("a list pages by signed cursors across changes and refuses a stale cursor b
               ).toString("base64url")}`,
             }),
           );
+          const unsigned = yield* Effect.flip(run({ query: "lamps", limit: 2, cursor: "page=2" }));
           for (const [failure, kind] of [
             [expired, "expired"],
             [otherInputs, "inputs_changed"],
             [handWritten, "malformed"],
+            [unsigned, "malformed"],
           ] as const) {
             expect(failure).toBeInstanceOf(RunOutcomeFailure);
             expect(failure).toMatchObject({
