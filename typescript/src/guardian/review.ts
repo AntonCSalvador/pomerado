@@ -136,6 +136,13 @@ export const GuardianDecision = Schema.Struct({
   reason: Schema.optional(Schema.suspend(() => PublicationReason)),
   findings: Schema.optional(Schema.Array(Schema.suspend(() => PublicationFinding))),
   /**
+   * A publication review's findings in a file the host wrote into the bundle, such as the sign-in
+   * recipe, which the minter cannot edit: reported, never blocking (`decodePublicationDecision`).
+   */
+  nonBlockingFindings: Schema.optional(
+    Schema.Array(Schema.suspend(() => PublicationFinding)),
+  ),
+  /**
    * A publication denial's one short sentence its caller may read: why the tool was not
    * published, in plain words, apart from the private rationale. Other kinds have none.
    */

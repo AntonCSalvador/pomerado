@@ -495,6 +495,180 @@ describe("a publication decision", () => {
   });
 });
 
+// A host writes some bundle files itself, such as the sign-in recipe it keeps from a verified
+// sign-in, and the minter can edit neither them nor what they are written from. A finding there
+// is reported beside the decision but never blocks; one that would publish private data, a
+// credential or an unauthorized effect goes to the host as its own failure instead.
+describe("a finding in a file the host wrote into the bundle", () => {
+  const recipe = JSON.stringify({
+    version: 1,
+    steps: [{ page: "https://portal.example/login", fields: [], submit: "#sign-in" }],
+    signedIn: { selector: "#account" },
+  });
+  const withRecipe = new Map([...files, ["operation/auth-fill.json", recipe]]);
+  const recipePending: PendingExecution = {
+    ...pending,
+    publication: {
+      files: [
+        ...(pending.publication?.files ?? []),
+        {
+          path: "operation/auth-fill.json",
+          byteLength: Buffer.byteLength(recipe),
+          published: true,
+          current: true,
+          owner: "host",
+        },
+      ],
+    },
+  };
+  const at = (path: string, category: string) => ({
+    path,
+    byteStart: 0,
+    byteEnd: 1,
+    category,
+    explanation,
+  });
+  const inRecipe = (category: string) => at("operation/auth-fill.json", category);
+  const decide = (decision: Record<string, unknown>) =>
+    Effect.runPromise(
+      makeGuardian({
+        run: (turn) =>
+          inspectAll(turn).pipe(
+            Effect.as({
+              rationale: "The sign-in picks a location the caller does not choose.",
+              publicReason: "The tool could not be published yet.",
+              ...decision,
+            }),
+          ),
+      }).review(recipePending, sourcesOf(withRecipe)),
+    ).then(({ decision: decided }) => decided);
+
+  it.each([
+    { reason: "input_feedback", category: "input_option" },
+    { reason: "source_correction", category: "schema_mismatch" },
+    { reason: "unsupported_claim", category: "unsupported_claim" },
+    { reason: "host_owned", category: "example_value" },
+  ])(
+    "allows a publication whose only $category finding is in the sign-in recipe",
+    async ({ reason, category }) => {
+      const decided = await decide({ outcome: "deny", reason, findings: [inRecipe(category)] });
+      expect(decided).toMatchObject({
+        outcome: "allow",
+        reason: "approved",
+        findings: [],
+        nonBlockingFindings: [inRecipe(category)],
+      });
+      expect(decided.publicReason).toBeUndefined();
+    },
+  );
+
+  // Reported, not dropped: the completion record a host keeps carries the finding.
+  it("records the recipe's finding in the completion diagnostic of the allow", async () => {
+    const persisted: { name: string; details: unknown }[] = [];
+    const diagnostics: GuardianDiagnostics = {
+      emit: (name, details) =>
+        Effect.sync(() => {
+          persisted.push({ name, details });
+        }),
+      retainScreenedSource: () => Effect.void,
+      retainModelTranscript: () => Effect.void,
+    };
+    await Effect.runPromise(
+      makeGuardian(
+        {
+          run: (turn) =>
+            inspectAll(turn).pipe(
+              Effect.as({
+                outcome: "deny",
+                reason: "input_feedback",
+                rationale: "The sign-in picks a location the caller does not choose.",
+                findings: [inRecipe("input_option")],
+              }),
+            ),
+        },
+        diagnostics,
+      ).review(recipePending, sourcesOf(withRecipe)),
+    );
+    expect(persisted.find((event) => event.name === "guardian.completed")?.details).toMatchObject({
+      details: { outcome: "allow", nonBlockingFindings: [inRecipe("input_option")] },
+    });
+  });
+
+  it("keeps the minter's findings blocking and reports the recipe's beside them", async () => {
+    const source = at(pending.entrypoint, "schema_mismatch");
+    expect(
+      await decide({
+        outcome: "deny",
+        reason: "source_correction",
+        findings: [source, inRecipe("input_option")],
+      }),
+    ).toMatchObject({
+      outcome: "deny",
+      reason: "source_correction",
+      findings: [source],
+      nonBlockingFindings: [inRecipe("input_option")],
+    });
+  });
+
+  // With the recipe's finding set aside, what is left is only input feedback, which gives the
+  // minter rounds to fix it rather than refusing the build.
+  it("leaves input feedback when only input findings in the minter's files remain", async () => {
+    const definition = at("publication/definition.json", "input_option");
+    expect(
+      await decide({
+        outcome: "deny",
+        reason: "source_correction",
+        findings: [definition, inRecipe("schema_mismatch")],
+      }),
+    ).toMatchObject({
+      outcome: "deny",
+      reason: "input_feedback",
+      findings: [definition],
+      nonBlockingFindings: [inRecipe("schema_mismatch")],
+    });
+  });
+
+  it.each([
+    { reason: "privacy", category: "customer_data" },
+    { reason: "privacy", category: "private_literal" },
+    { reason: "authority", category: "schema_mismatch" },
+    { reason: "host_owned", category: "credential" },
+  ])(
+    "sends a $reason $category finding in the recipe to the host as its own failure",
+    async ({ reason, category }) => {
+      const decided = await decide({ outcome: "deny", reason, findings: [inRecipe(category)] });
+      expect(decided).toMatchObject({
+        outcome: "deny",
+        reason: "host_owned",
+        findings: [inRecipe(category)],
+      });
+      expect(decided).not.toHaveProperty("nonBlockingFindings");
+    },
+  );
+
+  // A denial for missing evidence names what to gather in its rationale, which a finding set
+  // aside in the recipe does not answer.
+  it("keeps a denial for missing evidence, with the recipe's finding reported", async () => {
+    expect(
+      await decide({ outcome: "escalate", reason: "evidence", findings: [inRecipe("schema_mismatch")] }),
+    ).toMatchObject({
+      outcome: "escalate",
+      reason: "evidence",
+      findings: [],
+      nonBlockingFindings: [inRecipe("schema_mismatch")],
+    });
+  });
+
+  // The host's evidence under publication/ records what the minter's source did, so a finding
+  // there still names the source to change and keeps blocking.
+  it("keeps a finding in the host's example output blocking", async () => {
+    const output = at("publication/example-output.json", "schema_mismatch");
+    expect(
+      await decide({ outcome: "deny", reason: "source_correction", findings: [output] }),
+    ).toMatchObject({ outcome: "deny", reason: "source_correction", findings: [output] });
+  });
+});
+
 describe("the publication policy", () => {
   it("is the core text, naming the files the host writes", () => {
     const policy = guardianPublicationPolicy;
