@@ -1055,11 +1055,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           }
         | undefined;
       /**
-       * The build's latest sign-in is unconfirmed: a sign-in step that may have sent the login, or
-       * a check that found the site not signed in, with no later check that confirmed it. A step
-       * that sent nothing leaves it as it was.
+       * The build's latest sign-in is unconfirmed: a sign-in step that may have sent the login,
+       * with no later check that confirmed it, on the build's current site. A step that sent
+       * nothing, a check that found the site not signed in included, leaves it as it was; a
+       * takeover keeps it, and a move to another site clears it.
        */
-      let signInUnconfirmed = false;
+      let signInUnconfirmed = recovered?.signInUnconfirmed === true;
       /** Updates `signInUnconfirmed` once an authenticate ends, by what it did. */
       const noteSignIn = (
         exit: Exit.Exit<ExecutionEvidence, MintFailure>,
@@ -1068,15 +1069,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         if (Exit.isSuccess(exit)) {
           const { authentication, effect } = exit.value;
           if (authentication?.state === "authenticated") signInUnconfirmed = false;
-          else if (authentication?.state === "failed" || effect !== "not_sent")
-            signInUnconfirmed = true;
+          else if (effect !== "not_sent") signInUnconfirmed = true;
           return;
         }
-        // One that failed past its dispatch fence may have sent the login; a login the owner
-        // declined sent nothing.
+        // One that failed past its dispatch fence may have sent the login, unless it says it
+        // sent nothing: a login the owner declined, a screen the host refused before anything
+        // went out, or a stop before anything reached the site.
+        const failure = Cause.isFailType(exit.cause) ? exit.cause.error : undefined;
         if (
           crossedDispatch &&
-          !(Cause.isFailType(exit.cause) && exit.cause.error.loginDeclined !== undefined)
+          failure?.loginDeclined === undefined &&
+          failure?.authentication?.nothingSubmitted !== true &&
+          failure?.execution?.dispatch !== "not_sent"
         )
           signInUnconfirmed = true;
       };
@@ -3472,6 +3476,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const effectChanged = next.effect === "write" && buildEffect !== "write";
           const siteChanged = next.siteOrigin !== taskState.siteOrigin;
           taskState = next;
+          // The first site's unconfirmed sign-in says nothing of the next site.
+          if (siteChanged) signInUnconfirmed = false;
           // The task now runs signed out: a failed sign-in no longer holds anything back, and no
           // sign-in runs until a later update asks for one, which the owner then confirmed.
           for (const change of accepted.changes)
@@ -5464,16 +5470,26 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       yield* diagnose({ phase: "blocked", reason: "sign_in_unavailable" });
                       return endedForSignIn;
                     }
-                    // While the build's latest sign-in never confirmed, the site never got as far
-                    // as judging the task: it cannot have declined it or lacked it, and a policy
-                    // or host check that stopped it stopped a sign-in. With no failed sign-in
-                    // pending, whose own refusal below asks the agent to resolve it, the build
-                    // ends as sign-in unavailable, worded by what the host saw, and its caller is
-                    // never told to change the request. The owner's own no, and a question they
-                    // left unanswered, keep their endings.
+                    const explanation = redactCallerText(
+                      yield* screenMintText(dependencies, report.explanation),
+                    );
+                    const ending = blockedEnding(
+                      report.reason,
+                      explanation,
+                      yield* Clock.currentTimeMillis,
+                    );
+                    if ("refusal" in ending) return ending.refusal;
+                    // An ending the checks above accepted, while the build's latest sign-in
+                    // never confirmed: the site never got as far as judging the task, so it
+                    // cannot have declined it or lacked it, and a policy or host check that
+                    // stopped it stopped a sign-in. With no failed sign-in pending, whose own
+                    // refusal above asks the agent to resolve it, the build ends as sign-in
+                    // unavailable, worded by what the host saw, and its caller is never told to
+                    // change the request. The owner's own no, and a question they left
+                    // unanswered, keep their endings, a policy report renamed to one included.
                     if (
-                      report.reason !== "owner_declined" &&
-                      report.reason !== "question_unanswered" &&
+                      ending.reason !== "owner_declined" &&
+                      ending.reason !== "question_unanswered" &&
                       signInUnconfirmed &&
                       unresolvedSignIn === undefined &&
                       loginDeclined === undefined &&
@@ -5493,15 +5509,6 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       });
                       return endedForSignIn;
                     }
-                    const explanation = redactCallerText(
-                      yield* screenMintText(dependencies, report.explanation),
-                    );
-                    const ending = blockedEnding(
-                      report.reason,
-                      explanation,
-                      yield* Clock.currentTimeMillis,
-                    );
-                    if ("refusal" in ending) return ending.refusal;
                     const submitted = { ...report, reason: ending.reason };
                     const review = yield* reviewBlockedExplanation(explanation);
                     yield* active("publication");
@@ -6078,6 +6085,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ...(loginHeld ? { loginHeld: true as const } : {}),
         ...(loginDeclined === undefined ? {} : { loginDeclined }),
         ...(signInAbandoned ? { signInAbandoned: true as const } : {}),
+        ...(signInUnconfirmed ? { signInUnconfirmed: true as const } : {}),
         destinationEvidenceRefusals,
         inputFeedbackRounds,
         inputFeedbackPublicTool,

@@ -789,7 +789,8 @@ const declinedExample = {
 
 /**
  * A build that signs in through `steps`, one authenticate each, then sends `report`. A step that is
- * a failure fails its authenticate before anything is sent.
+ * a failure fails its authenticate before its dispatch fence, and `{ afterFence }` fails it past
+ * the fence.
  */
 const signInThenDecline = (
   steps: readonly (object | MintFailure)[],
@@ -805,12 +806,12 @@ const signInThenDecline = (
       ][index] ?? prose("Stopping."),
     {
       reviewAndExecute: (_submitted, beforeDispatch = () => Effect.void) => {
-        const step = steps[executions++];
-        return step instanceof MintFailure
-          ? Effect.fail(step)
-          : beforeDispatch({ reviewId: "review_sign_in", action: "authentication" }).pipe(
-              Effect.as(step as typeof submittedScreen),
-            );
+        const step = steps[executions++] ?? submittedScreen;
+        if (step instanceof MintFailure) return Effect.fail(step);
+        const dispatched = beforeDispatch({ reviewId: "review_sign_in", action: "authentication" });
+        return "afterFence" in step && step.afterFence instanceof MintFailure
+          ? Effect.zipRight(dispatched, Effect.fail(step.afterFence))
+          : dispatched.pipe(Effect.as(step as typeof submittedScreen));
       },
       ...overrides,
     },
@@ -873,10 +874,7 @@ const refusedLabel = new MintFailure({
   code: "ReviewDenied",
   review: { outcome: "deny", reviewId: "review_label", rationale: "Wrong field label." },
 });
-const refusedForm = autofillRefusalFailure(
-  { slot: "password", field: 1, check: "destination" },
-  { nothingSubmitted: true },
-);
+const refusedForm = autofillRefused("destination");
 it.each([
   { reason: "site_lacks_capability", first: [] },
   { reason: "policy", first: [refusedLabel] },
@@ -897,15 +895,103 @@ it.each([
   },
 );
 
-// A sign-in the host confirmed, or one that sent nothing, leaves site_declined as it was.
+// A sign-in the host confirmed, or one that sent nothing, leaves site_declined as it was: a screen
+// that sent nothing, one whose host found nothing to submit, and one that stopped past its
+// dispatch fence with nothing sent.
+const sentNothingPastFence = new MintFailure({
+  code: "Unavailable",
+  execution: { phase: "execute", reason: "provider_unavailable", dispatch: "not_sent" },
+});
 it.each([
   { name: "a confirmed sign-in", steps: [submittedScreen, signInCheck("authenticated")] },
   {
     name: "a screen that sent nothing",
     steps: [{ ...submittedScreen, effect: "not_sent" as const }],
   },
+  {
+    name: "a failed sign-in step that sent nothing",
+    steps: [
+      {
+        ...submittedScreen,
+        effect: "not_sent" as const,
+        authentication: { state: "failed" as const, effect: "possible" as const },
+      },
+    ],
+  },
+  { name: "a step stopped past its fence before sending", steps: [{ afterFence: sentNothingPastFence }] },
 ])("keeps site_declined after $name", async ({ steps }) => {
   const f = await signInThenDecline(steps, { signInSessionLoss: () => "session_not_kept" });
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "site_declined" },
+    stopReason: "site_declined",
+  });
+});
+
+// The ending a report gets is decided first, by the checks every report passes: one with no basis
+// on record is refused and the build goes on, signed in or not. Only an ending those checks accept
+// becomes sign-in unavailable while the sign-in never confirmed.
+it.each([
+  { reason: "policy", refusal: "policy_not_refused" },
+  { reason: "host_refused", refusal: "host_not_refused" },
+])(
+  "refuses an unfounded $reason report after an unconfirmed sign-in as $refusal",
+  async ({ reason, refusal }) => {
+    const f = await signInThenDecline([submittedScreen], {}, {
+      reason,
+      explanation: "The site's sign-in kept refusing.",
+    });
+    const outcome = await f.run();
+    expect(outcome).not.toMatchObject({ recoveryReason: "sign_in_unavailable" });
+    expect(JSON.stringify(f.requests[2]?.input)).toContain(refusal);
+  },
+);
+
+// A policy report that stands only on the owner's no takes that name, and the owner's own no keeps
+// its ending, sign-in or not.
+it("ends a policy report that stands on the owner's no as owner_declined after an unconfirmed sign-in", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        signIn,
+        call("request_input", {
+          questions: [{ id: "go", type: "confirm", prompt: "May the build open the account page?" }],
+        }),
+        call("report_blocked", {
+          reason: "policy",
+          explanation: "The owner did not allow the account page.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: (_submitted, beforeDispatch = () => Effect.void) =>
+        beforeDispatch({ reviewId: "review_sign_in", action: "authentication" }).pipe(
+          Effect.as(submittedScreen),
+        ),
+      askInput: () => Effect.succeed({ go: { type: "confirm", value: { confirmed: false } } }),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "owner_declined" },
+    stopReason: "owner_declined",
+  });
+});
+
+// A build that moved to another site left the first site's sign-in behind with it.
+it("keeps site_declined after a move to another site that left an unconfirmed sign-in", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [signIn, ...moveSite, call("report_blocked", declinedExample)][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: (_submitted, beforeDispatch = () => Effect.void) =>
+        beforeDispatch({ reviewId: "review_sign_in", action: "authentication" }).pipe(
+          Effect.as(submittedScreen),
+        ),
+      askInput: () => Effect.succeed({ move: { type: "confirm", value: { confirmed: true } } }),
+      reviewTaskUpdate: () =>
+        Effect.succeed({ outcome: "allow" as const, rationale: "Same task.", reviewId: "r1" }),
+      applyTaskUpdate: () => Effect.succeed({ outcome: "applied" as const }),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
   expect(await f.run()).toMatchObject({
     blocked: { reason: "site_declined" },
     stopReason: "site_declined",
