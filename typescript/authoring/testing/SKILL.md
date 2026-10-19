@@ -204,7 +204,7 @@ After the example passes, read its returned fields once at the answer and again 
 on the same page; a field that changed is filled late, so wait for it in source or describe it as
 live, such as a countdown. A run that sits idle after its answer showed, or opens controls its
 input did not use, works for more than it returns: trim it. Where a run's result reports timing
-for each step, read it, and remove waits and round trips the answer does not need, such as a
+for each step, read it, and prefer to remove waits and round trips the answer does not need, such as a
 wait on a page no step changed or a probe repeated on every poll, never one the answer needs.
 A slow tool still publishes. Read every string in each result.
 After each run with output the host reports output checks: values that hold code, styles, markup

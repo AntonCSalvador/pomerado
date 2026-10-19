@@ -154,6 +154,94 @@ const standaloneText: AuthoringRender = (text, sectionKey) => {
   return rendered;
 };
 
+/**
+ * The search URL fast path: a tool enters at the site's results URL with the caller's values in
+ * it, filters and a location the URL carries included, whenever that mapping is reliable and
+ * clear. A host turns it on with `searchUrlFastPath`. Off, the minter reads the files' own text,
+ * which opens such a URL only for the parts it lists, and a search reaches its results through
+ * the page's controls before it reads the page's own data. Each entry is whole lines of one
+ * file's rendered text, which appear there exactly once, and the lines that replace them.
+ */
+const searchUrlFastPathPassages: readonly {
+  readonly sectionKey: string;
+  readonly off: readonly string[];
+  readonly on: readonly string[];
+}[] = [
+  {
+    sectionKey: "agents",
+    off: [
+      "which parts of it carry which input, such as the query, dates, guests or party size, sort or a",
+      "record's own identifier route, the tool may open that URL with the caller's values in those",
+      "parts, built with `URLSearchParams` for a query part or `encodeURIComponent` for a path part and",
+      "every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input",
+    ],
+    on: [
+      "which parts of it carry which input, such as the query, dates, guests or party size, sort,",
+      "filters, a location the URL itself carries or a record's own identifier route, the tool enters",
+      "at that URL with the caller's values in those parts when the mapping is reliable and clear: each",
+      "part's valid values are known and readable in the URL, such as a sort or filter whose values",
+      "become the input's enum, or a query the site encodes as typed. An opaque filter code still comes",
+      "only from a link the page produced in this run (below). Otherwise it uses the page's controls.",
+      "It builds that URL with `URLSearchParams` for a query part or `encodeURIComponent` for a path",
+      "part and every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input",
+    ],
+  },
+  {
+    sectionKey: "search",
+    off: [
+      "On every run, set each input the site has a control for through that control, or through the URL",
+      "or data request the site itself uses for it when the control is unreliable (testing skill), never",
+      "by filtering the returned rows, then read it back from the site's committed state: the",
+    ],
+    on: [
+      "On every run, set each input the site has a control for through that control, through the",
+      'results URL when the site\'s URL reliably carries it (`AGENTS.md`, "Work through the page\'s own',
+      'controls"), or through the data request the site itself uses for it when the control is',
+      "unreliable (testing skill), never by filtering the returned rows, then read it back from the site's committed state: the",
+    ],
+  },
+  {
+    sectionKey: "search",
+    off: [
+      "Try the fast path first. While exploring, check whether the page's own data request or embedded",
+      "data carries the result fields. When it does, the default design is: reach the results through",
+      "the page's controls, then read that data in the same session (`page.evaluate(() => fetch(...))`",
+      "for a data request, core skill), reading the applied location back from the page or that",
+      "answer. Read rendered rows only when it doesn't.",
+    ],
+    on: [
+      "Try the fast path first. While exploring, check whether the results page loads directly by URL",
+      'with the inputs encoded (`AGENTS.md`, "Work through the page\'s own controls"), and whether the',
+      "page's own data request or embedded data carries the result fields. When both hold, the default",
+      "design is: set a location or store through the page's controls first if the URL cannot carry it,",
+      "load the results URL, then read that data in the same session (`page.evaluate(() => fetch(...))`",
+      "for a data request, core skill), reading the applied location back from the page or that",
+      "answer. Drive the search form and read rendered rows only when they don't.",
+    ],
+  },
+];
+
+/** `render`, with the search URL fast path's lines in place of the files' own. */
+const withSearchUrlFastPath =
+  (render: AuthoringRender): AuthoringRender =>
+  (text, sectionKey) =>
+    searchUrlFastPathPassages.reduce((rendered, { sectionKey: key, off, on }) => {
+      if (key !== sectionKey) return rendered;
+      const parts = rendered.split(off.join("\n"));
+      if (parts.length !== 2)
+        throw new Error(`Authoring ${sectionKey} lacks one search URL fast path passage`);
+      return parts.join(on.join("\n"));
+    }, render(text, sectionKey));
+
+/**
+ * What a host may turn on in the authoring it loads. `searchUrlFastPath` renders the search URL
+ * fast path (`searchUrlFastPathPassages`). It is off when absent, and the local host leaves it off.
+ */
+type AuthoringOptions = { readonly searchUrlFastPath?: boolean };
+
+const hostRender = (render: AuthoringRender, options: AuthoringOptions) =>
+  options.searchUrlFastPath === true ? withSearchUrlFastPath(render) : render;
+
 const readGuideFile = (
   directory: string,
   path: string,
@@ -184,12 +272,14 @@ const readGuideFile = (
 export const loadWorkspaceGuide = (
   directory: string,
   render: AuthoringRender = standaloneText,
+  options: AuthoringOptions = {},
 ): Effect.Effect<WorkspaceGuide, MintFailure> =>
   Effect.gen(function* () {
-    const instructions = yield* readGuideFile(directory, "AGENTS.md", "agents", render);
+    const rendering = hostRender(render, options);
+    const instructions = yield* readGuideFile(directory, "AGENTS.md", "agents", rendering);
     const files = new Map([["AGENTS.md", instructions]]);
     for (const { path, sectionKey } of workspaceGuideFiles)
-      files.set(path, yield* readGuideFile(directory, path, sectionKey, render));
+      files.set(path, yield* readGuideFile(directory, path, sectionKey, rendering));
     files.set(publicationReviewRules.path, publicationReviewRules.text);
     return { instructions, files };
   });
@@ -198,6 +288,7 @@ export const loadWorkspaceGuide = (
 export const loadAuthoringSkills = (
   directory: string,
   render: AuthoringRender = standaloneText,
+  options: AuthoringOptions = {},
 ): Effect.Effect<readonly SkillDescriptor[], MintFailure> =>
   Effect.tryPromise({
     try: async () =>
@@ -212,7 +303,7 @@ export const loadAuthoringSkills = (
             name: entry.name,
             description: entry.description,
             content: new TextEncoder().encode(
-              render(
+              hostRender(render, options)(
                 new TextDecoder("utf-8", { fatal: true }).decode(
                   await readScopedFile(directory, `${entry.name}/SKILL.md`),
                 ),

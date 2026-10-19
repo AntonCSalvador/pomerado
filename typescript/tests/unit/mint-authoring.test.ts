@@ -789,18 +789,164 @@ it("renders the pinned standalone authoring", async () => {
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
     ["8b79f447a4db2b130336b97eb6443e8f327a0a60f0d6d5a9ebb670549ec8aca4", "core"],
-    ["79b30bbf3224c9adf634809e240b5f7ec0dfa7e2dfe2e2d710a8403ce03ff2da", "search"],
+    ["73e5fc63c2f921e46152b21204d70ef23106ab9edcebeee70ac007f3a8f19d95", "search"],
     ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
-    ["da48d38e8cf9de7387c67771d36cd73673db25d335f4b267ebc9be1881fa3de7", "testing"],
+    ["4fb216e19c027f8a94a9bc3b0ec518f2c70d0403d3eef4551133d1884f2eacf3", "testing"],
     ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
     ["12b198d6503ef35853f9ff42aefefe641dc3b59c8b2a3e5a1424aabb4f6af2f4", "forms"],
     ["9c8d7256bd2f53cec0b11f7f6cf25a07fe9b87837938ca78dc8f8867e843aba0", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["a3a3b9de15fe58391adc4e5185e4bff3fa7f01a95b89a9cc6a87852f749d346e", "caller-input"],
     ["e3f1bf2ec18dc6285b34e01ed9c3b95ba8d3cf41e2a8eb0a7cdd3540b6948848", "publication"],
-    ["5be527946d4fe2b81b8292c0d503ead67e271ee47a4b50106e3402414379065c", "workspace/AGENTS.md"],
+    ["ade574ecf1af334f99fb0cd2f7e1b2bab934ee356d48776a4578eef9bbb35493", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
+});
+
+/*
+ * The search URL fast path's passages, off and on. Off is the URL guidance as it stood before the
+ * fast path, with the search skill's page-data paragraph kept without its URL clauses. On is the
+ * fast path's text.
+ */
+const urlFastPathPassages = {
+  agents: {
+    off: `When the controls flow lands on a URL the site produced, and two runs with different inputs show
+which parts of it carry which input, such as the query, dates, guests or party size, sort or a
+record's own identifier route, the tool may open that URL with the caller's values in those
+parts, built with \`URLSearchParams\` for a query part or \`encodeURIComponent\` for a path part and
+every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input
+`,
+    on: `When the controls flow lands on a URL the site produced, and two runs with different inputs show
+which parts of it carry which input, such as the query, dates, guests or party size, sort,
+filters, a location the URL itself carries or a record's own identifier route, the tool enters
+at that URL with the caller's values in those parts when the mapping is reliable and clear: each
+part's valid values are known and readable in the URL, such as a sort or filter whose values
+become the input's enum, or a query the site encodes as typed. An opaque filter code still comes
+only from a link the page produced in this run (below). Otherwise it uses the page's controls.
+It builds that URL with \`URLSearchParams\` for a query part or \`encodeURIComponent\` for a path
+part and every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input
+`,
+  },
+  apply: {
+    off: `## Apply and read back
+
+On every run, set each input the site has a control for through that control, or through the URL
+or data request the site itself uses for it when the control is unreliable (testing skill), never
+by filtering the returned rows, then read it back from the site's committed state: the
+`,
+    on: `## Apply and read back
+
+On every run, set each input the site has a control for through that control, through the
+results URL when the site's URL reliably carries it (\`AGENTS.md\`, "Work through the page's own
+controls"), or through the data request the site itself uses for it when the control is
+unreliable (testing skill), never by filtering the returned rows, then read it back from the site's committed state: the
+`,
+  },
+  data: {
+    off: `what its inputs need.
+
+Try the fast path first. While exploring, check whether the page's own data request or embedded
+data carries the result fields. When it does, the default design is: reach the results through
+the page's controls, then read that data in the same session (\`page.evaluate(() => fetch(...))\`
+for a data request, core skill), reading the applied location back from the page or that
+answer. Read rendered rows only when it doesn't.
+
+- The main path`,
+    on: `what its inputs need.
+
+Try the fast path first. While exploring, check whether the results page loads directly by URL
+with the inputs encoded (\`AGENTS.md\`, "Work through the page's own controls"), and whether the
+page's own data request or embedded data carries the result fields. When both hold, the default
+design is: set a location or store through the page's controls first if the URL cannot carry it,
+load the results URL, then read that data in the same session (\`page.evaluate(() => fetch(...))\`
+for a data request, core skill), reading the applied location back from the page or that
+answer. Drive the search form and read rendered rows only when they don't.
+
+- The main path`,
+  },
+} as const;
+
+const loadAuthoring = async (
+  directory: string,
+  render?: (text: string, sectionKey: string) => string,
+  options?: { readonly searchUrlFastPath?: boolean },
+) => {
+  const skills = await Effect.runPromise(loadAuthoringSkills(directory, render, options));
+  const guide = await Effect.runPromise(loadWorkspaceGuide(directory, render, options));
+  const search = contents(skills)[skills.findIndex((skill) => skill.name === "search")] ?? "";
+  return { skills, guide, search, agents: guide.instructions };
+};
+
+/*
+ * A host turns the search URL fast path on with `searchUrlFastPath`. Off, which is also what
+ * omitting it gives, renders the URL guidance as it stood before; on renders the fast path's
+ * text, whose search skill and workspace guide digests are the ones pinned before the flag. Every
+ * other file renders the same either way.
+ */
+it("renders the search URL fast path only when a host turns it on", async () => {
+  const omitted = await loadAuthoring("typescript/authoring");
+  const off = await loadAuthoring("typescript/authoring", undefined, { searchUrlFastPath: false });
+  const on = await loadAuthoring("typescript/authoring", undefined, { searchUrlFastPath: true });
+  expect(off.skills).toStrictEqual(omitted.skills);
+  expect(off.guide).toStrictEqual(omitted.guide);
+  for (const [mode, shown, hidden] of [
+    [off, "off", "on"],
+    [on, "on", "off"],
+  ] as const) {
+    expect(mode.agents).toContain(urlFastPathPassages.agents[shown]);
+    expect(mode.agents).not.toContain(urlFastPathPassages.agents[hidden]);
+    for (const passage of [urlFastPathPassages.apply, urlFastPathPassages.data]) {
+      expect(mode.search).toContain(passage[shown]);
+      expect(mode.search).not.toContain(passage[hidden]);
+    }
+  }
+  expect(on.guide.files.get("AGENTS.md")).toBe(on.guide.instructions);
+  expect([
+    [sha256(JSON.stringify(on.skills.find((skill) => skill.name === "search"))), "search"],
+    [sha256(on.agents), "workspace/AGENTS.md"],
+  ]).toStrictEqual([
+    ["79b30bbf3224c9adf634809e240b5f7ec0dfa7e2dfe2e2d710a8403ce03ff2da", "search"],
+    ["5be527946d4fe2b81b8292c0d503ead67e271ee47a4b50106e3402414379065c", "workspace/AGENTS.md"],
+  ]);
+  expect(on.skills.filter((skill) => skill.name !== "search")).toStrictEqual(
+    off.skills.filter((skill) => skill.name !== "search"),
+  );
+  expect([...on.guide.files].filter(([path]) => path !== "AGENTS.md")).toStrictEqual(
+    [...off.guide.files].filter(([path]) => path !== "AGENTS.md"),
+  );
+});
+
+it("renders the search URL fast path in a host's composed text", async () => {
+  const root = await authoringCopy((_path, text) => composeHostText(text));
+  try {
+    const off = await loadAuthoring(root, (text) => text);
+    const on = await loadAuthoring(root, (text) => text, { searchUrlFastPath: true });
+    expect(on.agents).toContain("host text for agents.role");
+    expect(off.agents).toContain(urlFastPathPassages.agents.off);
+    expect(on.agents).toContain(urlFastPathPassages.agents.on);
+    expect(off.search).toContain(urlFastPathPassages.data.off);
+    expect(on.search).toContain(urlFastPathPassages.data.on);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("refuses the search URL fast path when a file lacks one of its passages", async () => {
+  const root = await authoringCopy((path, text) =>
+    path.endsWith(join("search", "SKILL.md"))
+      ? text.replace("Try the fast path first. ", "")
+      : text,
+  );
+  try {
+    expect((await loadAuthoring(root)).search).not.toContain("Try the fast path first.");
+    expect(
+      await Effect.runPromise(
+        Effect.either(loadAuthoringSkills(root, undefined, { searchUrlFastPath: true })),
+      ),
+    ).toMatchObject({ _tag: "Left", left: { code: "Unavailable" } });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 /*
