@@ -11,6 +11,7 @@ import {
   type LiveTestHost,
   type MintDependencies,
   MintHarnessSnapshot,
+  type PublicationDecision,
 } from "../../src/mint/contracts.js";
 import type { LiveTestOutcome } from "../../src/mint/live-tests.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
@@ -1711,15 +1712,18 @@ it("does not send a read to publication review while 8 of its 23 cases pass on t
     reason: "live_tests_below_threshold",
     userInputRequired: false,
     instruction:
-      "Not sent to publication review: the latest live tests on src/tool.ts passed 8 of 23 (34%), and review needs at least 70%. Fix the failing cases, or the tests if they are wrong, run them again, then call finish_build.",
+      "Publication review not started: only 8 of 23 live test cases on src/tool.ts pass on this source (34%), and review starts at 70%. Fix the code where a case fails, or the case where it is wrong, run every case again, then call finish_build.",
   });
 });
 
 it.each([
   { label: "17 of 23 (73%)", counts: { pass: 17, fail: 6 } },
   { label: "exactly 70%, 7 of 10", counts: { pass: 7, fail: 3 } },
+  { label: "exactly 70%, 14 of 20", counts: { pass: 14, fail: 6 } },
   // Thirteen inconclusive cases tested nothing about the tool: 7 of the 10 counted pass.
   { label: "7 of 10 counted, beside 13 inconclusive", counts: { pass: 7, fail: 3, inconclusive: 13 } },
+  // Every case inconclusive: none counts, so the review judges coverage as before.
+  { label: "no counted case, 5 inconclusive", counts: { pass: 0, fail: 0, inconclusive: 5 } },
 ])("sends a read to publication review once its cases pass at least 70%: $label", async ({ counts }) => {
   const { outcome, reviews } = await finishAfterScoredBatch(counts);
   expect(reviews).toHaveLength(1);
@@ -1728,23 +1732,131 @@ it.each([
 
 it.each([
   // 69.6% is below 70%, and reads 69%, never rounded up to the bar it misses.
-  { label: "16 of 23 (69%)", counts: { pass: 16, fail: 7 }, passed: "16 of 23 (69%)" },
+  { label: "16 of 23 (69%)", counts: { pass: 16, fail: 7 }, passed: "16 of 23", percent: 69 },
   // Inconclusive cases leave the counted ones: 6 of 10 is 60%, never 6 of 15.
   {
     label: "6 of 10 counted, beside 5 inconclusive",
     counts: { pass: 6, fail: 4, inconclusive: 5 },
-    passed: "6 of 10 (60%)",
+    passed: "6 of 10",
+    percent: 60,
   },
-])("does not send a read to publication review below 70%: $label", async ({ counts, passed }) => {
+])("does not send a read to publication review below 70%: $label", async ({ counts, passed, percent }) => {
   const { reviews, finished } = await finishAfterScoredBatch(counts);
   expect(reviews).toHaveLength(0);
   expect(finished()).toMatchObject({ reason: "live_tests_below_threshold" });
-  expect(finished()["instruction"]).toContain(`passed ${passed}, and review needs at least 70%.`);
+  expect(finished()["instruction"]).toContain(
+    `only ${passed} live test cases on src/tool.ts pass on this source (${percent}%), and review starts at 70%.`,
+  );
+});
+
+// A refusal for the bar is the minter's to fix through its code or its cases. It is no host check
+// refusing a step the build needs, so it grants no host_refused ending, and the host's record says
+// a new live observation follows it.
+it("records a refusal for the bar as needing new live tests, and grants no host_refused ending", async () => {
+  const { file, outcomes } = scoredBatch({ pass: 8, fail: 15 });
+  const { host } = liveTestHost(outcomes);
+  const published = publications();
+  const recorded: PublicationDecision[] = [];
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("live_tests", runAll, "run"),
+        call("execute", example, "example"),
+        call("finish_build", finish, "finish"),
+        call(
+          "report_blocked",
+          { reason: "host_refused", explanation: "A Pomerado check refused publication." },
+          "blocked",
+        ),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+      publicationDecisions: {
+        record: (decision) =>
+          Effect.sync(() => {
+            recorded.push(decision);
+          }),
+        list: Effect.sync(() => recorded),
+      },
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  const outcome = await f.run();
+  expect(published.seen).toHaveLength(0);
+  expect(resultOf(f.requests[3], "finish")).toMatchObject({ reason: "live_tests_below_threshold" });
+  expect(recorded).toEqual([
+    expect.objectContaining({
+      outcome: "refused",
+      code: "PublicationUnavailable",
+      reason: "live_tests_below_threshold",
+      executionId: "execution_one",
+      failedChecks: ["live_tests_below_threshold"],
+      recovery: "new_observation",
+    }),
+  ]);
+  expect(JSON.stringify(resultOf(f.requests[4], "blocked"))).toContain("host_not_refused");
+  expect(outcome.blocked?.reason).not.toBe("host_refused");
+});
+
+// Once the attempt ran out of time for live tests, no case can run again, so a refusal that asks
+// for that could never be met: the review decides on the record as it is, as before the bar.
+it.each([
+  { label: "a later batch the host refused as no_time", way: "no_time" },
+  { label: "a case the attempt's deadline stopped", way: "deadline" },
+] as const)("sends a read below the bar to review once time ran out for tests: $label", async ({ way }) => {
+  const { file, outcomes } = scoredBatch({ pass: 2, fail: 5 });
+  // Stopped by the attempt's end: inconclusive, so 2 of the 6 counted pass.
+  const scored =
+    way === "deadline"
+      ? { ...outcomes, "case-3": { status: "inconclusive" as const, reason: "deadline" as const } }
+      : outcomes;
+  const { host, batches } = liveTestHost(scored);
+  // As a host that caps its batches does: once one ran, no case fits in what is left.
+  const capped: LiveTestHost =
+    way === "no_time"
+      ? {
+          ...host,
+          get caseTimeoutMs() {
+            return batches.length === 0 ? 60_000 : Number.POSITIVE_INFINITY;
+          },
+        }
+      : host;
+  const steps =
+    way === "no_time"
+      ? [call("live_tests", runAll, "run"), call("live_tests", runAll, "again")]
+      : [call("live_tests", runAll, "run")];
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [...steps, call("execute", example, "example"), call("finish_build", finish, "finish")][index] ??
+      prose(),
+    {
+      liveTests: capped,
+      deadline: Deadline.after(way === "deadline" ? 5 * 60_000 : 30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  const outcome = await f.run();
+  expect(batches).toHaveLength(1);
+  if (way === "no_time") expect(resultOf(f.requests[2], "again")).toMatchObject({ status: "no_time" });
+  expect(published.seen).toHaveLength(1);
+  expect(published.seen[0]?.liveTests).toMatchObject({ outOfTime: true });
+  expect(published.seen[0]?.coverage).toContain(way === "deadline" ? "2 pass, 4 fail" : "2 pass, 5 fail");
+  expect(outcome.build).toBe("published");
 });
 
 // Only the version finish_build publishes is held to the bar. An HTTP version beside a published
-// Playwright version ships only when the host's own check passes it, and a host publishes the
-// Playwright version alone when its tests failed, so its failures hold nothing back here.
+// Playwright version is judged by the publication review from its own results, as before, so its
+// failures never keep the Playwright version from review.
 it.each([
   { published: "src/tool.ts", reviewed: true },
   { published: "src/tool-http.mjs", reviewed: false },
@@ -1787,7 +1899,7 @@ it.each([
     } else {
       expect(published.seen).toHaveLength(0);
       expect(resultOf(f.requests[4], "finish")["instruction"]).toContain(
-        "the latest live tests on src/tool-http.mjs passed 0 of 4 (0%)",
+        "only 0 of 4 live test cases on src/tool-http.mjs pass on this source (0%)",
       );
     }
   },

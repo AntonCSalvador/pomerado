@@ -975,9 +975,10 @@ export interface LiveTestsShortfall {
  * either way: an inconclusive result (a challenge, a site block, a host fault, the deadline) tested
  * nothing about the tool; a stale or not_run case has no result on that source; and a retired case
  * is no longer one of the cases. A version with no counted case reaches the bar: the review judges
- * its coverage as before. Only the published version is held to it: an HTTP version beside a
- * published Playwright version ships only when its host's own check passes it, and a host
- * publishes the Playwright version alone when that version's tests failed.
+ * its coverage as before. Only the published version is held to it: the publication review
+ * judges an HTTP version beside a published Playwright version from its own results, as before.
+ * The harness does not apply the bar once the attempt ran out of time for live tests, since no
+ * case can run again then.
  */
 export const liveTestsShortfall = (
   versions: readonly {

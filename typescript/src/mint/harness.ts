@@ -4601,13 +4601,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               // The host's own record of a read's live tests on this source goes to the review
               // as evidence, and its line to coverage. It refuses publication by itself only
               // when the published version's cases pass below the bar on its source: the review
-              // would hold it back on those failures anyway, so it is not started.
+              // would hold it back on those failures anyway, so it is not started. Once the
+              // attempt ran out of time for live tests no case can run again, so the review
+              // decides on the record as it is.
               const liveTests = yield* liveTestsForPublication(
                 proposed.entrypoint,
                 proposed.httpVersion?.outcome === "ruled_out",
               );
               const shortfall =
-                liveTests === undefined
+                liveTests === undefined || liveTestsOutOfTime
                   ? undefined
                   : liveTestsShortfall(
                       liveTests.record.versions,
@@ -4622,7 +4624,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   code: "PublicationUnavailable",
                   reason,
                   userInputRequired: false,
-                  instruction: `Not sent to publication review: the latest live tests${shortfall.entrypoint === undefined ? "" : ` on ${shortfall.entrypoint}`} passed ${shortfall.passed} of ${shortfall.counted} (${shortfall.percent}%), and review needs at least ${reviewPassPercent}%. Fix the failing cases, or the tests if they are wrong, run them again, then call finish_build.`,
+                  instruction: `Publication review not started: only ${shortfall.passed} of ${shortfall.counted} live test cases${shortfall.entrypoint === undefined ? "" : ` on ${shortfall.entrypoint}`} pass on this source (${shortfall.percent}%), and review starts at ${reviewPassPercent}%. Fix the code where a case fails, or the case where it is wrong, run every case again, then call finish_build.`,
                   executionContext: yield* executionContext(),
                 });
               }
