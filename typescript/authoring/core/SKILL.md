@@ -165,8 +165,21 @@ use even when the caller's structured input is empty: pass the request's values 
 it), never as a build-time question. Decide from the request and the site which inputs are
 required. An optional input plus a declared question the tool asks before any effect is only for
 a value the request genuinely leaves open; never make a required field optional with nothing
-that asks. An input that tailors the answer on a read is the exception: it is optional unless
-the task can't run without it (below).
+that asks. A choice the request or the owner's answer settled as how the tool behaves, such as
+sorting by price or which kind of record it creates, is the tool's default, never a required
+input or a question at run time. When a caller could reasonably want another value, declare it
+with `defaultedInput(schema, answeredValue)` from the runtime, an optional input whose published
+schema shows that default and whose run gets it when the caller leaves it out, and say in its
+description that it defaults to what the owner chose; keep it fixed with no input only where
+varying it would be unsafe or meaningless. A choice that changes what the caller buys or pays,
+or whether the action can be cancelled or refunded, such as a paid add-on, a rate, fare or plan
+tier, a refundable option, shipping speed, how much of a balance to pay, the payment method or
+the delivery address, never takes one owner's answer as its default: it stays a required input
+or a declared question, and only declining it, turning it off or the option that adds no cost
+and keeps the action cancellable may be its optional input's default. A write asks
+its questions before its first save wherever the page lets it, so an unanswered question never
+leaves a partial save on the site (caller-input skill). An input that tailors the answer on a read is the
+exception: it is optional unless the task can't run without it (below).
 
 - The code works for every value the schema accepts. Never let the schema promise what
   the code rejects or ignores, such as a string the code throws on unless it is the example's
@@ -218,10 +231,16 @@ the task can't run without it (below).
   or without Ltd. or Inc. Never require an exact match.
   When more than one option matches, list them for the caller instead of picking one.
 - On a write, every choice the session met is an input: each option on the path,
-  add-ons and pre-selected defaults included. Make it required when the site requires
-  a choice (a fare class) and optional when it does not (a seat). An unset optional input
-  keeps the page's default; an add-on, a pre-selected paid option or a saved payment is
-  never left to a default, so ask about it (`AGENTS.md`, "Try hard, then ask").
+  add-ons and pre-selected defaults included, except one the request or an answer settled,
+  which is the tool's default (above). A costly choice, one that changes what the caller
+  buys or pays or whether the action can be cancelled or refunded (a paid add-on or
+  pre-selected paid option, a rate, fare or plan tier, a refundable or non-refundable option,
+  shipping speed, a saved payment or the delivery address), is never left to the page's
+  default: make it a required input or ask about it (`AGENTS.md`, "Try hard, then ask"), and
+  an optional input for it may default only to declining it, turning it off or the option
+  that adds no cost. Any other option is an optional input (a seat), required only when the
+  site requires a choice and nothing settled it; an unset optional input keeps the page's
+  default.
 - Never make an account-specific value (a passenger, loyalty number, saved card or
   address, account or member ID) an enum member, example or default in a public
   schema. Take it as a free-form input when the caller can name it, such as a loyalty
@@ -314,9 +333,11 @@ the task can't run without it (below).
 - A choice the request, the caller or the owner declined, or a step they said not to take (no
   location, no store, skip a filter, don't sign in), is not part of the tool for any caller:
   never offer it as an input, never set it in the example or a test, and never put it in
-  `exampleInput`. Note it in coverage. That covers a step the tool then never takes. A paid
-  add-on, payment method or address a write still meets on its path is never settled this way:
-  it stays an input or a run-time question (writes skill).
+  `exampleInput`. Note it in coverage. That covers a step the tool then never takes. A costly
+  choice a write still meets on its path, one that changes what the caller buys or pays or
+  whether the action can be cancelled or refunded (a paid add-on, a rate, fare or plan tier, a
+  refundable option, shipping speed, the payment method or the address), is never settled this
+  way: it stays an input or a run-time question (writes skill), whose default may only decline it.
 - When the caller input is empty (`{}`), write the tool's input from the request and the
   owner's answers, with dates normalized (10/4 is the next October 4, as `2026-10-04`), and
   pass it as `exampleInput`: on a read's example, or on each write act step that needs it. The
@@ -347,13 +368,21 @@ the task can't run without it (below).
   guest rating out of 5, not a count of reviews". Effect's stock text, such as "a non empty
   string", is no description. Annotate the field's own schema, inside `Schema.optional(...)`
   for an optional one. Callers see each beside its name.
-- Shape inputs and outputs like Pomerado's own API, so every tool reads alike: field names in
-  snake_case; dates as `YYYY-MM-DD` and timestamps as ISO 8601 with an offset; money as an
-  integer in minor units with the ISO 4217 `currency` the page shows beside it, such as
-  `total_minor` 12999 and `currency` `"EUR"` read from "€129.99"; enum values in lowercase
-  snake_case (`"premium_economy"`); booleans named as statements (`refundable`, not
-  `is_refundable_flag`); lists named in the plural; and the unit in the field name or its
-  description (`duration_minutes`). Convert between these and the site's own formats in code.
+- Shape inputs and outputs like Pomerado's own API, so every tool reads alike. A notation the
+  request states, such as amounts as decimal strings or signed amounts, always wins; follow it
+  and say so in the field's description. Otherwise: field names in snake_case; dates as
+  `YYYY-MM-DD` and timestamps as ISO 8601 with an offset; money as an integer in minor units
+  with the ISO 4217 `currency` the page shows beside it, such as `total_minor` 12999 and
+  `currency` `"EUR"` read from "€129.99", and an amount that can go either way, such as a
+  ledger entry, unsigned with a field that says its direction, such as `direction` `"debit"`
+  or `"credit"`; enum values, statuses included, in lowercase
+  snake_case (`"premium_economy"`, `"partially_paid"`), with the site's own wording, where a
+  caller may want it, in a separate `*_label` field (`status_label` `"Partially Paid"`);
+  booleans named as statements (`refundable`, not `is_refundable_flag`); lists named in the
+  plural; and the unit in the field name or its description (`duration_minutes`). Convert
+  between these and the site's own formats in code. The output check flags a date or timestamp
+  not in the form its field declares (`format_mismatch`) and one value in two letter cases
+  across a list (`case_variant`).
 - When `reference/site-tools.json` exists, you can view the site's other tools. Read
   `reference/site-tools/README.md` first: it indexes them, one folder each, with each tool's
   effect, sign-in and a short description. Then read the folders you need: each holds a

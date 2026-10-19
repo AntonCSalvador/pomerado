@@ -6,12 +6,14 @@ import {
   exampleInputFeedback,
   exampleOutputEvidence,
   exampleOutputRecord,
+  missingRequestedNames,
   outputDigest,
   outputDigestNote,
   outputDigestPath,
   publicationEvidenceNote,
   publicationScope,
   publicDefinition,
+  requestedOutputFields,
   reviewPublication,
   sessionEvidenceFiles,
   unlistedExampleInputKeys,
@@ -760,6 +762,181 @@ describe("reviewPublication", () => {
         },
       ],
     });
+  });
+
+  // A name the caller's request declares, an input it supplied or an output field a task update
+  // added, is one the tool supports or the build ends blocked: never dropped from the schema.
+  it("returns an input the caller's request names and the schema lacks as input feedback", async () => {
+    const { requests, review } = recordingReview();
+    const failure = await Effect.runPromise(
+      Effect.flip(
+        reviewPublication(review, {
+          ...candidate,
+          requested: { input: { date: "2026-03-14", notes: "Window seat", partySize: 2 } },
+        }),
+      ),
+    );
+    expect(requests).toHaveLength(1);
+    const start = Buffer.byteLength(definition.slice(0, definition.indexOf('"inputSchema"')));
+    expect(failure.review).toMatchObject({
+      outcome: "deny",
+      reason: "input_feedback",
+      reviewId: "review_1",
+      findings: [
+        {
+          path: "publication/definition.json",
+          byteStart: start,
+          byteEnd: start + '"inputSchema"'.length,
+          category: "example_input",
+        },
+      ],
+    });
+    expect(failure.review?.rationale).toContain('"notes"');
+    expect(failure.review?.rationale).not.toContain('"date"');
+  });
+
+  it("returns an output field a task update declared and the schema lacks as a source correction", async () => {
+    const withOutput = publicDefinition(
+      { name: "book_table", description: "Book a table" },
+      {
+        input: JSON.parse(definition).inputSchema as unknown,
+        output: {
+          type: "object",
+          properties: {
+            items: { type: "array", items: { type: "object", properties: { name: {} } } },
+          },
+        },
+      },
+    );
+    const failure = await Effect.runPromise(
+      Effect.flip(
+        reviewPublication(recordingReview().review, {
+          ...candidate,
+          definition: withOutput,
+          outputSchema: JSON.parse(withOutput).outputSchema as unknown,
+          requested: { input: { notes: "Window seat" }, outputs: ["items[].name", "items[].currency"] },
+        }),
+      ),
+    );
+    const outputAt = Buffer.byteLength(withOutput.slice(0, withOutput.indexOf('"outputSchema"')));
+    expect(failure.review).toMatchObject({
+      outcome: "deny",
+      reason: "source_correction",
+      findings: [
+        { category: "example_input" },
+        {
+          path: "publication/definition.json",
+          byteStart: outputAt,
+          byteEnd: outputAt + '"outputSchema"'.length,
+          category: "schema_mismatch",
+        },
+      ],
+    });
+    expect(failure.review?.findings?.[1]?.explanation).toContain('"items[].currency"');
+    expect(failure.review?.findings?.[1]?.explanation).not.toContain('"items[].name"');
+  });
+
+  it("publishes when every requested name is in the schemas", async () => {
+    expect(
+      await Effect.runPromise(
+        reviewPublication(recordingReview().review, {
+          ...candidate,
+          outputSchema: { type: "object", properties: { status: { type: "string" } } },
+          requested: { input: { date: "2026-03-14", partySize: 2 }, outputs: ["status"] },
+        }),
+      ),
+    ).toBe("review_1");
+  });
+
+  it("finds each requested name across references, unions and nested lists", () => {
+    const inputSchema = {
+      $ref: "#/$defs/Entry",
+      $defs: { Entry: { type: "object", properties: { amount: {}, memo: {} } } },
+    };
+    const outputSchema = {
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            entry: {
+              type: "object",
+              properties: {
+                lines: {
+                  type: "array",
+                  items: { $ref: "#/$defs/Line" },
+                },
+              },
+            },
+          },
+        },
+        { type: "object", properties: { status: { type: "string" } } },
+      ],
+      $defs: { Line: { type: "object", properties: { account: {}, amount: {} } } },
+    };
+    expect(
+      missingRequestedNames(
+        { input: inputSchema, output: outputSchema },
+        {
+          input: { amount: "12.50", memo: "Rent", notes: "Paid early" },
+          outputs: ["status", "entry.lines[].amount", "entry.lines[].direction", "entry.total"],
+        },
+      ),
+    ).toEqual({ inputs: ["notes"], outputs: ["entry.lines[].direction", "entry.total"] });
+  });
+
+  it("checks no name a schema cannot answer for", () => {
+    // A free-form object, an unresolvable reference or a caller input that is not an object
+    // lists nothing to check against.
+    expect(
+      missingRequestedNames(
+        { input: { $ref: "#/$defs/Missing" }, output: { type: "object" } },
+        { input: { notes: "Paid early" }, outputs: ["status", "entry.total"] },
+      ),
+    ).toEqual({ inputs: [], outputs: [] });
+    expect(
+      missingRequestedNames(
+        { input: { type: "object", properties: {} }, output: undefined },
+        { input: ["notes"], outputs: ["status"] },
+      ),
+    ).toEqual({ inputs: [], outputs: [] });
+    // A map keyed by the site's own field names takes any key.
+    expect(
+      missingRequestedNames(
+        {
+          input: { type: "object", properties: {}, additionalProperties: { type: "string" } },
+          output: {
+            type: "object",
+            properties: { fields: { type: "object", properties: {}, additionalProperties: true } },
+          },
+        },
+        { input: { Company: "Acme" }, outputs: ["fields.Close date"] },
+      ),
+    ).toEqual({ inputs: [], outputs: [] });
+  });
+
+  it("reads the output fields each task update declares, a later removal dropping one", () => {
+    const update = (...changes: Parameters<typeof requestedOutputFields>[0][number]["changes"]) => ({
+      changes,
+    });
+    expect(
+      requestedOutputFields([
+        update(
+          { setting: "output", field: "price.amount", change: "add", text: "Add the amount" },
+          { setting: "output", field: "status", change: "tighten", text: "Always return it" },
+          { setting: "purpose", text: "Read one order" },
+        ),
+        update(
+          { setting: "output", field: "rating", change: "nullable", text: "May be missing" },
+          {
+            setting: "output",
+            field: "status",
+            change: "remove",
+            text: "Drop the status",
+            reason: "The page no longer shows it",
+          },
+        ),
+      ]),
+    ).toEqual(["price.amount", "rating"]);
   });
 
   it("checks nothing for an example that ran the caller's own input", async () => {

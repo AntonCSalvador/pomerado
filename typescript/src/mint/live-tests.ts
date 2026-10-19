@@ -12,8 +12,9 @@ import { outputCheckMeaning, outputChecks, type OutputCheck } from "../runtime/o
  * on a fresh page that keeps its browser's site data, in parallel browsers where the host has
  * them, and the agent sees every result. Each case run says whether it started warm or cold (see
  * `LiveTestStart`).
- * Nothing here blocks publication: the publication review reads the record and judges the cases
- * against what the tool claims.
+ * The publication review reads the record and judges the cases against what the tool claims. The
+ * only rule here that holds publication back is `liveTestsShortfall`: a version whose cases
+ * mostly fail on the source it publishes is not sent to review at all.
  *
  * The same cases run on both versions of a read: the Playwright version (`src/tool.mjs`) and the
  * HTTP version (`src/tool-http.mjs`). Each version keeps its own result for each case, so a batch
@@ -1023,6 +1024,63 @@ export const liveTestsEvidence = (options: {
     coverage: `${summary}${outOfTime ? ` ${outOfTimeNote}` : ""}${
       options.fileProblem === undefined ? "" : ` ${options.fileProblem}`
     }`,
+  };
+};
+
+/**
+ * The share of the published version's counted cases, in percent, that must pass on its source
+ * before the harness sends a read's publication to review. Below it the review would hold
+ * publication back on the failing cases anyway, so it is not started. The bar sits below every
+ * case so that a case that is itself wrong, and not yet corrected, does not hold back the rest.
+ */
+export const reviewPassPercent = 70;
+
+/** The published version, when its live tests on its source pass below `reviewPassPercent`. */
+export interface LiveTestsShortfall {
+  readonly version: LiveTestVersion;
+  readonly entrypoint?: string;
+  /** Counted cases that pass. */
+  readonly passed: number;
+  /** Counted cases: those that pass or fail. */
+  readonly counted: number;
+  /** `passed` of `counted` in whole percent, rounded down, so 69.6% reads 69%. */
+  readonly percent: number;
+}
+
+/**
+ * Whether the version `finish_build` publishes, `published`, passes below `reviewPassPercent` on
+ * its source, from the publication record's `versions`; undefined when it reaches the bar.
+ *
+ * Its counted cases are the cases in `test/cases.json` as written now whose latest result on that
+ * version's published source is a pass or a fail, its `counts` in the record. Nothing else counts
+ * either way: an inconclusive result (a challenge, a site block, a host fault, the deadline) tested
+ * nothing about the tool; a stale or not_run case has no result on that source; and a retired case
+ * is no longer one of the cases. A version with no counted case reaches the bar: the review judges
+ * its coverage as before. Only the published version is held to it: the publication review
+ * judges an HTTP version beside a published Playwright version from its own results, as before.
+ * The harness does not apply the bar once the attempt ran out of time for live tests, or when no
+ * further batch fits, as after a host's batch cap, since no case can run again then.
+ */
+export const liveTestsShortfall = (
+  versions: readonly {
+    readonly version: LiveTestVersion;
+    readonly entrypoint?: string;
+    readonly counts: { readonly pass: number; readonly fail: number };
+  }[],
+  published: LiveTestVersion,
+): LiveTestsShortfall | undefined => {
+  const entry = versions.find((candidate) => candidate.version === published);
+  if (entry === undefined) return undefined;
+  const passed = entry.counts.pass;
+  const counted = passed + entry.counts.fail;
+  // Whole numbers, so 7 of 10 reaches 70% exactly.
+  if (counted === 0 || passed * 100 >= counted * reviewPassPercent) return undefined;
+  return {
+    version: entry.version,
+    ...(entry.entrypoint === undefined ? {} : { entrypoint: entry.entrypoint }),
+    passed,
+    counted,
+    percent: Math.floor((passed * 100) / counted),
   };
 };
 
