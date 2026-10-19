@@ -712,3 +712,11 @@ test("pickValue keeps options whose names start like a prompt", async ({ page })
   });
   await expect(page.getByRole("button", { name: "Customer" })).toHaveText("Type B");
 });
+
+test("pickValue never mistakes its own repeated saves for a page's poller, however many refills it has", async ({ page }) => {
+  await serve(page, gridEditor("always"), () => ({ delayMs: 500, body: {} }));
+  expect(await call(page, `return await pickValue(page.getByLabel("Owner"), "Casey Ng", { ...fast, refills: 3, timeout: 15000 });`)).toEqual({
+    error: "not_committed",
+  });
+  await expect(page.getByLabel("Owner")).toHaveValue("Avery Lee");
+});

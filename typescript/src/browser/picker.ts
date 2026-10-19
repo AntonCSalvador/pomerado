@@ -534,7 +534,8 @@ const pickerPageCode = String.raw`(element, args) => {
  * query, step)` (type instead of the helper), `answered(popup, query)` (true once the popup shows
  * the answer to this query, such as a site's query marker), `listbox` (the popup's locator),
  * `option` (a CSS selector for its options), `search` (the search box's locator), `confirm` (the
- * dialog's confirm button) and `chips` (a CSS selector for the chips of `pickValues`). Budgets:
+ * dialog's confirm button), `chips` (a CSS selector for the chips of `pickValues`) and
+ * `siteDomain` (the site's registrable domain, whose requests the waits follow). Budgets:
  * `timeout` (whole call, 10 s), `settleMs` (500), `holdMs` (500).
  *
  * A caller's value the picker lacks is not an error of the page: they return
@@ -571,13 +572,16 @@ const pickerWanted = (wanted) => {
 // The site's own requests a picker's action caused: xhr, fetch and documents to the page's site
 // (any host when the page has none) that started within causedMs of the action, counted until
 // they end or for the inflight budget. A poll, one request (same method, URL and body) started
-// four times or more at a steady interval, such as a heartbeat, is the page's own and never
-// counts. A pick's own repeats, such as a save sent again on a refill or a query typed again,
-// are too few to look steady, so they always count.
-const pickerNetwork = (page, causedMs) => {
+// four times at a steady interval outside every window the picker's own actions opened, such as
+// a heartbeat, is the page's own and never counts. A request starting right after one of the
+// picker's actions, such as a save sent again on each refill or a query typed again, never
+// counts toward a poll. The site is siteDomain when given (the host computes it), else a
+// conservative guess from the page's host.
+const pickerNetwork = (page, causedMs, siteDomain) => {
   const entries = [];
   const starts = new Map();
   const polls = new Set();
+  const marks = [];
   const siteOf = (host) => {
     const labels = host.split(".");
     if (labels.length <= 2 || /^\d+$/.test(labels.at(-1))) return host;
@@ -588,7 +592,7 @@ const pickerNetwork = (page, causedMs) => {
     try {
       const pageUrl = new URL(page.url());
       if (!/^https?:$/.test(pageUrl.protocol) || pageUrl.hostname === "") return true;
-      const site = siteOf(pageUrl.hostname);
+      const site = siteDomain ?? siteOf(pageUrl.hostname);
       const host = new URL(url).hostname;
       return host === site || host.endsWith("." + site);
     } catch {
@@ -600,9 +604,10 @@ const pickerNetwork = (page, causedMs) => {
     if (!["xhr", "fetch", "document"].includes(request.resourceType()) || !firstParty(request.url())) return;
     const key = request.method() + " " + request.url() + " " + String(request.postData() ?? "").slice(0, 2048);
     const at = Date.now();
-    const times = [...(starts.get(key) ?? []), at].slice(-4);
+    const ours = marks.some((mark) => at >= mark && at <= mark + causedMs);
+    const times = ours ? (starts.get(key) ?? []) : [...(starts.get(key) ?? []), at].slice(-4);
     starts.set(key, times);
-    if (times.length === 4) {
+    if (!ours && times.length === 4) {
       const gaps = [times[1] - times[0], times[2] - times[1], times[3] - times[2]];
       if (Math.min(...gaps) >= 50 && Math.max(...gaps) - Math.min(...gaps) <= Math.max(...gaps) / 2) polls.add(key);
     }
@@ -620,6 +625,7 @@ const pickerNetwork = (page, causedMs) => {
   page.on("requestfailed", onDone);
   const caused = (since) => entries.filter((entry) => !polls.has(entry.key) && entry.at >= since && entry.at <= since + causedMs);
   return {
+    mark: (at) => marks.push(at),
     inflight: (since) => caused(since).filter((entry) => entry.endAt === null && Date.now() - entry.at < pickerLimits.inflight).length,
     // When the action's last caused request started or ended, or 0.
     lastAt: (since) => Math.max(0, ...caused(since).map((entry) => entry.endAt ?? entry.at)),
@@ -647,7 +653,7 @@ const pickerSession = async (control, options) => {
     act: () => ({ timeout: Math.min(left(), pickerLimits.action) }),
     frame,
     token: "pk" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-    net: pickerNetwork(control.page(), Math.max(settleMs * 2, 1000)),
+    net: pickerNetwork(control.page(), Math.max(settleMs * 2, 1000), options.siteDomain),
     settleMs,
     idleMs: Math.max(settleMs * 2, 600),
     holdMs: options.holdMs ?? settleMs,
@@ -699,6 +705,12 @@ const pickerEval = async (s, phase, extra = {}) => {
     await popup?.dispose();
   }
 };
+// Notes the start of one of the picker's own actions, for the network's poll check.
+const pickerMark = (s) => {
+  const at = Date.now();
+  s.net.mark(at);
+  return at;
+};
 const pickerTag = (s, name, value) => s.frame.locator("[" + name + "=" + JSON.stringify(value) + "]");
 const pickerChoices = (options) => options.map((option) => ({ names: option.names, value: option.value, disabled: option.disabled, key: option.key }));
 // Waits for the picker's options to answer an action: no loading sign, no request the action
@@ -747,7 +759,7 @@ const pickerCollect = async (s, scan, wanted) => {
   while (!complete && Date.now() < reserve && seen.size < 2000) {
     const size = seen.size;
     const at = latest.scroll.top;
-    const scrolledAt = Date.now();
+    const scrolledAt = pickerMark(s);
     latest = await pickerEval(s, "scan", { scroll: "next" });
     // Options the scroll asked for can take a moment, or a request, to arrive.
     for (let look = 0; look < 25 && Date.now() < reserve; look++) {
@@ -830,7 +842,7 @@ const pickerQuery = async (s, field, wanted, seenAvailable = []) => {
     for (let step = 0; step < 3; step++) {
       const snapshot = await pickerEval(s, "snapshot", { near: s.kind === "dropdown" });
       const before = snapshot.signature;
-      const since = Date.now();
+      const since = pickerMark(s);
       await pickerType(s, field, query, step, snapshot);
       const { scan, reacted } = await pickerSettle(s, since, before, query);
       const found = await pickerCollect(s, scan, wanted);
@@ -857,7 +869,7 @@ const pickerOpen = async (s) => {
   const first = await pickerEval(s, "scan", { near: false });
   if (first.popup && first.options.length > 0 && (first.expanded || ["given", "kept", "owned"].includes(first.via))) return first;
   const before = first.signature;
-  const since = Date.now();
+  const since = pickerMark(s);
   if (s.options.open) await s.options.open();
   else await s.control.click(s.act());
   const { scan } = await pickerSettle(s, since, before, "");
@@ -1067,7 +1079,7 @@ const pickerNative = async (s, wanted) => {
   const option = outcome.option;
   const force = !(await pickerEval(s, "select-shown"));
   for (let attempt = 0; attempt <= s.refills; attempt++) {
-    const since = Date.now();
+    const since = pickerMark(s);
     await s.control.selectOption({ index: option.index }, { ...s.act(), force });
     const kept = await pickerConfirm(s, option, since, () =>
       s.control.evaluate((select, index) => select.selectedIndex === index, option.index, { timeout: Math.min(1000, s.left()) }).catch(() => false),
@@ -1083,7 +1095,7 @@ const pickerDatalist = async (s, wanted) => {
   if (outcome.status === "refused") return outcome.refusal;
   const option = outcome.option;
   for (let attempt = 0; attempt <= s.refills; attempt++) {
-    const since = Date.now();
+    const since = pickerMark(s);
     await s.control.fill(option.value, s.act());
     await pickerBlur(s, pickerTry(s.options, attempt, 0).blur, s.control);
     const kept = await pickerConfirm(s, option, since, async () => (await pickerFieldValue(s.control, s).catch(() => null)) === option.value);
@@ -1116,7 +1128,7 @@ const pickValue = async (control, wanted, options = {}) => {
         return found.refusal;
       }
       const pre = await pickerState(s);
-      const since = Date.now();
+      const since = pickerMark(s);
       const committed = await pickerCommit(s, found, method);
       acted ||= committed;
       const did = committed && (await pickerEvidence(s, pre, found.option));
@@ -1160,7 +1172,7 @@ const pickValues = async (control, values, options = {}) => {
       const current = await s.control.evaluate((select) => [...select.selectedOptions].map((option) => option.index), undefined, s.act());
       const indexes = [...new Set([...(mode === "replace" ? [] : current), ...picked.map((option) => option.index)])];
       const force = !(await pickerEval(s, "select-shown"));
-      const since = Date.now();
+      const since = pickerMark(s);
       await s.control.selectOption(indexes.map((index) => ({ index })), { ...s.act(), force });
       const kept = await pickerConfirm(s, picked[0], since, () =>
         s.control.evaluate((select, wantedIndexes) => {
@@ -1192,7 +1204,7 @@ const pickValues = async (control, values, options = {}) => {
         // A free-entry value is created rather than replaced by a suggestion that only holds it.
         if (options.create && found.status === "picked" && found.rank === "words")
           found = { status: "refused", field: found.field, refusal: { picked: false, reason: "option_missing", wanted: wanted[0], available: [], matches: [] } };
-        const since = Date.now();
+        const since = pickerMark(s);
         const showsChip = (label) => async () => {
           const now = await pickerChips(s).catch(() => []);
           return pickerChipIs(now.map(chipNames), [label]) !== null;
@@ -1226,7 +1238,7 @@ const pickValues = async (control, values, options = {}) => {
         const extra = chips.find((chip) => !list.some((wanted) => pickerChipIs([chipNames(chip)], wanted)));
         if (!extra) break;
         if (!extra.removable) throw pickerFailure("not_committed");
-        const since = Date.now();
+        const since = pickerMark(s);
         await pickerTag(s, "data-pomerado-pick-hit", extra.tag).click(s.act());
         const gone = await pickerConfirm(s, extra, since, async () => {
           const now = await pickerChips(s).catch(() => []);
@@ -1260,7 +1272,7 @@ const pickerOptions = async (control, options = {}) => {
       if (!options.query) throw pickerFailure("wanted_missing");
       await pickerEval(s, "snapshot");
       const before = (await pickerEval(s, "scan")).signature;
-      const since = Date.now();
+      const since = pickerMark(s);
       await pickerType(s, s.control, String(options.query), 0);
       scan = (await pickerSettle(s, since, before, String(options.query))).scan;
     } else {
@@ -1268,7 +1280,7 @@ const pickerOptions = async (control, options = {}) => {
       if (options.query && scan.search) {
         field = s.options.search ?? pickerTag(s, "data-pomerado-pick-search", s.token);
         const before = scan.signature;
-        const since = Date.now();
+        const since = pickerMark(s);
         await pickerType(s, field, String(options.query), 0);
         scan = (await pickerSettle(s, since, before, String(options.query))).scan;
       }
