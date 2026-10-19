@@ -702,6 +702,7 @@ export const correctReplayExtras = <E>(
       fields,
       ...(previous.popup === undefined ? {} : { popup: previous.popup }),
       ...(previous.submit === undefined ? {} : { submit: previous.submit }),
+      ...(previous.submitKey === undefined ? {} : { submitKey: previous.submitKey }),
     };
     const inspected = yield* input.browser.inspect(retryStep);
     if ("outcome" in inspected) return "extra_rejected" as const;

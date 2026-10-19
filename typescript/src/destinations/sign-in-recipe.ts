@@ -1,8 +1,14 @@
 import { Deferred, Effect, Either, FiberId, Option, Schema } from "effect";
-import type { AutofillApproval, AutofillPopup, RejectedMarker } from "./autofill-contracts.js";
+import type {
+  AutofillApproval,
+  AutofillPopup,
+  RejectedMarker,
+  SubmitKey,
+} from "./autofill-contracts.js";
 import {
   autofillRecipe,
   autofillRecipePath,
+  KeySubmitAutofillRecipe,
   LegacyAutofillRecipe,
   PopupAutofillRecipe,
   publishedAutofillRecipe,
@@ -46,22 +52,23 @@ export const SignInRecipeV3 = Schema.Struct({
   ),
 );
 /**
- * A recipe this host reads: version 1, 2 or 4 as every host writes it, or this host's version 3.
+ * A recipe this host reads: version 1, 2, 4 or 5 as every host writes it, or this host's version 3.
  */
 export const SignInRecipe = Schema.Union(
   LegacyAutofillRecipe,
   PopupAutofillRecipe,
   SignInRecipeV3,
   WorkspaceAutofillRecipe,
+  KeySubmitAutofillRecipe,
 );
 export type SignInRecipe = typeof SignInRecipe.Type;
 export type SignInRecipeStep = AutofillRecipeStep;
 
-const knownVersions: readonly unknown[] = [1, 2, 3, 4];
+const knownVersions: readonly unknown[] = [1, 2, 3, 4, 5];
 
 /**
  * A published recipe file read back: the recipe, `unknown_version` for a version this host does
- * not know, else `invalid`. Version 1, 2 and 4 decode as every host reads them; version 3 is
+ * not know, else `invalid`. Version 1, 2, 4 and 5 decode as every host reads them; version 3 is
  * read only here.
  */
 export const decodeSignInRecipe = (text: string): SignInRecipe | "invalid" | "unknown_version" => {
@@ -92,6 +99,8 @@ export interface RecordedSignInStep {
   /** With each identifier field's accepted kinds, never a value. */
   readonly fields: readonly AutofillField[];
   readonly submit?: string | undefined;
+  /** The key pressed in the last field to submit its form, on a form with no submit control. */
+  readonly submitKey?: SubmitKey | undefined;
   readonly submittedBy?: "host" | "minter" | undefined;
   /** A two-factor method choice's recorded methods. */
   readonly methods?: AutofillStep["methods"];
@@ -139,12 +148,13 @@ const inStepOrder = (step: SignInRecipeStep): SignInRecipeStep => ({
         },
   ),
   ...(step.submit === undefined ? {} : { submit: step.submit }),
+  ...(step.submitKey === undefined ? {} : { submitKey: step.submitKey }),
   ...(step.submittedBy === undefined ? {} : { submittedBy: step.submittedBy }),
   ...(step.methods === undefined ? {} : { methods: step.methods }),
 });
 
 /**
- * A recipe as `auth-fill.json` holds it: `version`, then version 4's `workspace`, then each
+ * A recipe as `auth-fill.json` holds it: `version`, then version 4's or 5's `workspace`, then each
  * screen in `recipeStep`'s key order (a workspace screen's `origin` first), indented two spaces,
  * with no final newline. The same recipe is the same bytes from any
  * host that writes it this way.
@@ -153,7 +163,7 @@ export const signInRecipeText = (recipe: SignInRecipe) =>
   JSON.stringify(
     {
       version: recipe.version,
-      ...(recipe.version !== 4 || recipe.workspace === undefined
+      ...((recipe.version !== 4 && recipe.version !== 5) || recipe.workspace === undefined
         ? {}
         : { workspace: { parent: recipe.workspace.parent } }),
       steps: recipe.steps.map(inStepOrder),
@@ -487,6 +497,7 @@ export const armStep = (
       field.slot === "date_of_birth" ? { ...field, control: control(index) } : field,
     ),
     ...(step.submit === undefined ? {} : { submit: step.submit }),
+    ...(step.submitKey === undefined ? {} : { submitKey: step.submitKey }),
     ...(step.methods === undefined ? {} : { methods: step.methods }),
     page: inspection.page,
   });
