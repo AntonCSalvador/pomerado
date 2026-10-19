@@ -12,6 +12,7 @@ import {
   guardianPublicationPolicy,
   publicationCallerDecisionPolicy,
   publicationDecisionPolicy,
+  publicationPaidChoiceLimit,
   publicationLiveTestsPolicy,
   publicationOutputPolicy,
   publicationSafetyDefaultPolicy,
@@ -817,6 +818,17 @@ describe("the OpenAI publication reviewer", () => {
     });
     expect(policyOf(requests[0])).toContain(publicationCallerDecisionPolicy);
     expect(publicationOutputPolicy).toContain(publicationCallerDecisionPolicy);
+  });
+
+  // One caller's "always" answer must not make a published write take a paid add-on, an upsell,
+  // a payment method or a delivery address for every later caller. Both rules that could excuse
+  // such a choice, the input schema review and the caller decision rule, carry the same limit.
+  it("limits a caller's decision on a write's paid or payment choices in both rules that read it", () => {
+    expect(publicationCallerDecisionPolicy).toContain(publicationPaidChoiceLimit);
+    const inputReview = guardianPublicationPolicy
+      .split("\n")
+      .find((line) => line.startsWith("Review the public input schema"));
+    expect(inputReview).toContain(publicationPaidChoiceLimit);
   });
 
   it("gives an execution review no publication policy or index", async () => {
