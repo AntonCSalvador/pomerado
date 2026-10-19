@@ -14,7 +14,9 @@ composes its script from what happened (the `writes` skill). A read tests what i
 did not exercise with a few combined live cases (the `testing` skill). A write proves its tool
 with its act session; it never reads
 the `testing` skill or designs further tests<!-- pomerado:section core.write-http-check -->.
-The scope follows what the tool is now, as the `testing` skill says. Credentials and
+That forbids running the write again or testing it live, not writing checks: a write's script
+checks its own result, and its read-back and comparison are checked offline over what the session
+read (the `writes` skill). The scope follows what the tool is now, as the `testing` skill says. Credentials and
 sign-in codes
 belong to the host; never request a password, cookie or TOTP seed in model-visible text.
 

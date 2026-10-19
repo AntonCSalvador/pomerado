@@ -628,18 +628,18 @@ it("keeps the HTTP version passages in host sections", async () => {
         ])
           expect(text.replace(/\s+/g, " "), name).not.toContain(hosted);
       const kept: readonly (readonly [string, string])[] = [
-        ["core", "or designs further tests. The scope follows what the tool is now"],
+        ["core", "or designs further tests. That forbids running the write again"],
         ["core", "or the site's own data request, to opening each record's page."],
         ["search", "it never returns unfiltered results as filtered. When setting one control"],
-        ["testing", "builds no offline test suite. A read proves its operation"],
+        ["testing", "builds no offline test suite. It still checks its composed script's read-back"],
         ["testing", "no no-results case and no edge cases. Publication review reads"],
         ["testing", "own controls\"). Either way, read the input back"],
         ["testing", "count toward the same two. The example uses"],
-        ["writes", "build no offline test suite for it. ## Check the read-back"],
+        ["writes", "run no live test of it. That rule is about running the write"],
         ["workspace/AGENTS.md", "and your own probes. **Read back every input before returning.**"],
         ["workspace/AGENTS.md", "the request the page sends for the rows, to driving such a filter"],
         ["workspace/AGENTS.md", "runs them in parallel batches. Finish in this order"],
-        ["workspace/AGENTS.md", "offline test suites beyond it. The scope follows"],
+        ["workspace/AGENTS.md", "offline test suites beyond it. It still checks its composed"],
       ];
       for (const [name, line] of kept) expect(flat(name), name).toContain(line);
     }
@@ -750,7 +750,7 @@ it("has a write confirm from its first matching read-back, never from state befo
     " ",
   );
   expect(writes).toContain(
-    "- When a read-back is needed, the first one that matches confirms the write; stop there. It matches when it shows the written record after the write, found by something the write produced or entered (its number, its own reference or the values entered), and every field the caller asked for that the view shows agrees (the read before the commit already checked what you entered). Sites reformat what they save, such as line breaks, spaces and dates in the viewer's format, so compare text after the commit normalized as before it (the core skill's Confirm step): pass the caller's text through `normalizeText` from `pomerado/runtime`, as `visibleText` already does with the page's. Compare a chosen option's value only where the view shows that value; otherwise compare the label it shows. When the write changed state that already existed, the same read also checks that only the requested change happened. Write each read-back step to check that match in its own code and call `verified()` when it holds, so the first one that matches is the confirming step. Read one confirmation, list or detail view: find the record there by that identity, never by its position, such as the first or newest row, and prefer finding each value in it by a stable id, its column header or a `data-` attribute over its cell's position. Read only that record, and the view's other rows only where the before-and-after check or another skill, such as the cart skill, compares them. Read another page, in that same step before `verified()`, only for a field the view did not show and the tool's output promises.",
+    "- When a read-back is needed, the first one that matches confirms the write; stop there. It matches when it shows the written record after the write, found by something the write produced or entered (its number, its own reference or the values entered), and every field the caller asked for that the view shows agrees (the read before the commit already checked what you entered). Sites reformat what they save, such as line breaks, spaces and dates in the viewer's format, so compare text after the commit normalized as before it (the core skill's Confirm step): pass the caller's text through `normalizeText` from `pomerado/runtime`, as `visibleText` already does with the page's. Compare a chosen option's value only where the view shows that value; otherwise compare the label it shows. When the write changed state that already existed, the same read is also the after read of the before-and-after comparison, which runs after `verified()` (\"Check the read-back\"). Write each read-back step to check the requested fields in its own code and call `verified()` when they hold, so the first one that matches is the confirming step. Read one confirmation, list or detail view: find the record there by that identity, never by its position, such as the first or newest row, and prefer finding each value in it by a stable id, its column header or a `data-` attribute over its cell's position. Read only that record, and the view's other rows only where the before-and-after check or another skill, such as the cart skill, compares them. Read another page, in that same step before `verified()`, only for a field the view did not show and the tool's output promises.",
   );
   // Entered values find a record but never prove it new.
   expect(writes).toContain(
@@ -837,17 +837,17 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["b4443a67104973e94ee9e656e8ec78207596207f4d636349750ebf472f06070d", "core"],
+    ["43d41e45fcd62396a45ef48c1c7874ca42c62a255e2388301eff6626d67aef9c", "core"],
     ["78e2235aef1f279b7d43dc96f3625f4aa82cbc7fa0b63a741842d4ad3321e0d7", "search"],
     ["7e50c86ea30964f0e3610e090c7bd7d78aac6f59a7f644644c1ad99577d59f5f", "auth"],
-    ["aff53db43905d5bd9cf68137deec039588f6cd9fffdda8888d5fc0cbb663f45a", "testing"],
+    ["2473cef77a3047634a8b379f260066134e28afd2fcbbb02ac75ad9b3ec8149e1", "testing"],
     ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
     ["a8f94638ddf2d5474106eb89a4d96e9deb73420d7236fdffb6cfc756295bdd30", "forms"],
-    ["f956f88f1a5b3cb46bc0a88d6302443f4b62c8b9847e9dccdb5e1a9239ce1348", "writes"],
+    ["fa282a2dce486dd4b489ba9140ef63f8f65eecd53c9d131e95401e7bd4edb716", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["fdff589fe37de80134fe1f49e58ace38221d3fb360dfc448767228037cc4e25f", "caller-input"],
-    ["1e4ab9d4aec3f8f0cffce66f5579b8e4e4f406ff2aa981ee78cefee5e4f613f7", "publication"],
-    ["d2b4420080c1de4d460d3803c5bd77d5838ae41c192e368ad362ff988d36de64", "workspace/AGENTS.md"],
+    ["273451978361325f0caeaecbca4345421637b9dc61ba9f6a41e96627cb50d385", "publication"],
+    ["d3d9531d7ccca7f79aba7df45618d1a1673e10374f5ec7336cfa3801ddbad099", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });

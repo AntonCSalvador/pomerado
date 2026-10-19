@@ -6,8 +6,9 @@ description: Design and run a few combined live test cases for a read. A read si
 # Test a read with a few combined cases
 
 This skill is for reads. A write does the original task: it proves its tool with its act session
-(writes skill), designs no tests, runs no live test and builds no offline test suite<!-- pomerado:section testing.write-http-check -->. A read proves its operation with its
-example, run again after each fix as the core skill says, then tests what the example did not
+(writes skill), designs no tests, runs no live test and builds no offline test suite<!-- pomerado:section testing.write-http-check -->. It still checks its
+composed script's read-back and comparison offline over what the session read (writes skill). A
+read proves its operation with its example, run again after each fix as the core skill says, then tests what the example did not
 exercise with a few live cases, each designed to cover as much as it can. A read signed out runs a
 handful (below). A signed-in read runs at most two distinct inputs beyond its example: one
 combined filter case, and a second only when it needs one (Signed-in reads, below). Report what

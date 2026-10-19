@@ -549,8 +549,9 @@ runs them in parallel batches<!-- pomerado:section agents.http-cases -->. Finish
 the example last, before `finish_build`. A signed-in read tests two distinct inputs at most. A
 write's act session is the one run that proves the tool: it designs no tests and runs no live
 tests or offline test suites
-beyond it<!-- pomerado:section agents.write-http-check -->. The scope follows what the tool is
-now, as the testing skill says.
+beyond it<!-- pomerado:section agents.write-http-check -->. It still checks its composed
+script's read-back and comparison offline over what the session read (writes skill). The scope
+follows what the tool is now, as the testing skill says.
 Report skipped, unsupported or missing bodies honestly.
 
 <!-- pomerado:section agents.implementations -->
