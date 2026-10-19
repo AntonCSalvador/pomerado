@@ -47,6 +47,17 @@ const source = {
   executedEntrypoint: "executed/src/tool.mjs",
   executedSourceDigest: "digest_a",
 };
+/** A small record of short fields, which indenting makes about twice as long. */
+const smallRecord = (index: number) => ({
+  id: index,
+  name: `Item ${index}`,
+  price: 9.99,
+  inStock: true,
+  rating: 4.5,
+  reviews: 120,
+  sale: false,
+  qty: 3,
+});
 const evidenceFor = async (value: unknown, credentialFree = precheck("private-canary")) => {
   const { state, text } = await Effect.runPromise(
     exampleOutputEvidence(
@@ -70,7 +81,7 @@ describe("the example's output evidence", () => {
       screenedBytes: Buffer.byteLength('{"heading":"Public"}'),
       output: { heading: "Public" },
     });
-    // The record is indented JSON with its fields in this order.
+    // The record is compact JSON with its fields in this order.
     expect(Object.keys(JSON.parse(text) as object)).toEqual([
       "kind",
       "executionId",
@@ -80,7 +91,8 @@ describe("the example's output evidence", () => {
       "screenedBytes",
       "output",
     ]);
-    expect(text).toContain('\n  "kind": "verified_example_output",\n');
+    expect(text.startsWith('{"kind":"verified_example_output","executionId":')).toBe(true);
+    expect(text).not.toContain("\n");
   });
 
   it("names a write session's step instead of a source digest", async () => {
@@ -132,6 +144,38 @@ describe("the example's output evidence", () => {
     expect(envelope.truncation).toEqual({ list: "results", kept, records: 4000 });
     expect(kept).toBeGreaterThan(100);
     expect(envelope.output).toEqual({ total: 4000, results: records.slice(0, kept) });
+  });
+
+  it("keeps every record of an output that fits in 96 KiB as compact JSON", async () => {
+    const records = Array.from({ length: 600 }, (_, index) => smallRecord(index));
+    const value = { total: 600, results: records };
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThan(limit - 1024);
+    expect(Buffer.byteLength(JSON.stringify(value, null, 2))).toBeGreaterThan(limit);
+    const { text, envelope } = await evidenceFor(value);
+    expect(envelope.state).toBe("available");
+    expect(envelope.truncation).toBeUndefined();
+    expect(envelope.output).toEqual(value);
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(limit);
+  });
+
+  it("cuts an output past 96 KiB as compact JSON, and its digest covers every record", async () => {
+    const records = Array.from({ length: 1500 }, (_, index) => smallRecord(index));
+    const value = { total: 1500, results: records };
+    const evidence = await Effect.runPromise(
+      exampleOutputEvidence(source, JSON.stringify(value), precheck()),
+    );
+    const envelope = Schema.decodeUnknownSync(Envelope)(evidence.text);
+    expect(envelope.state).toBe("truncated");
+    expect(Buffer.byteLength(evidence.text)).toBeLessThanOrEqual(limit);
+    const kept = envelope.truncation?.kept ?? 0;
+    expect(envelope.truncation).toEqual({ list: "results", kept, records: 1500 });
+    expect(envelope.output).toEqual({ total: 1500, results: records.slice(0, kept) });
+    // The kept records fill the limit as compact JSON.
+    expect(Buffer.byteLength(JSON.stringify(records.slice(0, kept)))).toBeGreaterThan(limit * 0.95);
+    const digest = JSON.parse(outputDigest(evidence.screened) ?? "{}") as {
+      readonly lists: readonly { readonly path: string; readonly records: number }[];
+    };
+    expect(digest.lists).toContainEqual(expect.objectContaining({ path: "results", records: 1500 }));
   });
 
   it("writes the record of an output the host could not read", () => {

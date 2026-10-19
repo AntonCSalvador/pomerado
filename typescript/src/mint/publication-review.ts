@@ -229,7 +229,8 @@ const withListPrefix = (value: unknown, path: string, kept: number): unknown => 
 };
 /**
  * The host's record of an example's output in `state`, with `fields` after it, such as the
- * `reason` a host gives for an output it could not read (`unavailable`).
+ * `reason` a host gives for an output it could not read (`unavailable`). The record is compact
+ * JSON, so the 96 KiB limit keeps as many of the output's records as it can.
  */
 export const exampleOutputRecord = (
   source: ExampleOutputSource,
@@ -237,20 +238,16 @@ export const exampleOutputRecord = (
   fields: Json = {},
 ): ExampleOutputEvidence => ({
   state,
-  text: JSON.stringify(
-    {
-      kind: source.kind ?? "verified_example_output",
-      executionId: source.executionId,
-      executedEntrypoint: source.executedEntrypoint,
-      ...(source.executedSourceDigest === undefined
-        ? {}
-        : { executedSourceDigest: source.executedSourceDigest }),
-      state,
-      ...fields,
-    },
-    null,
-    2,
-  ),
+  text: JSON.stringify({
+    kind: source.kind ?? "verified_example_output",
+    executionId: source.executionId,
+    executedEntrypoint: source.executedEntrypoint,
+    ...(source.executedSourceDigest === undefined
+      ? {}
+      : { executedSourceDigest: source.executedSourceDigest }),
+    state,
+    ...fields,
+  }),
 });
 
 /**
@@ -273,8 +270,8 @@ export const exampleOutputEvidence = (
     if (output === undefined) return exampleOutputRecord(source, "not_retained");
     const withheld = exampleOutputRecord(source, "withheld", { reason: "credential_precheck" });
     const screenedBytes = byteLength(output);
-    // The output as JSON, pretty-printed with its envelope, never a JSON string inside JSON, so
-    // the review reads its values as the caller will.
+    // The output as JSON inside its envelope, never a JSON string inside JSON, so the review
+    // reads its values as the caller will.
     const parsed = parsedJson(output);
     const readable = parsed ?? output;
     const complete = exampleOutputRecord(source, "available", { screenedBytes, output: readable });
