@@ -313,13 +313,15 @@ the request nor an answer settled, optional otherwise. The script sets each opti
 input. An unset optional input leaves the page's default, as in a read. An option the request
 or the owner's answer settled as how the tool behaves, such as which kind of record it
 creates, which line type a free-text line takes or whether a save runs the site's automation,
-is the tool's fixed behavior: its optional input defaults to the answered value, and its
-description says so. Never make it a required input or a question the script asks. The
-exception is a paid add-on or pre-selected paid option
+is the tool's default: an optional input declared with `defaultedInput` and the answered value,
+whose description says so (core skill), never a required input or a question the script asks.
+The exception is a paid add-on or pre-selected paid option
 within the tool's purpose, the payment method and the delivery address: each must be
 explicit, so the script never keeps, clears, accepts or declines one the input leaves open. It
 asks with a declared question before the commit mark (the caller-input skill), offering a
-saved payment or address as an account-specific choice. Choosing the address and payment is
+saved payment or address as an account-specific choice. An owner's answer may make declining
+such an option, or turning it off, the default of its optional input, never accepting, keeping
+or choosing one. Choosing the address and payment is
 part of a checkout's job, so the page's pre-selected one is never used silently. The request
 and the owner's answers settle such a choice for the session only: the published tool serves
 other callers, so it takes the choice as an input or asks, never hard-codes the build's answer.

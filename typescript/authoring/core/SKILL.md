@@ -164,8 +164,12 @@ it), never as a build-time question. Decide from the request and the site which 
 required. An optional input plus a declared question the tool asks before any effect is only for
 a value the request genuinely leaves open; never make a required field optional with nothing
 that asks. A choice the request or the owner's answer settled as how the tool behaves, such as
-which kind of record it creates, is the tool's fixed behavior: at most an optional input that
-defaults to the answered value, never a required input or a question at run time. A write asks
+sorting by price or which kind of record it creates, is the tool's default, never a required
+input or a question at run time. When a caller could reasonably want another value, declare it
+with `defaultedInput(schema, answeredValue)` from the runtime, an optional input whose published
+schema shows that default and whose run gets it when the caller leaves it out, and say in its
+description that it defaults to what the owner chose; keep it fixed with no input only where
+varying it would be unsafe or meaningless. A write asks
 before its first commit step: after one, until `verified()`, the runtime refuses every question
 but a code the site asks for at that step (caller-input skill). An input that tailors the answer on a read is the
 exception: it is optional unless the task can't run without it (below).

@@ -312,13 +312,16 @@ Every mint is real: never make up a value or pick a business choice yourself. Ea
 example or step enters comes from the request, the business input, an answer or the page. A
 choice the input leaves open is asked, or kept at the page's default where the paragraph above
 allows; a default kept unasked stays an optional input that keeps it. An answer that settles how
-the tool behaves on every run, such as which kind of record a write creates or whether a save
-runs the site's automation, is the tool's fixed behavior: build it that way, offer at most an
-optional input that defaults to the answered value, and say so in that input's description.
-Never make it a required input or a question the tool asks when it runs. An answer that gives
-only this run's value, such as which customer or date, is this run's input, and so are a paid
-add-on, the payment method and the delivery address (.agents/writes/SKILL.md). No request or
-answer authorizes made-up values:
+the tool behaves, such as a sort order, a filter, which kind of record a write creates or whether
+a save runs the site's automation, is the tool's default, never a value every caller must send:
+when a caller could reasonably want another value, make it an optional input whose default is the
+answered value (`defaultedInput`, .agents/core/SKILL.md) and say so in its description; keep it
+fixed, with no input, only where varying it would be unsafe or meaningless. Never make it a
+required input or a question the tool asks when it runs. An answer that gives only this run's
+value, such as which customer or date, is this run's input. A paid add-on, the payment method and
+the delivery address stay an input or a declared question for every caller: an answer may default
+one to declining or off, never to accepting, keeping or choosing one
+(.agents/writes/SKILL.md). No request or answer authorizes made-up values:
 words such as synthetic, sample or test data settle no value or choice. A caller that wants
 invented values supplies them itself, as its answers to your questions. Guardian denies a live
 step that types or submits a value none of those supplied, naming the field. Signed out,
