@@ -185,11 +185,9 @@ export const isFreeTextSchemeCredential = (scheme: string, value: string): boole
 export const isRandomKeyBody = (value: string): boolean =>
   (/[A-Z]/u.test(value) && (value.match(/[0-9]/gu) ?? []).length >= 3) || hasRandomRun(value, 16);
 
-/** Every provider key at its shortest: a prefix and the fewest body characters it takes. */
+/** Every provider key at its shortest: one of a shape's prefixes and the fewest body characters. */
 const shortestKeys = credentialPolicy.providerKeys
-  .flatMap(({ prefixes, body, minBody }) =>
-    prefixes.map((prefix) => `${escapeRegExp(prefix)}[${body}]{${String(minBody)}}`),
-  )
+  .map(({ prefixes, body, minBody }) => `(?:${alternation(prefixes)})[${body}]{${String(minBody)}}`)
   .join("|");
 /**
  * A key body: its characters, at least `minBody` of them. A `-`, `+`, `/` or `=` joins the body
@@ -205,25 +203,20 @@ const bodyPattern = (body: string, minBody: number) => {
   return `(?:[${word}]|${separator}){${String(minBody)},}`;
 };
 const providerShapes = credentialPolicy.providerKeys.flatMap((shape) =>
-  shape.prefixes.map((prefix) => ({
-    prefix,
-    body: bodyPattern(shape.body, shape.minBody),
-    random: "random" in shape && shape.random,
-  })),
+  shape.prefixes.map((prefix) => ({ prefix, random: "random" in shape && shape.random })),
 );
+// One alternative per shape, its prefixes in list order, keeps the pattern short: `matchAll` copies
+// a pattern on every call, at a cost that grows with its length.
+const providerKeySource = `(?<![A-Za-z0-9_])(?:${credentialPolicy.providerKeys
+  .map(({ prefixes, body, minBody }) => `(?:${alternation(prefixes)})${bodyPattern(body, minBody)}`)
+  .join("|")})`;
 
 /**
  * Provider API keys, by prefix and body, starting at a word boundary. Each match
  * must also pass `isProviderKey`, which checks a random body. Longer prefixes come first
  * (`sk-proj-` before `sk-`).
  */
-export const providerKeyPattern = (): RegExp =>
-  new RegExp(
-    `(?<![A-Za-z0-9_])(?:${providerShapes
-      .map((shape) => `${escapeRegExp(shape.prefix)}${shape.body}`)
-      .join("|")})`,
-    "gu",
-  );
+export const providerKeyPattern = (): RegExp => new RegExp(providerKeySource, "gu");
 
 /** Whether a `providerKeyPattern` match is a key rather than a slug or an identifier. */
 export const isProviderKey = (match: string): boolean => {
