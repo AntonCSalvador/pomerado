@@ -16,6 +16,7 @@ import {
 } from "../../src/runtime/sign-in-replay.js";
 import type { AutofillReplayTiming } from "../../src/runtime/autofill-replay-steps.js";
 import { localSignInLogin } from "../../src/standalone/authentication.js";
+import { runSignInBefore } from "../../src/standalone/session-sign-in.js";
 
 // A run's sign-in through the screens a site may put after the login: a date of birth, a combined
 // password and code screen, a method choice, an approval, a screen the site skips this time, an
@@ -495,6 +496,108 @@ it("asks a read's login when its entry page draws the form late, since the local
     { stepWaitMs: 8_000, pollMs: 20 },
     true,
   );
+  expect(result).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(fake.trace).toEqual(["open:/login", "ask:missing_credentials", "open:/login", "fill:login"]);
+});
+
+/**
+ * A run's first sign-in as a library scope makes it, on a browser this host already typed a sign-in
+ * into (`typed`) or on a new one. The marker shows only on the recipe's account page.
+ */
+const signInBefore = (
+  fake: ScriptedSite,
+  browser: SignInReplayBrowser<never>,
+  typed: boolean,
+  allowCantTell: boolean,
+) => {
+  const secrets = makeRunSecrets();
+  const { ask } = owner(fake);
+  return Effect.runPromise(
+    Effect.either(
+      runSignInBefore(() => typed, {
+        recipe: { ...recipe(loginStep), signedIn: { selector: "#account", openPath: "/account" } },
+        entryUrl: `${origin}/login`,
+        browser,
+        login: localSignInLogin({ ask, register: secrets.register, siteOrigin: origin }),
+        ask,
+        secrets,
+        markerSettle: { within: Duration.millis(20), interval: Duration.millis(5) },
+        site,
+        siteOrigin: origin,
+        timing: { stepWaitMs: 3_000, pollMs: 20 },
+        ...(allowCantTell ? { allowCantTell } : {}),
+      }),
+    ),
+  );
+};
+
+/**
+ * A site whose session the browser already holds: its login address sends a signed-in browser on
+ * to its home page (`redirect`), or shows it a page of its own with no form (`static`).
+ */
+const signedInSite = (login: "redirect" | "static") => {
+  const fake = scriptedSite({
+    entry: "login",
+    screens: { login: loginScreen, home: [], account: [] },
+    fill: (_page, values) => (signedLogin(values) ? { next: "account", signIn: true } : {}),
+  });
+  fake.state.signedIn = true;
+  const browser: SignInReplayBrowser<never> = {
+    ...fake.browser,
+    open: (url) =>
+      fake.browser.open(url).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            if (login === "redirect" && fake.state.signedIn) fake.state.page = "home";
+          }),
+        ),
+      ),
+    inspect: (step) =>
+      login === "static" && fake.state.signedIn && fake.state.page === "login"
+        ? Effect.succeed({ outcome: "refused" as const, reason: "not_found" as const })
+        : fake.browser.inspect(step),
+  };
+  return { fake, browser };
+};
+
+it.each([
+  ["a write whose login address sends it home", "redirect", false],
+  ["a read whose login address shows a page of its own", "static", true],
+] as const)(
+  "signs nothing in on a browser this host already signed in, for %s, once the account page shows the marker",
+  { timeout: 20_000 },
+  async (_, login, read) => {
+    const { fake, browser } = signedInSite(login);
+    const result = await signInBefore(fake, browser, true, read);
+    expect(result).toEqual(Either.right({ alreadySignedIn: true }));
+    expect(fake.trace).toEqual(["open:/account"]);
+  },
+);
+
+it("replays after the account page on a browser this host typed into whose session ended", { timeout: 20_000 }, async () => {
+  const fake = scriptedSite({
+    entry: "login",
+    screens: { login: loginScreen, account: [] },
+    fill: (_page, values) => (signedLogin(values) ? { next: "account", signIn: true } : {}),
+  });
+  const result = await signInBefore(fake, fake.browser, true, false);
+  expect(result).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(fake.trace).toEqual([
+    "open:/account",
+    "open:/login",
+    "ask:missing_credentials",
+    "open:/login",
+    "fill:login",
+  ]);
+});
+
+it("opens no account page first on a new browser", { timeout: 20_000 }, async () => {
+  const fake = scriptedSite({
+    entry: "login",
+    screens: { login: loginScreen, account: [] },
+    fill: (_page, values) => (signedLogin(values) ? { next: "account", signIn: true } : {}),
+  });
+  const result = await signInBefore(fake, fake.browser, false, false);
   expect(result).toEqual(Either.right({ alreadySignedIn: false }));
   expect(fake.trace).toEqual(["open:/login", "ask:missing_credentials", "open:/login", "fill:login"]);
 });
