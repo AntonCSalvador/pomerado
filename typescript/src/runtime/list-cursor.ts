@@ -4,7 +4,6 @@ import { canonicalJson } from "./fingerprint.js";
 import {
   decodeListDraft,
   listDraftFields,
-  listDraftPrefix,
   listCursorMaxLength,
   listCursorTtlMs,
   type CursorRefusal,
@@ -194,9 +193,10 @@ const refused = (reason: CursorRefusal): ListCursorAdmission => ({
  * these inputs and this caller, unexpired, whose site link is on the tool's site. A host refuses
  * the run at once on `ok: false`, as an input the caller fixes, with nothing provisioned and no
  * repair; on `ok: true` it runs the script with the input unchanged and `list` beside it. An
- * input without a cursor, or with an empty one, gets no position. A cursor in another form is
- * the tool's own and passes unchanged, with no position; a runtime draft sent as a cursor is
- * refused, since only this host may turn one into a position.
+ * input without a cursor, or with an empty or null one, gets no position. Any other cursor this
+ * host did not sign is refused: tools never make or read a cursor of their own, so one in another
+ * form, or that is not a string, is `malformed`, and so is a runtime draft sent as a cursor, since
+ * only this host may turn one into a position.
  */
 export const admitListCursor = (input: unknown, scope: ListCursorScope): ListCursorAdmission => {
   const cursor: unknown =
@@ -204,13 +204,13 @@ export const admitListCursor = (input: unknown, scope: ListCursorScope): ListCur
       ? Reflect.get(input, "cursor")
       : undefined;
   if (cursor === undefined || cursor === null || cursor === "") return { ok: true, list: {} };
-  if (typeof cursor !== "string") return { ok: true, list: {} };
-  if (cursor.startsWith(listDraftPrefix)) return refused("malformed");
+  if (typeof cursor !== "string") return refused("malformed");
   const parts = cursor.split(".");
   const [prefix, keyId, body, signature] = parts;
-  if (prefix === undefined || !/^pc\d+$/u.test(prefix) || parts.length < 2)
-    return { ok: true, list: {} };
-  if (prefix !== wirePrefix) return refused("version");
+  if (prefix !== wirePrefix) {
+    const otherVersion = prefix !== undefined && /^pc\d+$/u.test(prefix) && parts.length >= 2;
+    return refused(otherVersion ? "version" : "malformed");
+  }
   if (
     cursor.length > listCursorMaxLength ||
     parts.length !== 4 ||
@@ -265,11 +265,13 @@ export type DroppedListCursor = Extract<
 /**
  * Signs the `next_cursor` a run's output holds and fills `next_cursor_expires_at`,
  * `listCursorTtlMs` (ten minutes) from `now`. `input` is the caller's input for the run, as sent.
- * Only a runtime draft is signed; a next cursor in any other form is the tool's own and the
- * output passes unchanged. A draft that does not decode, or whose site link is off the tool's
- * site, is dropped: `next_cursor` becomes null, `has_more` stays true, and both
- * `next_cursor_unavailable` and `dropped` say why. Every valid draft fits in a cursor, so none is
- * dropped for its size.
+ * Only a runtime draft is signed; an absent or null next cursor leaves the output unchanged. A
+ * next cursor in any other form or of any other type, which `admitListCursor` would refuse if a
+ * caller sent it back, a draft that does not decode, and a draft whose site link is off the
+ * tool's site are dropped: `next_cursor` becomes null and `dropped` says why. `has_more` stays as
+ * the output gave it, true unless it is false (an output without it gets `has_more: true`), and
+ * when it is true `next_cursor_unavailable` says why too. Every valid draft fits in a cursor, so
+ * none is dropped for its size.
  */
 export const sealListOutput = (
   output: unknown,
@@ -279,17 +281,20 @@ export const sealListOutput = (
   if (typeof output !== "object" || output === null || Array.isArray(output)) return { output };
   const fields = output as Record<string, unknown>;
   const next = fields["next_cursor"];
-  if (typeof next !== "string" || !next.startsWith(listDraftPrefix)) return { output };
-  const drop = (dropped: DroppedListCursor) => ({
-    output: {
-      ...fields,
-      next_cursor: null,
-      next_cursor_expires_at: null,
-      has_more: true,
-      next_cursor_unavailable: dropped,
-    },
-    dropped,
-  });
+  if (next === undefined || next === null) return { output };
+  const drop = (dropped: DroppedListCursor) => {
+    const hasMore = fields["has_more"] !== false;
+    return {
+      output: {
+        ...fields,
+        next_cursor: null,
+        next_cursor_expires_at: null,
+        has_more: hasMore,
+        ...(hasMore ? { next_cursor_unavailable: dropped } : {}),
+      },
+      dropped,
+    };
+  };
   const draft = decodeListDraft(next);
   if (draft === undefined) return drop("not_a_draft");
   if (draft.pos.href !== undefined && !onSite(draft.pos.href, scope.siteOrigin))

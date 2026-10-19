@@ -603,6 +603,55 @@ it("keeps the testing skill's capture and saved-fixture paragraphs in host secti
   }
 });
 
+/*
+ * How to build, test and publish a read's HTTP version, and the pointers to the skill on it, are
+ * host sections in the shared skills and the workspace guide, so neither the local host nor a host
+ * that composes nothing reads them. The sentences around each one still read whole. The package
+ * ships no skill or reference for it.
+ */
+it("keeps the HTTP version passages in host sections", async () => {
+  const root = await authoringCopy((_path, text) => text.replace(sectionMarker, ""));
+  try {
+    for (const texts of [await renderedTexts("typescript/authoring"), await renderedTexts(root)]) {
+      const flat = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+      for (const [name, text] of texts)
+        for (const hosted of [
+          "http-mcp",
+          "HTTP version once",
+          "An HTTP version reads each input back",
+          "Check `src/tool-http.mjs` once",
+          "apply it there in `src/tool-http.mjs`",
+          "Test the HTTP version",
+          "Its HTTP version gets one offline replay",
+          "It does not cover the HTTP version",
+          "a batch on its HTTP version",
+        ])
+          expect(text.replace(/\s+/g, " "), name).not.toContain(hosted);
+      const kept: readonly (readonly [string, string])[] = [
+        ["core", "or designs further tests. The scope follows what the tool is now"],
+        ["core", "or the site's own data request, to opening each record's page."],
+        ["search", "it never returns unfiltered results as filtered. When setting one control"],
+        ["testing", "builds no offline test suite. A read proves its operation"],
+        ["testing", "no no-results case and no edge cases. Publication review reads"],
+        ["testing", "own controls\"). Either way, read the input back"],
+        ["testing", "count toward the same two. The example uses"],
+        ["writes", "build no offline test suite for it. ## Check the read-back"],
+        ["workspace/AGENTS.md", "and your own probes. **Read back every input before returning.**"],
+        ["workspace/AGENTS.md", "the request the page sends for the rows, to driving such a filter"],
+        ["workspace/AGENTS.md", "runs them in parallel batches. Finish in this order"],
+        ["workspace/AGENTS.md", "offline test suites beyond it. The scope follows"],
+      ];
+      for (const [name, line] of kept) expect(flat(name), name).toContain(line);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+  const shipped = await readdir("typescript/authoring", { recursive: true });
+  expect(
+    shipped.filter((path) => /http-mcp|http-version|kernel-page-fetch/u.test(path)),
+  ).toStrictEqual([]);
+});
+
 it("leaves no heading, list or skill header of the local host's authoring empty", async () => {
   const texts = await renderedTexts("typescript/authoring");
   const core = texts.get("core") ?? "";
@@ -788,17 +837,17 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["96af1b0d060d1eaabc0056b9563c092d21c0b4f455cc0308f10ea73959e708ba", "core"],
-    ["fe1283cbe9de49c475065da5c44f55bddafb854a141f9151b2c8d54a8dae749b", "search"],
+    ["92fc0b7671fa69255608725756172a9c4d7f2ceed5a7096a039a1025ea764a27", "core"],
+    ["fb27753b30c3e53a0a51b07b13eedfbae2555e4abb861fe287a7f9d352018a7a", "search"],
     ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
-    ["51fa575e15e88f8087eb4e4c25b8a79a684de0453e1dff7e8e7246dde202dab6", "testing"],
+    ["3c50b8548da85efbdeb173ff0e13969053a7cff6208ce8297bbac6ad8361360e", "testing"],
     ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
     ["12b198d6503ef35853f9ff42aefefe641dc3b59c8b2a3e5a1424aabb4f6af2f4", "forms"],
-    ["9c8d7256bd2f53cec0b11f7f6cf25a07fe9b87837938ca78dc8f8867e843aba0", "writes"],
+    ["f17ddc96cd999764d5a203416b2318b43366bcbc7b3ae3e6912a4a35a720c2e4", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["e425e194933160e1094a5d5cecd917bcff31015ce6f506d4bda8383797aa6bad", "caller-input"],
-    ["9ca946a431fb56aa842d5c8d94e44077fdfca6a7f7adb1b8a3085066ac85cc42", "publication"],
-    ["715d0de541f81e1abb1afb702f9c094fb611ea43be57dbb20556a73394afb0c5", "workspace/AGENTS.md"],
+    ["a3a3b9de15fe58391adc4e5185e4bff3fa7f01a95b89a9cc6a87852f749d346e", "caller-input"],
+    ["e3f1bf2ec18dc6285b34e01ed9c3b95ba8d3cf41e2a8eb0a7cdd3540b6948848", "publication"],
+    ["69a275fc44bc2bd80f12148f34daf4e35ab119aaab0b125edb24cf628459272d", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
