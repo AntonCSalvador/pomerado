@@ -2027,9 +2027,12 @@ throw new Error("Unexpected change after the save");});`;
         name: "save_fixture",
         arguments: { input: { then: "refuse" } },
       });
-      expect(result.isError, JSON.stringify(result) + connection.stderr()).toBeFalsy();
+      // A failed run is an MCP error even when its write landed; the structured content says the
+      // write applied and must never run again.
+      expect(result.isError, JSON.stringify(result) + connection.stderr()).toBe(true);
       expect(result.structuredContent).toMatchObject({
         status: "failed",
+        code: "input_rejected",
         error: expect.stringContaining(reason),
         write_status: "applied",
         retry: "never",
