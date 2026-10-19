@@ -464,9 +464,9 @@ it("waits out a write's skipped code screen when its landing shows no marker, op
   expect(fake.trace).toEqual(["open:/login", "ask:missing_credentials", "open:/login", "fill:login"]);
 });
 
-// The local browser starts every call empty, so a read's check without values never takes a
-// blank login page for a signed-in one: it waits for the form the page draws late, then asks.
-it("asks a read's login when its entry page draws the form late, since the local browser started empty", { timeout: 20_000 }, async () => {
+// The local host sets `startedEmpty` on every sign-in, so a read's check without values never takes
+// a blank login page for a signed-in one: it waits for the form the page draws late, then asks.
+it("asks a read's login when its entry page draws the form late, since every local sign-in sets startedEmpty", { timeout: 20_000 }, async () => {
   const fake = scriptedSite({
     entry: "login",
     screens: { login: loginScreen, account: [] },
