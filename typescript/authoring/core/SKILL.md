@@ -175,9 +175,8 @@ tier, a refundable option, shipping speed, how much of a balance to pay, the pay
 the delivery address, never takes one owner's answer as its default: it stays a required input
 or a declared question, and only declining it, turning it off or the option that adds no cost
 and keeps the action cancellable may be its optional input's default. A write asks
-before its first commit step: after one, until `verified()`, the runtime refuses every question
-but a code the site asks for at that step and one declared `afterCommit` because the site first
-offers it past a saved step (caller-input skill). An input that tailors the answer on a read is the
+its questions before its first save wherever the page lets it, so an unanswered question never
+leaves a partial save on the site (caller-input skill). An input that tailors the answer on a read is the
 exception: it is optional unless the task can't run without it (below).
 
 - The code works for every value the schema accepts. Never let the schema promise what

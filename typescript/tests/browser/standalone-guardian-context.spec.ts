@@ -482,9 +482,8 @@ test("a step reuses the owner's answer each time its script asks the same questi
   test.setTimeout(90_000);
   const { scriptAsks, guardian, last } = await laterAsk({
     first: askThenFail,
-    // Both asks come before the commit: a question after it is refused (`AskedAfterCommit`).
     later:
-      "const first = await ask('approve'); const second = await ask('approve'); enteringCommit('submit'); return { first, second };",
+      "const first = await ask('approve'); enteringCommit('submit'); return { first, second: await ask('approve') };",
   });
   expect(scriptAsks).toHaveLength(1);
   // Guardian reviewed each of the three asks.

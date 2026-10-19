@@ -3,13 +3,7 @@ import { Effect, Either, Schema } from "effect";
 import type { Context } from "effect";
 import { DialogChoice, DialogFailure, DialogType } from "./dialogs.js";
 import { ChallengeFailure, challengeSolverWaitMs } from "./challenge.js";
-import {
-  askableAfterCommit,
-  askedAfterCommit,
-  askedQuestionIds,
-  ScriptInput,
-  ScriptInputFailure,
-} from "./script-input.js";
+import { ScriptInput, ScriptInputFailure } from "./script-input.js";
 import type {
   AskSpecOf,
   ScriptAnswer,
@@ -138,11 +132,7 @@ export interface KernelOperationContext<
    * declared with its type and prompt in the contract's `questions`. The browser stays open and
    * the deadline pauses while the caller decides; the next call gets the answers written into
    * its code. It throws `ScriptInputFailure` when no usable answer comes, such as `NoResponse`.
-   * A card question's answer is a card handle for `fillCard`, never the card itself. Once the
-   * script entered a commit step (`enteringCommit`), and until `verified()` confirms the write,
-   * it asks only for a one-time or authenticator code the site asks for at that step, or a
-   * question the contract declares `afterCommit`, and refuses anything else as
-   * `AskedAfterCommit`, asking nobody: ask every other question before the first commit step.
+   * A card question's answer is a card handle for `fillCard`, never the card itself.
    */
   readonly ask: ScriptAsk<Questions>;
   /** Asks one declared question and returns its answer itself, not one answer per id. */
@@ -242,22 +232,11 @@ while (true) {
 
 type Declared = ScriptQuestionDeclarations[string];
 /**
- * How far a run's write has come, as its questions see it: the first commit step the script
- * entered since its write was last confirmed (`verified`), live or offline, and the questions its
- * contract declares. While a step is entered and unconfirmed, a question other than a code the
- * site asks for or one declared `afterCommit` is refused (`askedAfterCommit`).
- */
-interface WriteProgress {
-  entered: string | undefined;
-  readonly questions: ScriptQuestionDeclarations | undefined;
-}
-/**
  * The context's `ask` over the runner's script input. The runtime checks every id and option
  * against the contract's declarations; the declared types only guide the script's author.
  */
 const scriptAsk = (
   scriptInput: Context.Tag.Service<ScriptInput> | undefined,
-  write?: WriteProgress,
 ): ScriptAsk<ScriptQuestionDeclarations> => {
   function ask(id: string): Promise<ScriptAnswerOf<Declared>>;
   function ask<const Ids extends ReadonlyArray<string>>(
@@ -269,14 +248,6 @@ const scriptAsk = (
   function ask(
     input: Parameters<Context.Tag.Service<ScriptInput>["ask"]>[0],
   ): Promise<ScriptAnswer | Readonly<Record<string, ScriptAnswer>>> {
-    const step = write?.entered;
-    if (step !== undefined) {
-      const declared = write?.questions ?? {};
-      const late = askedQuestionIds(input).find(
-        (id) => !askableAfterCommit(Object.hasOwn(declared, id) ? declared[id] : undefined),
-      );
-      if (late !== undefined) return Promise.reject(askedAfterCommit(late, step));
-    }
     return settle(
       scriptInput === undefined
         ? Effect.fail(new ScriptInputFailure({ code: "Unavailable" }))
@@ -289,9 +260,8 @@ const scriptAsk = (
 /** The context's `askOne`, a thin wrapper over `ask` that unwraps the one answer. */
 const scriptAskOne = (
   scriptInput: Context.Tag.Service<ScriptInput> | undefined,
-  write?: WriteProgress,
 ): ScriptAskOne<ScriptQuestionDeclarations> => {
-  const ask = scriptAsk(scriptInput, write);
+  const ask = scriptAsk(scriptInput);
   return async (id: string, question: AskSpecOf<Declared> = {}) => {
     const answer = (await ask({ [id]: question }))[id];
     if (answer === undefined) throw new ScriptInputFailure({ code: "Unavailable" });
@@ -478,8 +448,6 @@ const makeKernelOperationContext = <Input>(
     readonly journal?: EffectJournal;
     /** The script's write declaration; the login hooks get none. */
     readonly write?: WriteDeclaration;
-    /** The run's commit progress its questions check; the login hooks get none. */
-    readonly progress?: WriteProgress;
   },
 ): KernelOperationContext<Input> => ({
   kernel: options.kernel,
@@ -493,13 +461,9 @@ const makeKernelOperationContext = <Input>(
     if (options.write?.confirmation === "unverifiable")
       throw new WriteConfirmationRefused({ declared: "unverifiable", recorded: kind });
     if (options.journal !== undefined) Effect.runSync(options.journal.confirmed(kind));
-    // A confirmed write is whole, so a question after it leaves nothing half done.
-    if (options.progress !== undefined) options.progress.entered = undefined;
   },
-  // Marks a named commit step sent just before the execute call that dispatches it. An offline
-  // run records no mark, but its questions still count from the step, as a live run's do.
+  // Marks a named commit step sent just before the execute call that dispatches it.
   enteringCommit: (name) => {
-    if (options.progress !== undefined) options.progress.entered ??= name;
     if (options.journal === undefined) return;
     const entered = Effect.runSync(Effect.either(options.journal.enteringCommit(name)));
     if (entered._tag === "Left") throw entered.left;
@@ -528,8 +492,8 @@ const makeKernelOperationContext = <Input>(
     }
   },
   // The runtime checks every id and option against the declarations; the types only guide.
-  ask: scriptAsk(options.scriptInput, options.progress),
-  askOne: scriptAskOne(options.scriptInput, options.progress),
+  ask: scriptAsk(options.scriptInput),
+  askOne: scriptAskOne(options.scriptInput),
   fillCard: scriptFillCard(options),
   files: scriptFiles(options),
   waitPastChallenge: async ({ ready }) => {
@@ -654,7 +618,6 @@ export const runKernelScript = <Input, EncodedInput, Output, EncodedOutput>(
           input,
           ensureSignedIn,
           ...(operation.write === undefined ? {} : { write: operation.write }),
-          progress: { entered: undefined, questions: operation.questions },
         });
         const output = await operation.run({
           ...context,

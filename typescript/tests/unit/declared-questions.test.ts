@@ -149,40 +149,15 @@ describe("asksAsDeclared", () => {
   });
 });
 
-it("reads a question declared afterCommit from a draft", () => {
-  const source = operation(
-    `{name:"book",input:Schema.Unknown,output:Schema.Unknown,questions:{slot:{type:"choice",prompt:"Which delivery slot should I book?",afterCommit:true}}}`,
-  );
-  expect(draftQuestionDeclarationFailure("src/tool.mjs", source)).toBeUndefined();
-  expect(draftQuestionDeclarations("src/tool.mjs", source)).toEqual({
-    slot: { type: "choice", prompt: "Which delivery slot should I book?", afterCommit: true },
-  });
-});
-
-it("reads a secret question declared afterCommit, and afterCommit false as left out", () => {
-  const source = operation(
-    `{name:"pay",input:Schema.Unknown,output:Schema.Unknown,questions:{code:{type:"secret",prompt:"What code did the bank send?",secretKind:"one_time_code",afterCommit:true}}}`,
-  );
-  expect(draftQuestionDeclarationFailure("src/tool.mjs", source)).toBeUndefined();
-  expect(draftQuestionDeclarations("src/tool.mjs", source)).toEqual({
-    code: { type: "secret", prompt: "What code did the bank send?", secretKind: "one_time_code", afterCommit: true },
-  });
-  const offSource = operation(
-    `{name:"book",input:Schema.Unknown,output:Schema.Unknown,questions:{slot:{type:"choice",prompt:"Which delivery slot should I book?",afterCommit:false},note:{type:"text",prompt:"Which note should I keep?"}}}`,
-  );
-  expect(draftQuestionDeclarationFailure("src/tool.mjs", offSource)).toBeUndefined();
-  expect(draftQuestionDeclarations("src/tool.mjs", offSource)).toEqual({
-    slot: { type: "choice", prompt: "Which delivery slot should I book?", afterCommit: false },
-    note,
-  });
-});
-
 // One invalid declaration would leave the run with none, so the draft check names it before a step runs.
 it("refuses a declaration that does not decode instead of dropping every question", () => {
   const source = operation(
-    `{name:"book",input:Schema.Unknown,output:Schema.Unknown,questions:{slot:{type:"choice",prompt:"Which slot?",afterCommit:"yes"},note:{type:"text",prompt:"Which note should I keep?"}}}`,
+    `{name:"book",input:Schema.Unknown,output:Schema.Unknown,questions:{slot:{type:"choice",prompt:"Which slot?",allowOther:"yes"},note:{type:"text",prompt:"Which note should I keep?"}}}`,
   );
-  expect(draftQuestionDeclarationFailure("src/tool.mjs", source)).toMatch(/^Invalid script questions: the run would declare none of them\./);
+  expect(draftQuestionDeclarations("src/tool.mjs", source)).toEqual({});
+  expect(draftQuestionDeclarationFailure("src/tool.mjs", source)).toMatch(
+    /^Invalid script questions: the run would declare none of them\./,
+  );
 });
 
 describe("a local operation's questions", () => {
@@ -293,160 +268,5 @@ describe("card questions in a script", () => {
       card: { type: "secret", secretKind: "card_number" },
       zip: { type: "secret", secretKind: "billing_postal_code" },
     });
-  });
-});
-
-// A question asked once a write's commit step may have reached the site leaves the record half
-// done while the caller decides, such as a draft saved before asking which kind of line to add.
-// The runtime refuses it with words that name the question and the step; a code the site sends
-// only after that step is the one question that can come later.
-describe("a question asked after a commit mark", () => {
-  const questions = {
-    line_kind: { type: "choice", prompt: "Which kind of line should I add?" },
-    slot: { type: "choice", prompt: "Which delivery slot should I book?", afterCommit: true },
-    card: {
-      type: "secret",
-      secretKind: "card_number",
-      prompt: "Card number?",
-      afterCommit: true,
-    },
-    code: {
-      type: "secret",
-      secretKind: "one_time_code",
-      prompt: "Enter the code the website just sent you.",
-    },
-  } as const;
-  const write = (body: string) =>
-    operation(
-      `{name:"save_invoice",input:Schema.Unknown,output:Schema.Unknown,write:{confirmation:"readback",commits:["save_draft","submit"]},questions:${JSON.stringify(questions)}}`,
-      body,
-    );
-  const run = (source: string) => {
-    const asked: InputRequest[] = [];
-    const ask = makeInputAsker((request) =>
-      Effect.sync(() => {
-        asked.push(request);
-        const question = request.questions[0];
-        // The first option the page offered, or a code.
-        return question?.type === "choice"
-          ? { [question.id]: question.options[0]?.id ?? "" }
-          : { [question?.id ?? "code"]: "123456" };
-      }),
-    );
-    return Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const workspace = yield* createLocalWorkspace();
-          return yield* Effect.either(
-            runLocalOperation({
-              workspace,
-              entrypoint: "src/tool.mjs",
-              sources: [["src/tool.mjs", source]],
-              input: {},
-              target: "pureFiles",
-              ask,
-              declaredQuestions: questions,
-            }),
-          );
-        }),
-      ),
-    ).then((result) => ({ result, asked }));
-  };
-  const lineOptions = `{ options: [{ value: "item", label: "Item line" }, { value: "text", label: "Free-text line" }] }`;
-
-  it("refuses the question, names it and the step, and asks nobody", async () => {
-    const { result, asked } = await run(
-      write(
-        `async ({ ask, enteringCommit }) => { enteringCommit("save_draft"); return { kind: await ask({ line_kind: ${lineOptions} }) }; }`,
-      ),
-    );
-    expect(asked).toEqual([]);
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(LocalOperationFailure);
-      expect(result.left).toMatchObject({ tag: "ScriptInputFailure", code: "AskedAfterCommit" });
-      expect(result.left.message).toContain("line_kind");
-      expect(result.left.message).toContain("save_draft");
-    }
-  });
-
-  it("refuses askOne and a list of ids after the mark the same way", async () => {
-    for (const call of [
-      `askOne("line_kind", ${lineOptions})`,
-      `ask(["code", "line_kind"])`,
-    ]) {
-      const { result, asked } = await run(
-        write(`async ({ ask, askOne, enteringCommit }) => { enteringCommit("submit"); return await ${call}; }`),
-      );
-      expect(asked).toEqual([]);
-      expect(Either.isLeft(result) && result.left).toMatchObject({ code: "AskedAfterCommit" });
-    }
-  });
-
-  it("names only an identifier the script passed, never other text", async () => {
-    const { result } = await run(
-      write(
-        `async ({ ask, enteringCommit }) => { enteringCommit("save draft for Ada"); return await ask("Ada's card 4242"); }`,
-      ),
-    );
-    expect(Either.isLeft(result) && result.left).toMatchObject({ code: "AskedAfterCommit" });
-    if (Either.isLeft(result)) {
-      expect(result.left.message).toMatch(/^A script question was asked after the commit step was entered/u);
-      for (const said of ["Ada", "4242"]) expect(result.left.message).not.toContain(said);
-    }
-  });
-
-  // Options a saved step first shows, such as the delivery slots for the cart it filled, can only
-  // be asked after that step: the contract declares such a question afterCommit, where the
-  // publication review reads it.
-  it("asks a question its contract declares afterCommit, once a step entered its mark", async () => {
-    const { result, asked } = await run(
-      write(
-        `async ({ ask, enteringCommit }) => { enteringCommit("save_draft"); const slot = (await ask({ slot: { options: [{ value: "am", label: "Morning" }] } })).slot; const card = (await ask(["card"])).card; return { slot, card: card.length > 0 }; }`,
-      ),
-    );
-    expect(Either.isRight(result) && result.right.output).toEqual({ slot: "am", card: true });
-    expect(asked.map((request) => request.questions[0]?.id)).toEqual(["slot", "card"]);
-  });
-
-  it("still refuses an undeclared question asked beside one declared afterCommit", async () => {
-    const { result, asked } = await run(
-      write(
-        `async ({ ask, enteringCommit }) => { enteringCommit("save_draft"); return await ask({ slot: { options: [{ value: "am", label: "Morning" }] }, line_kind: ${lineOptions} }); }`,
-      ),
-    );
-    expect(asked).toEqual([]);
-    expect(Either.isLeft(result) && result.left).toMatchObject({ code: "AskedAfterCommit" });
-    if (Either.isLeft(result)) expect(result.left.message).toContain("line_kind");
-  });
-
-  it("asks again once verified() confirmed the write, which is then whole", async () => {
-    const { result, asked } = await run(
-      write(
-        `async ({ ask, enteringCommit, verified }) => { enteringCommit("submit"); verified(); return { kind: (await ask({ line_kind: ${lineOptions} })).line_kind }; }`,
-      ),
-    );
-    expect(Either.isRight(result) && result.right.output).toEqual({ kind: "item" });
-    expect(asked).toHaveLength(1);
-  });
-
-  it("asks the same question before the first commit mark", async () => {
-    const { result, asked } = await run(
-      write(
-        `async ({ ask, enteringCommit }) => { const kind = (await ask({ line_kind: ${lineOptions} })).line_kind; enteringCommit("save_draft"); return { kind }; }`,
-      ),
-    );
-    expect(Either.isRight(result) && result.right.output).toEqual({ kind: "item" });
-    expect(asked).toHaveLength(1);
-  });
-
-  it("asks for a code the site sends after a commit step", async () => {
-    const { result, asked } = await run(
-      write(
-        `async ({ ask, enteringCommit }) => { enteringCommit("save_draft"); const code = await ask("code"); return { sent: code.length > 0 }; }`,
-      ),
-    );
-    expect(Either.isRight(result) && result.right.output).toEqual({ sent: true });
-    expect(asked).toHaveLength(1);
   });
 });

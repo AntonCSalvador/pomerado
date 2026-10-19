@@ -789,7 +789,7 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["879933f1f4e06822afd1966fd269e561fa31a5aca3f2022a97d178c670bebb76", "core"],
+    ["acfcfe82eb4af82588ebdd6f50af1d824dbdc8138cde69bcd4f15914dabdafae", "core"],
     ["cbf9d84d1cdc1a192ec07df90bf99192a72c7b03c0aefb89096f4f0b5bf6ef27", "search"],
     ["ac66bcd6e97b1126cd643bbaee17f1333decc5af5273748060a07b0b82f2b99c", "auth"],
     ["48ba91768a4c1cbb8d6d325bb6b3ef41182bcbdf8097db014391137e29fb7f7d", "testing"],
@@ -798,7 +798,7 @@ it("renders the pinned standalone authoring", async () => {
     ["7e39ab2d515b817c3d42070922a575f6d3cd5b8427d3c97a4af151cec7a32656", "forms"],
     ["9c8d7256bd2f53cec0b11f7f6cf25a07fe9b87837938ca78dc8f8867e843aba0", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["8b556e9aa9aaa2522b5d3ace3b44ae143f72079c3dfe9606fb07e22cac59bee3", "caller-input"],
+    ["e425e194933160e1094a5d5cecd917bcff31015ce6f506d4bda8383797aa6bad", "caller-input"],
     ["9903e3f1b5df144b807e10bd4befff346b62f593a5d778209a92a2b8134c3853", "publication"],
     ["75257864c06d65f78833bfafb30bf84bf554e216768f792c3e9f2b3f8b15fc5a", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
