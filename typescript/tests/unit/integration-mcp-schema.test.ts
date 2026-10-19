@@ -52,7 +52,9 @@ const tree = {
   additionalProperties: false,
 };
 
-it("serves a recursive input with its definitions at the call schema's root, titled and summarised", async () => {
+// An input whose fields are listed beside it keeps only its own description: a summary of the same
+// fields would repeat them.
+it("serves a recursive input with its definitions at the call schema's root, titled and described", async () => {
   const { tool, called } = await served(tree, { label: 7 });
   expect(tool?.inputSchema).toEqual({
     type: "object",
@@ -67,8 +69,7 @@ it("serves a recursive input with its definitions at the call schema's root, tit
         title: "tree_tool input",
         ...tree,
         properties: { ...tree.properties, children: { type: "array", items: { $ref: "#/$defs/Root" } } },
-        description:
-          "The branch to read.\nThe operation's input: label (string, required): The category's own name, as the site shows it; children (array).",
+        description: "The branch to read.",
       },
     },
     required: ["input"],
@@ -93,7 +94,6 @@ it("inlines an input whose references all expand, and describes one with no fiel
         type: "object",
         required: ["code"],
         properties: { code: { type: "string", minLength: 3 } },
-        description: "The operation's input: code (string, required).",
       },
     },
     required: ["input"],

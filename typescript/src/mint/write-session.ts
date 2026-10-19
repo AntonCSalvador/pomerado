@@ -16,11 +16,17 @@ export { commitEvidenceOf, type CommitEvidence } from "../runtime/run-outcome.js
  * something it sent, or could not count (`sent` undefined), or the step entered a commit mark or
  * returned no result (a lost page). Those last two may have committed where the host's count
  * cannot see, so the minter verifies before writing again.
+ *
+ * @deprecated Hosts use `readBackFirst`, which keys on Guardian's write label and the commit marks.
  */
 export const commitUncertain = (sent: number | undefined, commit?: CommitEvidence) =>
   sent !== 0 || commit === "entered" || commit === "unreported";
 
-/** Why a failed act step may have committed its write, for its receipt. */
+/**
+ * Why a failed act step may have committed its write, for its receipt.
+ *
+ * @deprecated Hosts use `readBackFirst`.
+ */
 export const uncertainCommit = (sent: number | undefined, commit: CommitEvidence | undefined) =>
   sent === undefined
     ? "the page sent requests the host could not count"
@@ -33,9 +39,38 @@ export const uncertainCommit = (sent: number | undefined, commit: CommitEvidence
 /**
  * The receipt of an act step that failed after it may have committed its write. The host never
  * blocks or resubmits a write; the minter verifies by reading back, then decides.
+ *
+ * @deprecated Hosts use `readBackFirst`.
  */
 export const verifyFirstNotice = (sent: number | undefined, commit: CommitEvidence | undefined) =>
   `This act step did not complete after ${uncertainCommit(sent, commit)}, so the write may already be committed. Before any further write, verify: run an act step that only reads the page or the account and learns whether the write happened. If it did, record it with verified() in that step and publish against it; never submit the write again. If the read-back shows nothing happened, you may submit the write again with the caller's values and read its confirmation. Either way, adjust the composed script to what actually works end to end. The host never resubmits a write for you.`;
+
+/** Why a failed act step Guardian labelled a write may have committed it, for its receipt. */
+const labelledWriteUncertainty = (commit: CommitEvidence | undefined) =>
+  commit === "entered"
+    ? "its script entered a declared commit step"
+    : commit === "unreported"
+      ? "it returned no result, as when its page was lost or its runner stopped, so the host cannot tell which commit steps it entered"
+      : "Guardian labelled it a write";
+
+/**
+ * The receipt of an act step that failed after it may have committed its write. The host never
+ * blocks or resubmits a write; the minter verifies by reading back, then decides. A commit request
+ * the site answered 2xx or 3xx lets that read be the page as it stands.
+ */
+const labelledWriteNotice = (commit: CommitEvidence | undefined) =>
+  `This act step did not complete after ${labelledWriteUncertainty(commit)}, so the write may already be committed. Before any further write, verify: run an act step that only reads the page or the account and learns whether the write happened. When this step's stateChangingRequests shows its commit request to the site returned 2xx or 3xx, that step may read only the page as it stands: check it shows no error or validation message, read what the output needs, and call verified() there. A 200 whose body reports an error, as GraphQL can, did not go through. Read the site's own proof for such a commit, as for an error status, since part of it may have applied. A 202, or a 2xx whose body says the work is queued, counts too: return the site's own status word for it, such as Queued, in the output. If the write happened, record it with verified() in that step and publish against it; never submit the write again. If the read-back shows nothing happened, you may submit the write again with the caller's values and read its confirmation. Either way, adjust the composed script to what actually works end to end. The host never resubmits a write for you.`;
+
+/**
+ * What an act step Guardian labelled a write asks of the minter when it did not complete: read
+ * back before any further write, unless its commit marks show no commit step entered, since such
+ * a step changed nothing. Each host decides that the step was a write that did not complete; the
+ * rule and its text are the same for every host.
+ */
+export const readBackFirst = (commit: CommitEvidence | undefined) =>
+  commit === "not_entered"
+    ? undefined
+    : { verifyFirst: true as const, notice: labelledWriteNotice(commit) };
 
 /** What publication reads of one act step of a write session. */
 export interface WriteSessionMarks {
