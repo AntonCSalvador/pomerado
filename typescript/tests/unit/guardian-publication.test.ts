@@ -593,10 +593,18 @@ describe("the publication policy", () => {
   it("accepts a write confirmed from its own commit request, and refuses a loose check", () => {
     const policy = guardianPublicationPolicy;
     expect(policy).toContain(
-      "perform and return the confirmation or read-back it declares, and never resubmit or commit twice. A script that confirms from its commit request is confirming, not missing a read-back: in the same call as the final commit click it waits for the site's response on the route the session's commit used, requires a 2xx or 3xx status and no error in a body it can read, checks the page for an error or validation message, and only then calls verified(). A 200 whose body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says the work is queued, counts, with the site's own status word for it in the output. It is a confirmation finding when the script accepts any request or any status, takes a 200 from an endpoint that can report errors in its body without checking that body, or skips the page's error check.",
+      "perform and return the confirmation or read-back it declares, and never resubmit or commit twice. A script that confirms from its commit request is confirming, not missing a read-back: in the same call as the final commit click it waits for the site's response on the route the session's commit used, requires a 2xx or 3xx status and no error in a body it can read, checks the page for an error or validation message (a 201 whose Location names the new record needs no page check), and only then calls verified(). A 200 whose body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says the work is queued, counts, with the site's own status word for it in the output. It is a confirmation finding when the script accepts any request or any status, takes a 200 from an endpoint that can report errors in its body without checking that body, or skips the page's error check.",
     );
     expect(policy).toContain(
       "'unverifiable' is valid only if the session evidence shows the site offered no commit response the script can check, no confirmation and no read-back.",
+    );
+  });
+
+  // A write's own add-ons, payment and address come from the caller, and so does a paid upsell
+  // the script accepts; declining an out-of-scope upsell, or a control with one value, is no finding.
+  it("names what a write settles on its own as input_option, and what is no finding", () => {
+    expect(guardianPublicationPolicy).toContain(
+      "An input_option finding, at that source or schema text, is only an add-on, a pre-selected paid option, a saved payment or payment method, or a delivery address the composed script sets, keeps, accepts, declines or clears on its own instead of taking it from an input or a declared question, such as code that always keeps the pre-selected address, or a paid upsell outside the tool's purpose, such as a membership or trial offered at checkout, that the script accepts without an input the caller set; an optional input left unset keeps the page's default and is no finding. A choice that the build's request or the owner's answers settled is still this finding when the script hard-codes it, since the published tool serves callers that request did not speak for. No finding: declining an out-of-scope paid upsell, turning off a safety default, dismissing a dialog or banner that carries no paid or private choice, and a control with exactly one possible value, such as a single payment option like pay at pickup, which is no choice. On every tool,",
     );
   });
 
