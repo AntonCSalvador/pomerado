@@ -2,7 +2,9 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { mintEntryNavigation } from "../../src/mint/contracts.js";
 import type { HostExecute } from "../../src/runtime/host-execute.js";
-import { entryNavigationCode, loadEntry } from "../../src/runtime/start-state.js";
+import { entryNavigationCode, loadEntry, stopLoadingCode } from "../../src/runtime/start-state.js";
+import { requestSite } from "../../src/standalone/request-context.js";
+import type { StandaloneSession } from "../../src/standalone/session.js";
 
 // How the host's load of the request's page is read, and what the build's model is told of it.
 
@@ -207,5 +209,70 @@ describe("mintEntryNavigation", () => {
       redirects,
       status: 200,
     });
+  });
+});
+
+describe("requestSite", () => {
+  /** The local host's load of the request's page on `execute`, and what the build is told. */
+  const navigated = async (execute: HostExecute) => {
+    const session = { browser: { execute, targetId: "page_1" } } as unknown as StandaloneSession;
+    const site = await Effect.runPromise(requestSite(session, { url: entryUrl }));
+    await Effect.runPromise(site.navigate);
+    return site.entryNavigation();
+  };
+  const refused = {
+    ok: false,
+    name: "Error",
+    message: "page.goto: net::ERR_CONNECTION_REFUSED",
+    url: "about:blank",
+  };
+
+  it("stops the tab's loading after a load that failed, so its error page can't cut off the next load", async () => {
+    const { execute, calls } = answering(refused);
+    expect(await navigated(execute)).toMatchObject({ state: "not_opened", outcome: "failed" });
+    expect(calls).toEqual([
+      { code: entryNavigationCode("page_1", new URL(entryUrl).href, 30_000), timeoutSec: 35 },
+      { code: stopLoadingCode("page_1"), timeoutSec: 10 },
+    ]);
+  });
+
+  it("leaves a load that ran out of time, or that the site answered, as it is", async () => {
+    const answered = (status: number) => ({
+      ok: true,
+      response: { status, headers: {}, method: "GET", redirected: false },
+      redirects: [],
+      truncated: false,
+      url: entryUrl,
+    });
+    for (const answer of [
+      {
+        ok: false,
+        name: "TimeoutError",
+        message: "page.goto: Timeout 30000ms exceeded.",
+        url: null,
+      },
+      answered(200),
+      answered(404),
+    ]) {
+      const { execute, calls } = answering(answer);
+      await navigated(execute);
+      expect(calls).toHaveLength(1);
+    }
+  });
+
+  it("keeps a failed load's outcome when the browser can't stop the tab either", async () => {
+    const calls: string[] = [];
+    const execute: HostExecute = (code) =>
+      Effect.suspend(() => {
+        calls.push(code);
+        return calls.length === 1
+          ? Effect.succeed(refused)
+          : Effect.fail(new Error("Target closed"));
+      });
+    expect(await navigated(execute)).toMatchObject({ state: "not_opened", outcome: "failed" });
+    expect(calls).toEqual([
+      entryNavigationCode("page_1", new URL(entryUrl).href, 30_000),
+      stopLoadingCode("page_1"),
+    ]);
   });
 });

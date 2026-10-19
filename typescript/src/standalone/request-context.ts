@@ -52,7 +52,11 @@ import type { StandaloneSession } from "./session.js";
 import { error } from "./errors.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { runtimeSourceEntry } from "../execution/runtime-sources.js";
-import { loadEntry, type EntryNavigationOutcome } from "../runtime/start-state.js";
+import {
+  loadEntry,
+  stopLoadingCode,
+  type EntryNavigationOutcome,
+} from "../runtime/start-state.js";
 /** How long the load of the request's page may take. */
 const entryNavigationTimeoutMs = 30_000;
 /** The folder Guardian's publication policy names the SDK's modules under, `pomerado/`. */
@@ -130,8 +134,9 @@ export const sourceInspector = (
 };
 /**
  * The request's checked site and the navigation to it. Builds no Guardian. The navigation loads
- * the request's page in one browser call that never fails: how it went, a load that failed
- * included, is the entry state the build reads (`entryNavigation`).
+ * the request's page in one browser call and never fails: how it went, a load that failed
+ * included, is the entry state the build reads (`entryNavigation`). A load that failed then stops
+ * the tab's loading.
  */
 export const requestSite = (session: StandaloneSession, request: Pick<PomeradoRequest, "url">) =>
   Effect.gen(function* () {
@@ -148,9 +153,21 @@ export const requestSite = (session: StandaloneSession, request: Pick<PomeradoRe
         request.url,
         entryNavigationTimeoutMs,
       ).pipe(
-        Effect.map((outcome) => {
-          entry = outcome;
-        }),
+        Effect.tap((outcome) =>
+          Effect.sync(() => {
+            entry = outcome;
+          }),
+        ),
+        // Chromium may commit its error page after a failed load's goto rejects, which would cut
+        // off the next step's own load, so the tab stops loading. A load that ran out of time is
+        // left to finish.
+        Effect.flatMap((outcome) =>
+          outcome.outcome === "failed"
+            ? session.browser
+                .execute(stopLoadingCode(session.browser.targetId), 10)
+                .pipe(Effect.ignore)
+            : Effect.void,
+        ),
       ),
       /** How the load of the request's page went, once the navigation ran. */
       entryNavigation: () => mintEntryNavigation(request.url, entry),
