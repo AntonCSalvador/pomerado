@@ -192,6 +192,12 @@ const Described = Schema.Struct({
    * with no text it reads. Inspection-only.
    */
   questionUnread: Schema.optional(Schema.Literal(true)),
+  /**
+   * A code field that is one of the screen's one-character boxes (an input whose `maxlength` is 1),
+   * when the screen shows two or more: its place among them (`box`, from 1) and how many it shows
+   * (`of`). Inspection-only, never a recipe value; see `codeBoxesRefusal`.
+   */
+  codeBox: Schema.optional(Schema.Struct({ box: Schema.Number, of: Schema.Number })),
 });
 
 /** A control a step call could not find, or found moved to where the host refuses it. */
@@ -240,9 +246,15 @@ export type AutofillRefusal = {
     | "page_unavailable"
     | "typing_unavailable"
     | "popup_missing"
-    | "popup_ambiguous";
+    | "popup_ambiguous"
+    | "code_boxes_incomplete";
   /** The field (by its index in the step) or the submit control the refusal is about. */
   readonly target?: number | "submit" | "popup";
+  /**
+   * `code_boxes_incomplete`: how many one-character code boxes the screen shows, and the place of
+   * each box the step's code fields named, in the step's order. Counts only, never a value.
+   */
+  readonly codeBoxes?: { readonly boxes: number; readonly named: readonly number[] };
   /**
    * Host diagnostics only, never a value: the failed call's own error, or which check refused
    * (its `phase`) with origins and counts as evidence (`withCheck`).
@@ -686,6 +698,35 @@ export const inspectAutofillStep = (input: {
       },
     };
   });
+
+/**
+ * A code step that names only part of its screen's one-character code boxes, or names them out of
+ * order: a refusal before anything is typed or reviewed, which says how many boxes the screen shows
+ * and which ones the step named (`codeBoxes`), so the step can be sent again with every box. A code
+ * split across boxes takes one character in each, so a step that leaves a box out can never send
+ * the whole code. Undefined when the step's code fields that are boxes (`codeBox`, from the
+ * inspection) are every box, first to last, or when none of its code fields is one.
+ */
+export const codeBoxesRefusal = (
+  step: Pick<AutofillStep, "fields">,
+  inspection: Pick<AutofillInspection, "screen">,
+): AutofillRefusal | undefined => {
+  const named = step.fields.flatMap((field, index) => {
+    const box = field.slot === "code" ? inspection.screen.fields[index]?.codeBox : undefined;
+    return box === undefined ? [] : [{ index, ...box }];
+  });
+  const first = named[0];
+  if (first === undefined) return undefined;
+  const boxes = Math.max(...named.map(({ of }) => of));
+  if (named.length === boxes && named.every(({ box }, at) => box === at + 1)) return undefined;
+  return {
+    ...withCheck(refused("code_boxes_incomplete", first.index), "code_boxes", {
+      boxes,
+      named: named.length,
+    }),
+    codeBoxes: { boxes, named: named.map(({ box }) => box) },
+  };
+};
 
 /** The site's registrable domain, or its host where it has none, for the marker's frames. */
 const siteHost = (siteOrigin: string) =>
