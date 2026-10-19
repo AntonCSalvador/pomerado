@@ -46,9 +46,11 @@ const authorizePath =
 /**
  * What marks a login URL as one authorization request: its one-time parameters' names (never
  * their values), such as an OAuth `code_challenge`, an opaque `state` or `nonce`, or a
- * `SAMLRequest`, and its path when that is an identity provider's authorize endpoint. Used only to
- * tell the minting agent once that the URL is unlikely to work again, whether it read the URL from
- * the page or passed it itself; the URL itself is never changed or refused because of it.
+ * `SAMLRequest`, and its path when that is an identity provider's authorize endpoint. During a
+ * build it only tells the minting agent once that the URL is unlikely to work again, whether it
+ * read the URL from the page or passed it itself, and never changes or refuses the URL. The
+ * sign-in version check refuses a version whose entry URL it marks (`one_time_url`), since no
+ * later run could open that URL again, unless the host already asked about it.
  */
 export const oneTimeLoginUrlParameters = (loginUrl: string): readonly string[] => {
   const url = URL.parse(loginUrl);
