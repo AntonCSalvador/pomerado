@@ -55,8 +55,10 @@ add, save or submit anything there.
 
 Read the path's options with read-only exploration where you can, then ask with
 `request_input` about the ones the caller's input does not settle, as `AGENTS.md` ("Try
-hard, then ask") says: each paid add-on and pre-selected paid option within the tool's
-purpose, the payment method and the delivery address you saw, and any other option only when
+hard, then ask") says: each costly choice you saw, one that changes what the caller buys or
+pays or whether the action can be cancelled or refunded (each paid add-on and pre-selected paid
+option within the tool's purpose, a rate, fare or plan tier, a refundable or non-refundable
+option, shipping speed, the payment method and the delivery address), and any other option only when
 the request's purpose clearly depends on it. An unasked optional field keeps the page's
 default and is still an optional input of the script. Ask only about options the site
 actually shows. Never keep, clear, accept or decline one of those unasked. A paid upsell

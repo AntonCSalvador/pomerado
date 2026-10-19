@@ -789,18 +789,18 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["eff71dfcee79415420533778b0a9ec67b7dac3beb1d281b0a5acc0d400de6fd6", "core"],
+    ["879933f1f4e06822afd1966fd269e561fa31a5aca3f2022a97d178c670bebb76", "core"],
     ["cbf9d84d1cdc1a192ec07df90bf99192a72c7b03c0aefb89096f4f0b5bf6ef27", "search"],
     ["ac66bcd6e97b1126cd643bbaee17f1333decc5af5273748060a07b0b82f2b99c", "auth"],
     ["48ba91768a4c1cbb8d6d325bb6b3ef41182bcbdf8097db014391137e29fb7f7d", "testing"],
     ["fc4707b0cd5692efe8cc9b96be4ec88b1f8807451348056eb13dfc3d88486b0f", "pagination"],
     ["f0dd745f7e9b94173bf0ccbfde6c2fa4aab49c6ac84641f84764eae9e11c9f2c", "records"],
     ["7e39ab2d515b817c3d42070922a575f6d3cd5b8427d3c97a4af151cec7a32656", "forms"],
-    ["c9bb5276f803b4fdfd4f82f6587e33a16c6b93e3fa532709919936b5a3a6da2e", "writes"],
+    ["9c8d7256bd2f53cec0b11f7f6cf25a07fe9b87837938ca78dc8f8867e843aba0", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["d3b3db8b851a09d0f2de1e9dd95bf55b12dffc4cf3210835c1614cdf9d933d44", "caller-input"],
-    ["3c11e86df509740394a8913710175dbdb364a84afbd2cd755ea19f676be6e0db", "publication"],
-    ["f4bf521e46d8a6aa99fc483c48447d87d22152a6a99abb9fde01df92241c1492", "workspace/AGENTS.md"],
+    ["8b556e9aa9aaa2522b5d3ace3b44ae143f72079c3dfe9606fb07e22cac59bee3", "caller-input"],
+    ["9903e3f1b5df144b807e10bd4befff346b62f593a5d778209a92a2b8134c3853", "publication"],
+    ["75257864c06d65f78833bfafb30bf84bf554e216768f792c3e9f2b3f8b15fc5a", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });

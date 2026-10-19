@@ -159,7 +159,7 @@ it("reads a question declared afterCommit from a draft", () => {
   });
 });
 
-it("reads a secret question declared afterCommit, and declares nothing when afterCommit is anything but true", () => {
+it("reads a secret question declared afterCommit, and afterCommit false as left out", () => {
   const source = operation(
     `{name:"pay",input:Schema.Unknown,output:Schema.Unknown,questions:{code:{type:"secret",prompt:"What code did the bank send?",secretKind:"one_time_code",afterCommit:true}}}`,
   );
@@ -168,10 +168,21 @@ it("reads a secret question declared afterCommit, and declares nothing when afte
     code: { type: "secret", prompt: "What code did the bank send?", secretKind: "one_time_code", afterCommit: true },
   });
   const offSource = operation(
-    `{name:"book",input:Schema.Unknown,output:Schema.Unknown,questions:{slot:{type:"choice",prompt:"Which delivery slot should I book?",afterCommit:false}}}`,
+    `{name:"book",input:Schema.Unknown,output:Schema.Unknown,questions:{slot:{type:"choice",prompt:"Which delivery slot should I book?",afterCommit:false},note:{type:"text",prompt:"Which note should I keep?"}}}`,
   );
-  // Only true is a valid afterCommit, so the contract declares no question and the run asks none.
-  expect(draftQuestionDeclarations("src/tool.mjs", offSource)).toEqual({});
+  expect(draftQuestionDeclarationFailure("src/tool.mjs", offSource)).toBeUndefined();
+  expect(draftQuestionDeclarations("src/tool.mjs", offSource)).toEqual({
+    slot: { type: "choice", prompt: "Which delivery slot should I book?", afterCommit: false },
+    note,
+  });
+});
+
+// One invalid declaration would leave the run with none, so the draft check names it before a step runs.
+it("refuses a declaration that does not decode instead of dropping every question", () => {
+  const source = operation(
+    `{name:"book",input:Schema.Unknown,output:Schema.Unknown,questions:{slot:{type:"choice",prompt:"Which slot?",afterCommit:"yes"},note:{type:"text",prompt:"Which note should I keep?"}}}`,
+  );
+  expect(draftQuestionDeclarationFailure("src/tool.mjs", source)).toMatch(/^Invalid script questions: the run would declare none of them\./);
 });
 
 describe("a local operation's questions", () => {

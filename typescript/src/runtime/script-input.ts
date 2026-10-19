@@ -28,8 +28,9 @@ const Selections = Schema.Int.pipe(Schema.between(0, 50));
  * Marks a question a write may ask after it entered a commit step and before `verified()`: one
  * the site first offers past a saved step, such as the delivery slots for the cart that step
  * filled or the card fields of a checkout's payment step. Publication review judges each one.
+ * `false` is the same as leaving it out.
  */
-const AfterCommit = Schema.optional(Schema.Literal(true));
+const AfterCommit = Schema.optional(Schema.Boolean);
 
 export const ScriptQuestionDeclaration = Schema.Union(
   Schema.Struct({

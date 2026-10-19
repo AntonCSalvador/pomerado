@@ -230,10 +230,16 @@ exception: it is optional unless the task can't run without it (below).
   or without Ltd. or Inc. Never require an exact match.
   When more than one option matches, list them for the caller instead of picking one.
 - On a write, every choice the session met is an input: each option on the path,
-  add-ons and pre-selected defaults included. Make it required when the site requires
-  a choice (a fare class) and optional when it does not (a seat). An unset optional input
-  keeps the page's default; an add-on, a pre-selected paid option or a saved payment is
-  never left to a default, so ask about it (`AGENTS.md`, "Try hard, then ask").
+  add-ons and pre-selected defaults included, except one the request or an answer settled,
+  which is the tool's default (above). A costly choice, one that changes what the caller
+  buys or pays or whether the action can be cancelled or refunded (a paid add-on or
+  pre-selected paid option, a rate, fare or plan tier, a refundable or non-refundable option,
+  shipping speed, a saved payment or the delivery address), is never left to the page's
+  default: make it a required input or ask about it (`AGENTS.md`, "Try hard, then ask"), and
+  an optional input for it may default only to declining it, turning it off or the option
+  that adds no cost. Any other option is an optional input (a seat), required only when the
+  site requires a choice and nothing settled it; an unset optional input keeps the page's
+  default.
 - Never make an account-specific value (a passenger, loyalty number, saved card or
   address, account or member ID) an enum member, example or default in a public
   schema. Take it as a free-form input when the caller can name it, such as a loyalty
@@ -326,9 +332,11 @@ exception: it is optional unless the task can't run without it (below).
 - A choice the request, the caller or the owner declined, or a step they said not to take (no
   location, no store, skip a filter, don't sign in), is not part of the tool for any caller:
   never offer it as an input, never set it in the example or a test, and never put it in
-  `exampleInput`. Note it in coverage. That covers a step the tool then never takes. A paid
-  add-on, payment method or address a write still meets on its path is never settled this way:
-  it stays an input or a run-time question (writes skill).
+  `exampleInput`. Note it in coverage. That covers a step the tool then never takes. A costly
+  choice a write still meets on its path, one that changes what the caller buys or pays or
+  whether the action can be cancelled or refunded (a paid add-on, a rate, fare or plan tier, a
+  refundable option, shipping speed, the payment method or the address), is never settled this
+  way: it stays an input or a run-time question (writes skill), whose default may only decline it.
 - When the caller input is empty (`{}`), write the tool's input from the request and the
   owner's answers, with dates normalized (10/4 is the next October 4, as `2026-10-04`), and
   pass it as `exampleInput`: on a read's example, or on each write act step that needs it. The

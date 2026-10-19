@@ -289,9 +289,11 @@ credentials (the host asks for logins itself) or for CAPTCHAs. Asking which acco
 channel to use is a different question and is expected, as the sign-in branch rule above says,
 and so is asking whether to support or leave out a capability the site offers (item 8), which is
 a design question, not a request for permission.
-On a write, you never assume a missing business choice: ask about paid add-ons and pre-selected
-paid options within the tool's purpose, saved payment and the delivery address actually observed
-on the site, and about any other optional field
+On a write, you never assume a missing business choice: ask about each costly choice actually
+observed on the site, one that changes what the caller buys or pays or whether the action can be
+cancelled or refunded (paid add-ons and pre-selected paid options within the tool's purpose, a
+rate, fare or plan tier, a refundable or non-refundable option, shipping speed, saved payment and
+the delivery address), and about any other optional field
 only when the request's purpose clearly depends on its value (an unset optional input keeps the
 page's default; it is still a tool input). A control with exactly one possible value (a select or radio group with a single option),
 or one the input or an earlier answer already settles, is no choice: never ask about it. An
