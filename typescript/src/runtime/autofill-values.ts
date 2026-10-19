@@ -232,6 +232,11 @@ export interface AutofillLogin {
  * filled. Absent, the owner is asked. `saveOffer` offers to keep an answer the owner gives.
  */
 export interface HostedValues<E, L extends AutofillLogin> {
+  /**
+   * A code field's code. When the host's own code source can't give a code, it returns
+   * `Unanswered` with the `credentialUnavailable` cause, so the step fails as the host's outage
+   * rather than as the site's refusal of a code.
+   */
   readonly code?: ((login: L) => Effect.Effect<Found, E>) | undefined;
   readonly recoveryCode?: ((login: L) => Effect.Effect<Found, E>) | undefined;
   readonly privateAnswer?:
