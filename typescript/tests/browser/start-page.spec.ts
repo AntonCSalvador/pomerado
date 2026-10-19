@@ -5,6 +5,7 @@ import { Effect, Schema } from "effect";
 import type { HostExecute } from "../../src/runtime/host-execute.js";
 import { configureSiteIdentity } from "../../src/runtime/same-site.js";
 import {
+  loadEntry,
   localStartHooks,
   SavedSession,
   saveSessionCode,
@@ -13,6 +14,8 @@ import {
   type PageStart,
 } from "../../src/runtime/start-state.js";
 import { makeLocalKernel } from "../../src/testing/local-kernel.js";
+import { requestSite } from "../../src/standalone/request-context.js";
+import type { StandaloneSession } from "../../src/standalone/session.js";
 
 // The page reset a live example, live test or write session's first step starts from, on local
 // Chromium against a local site that counts each path it serves.
@@ -22,6 +25,20 @@ const startSite = async () => {
   const server = createServer((request, response) => {
     const path = new URL(request.url ?? "/", "http://site.test").pathname;
     hits.set(path, (hits.get(path) ?? 0) + 1);
+    // A page that moved twice, and one the site does not have.
+    if (path === "/old" || path === "/older") {
+      response.writeHead(path === "/older" ? 301 : 302, {
+        location: path === "/older" ? "/old" : "/claims",
+      });
+      response.end();
+      return;
+    }
+    // A page whose connection the site drops.
+    if (path === "/dropped") {
+      response.destroy();
+      return;
+    }
+    response.statusCode = path === "/missing" ? 404 : 200;
     response.setHeader("Content-Type", "text/html");
     response.end(`<h1>${path}</h1>`);
   });
@@ -287,5 +304,84 @@ test("saves a sibling subdomain's tab storage only while no added suffix splits 
     ]);
   } finally {
     configureSiteIdentity({});
+  }
+});
+
+// The host's load of the request's page: one call that reports how it went, whatever happened.
+test("loads the request's page and reports its status, its redirects and where it landed", async ({
+  page,
+}) => {
+  const site = await startSite();
+  const { execute, targetId } = await host(page);
+  try {
+    const load = (path: string) =>
+      Effect.runPromise(loadEntry(execute, targetId, `${site.origin}${path}`, 30_000));
+    expect(await load("/older")).toEqual({
+      outcome: "ready",
+      requestedUrl: `${site.origin}/older`,
+      resolvedUrl: `${site.origin}/claims`,
+      redirects: [
+        { url: `${site.origin}/older`, status: 301 },
+        { url: `${site.origin}/old`, status: 302 },
+      ],
+      redirectsTruncated: false,
+      status: 200,
+      durationMs: expect.any(Number),
+    });
+    expect(page.url()).toBe(`${site.origin}/claims`);
+    expect(await load("/missing")).toMatchObject({
+      outcome: "http_error",
+      resolvedUrl: `${site.origin}/missing`,
+      redirects: [],
+      status: 404,
+    });
+    await page.route(`${site.origin}/refused`, (route) => route.abort("connectionrefused"));
+    expect(await load("/refused")).toMatchObject({
+      outcome: "failed",
+      requestedUrl: `${site.origin}/refused`,
+      status: null,
+      failure: { kind: "refused" },
+    });
+  } finally {
+    await site.close();
+  }
+});
+
+// Chromium may commit its error page a moment after a failed load's goto rejects, which would cut
+// off a goto the step makes at once. The local host stops the tab after a failed load.
+test("a step's goto right after the request's page failed to load is never cut off", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const site = await startSite();
+  const closed = await startSite();
+  await closed.close();
+  const { execute, targetId } = await host(page);
+  const session = { browser: { execute, targetId } } as unknown as StandaloneSession;
+  const deep = `${site.origin}/deep`;
+  try {
+    const landed: string[] = [];
+    for (let attempt = 0; attempt < 6; attempt++) {
+      for (const url of [`${closed.origin}/claims`, `${site.origin}/dropped`]) {
+        // Any error page the last attempt left commits before the tab starts over.
+        await page.waitForTimeout(1_000);
+        await page.goto("about:blank");
+        const entry = await Effect.runPromise(requestSite(session, { url }));
+        await Effect.runPromise(entry.navigate);
+        expect(entry.entryNavigation()).toMatchObject({ state: "not_opened", outcome: "failed" });
+        // The step's own load, at once, as a first explore would make it.
+        const step = await Effect.runPromise(
+          execute(`await page.goto(${JSON.stringify(deep)}); return page.url();`, 30).pipe(
+            Effect.either,
+          ),
+        );
+        landed.push(
+          step._tag === "Right" ? String(step.right) : (step.left.message.split("\n")[0] ?? ""),
+        );
+      }
+    }
+    expect(landed).toEqual(Array.from({ length: 12 }, () => deep));
+  } finally {
+    await site.close();
   }
 });

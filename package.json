@@ -416,6 +416,11 @@
       "import": "./dist/typescript/src/mint/sign-in-failure.js",
       "default": "./dist/typescript/src/mint/sign-in-failure.js"
     },
+    "./core/mint/sign-in-version": {
+      "types": "./dist/typescript/src/mint/sign-in-version.d.ts",
+      "import": "./dist/typescript/src/mint/sign-in-version.js",
+      "default": "./dist/typescript/src/mint/sign-in-version.js"
+    },
     "./core/mint/site-access-contracts": {
       "types": "./dist/typescript/src/mint/site-access-contracts.d.ts",
       "import": "./dist/typescript/src/mint/site-access-contracts.js",
