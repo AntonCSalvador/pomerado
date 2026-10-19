@@ -25,6 +25,8 @@ import {
   SignInRunFailed,
   type SignInReplayBrowser,
 } from "../runtime/sign-in-replay.js";
+import { settledMarkerCheck } from "../destinations/marker-settle.js";
+import { workspaceRelation } from "../runtime/workspace-origin.js";
 import { localSignInLogin, makeSignInBrowser } from "./authentication.js";
 import type { StandaloneSession } from "./session.js";
 
@@ -440,6 +442,34 @@ export const mintSessionSignInFailure = (failed: SessionSignInFailed): MintFailu
 };
 
 /**
+ * A run's first sign-in, before its operation runs. On a browser this host already typed a sign-in
+ * into (`typed`), as a library scope's run after its build, a recipe whose marker shows on its
+ * account page checks that page first, as `stillSignedIn` does, waiting for a marker drawn late
+ * (`settledMarkerCheck`), and signs nothing in when the marker shows there. Otherwise, and on a
+ * new browser, it replays. A recipe with a workspace relation always replays, since only the
+ * replay learns the login's workspace.
+ */
+export const runSignInBefore = <E>(
+  typed: () => boolean,
+  input: Parameters<typeof signInForRun<E>>[0],
+): ReturnType<typeof signInForRun<E>> =>
+  Effect.gen(function* () {
+    const { signedIn, steps } = input.recipe;
+    if (
+      typed() &&
+      signedIn.openPath !== undefined &&
+      workspaceRelation(input.recipe, input.siteOrigin) === undefined &&
+      (yield* settledMarkerCheck(
+        (shown) => input.browser.confirm(shown, steps, steps),
+        signedIn,
+        input.markerSettle,
+      )).signedIn
+    )
+      return { alreadySignedIn: true };
+    return yield* signInForRun(input);
+  });
+
+/**
  * A run's sign-in with its artifact's recorded sign-in: `before` signs in before the operation
  * runs, as every signed-in run does, and `hook` signs in again on the same browser whenever the
  * script's `ensureSignedIn` finds the page signed out, with the login `before` read. A run never
@@ -471,7 +501,7 @@ export const makeRunSignIn = (
   const login = { login: localSignInLogin({ ask: asks.ask, register: secrets.register, siteOrigin }) };
   // One run's sign-ins share what the site rejected, as one attempt's do in every host.
   const retryState = makeAutofillRetryState();
-  const before = signInForRun({
+  const before = runSignInBefore(() => session.signInTyping.typed, {
     recipe: signIn.recipe,
     entryUrl: signIn.entryUrl,
     browser: signInBrowser,
