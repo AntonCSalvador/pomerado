@@ -111,12 +111,8 @@ export const restartPasswordSendsIfFresh = (h: RejectionHost, password: string |
   }
 };
 
-/** The login's identifier or password, whose rejection asks the owner for a corrected login. */
-export const primaryCredential = (field: CredentialRejectedField) =>
-  field === "username" || field === "password";
-
 /** A field the site may reject that holds a secret, which the host may have filled. */
-export const secretField = (field: CredentialRejectedField) =>
+const secretField = (field: CredentialRejectedField) =>
   field === "password" ||
   field === "code" ||
   field === "date_of_birth" ||
