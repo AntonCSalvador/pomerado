@@ -676,7 +676,8 @@ export const ManagedSignInExecutionRequest = ExecutionRequest.omit("signInStep")
  * `test/cases.json` from what it saw on the site, and runs them in batches on the Playwright
  * version or the HTTP version (`entrypoint`); the harness keeps each version's results apart. A
  * read signed out runs as many as it needs. A signed-in read runs a few, on at most
- * `signedInTestInputLimit` distinct inputs in a build or repair, as batches marked `signedIn`. A
+ * `signedInTestInputLimit` distinct inputs in a build or repair, as batches marked `signedIn`,
+ * only on a host that declares `signedInBatches`. A
  * write runs none: its act session is the one run that proves it.
  */
 export interface LiveTestHost {
@@ -710,6 +711,14 @@ export interface LiveTestHost {
   readonly run: (batch: LiveTestBatch) => Effect.Effect<LiveTestBatchResult, MintFailure>;
   /** The most browsers this host runs a batch on at once, the build's own included. */
   readonly maxWorkers: number;
+  /**
+   * The host runs a batch marked `signedIn` as that field says: every case on the build's own
+   * signed-in browser, warm, never on a new browser. Only then does the harness give a signed-in
+   * read live tests, on at most `signedInTestInputLimit` distinct inputs, and only then should the
+   * host's preflight pass `signedInTests: true` to `preflightTestInput`. Absent, a signed-in read
+   * runs no live tests, as before this field existed.
+   */
+  readonly signedInBatches?: true;
   /**
    * How long one case may run on this host, in milliseconds; `defaultLiveTestCaseMs` when
    * absent. The harness refuses a batch as `no_time`, running nothing, when less than this is

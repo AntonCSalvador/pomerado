@@ -52,7 +52,9 @@ Design it as soon as you know the page and its inputs, and run it once the examp
 
 ## Signed-in reads
 
-A signed-in read runs its combined case and, only where it needs one, the second case above:
+Where the host runs no signed-in live tests, `live_tests` answers `unavailable` and the example
+alone proves a signed-in read's tool. Otherwise a signed-in read runs its combined case and, only
+where it needs one, the second case above:
 at most two distinct inputs in a build or repair, beyond its example. The host enforces it: a
 batch or `testInput` that would add a third input is refused as `limit` and runs nothing.
 Running an input that already ran again, after a fix or on `src/tool-http.mjs`, is free, so

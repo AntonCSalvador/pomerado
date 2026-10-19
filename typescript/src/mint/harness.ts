@@ -3627,8 +3627,19 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             // A sign-in on the site an update moved the build away from is that site's.
             (revisions.get(entry.executionId) ?? 0) >= latestRevisionChanging("site"),
         );
-      /** A write never runs live tests: its act session is the one run that proves it. */
-      const liveTestsOffered = () => dependencies.liveTests !== undefined && buildEffect === "read";
+      /**
+       * Whether the host runs a signed-in read's batches on the build's own signed-in browser
+       * (`LiveTestHost.signedInBatches`). Without it a signed-in read runs no live tests, as before.
+       */
+      const signedInTestsSupported = dependencies.liveTests?.signedInBatches === true;
+      /**
+       * A write never runs live tests: its act session is the one run that proves it. A signed-in
+       * read runs them only on a host that supports signed-in batches.
+       */
+      const liveTestsOffered = () =>
+        dependencies.liveTests !== undefined &&
+        buildEffect === "read" &&
+        (signedInTestsSupported || !signedIn());
       /**
        * A case's latest result on `entrypoint`'s version, as this read counts it now: once it
        * signed in, only a result run signed in, since one from before tested another session.
@@ -4280,6 +4291,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 submitted.purpose === "test" &&
                 submitted.target === "liveBrowser" &&
                 buildEffect === "read" &&
+                signedInTestsSupported &&
                 signedIn()
                   ? Option.getOrUndefined(
                       Schema.decodeUnknownOption(Schema.parseJson())(submitted.testInput),
@@ -5845,7 +5857,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         kind: "host_live_tests",
                         status: "unavailable",
                         instruction:
-                          "A write build runs no live tests: its act session is the one run that proves it. Compose the script from the session and publish.",
+                          buildEffect === "write"
+                            ? "A write build runs no live tests: its act session is the one run that proves it. Compose the script from the session and publish."
+                            : "This read signed in, and this host runs no signed-in live tests, so its example alone proves the tool. Check src/tool-http.mjs once against the example's input, if you wrote one (execute purpose test, target liveBrowser, no testInput), run the example last, after your last edit, and publish.",
                       });
                     if (request.action === "plan")
                       return JSON.stringify(

@@ -141,10 +141,16 @@ type Outcomes =
   | Readonly<Record<string, LiveTestOutcome>>
   | ((batch: number) => Readonly<Record<string, LiveTestOutcome>>);
 
-const liveTestHost = (outcomes: Outcomes, result?: LiveTestBatchResult) => {
+/** A host that supports signed-in batches unless `signedInBatches` is false. */
+const liveTestHost = (
+  outcomes: Outcomes,
+  result?: LiveTestBatchResult,
+  { signedInBatches = true }: { readonly signedInBatches?: boolean } = {},
+) => {
   const batches: LiveTestBatch[] = [];
   const host: LiveTestHost = {
     maxWorkers: 3,
+    ...(signedInBatches ? { signedInBatches: true as const } : {}),
     schemas: () => Effect.succeed(schemas),
     run: (batch) =>
       Effect.sync(() => {
@@ -1246,6 +1252,41 @@ it("counts a signed-in read's test inputs across live_tests and execute", async 
     { query: "lamp", sort: "price_high" },
     { sort: "price_high", query: "lamp" },
   ]);
+});
+
+// A host on the contract before signed-in batches never declares them, and would run a signed-in
+// read's cases on new browsers with no session: such a read keeps proving its tool with its example.
+it("runs no live tests for a signed-in read on a host that does not support signed-in batches", async () => {
+  const { host, batches } = liveTestHost({}, undefined, { signedInBatches: false });
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", signInStep, "sign_in"),
+        call("execute", example, "example"),
+        call("live_tests", { ...runAll, cases: ["every-filter"] }, "run"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: signingIn,
+      publish: published.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/sign-in.ts": toolSource,
+    "test/cases.json": JSON.stringify(combined),
+  });
+  await f.run();
+  // No test plan reminder after the example, the batch is refused, and nothing ran.
+  expect(resultOf(f.requests[2], "example")["testPlan"]).toBeUndefined();
+  expect(resultOf(f.requests[3], "run")).toMatchObject({ status: "unavailable" });
+  expect(batches).toHaveLength(0);
+  expect(published.seen[0]?.liveTests).toBeUndefined();
 });
 
 it("runs no live tests for a write, signed in or not", async () => {
