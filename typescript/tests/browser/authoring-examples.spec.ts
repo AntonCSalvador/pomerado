@@ -22,6 +22,7 @@ import readCatalog, {
   searchThenRead,
 } from "../../authoring/examples/navigation.js";
 import searchListings, { readRooms } from "../../authoring/examples/pagination.js";
+import assignOwner from "../../authoring/examples/picker.js";
 import selectStatus from "../../authoring/examples/selection.js";
 import readInvoiceIds from "../../authoring/examples/variants.js";
 import createTask from "../../authoring/examples/write-readback.js";
@@ -919,6 +920,34 @@ test("native select example selects a canonical value and reads it back", async 
     Either.right({ status: "paid" }),
   );
   await expect(page.locator("output")).toHaveText("1");
+});
+
+test("picker example picks a suggested person and refuses one the site does not suggest", async ({
+  page,
+}) => {
+  await page.setContent(`
+    <label for="owner">Owner</label><input id="owner" role="combobox" aria-controls="people" autocomplete="off">
+    <ul id="people" role="listbox" hidden></ul>
+    <script>
+      const input = document.getElementById("owner"), list = document.getElementById("people");
+      input.oninput = () => setTimeout(() => {
+        list.hidden = false;
+        list.innerHTML = ["Devon Webb", "Tanya Fox", "Tom Cook"].filter((name) => name.toLowerCase().includes(input.value.toLowerCase()))
+          .map((name) => '<li role="option">' + name + "</li>").join("");
+      }, 80);
+      list.onmousedown = (event) => event.preventDefault();
+      list.onclick = (event) => { input.value = event.target.textContent; list.hidden = true; };
+    </script>`);
+  expect((await runExample(page, assignOwner, { owner: "devon webb" })).result).toEqual(
+    Either.right({ owner: "Devon Webb" }),
+  );
+  await expect(page.getByRole("combobox", { name: "Owner" })).toHaveValue("Devon Webb");
+  expect(failure((await runExample(page, assignOwner, { owner: "To" })).result)).toMatchObject({
+    _tag: "InvalidInput",
+    field: "owner",
+    available: ["Tom Cook"],
+    kind: "option_missing",
+  });
 });
 
 test("date and dropdown example fills a split date and a custom dropdown by label", async ({

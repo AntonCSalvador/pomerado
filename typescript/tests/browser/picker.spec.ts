@@ -1,0 +1,652 @@
+import { expect, test } from "@playwright/test";
+import { call, serve, submitted } from "./picker-fixture.js";
+
+// The picker helper, run as a Kernel call body runs it, on synthetic pages that each model one
+// kind of picker or one way a picker misbehaves. Chromium must generate the events: the widgets
+// open, filter, highlight and commit only from real clicks, keys and scrolling.
+
+/** An ARIA combobox that filters a local list as you type and commits a click. */
+const combobox = `
+<form><label for="person">Assignee</label>
+<div class="field">
+  <input id="person" role="combobox" aria-expanded="false" aria-controls="people" aria-autocomplete="list" autocomplete="off">
+  <ul id="people" role="listbox" hidden style="margin:0;padding:0;list-style:none"></ul>
+  <input type="hidden" name="person">
+</div></form>
+<script>
+const people = [["1","Wade Cooper"],["2","Arlene Mccoy"],["3","Devon Webb"],["4","Tom Cook"],["5","Tanya Fox"],["6","Devon Webber"]];
+const input = document.getElementById("person"), list = document.getElementById("people"), hidden = document.querySelector("[name=person]");
+const render = () => {
+  const query = input.value.toLowerCase();
+  list.innerHTML = people.filter(([, name]) => name.toLowerCase().includes(query))
+    .map(([value, name]) => '<li role="option" id="p' + value + '" data-value="' + value + '">' + name + '</li>').join("");
+  list.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+};
+input.addEventListener("input", render);
+input.addEventListener("focus", render);
+list.addEventListener("mousedown", (event) => event.preventDefault());
+list.addEventListener("click", (event) => {
+  const option = event.target.closest("[role=option]");
+  if (!option) return;
+  hidden.value = option.dataset.value;
+  input.value = option.textContent;
+  list.hidden = true;
+  input.setAttribute("aria-expanded", "false");
+});
+</script>`;
+
+test("pickValue types into an ARIA combobox and clicks the matching option", async ({ page }) => {
+  await serve(page, combobox);
+  expect(
+    await call(page, `return await pickValue(page.getByRole("combobox", { name: "Assignee" }), "devon webb", fast);`),
+  ).toEqual({ result: { picked: true, kind: "typeahead", label: "Devon Webb", value: "3", rank: "normalized", refills: 0 } });
+  expect(await submitted(page)).toEqual({ person: "3" });
+});
+
+test("pickValue picks a native select's option by label, value or another spelling", async ({ page }) => {
+  await serve(page, `<form><label>State <select name="state">
+<option value="">Choose a state</option><option value="CA">California</option><option value="NV">Nevada</option>
+<option value="OR" disabled>Oregon</option></select></label></form>`);
+  const state = 'page.getByLabel("State")';
+  expect(await call(page, `return await pickValue(${state}, ["CA", "California"], fast);`)).toEqual({
+    result: { picked: true, kind: "select", label: "California", value: "CA", rank: "exact", refills: 0 },
+  });
+  expect(await call(page, `return await pickValue(${state}, "nevada", fast);`)).toMatchObject({ result: { value: "NV", rank: "normalized" } });
+  expect(await submitted(page)).toEqual({ state: "NV" });
+  // A disabled option is reported, and a missing one lists what the select offers, never its prompt.
+  expect(await call(page, `return await pickValue(${state}, "Oregon", fast);`)).toEqual({
+    result: { picked: false, reason: "option_disabled", wanted: "Oregon", available: ["California", "Nevada"], matches: ["Oregon"] },
+  });
+  expect(await call(page, `return await pickValue(${state}, "Texas", fast);`)).toEqual({
+    result: { picked: false, reason: "option_missing", wanted: "Texas", available: ["California", "Nevada"], matches: [] },
+  });
+});
+
+test("pickValue prefers an exact match and reports options that tie once case is ignored", async ({ page }) => {
+  await serve(page, `<form><label>Plan <select name="plan">
+<option value="1">Basic</option><option value="2">basic</option><option value="3">Basic plus</option></select></label></form>`);
+  expect(await call(page, `return await pickValue(page.getByLabel("Plan"), "basic", fast);`)).toMatchObject({
+    result: { picked: true, value: "2", rank: "exact" },
+  });
+  expect(await call(page, `return await pickValue(page.getByLabel("Plan"), "BASIC", fast);`)).toEqual({
+    result: { picked: false, reason: "option_ambiguous", wanted: "BASIC", available: ["Basic", "basic", "Basic plus"], matches: ["Basic", "basic"] },
+  });
+  expect(await submitted(page)).toEqual({ plan: "2" });
+});
+
+test("pickValue sets a hidden select behind a custom widget and the widget follows", async ({ page }) => {
+  await serve(page, `<form><label id="size-label">Size</label>
+<select name="size" aria-labelledby="size-label" style="position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);overflow:hidden">
+<option value="s">Small</option><option value="m">Medium</option><option value="l">Large</option></select>
+<span id="shown">Small</span></form>
+<script>document.querySelector("select").addEventListener("change", (event) => {
+  document.getElementById("shown").textContent = event.target.selectedOptions[0].textContent; });</script>`);
+  expect(await call(page, `return await pickValue(page.locator("select[name=size]"), "Large", fast);`)).toMatchObject({
+    result: { picked: true, kind: "select", value: "l" },
+  });
+  await expect(page.locator("#shown")).toHaveText("Large");
+});
+
+test("pickValue fills an input's datalist value", async ({ page }) => {
+  await serve(page, `<form><label>Browser <input name="browser" list="browsers"></label>
+<datalist id="browsers"><option value="chromium">Chromium</option><option value="firefox">Firefox</option></datalist></form>`);
+  expect(await call(page, `return await pickValue(page.getByLabel("Browser"), "Firefox", fast);`)).toEqual({
+    result: { picked: true, kind: "datalist", label: "Firefox", value: "firefox", rank: "exact", refills: 0 },
+  });
+  expect(await submitted(page)).toEqual({ browser: "firefox" });
+});
+
+/**
+ * An autocomplete whose suggestions come from the site's API: a "Loading..." panel shows while
+ * the request runs, then a listbox the input owns, or "No options".
+ */
+const remoteAutocomplete = `
+<form><label for="country">Country</label>
+<input id="country" role="combobox" aria-expanded="false" aria-autocomplete="list" autocomplete="off">
+<input type="hidden" name="country"></form>
+<script>
+const input = document.getElementById("country"), hidden = document.querySelector("[name=country]");
+const popper = document.createElement("div");
+popper.className = "autocomplete-popper";
+popper.style.cssText = "position:absolute;top:40px;left:8px;width:300px;background:#fff;border:1px solid #ccc";
+popper.hidden = true;
+document.body.append(popper);
+let generation = 0;
+input.addEventListener("input", async () => {
+  const mine = ++generation;
+  popper.hidden = false;
+  input.removeAttribute("aria-controls");
+  popper.innerHTML = '<div class="autocomplete-loading">Loading…</div>';
+  const answer = await (await fetch("/api/countries?q=" + encodeURIComponent(input.value))).json();
+  if (mine !== generation) return;
+  if (answer.length === 0) { popper.innerHTML = '<div class="autocomplete-noOptions">No options</div>'; return; }
+  popper.innerHTML = '<ul role="listbox" id="country-list" style="margin:0;padding:0">' +
+    answer.map((item) => '<li role="option" data-value="' + item.code + '">' + item.name + '</li>').join("") + "</ul>";
+  input.setAttribute("aria-controls", "country-list");
+  input.setAttribute("aria-expanded", "true");
+});
+popper.addEventListener("mousedown", (event) => event.preventDefault());
+popper.addEventListener("click", (event) => {
+  const option = event.target.closest("[role=option]");
+  if (!option) return;
+  input.value = option.textContent;
+  hidden.value = option.dataset.value;
+  popper.hidden = true;
+  input.setAttribute("aria-expanded", "false");
+});
+</script>`;
+const countries = [
+  ["CA", "Canada"], ["TD", "Chad"], ["CL", "Chile"], ["CN", "China"], ["CO", "Colombia"],
+  ["AQ", "Chilean Antarctic Territory"], ["CU", "Cuba"],
+] as const;
+const countryApi = (params: URLSearchParams) => ({
+  delayMs: 150,
+  body: countries
+    .filter(([, name]) => name.toLowerCase().includes((params.get("q") ?? "").toLowerCase()))
+    .map(([code, name]) => ({ code, name })),
+});
+
+test("pickValue waits out an autocomplete's loading panel and picks among partial matches", async ({ page }) => {
+  await serve(page, remoteAutocomplete, countryApi);
+  const country = 'page.getByRole("combobox", { name: "Country" })';
+  // "Chile" also matches "Chilean Antarctic Territory" as a prefix: the exact name wins.
+  expect(await call(page, `return await pickValue(${country}, "Chile", fast);`)).toEqual({
+    result: { picked: true, kind: "typeahead", label: "Chile", value: "CL", rank: "exact", refills: 0 },
+  });
+  expect(await submitted(page)).toEqual({ country: "CL" });
+  // A whole word of one option's name picks it.
+  expect(await call(page, `return await pickValue(${country}, "antarctic", fast);`)).toMatchObject({
+    result: { picked: true, value: "AQ", rank: "words" },
+  });
+});
+
+test("pickValue reports no match, with what the site suggested, instead of timing out", async ({ page }) => {
+  await serve(page, remoteAutocomplete, countryApi);
+  const country = 'page.getByRole("combobox", { name: "Country" })';
+  expect(await call(page, `return await pickValue(${country}, "Atlantis", fast);`)).toEqual({
+    result: { picked: false, reason: "option_missing", wanted: "Atlantis", available: [], matches: [] },
+  });
+  // A prefix is not a name: the options the site listed come back as available.
+  expect(await call(page, `return await pickValue(${country}, "Chi", fast);`)).toEqual({
+    result: { picked: false, reason: "option_missing", wanted: "Chi", available: ["Chile", "China", "Chilean Antarctic Territory"], matches: [] },
+  });
+});
+
+test("pickValue types again key by key when the field listens only to keys, and answers that land out of order never win", async ({ page }) => {
+  const cities = ["Sacramento", "Salem", "San Diego", "San Jose", "Santa Fe", "Santiago", "Seattle", "Spokane"];
+  const asked: string[] = [];
+  await serve(
+    page,
+    `<form><label>City <input id="city" autocomplete="off"></label><ul id="cities"></ul><input type="hidden" name="city"></form>
+<script>
+const input = document.getElementById("city"), list = document.getElementById("cities");
+// Every key asks the API; the page draws whichever answer lands last.
+input.addEventListener("keyup", async () => {
+  const answer = await (await fetch("/api/cities?q=" + encodeURIComponent(input.value))).json();
+  list.innerHTML = answer.map((name) => "<li>" + name + "</li>").join("");
+});
+list.addEventListener("click", (event) => {
+  const item = event.target.closest("li");
+  input.value = item.textContent;
+  document.querySelector("[name=city]").value = item.textContent;
+  list.innerHTML = "";
+});
+</script>`,
+    (params) => {
+      const query = params.get("q") ?? "";
+      asked.push(query);
+      // Shorter queries answer slower, so an early key's answer lands after the last key's.
+      return {
+        delayMs: Math.max(20, 400 - query.length * 60),
+        body: cities.filter((name) => name.toLowerCase().startsWith(query.toLowerCase())).slice(0, 5),
+      };
+    },
+  );
+  expect(await call(page, `return await pickValue(page.getByLabel("City"), "Santiago", fast);`)).toMatchObject({
+    result: { picked: true, label: "Santiago", rank: "exact" },
+  });
+  expect(await submitted(page)).toEqual({ city: "Santiago" });
+});
+
+test("pickValue types the value once more when a slower, older answer replaced the list", async ({ page }) => {
+  await serve(
+    page,
+    `<form><label>Destination <input id="to" role="combobox" aria-controls="to-list" autocomplete="off"></label>
+<ul id="to-list" role="listbox"></ul></form>
+<script>
+const input = document.getElementById("to"), list = document.getElementById("to-list");
+const draw = (names) => { list.innerHTML = names.map((name) => '<li role="option">' + name + "</li>").join(""); };
+// Focus asks for recent places slowly; typing asks for matches quickly. Both draw on arrival.
+input.addEventListener("focus", async () => draw(await (await fetch("/api/recent")).json()));
+input.addEventListener("input", async () => {
+  if (input.value === "") { draw([]); return; }
+  draw(await (await fetch("/api/places?q=" + encodeURIComponent(input.value))).json());
+});
+list.addEventListener("click", (event) => { input.value = event.target.textContent; draw([]); });
+</script>`,
+    (params, path) =>
+      path === "/api/recent"
+        ? { delayMs: 400, body: ["Lisbon", "Porto"] }
+        : { delayMs: 40, body: ["Madrid", "Malaga"].filter((name) => name.toLowerCase().startsWith((params.get("q") ?? "").toLowerCase())) },
+  );
+  expect(await call(page, `return await pickValue(page.getByLabel("Destination"), "Madrid", fast);`)).toMatchObject({
+    result: { picked: true, label: "Madrid" },
+  });
+  await expect(page.getByLabel("Destination")).toHaveValue("Madrid");
+});
+
+test("pickValue waits for debounced suggestions that show no loading sign", async ({ page }) => {
+  await serve(page, `<form><label>Fruit <input id="fruit" autocomplete="off"></label><div class="suggestions"></div></form>
+<script>
+const input = document.getElementById("fruit"), box = document.querySelector(".suggestions");
+let timer;
+input.addEventListener("input", () => {
+  clearTimeout(timer);
+  timer = setTimeout(() => {
+    box.innerHTML = ["Apple", "Apricot", "Avocado"].filter((name) => name.toLowerCase().startsWith(input.value.toLowerCase()))
+      .map((name) => '<div class="suggestion" data-value="' + name.toLowerCase() + '">' + name + "</div>").join("");
+  }, 300);
+});
+box.addEventListener("click", (event) => { input.value = event.target.textContent; box.innerHTML = ""; });
+</script>`);
+  expect(await call(page, `return await pickValue(page.getByLabel("Fruit"), "Apricot", fast);`)).toEqual({
+    result: { picked: true, kind: "typeahead", label: "Apricot", value: "apricot", rank: "exact", refills: 0 },
+  });
+});
+
+/**
+ * A grid row whose cell editor is an ARIA combobox. A commit sends a save; `reverts` times the
+ * grid's refresh, which redraws the editor with the row's old value, answers the save.
+ */
+const gridEditor = (reverts: "once" | "always") => `
+<table><tbody><tr><td>Row 1</td><td id="cell"></td></tr></tbody></table>
+<output id="saves">0</output>
+<script>
+const owners = ["Avery Lee", "Blake Moss", "Casey Ng"];
+let saved = "Avery Lee", refreshes = 0;
+const draw = (value) => {
+  document.getElementById("cell").innerHTML =
+    '<input aria-label="Owner" role="combobox" aria-controls="owner-list" autocomplete="off" value="' + value + '">' +
+    '<ul id="owner-list" role="listbox" hidden></ul>';
+  const input = document.querySelector("[aria-label=Owner]"), list = document.getElementById("owner-list");
+  input.addEventListener("input", () => {
+    list.hidden = false;
+    list.innerHTML = owners.filter((name) => name.toLowerCase().includes(input.value.toLowerCase()))
+      .map((name) => '<li role="option">' + name + "</li>").join("");
+  });
+  list.addEventListener("click", async (event) => {
+    input.value = event.target.textContent;
+    list.hidden = true;
+    const chosen = input.value;
+    document.getElementById("saves").textContent++;
+    await fetch("/api/save");
+    refreshes++;
+    if (${JSON.stringify(reverts)} === "always" || refreshes === 1) draw(saved);
+    else saved = chosen;
+  });
+};
+draw(saved);
+</script>`;
+
+test("pickValue picks again when a grid refresh puts the old value back", async ({ page }) => {
+  await serve(page, gridEditor("once"), () => ({ delayMs: 80, body: {} }));
+  expect(await call(page, `return await pickValue(page.getByLabel("Owner"), "Casey Ng", fast);`)).toEqual({
+    result: { picked: true, kind: "typeahead", label: "Casey Ng", value: "", rank: "exact", refills: 1 },
+  });
+  await expect(page.getByLabel("Owner")).toHaveValue("Casey Ng");
+  await expect(page.locator("#saves")).toHaveText("2");
+});
+
+test("pickValue gives up as not_committed after a bounded number of refills", async ({ page }) => {
+  await serve(page, gridEditor("always"), () => ({ delayMs: 40, body: {} }));
+  expect(await call(page, `return await pickValue(page.getByLabel("Owner"), "Casey Ng", { ...fast, refills: 1 });`)).toEqual({
+    error: "not_committed",
+  });
+  await expect(page.locator("#saves")).toHaveText("2");
+});
+
+/** A button that opens a listbox of `options` (`[value, text, title?, disabled?]`). */
+const dropdown = (options: readonly (readonly [string, string, string?, boolean?])[]) => `
+<form><button type="button" id="pick" aria-label="Customer" aria-haspopup="listbox" aria-expanded="false" aria-controls="customers">Choose</button>
+<div id="customers" role="listbox" hidden>${options
+  .map(
+    ([value, text, title, disabled]) =>
+      `<div role="option" data-value="${value}"${title ? ` title="${title}"` : ""}${disabled ? ' aria-disabled="true"' : ""}>${text}</div>`,
+  )
+  .join("")}</div><input type="hidden" name="customer"></form>
+<script>
+const button = document.getElementById("pick"), list = document.getElementById("customers");
+button.addEventListener("click", () => { list.hidden = !list.hidden; button.setAttribute("aria-expanded", String(!list.hidden)); });
+list.addEventListener("click", (event) => {
+  const option = event.target.closest("[role=option]");
+  if (!option || option.getAttribute("aria-disabled") === "true") return;
+  button.textContent = option.title || option.innerText.split("\\n")[0];
+  document.querySelector("[name=customer]").value = option.dataset.value;
+  list.hidden = true;
+  button.setAttribute("aria-expanded", "false");
+});
+</script>`;
+
+test("pickValue matches an option by the name in its title or the value in its data attribute", async ({ page }) => {
+  const options = [
+    ["ACM-2", "Acme Insur…", "Acme Insurance Group"],
+    ["ACM-3", "Acme Indus…", "Acme Industrial Supply"],
+  ] as const;
+  await serve(page, dropdown(options));
+  const customer = 'page.getByRole("button", { name: "Customer" })';
+  expect(await call(page, `return await pickValue(${customer}, "Acme Insurance Group", fast);`)).toEqual({
+    result: { picked: true, kind: "dropdown", label: "Acme Insur…", value: "ACM-2", rank: "exact", refills: 0 },
+  });
+  expect(await submitted(page)).toEqual({ customer: "ACM-2" });
+  expect(await call(page, `return await pickValue(${customer}, "acm-3", fast);`)).toMatchObject({
+    result: { picked: true, value: "ACM-3", rank: "normalized" },
+  });
+  expect(await submitted(page)).toEqual({ customer: "ACM-3" });
+});
+
+test("pickValue reports two options with one label as ambiguous, each by its full text", async ({ page }) => {
+  await serve(
+    page,
+    dropdown([
+      ["17", "John Smith<br><small>john.s@example.com</small>"],
+      ["42", "John Smith<br><small>jsmith@example.org</small>"],
+      ["50", "Jane Smith"],
+      ["61", "Jon Smithers", "", true],
+    ]),
+  );
+  expect(await call(page, `return await pickValue(page.getByRole("button", { name: "Customer" }), "John Smith", fast);`)).toEqual({
+    result: {
+      picked: false,
+      reason: "option_ambiguous",
+      wanted: "John Smith",
+      available: ["John Smith", "Jane Smith"],
+      matches: ["John Smith john.s@example.com", "John Smith jsmith@example.org"],
+    },
+  });
+  expect(await submitted(page)).toEqual({ customer: "" });
+  expect(await call(page, `return await pickValue(page.getByRole("button", { name: "Customer" }), "Jon Smithers", fast);`)).toMatchObject({
+    result: { picked: false, reason: "option_disabled", matches: ["Jon Smithers"] },
+  });
+});
+
+test("pickValue scrolls a virtualized list to an option it has not rendered yet", async ({ page }) => {
+  await serve(page, `<form><button type="button" aria-label="Item" aria-haspopup="listbox" aria-controls="items" aria-expanded="false">Choose</button>
+<div id="items" role="listbox" hidden style="height:200px;overflow-y:auto;position:relative">
+<div id="spacer" style="position:relative"></div></div><input type="hidden" name="item"></form>
+<script>
+const button = document.querySelector("button"), list = document.getElementById("items"), spacer = document.getElementById("spacer");
+const total = 200, height = 24;
+spacer.style.height = total * height + "px";
+// Only the rows in view, and a few beyond, are in the page.
+const render = () => {
+  const first = Math.max(0, Math.floor(list.scrollTop / height) - 2);
+  spacer.innerHTML = "";
+  for (let index = first; index < Math.min(total, first + 20); index++)
+    spacer.insertAdjacentHTML("beforeend", '<div role="option" data-value="i' + index + '" style="position:absolute;top:' + index * height + 'px;height:' + height + 'px">Item ' + index + "</div>");
+};
+list.addEventListener("scroll", render);
+button.addEventListener("click", () => { list.hidden = false; button.setAttribute("aria-expanded", "true"); render(); });
+list.addEventListener("click", (event) => {
+  const option = event.target.closest("[role=option]");
+  button.textContent = option.textContent;
+  document.querySelector("[name=item]").value = option.dataset.value;
+  list.hidden = true;
+  button.setAttribute("aria-expanded", "false");
+});
+</script>`);
+  expect(await call(page, `return await pickValue(page.getByRole("button", { name: "Item" }), "Item 150", fast);`)).toMatchObject({
+    result: { picked: true, label: "Item 150", value: "i150", rank: "exact" },
+  });
+  expect(await submitted(page)).toEqual({ item: "i150" });
+});
+
+test("pickValue scrolls a list that loads more options from the site as it scrolls", async ({ page }) => {
+  await serve(
+    page,
+    `<form><button type="button" aria-label="Region" aria-haspopup="listbox" aria-controls="regions" aria-expanded="false">Choose</button>
+<ul id="regions" role="listbox" hidden style="height:150px;overflow-y:auto;margin:0"></ul></form>
+<script>
+const button = document.querySelector("button"), list = document.getElementById("regions");
+let next = 0, busy = false;
+const more = async () => {
+  if (busy || next >= 100) return;
+  busy = true;
+  list.setAttribute("aria-busy", "true");
+  const names = await (await fetch("/api/regions?from=" + next)).json();
+  list.insertAdjacentHTML("beforeend", names.map((name) => '<li role="option" style="height:20px">' + name + "</li>").join(""));
+  next += names.length;
+  list.removeAttribute("aria-busy");
+  busy = false;
+};
+list.addEventListener("scroll", () => { if (list.scrollTop + list.clientHeight >= list.scrollHeight - 10) more(); });
+button.addEventListener("click", () => { list.hidden = false; button.setAttribute("aria-expanded", "true"); if (next === 0) more(); });
+list.addEventListener("click", (event) => { button.textContent = event.target.textContent; list.hidden = true; button.setAttribute("aria-expanded", "false"); });
+</script>`,
+    (params) => {
+      const from = Number(params.get("from"));
+      return { delayMs: 60, body: Array.from({ length: 20 }, (_, index) => `Region ${from + index}`) };
+    },
+  );
+  expect(await call(page, `return await pickValue(page.getByRole("button", { name: "Region" }), "Region 87", fast);`)).toMatchObject({
+    result: { picked: true, label: "Region 87" },
+  });
+  await expect(page.getByRole("button", { name: "Region" })).toHaveText("Region 87");
+});
+
+test("pickValue works inside a shadow root", async ({ page }) => {
+  await serve(page, `<form><picker-box></picker-box></form>
+<script>
+customElements.define("picker-box", class extends HTMLElement {
+  connectedCallback() {
+    const root = this.attachShadow({ mode: "open" });
+    root.innerHTML = '<label>Team <input role="combobox" aria-controls="teams" autocomplete="off"></label><ul id="teams" role="listbox" hidden></ul>';
+    const input = root.querySelector("input"), list = root.getElementById("teams");
+    input.addEventListener("input", () => {
+      list.hidden = false;
+      list.innerHTML = ["Design", "Data", "Development"].filter((name) => name.toLowerCase().startsWith(input.value.toLowerCase()))
+        .map((name) => '<li role="option">' + name + "</li>").join("");
+    });
+    list.addEventListener("click", (event) => { input.value = event.target.textContent; list.hidden = true; });
+  }
+});
+</script>`);
+  expect(await call(page, `return await pickValue(page.getByRole("combobox", { name: "Team" }), "Data", fast);`)).toMatchObject({
+    result: { picked: true, label: "Data", rank: "exact" },
+  });
+  await expect(page.getByRole("combobox", { name: "Team" })).toHaveValue("Data");
+});
+
+test("pickValue works inside an iframe", async ({ page }) => {
+  await serve(page, `<iframe src="/frame" style="width:400px;height:300px"></iframe>`, undefined, { "/frame": combobox });
+  expect(
+    await call(page, `return await pickValue(page.frameLocator("iframe").getByRole("combobox", { name: "Assignee" }), "Tanya Fox", fast);`),
+  ).toMatchObject({ result: { picked: true, label: "Tanya Fox", value: "5" } });
+  await expect(page.frameLocator("iframe").locator("[name=person]")).toHaveValue("5");
+});
+
+/** A combobox whose options ignore the mouse: ArrowDown moves the active option, Enter commits. */
+const keyboardOnly = `
+<form><label>Priority <input id="priority" role="combobox" aria-controls="levels" aria-expanded="false" autocomplete="off"></label>
+<ul id="levels" role="listbox" hidden></ul><input type="hidden" name="priority"></form>
+<script>
+const input = document.getElementById("priority"), list = document.getElementById("levels");
+const levels = ["Low", "Normal", "High", "Urgent"];
+let active = -1;
+const draw = () => {
+  const shown = levels.filter((name) => name.toLowerCase().includes(input.value.toLowerCase()));
+  list.innerHTML = shown.map((name, index) => '<li role="option" id="lvl-' + index + '"' + (index === active ? ' class="is-active"' : "") + ">" + name + "</li>").join("");
+  input.setAttribute("aria-activedescendant", active >= 0 ? "lvl-" + active : "");
+  list.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+};
+input.addEventListener("input", () => { active = -1; draw(); });
+input.addEventListener("keydown", (event) => {
+  const count = list.querySelectorAll("[role=option]").length;
+  if (event.key === "ArrowDown") { active = Math.min(count - 1, active + 1); draw(); event.preventDefault(); }
+  if (event.key === "Enter" && active >= 0) {
+    input.value = list.querySelectorAll("[role=option]")[active].textContent;
+    document.querySelector("[name=priority]").value = input.value;
+    list.hidden = true;
+    input.setAttribute("aria-expanded", "false");
+    event.preventDefault();
+  }
+});
+</script>`;
+
+test("pickValue falls back to ArrowDown and Enter when a click does not commit", async ({ page }) => {
+  await serve(page, keyboardOnly);
+  expect(await call(page, `return await pickValue(page.getByLabel("Priority"), "High", fast);`)).toMatchObject({
+    result: { picked: true, label: "High", refills: 1 },
+  });
+  expect(await submitted(page)).toEqual({ priority: "High" });
+});
+
+test("pickValue selects with the keyboard alone when asked", async ({ page }) => {
+  await serve(page, keyboardOnly);
+  expect(await call(page, `return await pickValue(page.getByLabel("Priority"), "Urgent", { ...fast, commit: "keyboard" });`)).toMatchObject({
+    result: { picked: true, label: "Urgent", refills: 0 },
+  });
+  expect(await submitted(page)).toEqual({ priority: "Urgent" });
+});
+
+test("pickValue blurs the field when the site commits a choice only on blur", async ({ page }) => {
+  await serve(page, `<form><label>Airport <input id="airport" autocomplete="off"></label>
+<ul id="airports" role="listbox"></ul><output id="chosen"></output></form>
+<script>
+const input = document.getElementById("airport"), list = document.getElementById("airports");
+const airports = ["Oslo (OSL)", "Osaka (KIX)"];
+input.addEventListener("input", () => {
+  list.innerHTML = airports.filter((name) => name.toLowerCase().includes(input.value.toLowerCase())).map((name) => '<li role="option">' + name + "</li>").join("");
+});
+list.addEventListener("mousedown", (event) => event.preventDefault());
+list.addEventListener("click", (event) => { input.value = event.target.textContent; list.innerHTML = ""; });
+// The choice counts only once the field loses focus holding a listed name.
+input.addEventListener("blur", () => { if (airports.includes(input.value)) document.getElementById("chosen").textContent = input.value; });
+</script>`);
+  expect(
+    await call(page, `return await pickValue(page.getByLabel("Airport"), "OSL", { ...fast, committed: page.locator("#chosen") });`),
+  ).toMatchObject({ result: { picked: true, label: "Oslo (OSL)", rank: "words", refills: 0 } });
+  await expect(page.locator("#chosen")).toHaveText("Oslo (OSL)");
+});
+
+/** A grid cell editor that saves only when Tab leaves it. */
+const tabCommit = `
+<table><tr><td><input aria-label="Status" role="combobox" aria-controls="statuses" autocomplete="off"><ul id="statuses" role="listbox" hidden></ul></td>
+<td id="status-cell">Open</td><td><input aria-label="Notes"></td></tr></table>
+<script>
+const input = document.querySelector("[aria-label=Status]"), list = document.getElementById("statuses");
+const statuses = ["Open", "In progress", "Closed"];
+let active = -1;
+const draw = () => {
+  const shown = statuses.filter((name) => name.toLowerCase().includes(input.value.toLowerCase()));
+  list.innerHTML = shown.map((name, index) => '<li role="option" id="st-' + index + '">' + name + "</li>").join("");
+  input.setAttribute("aria-activedescendant", active >= 0 ? "st-" + active : "");
+  list.hidden = false;
+};
+input.addEventListener("input", () => { active = -1; draw(); });
+list.addEventListener("mousedown", (event) => event.preventDefault());
+list.addEventListener("click", (event) => { input.value = event.target.textContent; list.hidden = true; });
+input.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") { active++; draw(); event.preventDefault(); }
+  if (event.key === "Enter" && active >= 0) { input.value = list.querySelectorAll("li")[active].textContent; list.hidden = true; event.preventDefault(); }
+  if (event.key === "Tab" && statuses.includes(input.value)) document.getElementById("status-cell").textContent = input.value;
+});
+</script>`;
+
+test("pickValue presses Tab to commit when asked, and tries Tab on a refill when it was not", async ({ page }) => {
+  await serve(page, tabCommit);
+  const cell = 'page.locator("#status-cell")';
+  expect(
+    await call(page, `return await pickValue(page.getByLabel("Status"), "Closed", { ...fast, blur: "tab", committed: ${cell} });`),
+  ).toMatchObject({ result: { picked: true, label: "Closed", refills: 0 } });
+  await expect(page.locator("#status-cell")).toHaveText("Closed");
+  expect(
+    await call(page, `return await pickValue(page.getByLabel("Status"), "In progress", { ...fast, committed: ${cell} });`),
+  ).toMatchObject({ result: { picked: true, label: "In progress", refills: 1 } });
+  await expect(page.locator("#status-cell")).toHaveText("In progress");
+});
+
+test("pickValue opens a dropdown built from plain divs and reads the choice back from it", async ({ page }) => {
+  await serve(page, `<form><div class="field"><span>Size</span>
+<div class="dd" id="size" tabindex="0">Pick a size</div>
+<div class="dd-menu" style="display:none;border:1px solid #999">
+  <div class="dd-item" data-value="s"><span class="dd-item-label">Small</span></div>
+  <div class="dd-item" data-value="m"><span class="dd-item-label">Medium</span></div>
+  <div class="dd-item" data-value="l"><span class="dd-item-label">Large</span></div>
+</div></div><input type="hidden" name="size"></form>
+<script>
+const control = document.getElementById("size"), menu = document.querySelector(".dd-menu");
+control.addEventListener("click", () => { menu.style.display = menu.style.display === "none" ? "block" : "none"; });
+menu.addEventListener("click", (event) => {
+  const item = event.target.closest(".dd-item");
+  control.textContent = item.textContent.trim();
+  document.querySelector("[name=size]").value = item.dataset.value;
+  menu.style.display = "none";
+});
+</script>`);
+  expect(await call(page, `return await pickValue(page.locator("#size"), "medium", fast);`)).toEqual({
+    result: { picked: true, kind: "dropdown", label: "Medium", value: "m", rank: "normalized", refills: 0 },
+  });
+  expect(await submitted(page)).toEqual({ size: "m" });
+});
+
+test("pickValue never picks an Add or Create row for a value the list lacks", async ({ page }) => {
+  await serve(page, `<form><label>Vendor <input id="vendor" role="combobox" aria-controls="vendors" autocomplete="off"></label>
+<ul id="vendors" role="listbox"></ul></form>
+<script>
+const input = document.getElementById("vendor"), list = document.getElementById("vendors");
+input.addEventListener("input", () => {
+  const names = ["Northwind Traders", "Contoso Supplies"].filter((name) => name.toLowerCase().includes(input.value.toLowerCase()));
+  list.innerHTML = names.map((name) => '<li role="option">' + name + "</li>").join("") +
+    '<li role="option" class="create-option">Add "' + input.value + '"</li>';
+});
+</script>`);
+  expect(await call(page, `return await pickValue(page.getByLabel("Vendor"), "Fabrikam", fast);`)).toEqual({
+    result: { picked: false, reason: "option_missing", wanted: "Fabrikam", available: [], matches: [] },
+  });
+});
+
+test("pickValue fails fast as popup_missing when the control opens nothing", async ({ page }) => {
+  await serve(page, `<button type="button" aria-label="Broken" aria-haspopup="listbox">Choose</button>`);
+  expect(await call(page, `return await pickValue(page.getByRole("button", { name: "Broken" }), "Anything", fast);`)).toEqual({
+    error: "popup_missing",
+  });
+});
+
+test("pickValue fails as options_loading when the list never finishes loading", async ({ page }) => {
+  await serve(page, `<label>Account <input id="account" autocomplete="off"></label><div id="box"></div>
+<script>document.getElementById("account").addEventListener("input", () => {
+  document.getElementById("box").innerHTML = '<div class="spinner" role="progressbar" style="width:20px;height:20px">…</div>';
+});</script>`);
+  expect(await call(page, `return await pickValue(page.getByLabel("Account"), "Savings", { ...fast, timeout: 2000 });`)).toEqual({
+    error: "options_loading",
+  });
+});
+
+test("pickValue waits for a site's own answered signal when given one", async ({ page }) => {
+  await serve(page, `<label>Code <input id="code" role="combobox" aria-controls="codes" autocomplete="off"></label>
+<ul id="codes" role="listbox" data-query=""></ul>
+<script>
+const input = document.getElementById("code"), list = document.getElementById("codes");
+input.addEventListener("input", () => {
+  // The old options stay until the new answer, which arrives in two parts.
+  setTimeout(() => { list.insertAdjacentHTML("beforeend", '<li role="option">' + input.value + '-A</li>'); }, 150);
+  setTimeout(() => { list.innerHTML = '<li role="option">' + input.value + '</li><li role="option">' + input.value + '-B</li>'; list.dataset.query = input.value; }, 450);
+});
+list.addEventListener("click", (event) => { input.value = event.target.textContent; list.innerHTML = ""; });
+</script>`);
+  expect(
+    await call(
+      page,
+      `return await pickValue(page.getByLabel("Code"), "ZX9", { ...fast, answered: async (popup, query) => (await popup.getAttribute("data-query")) === query });`,
+    ),
+  ).toMatchObject({ result: { picked: true, label: "ZX9", rank: "exact" } });
+});
+
+test("pickValue fails as timeout, a fixed reason, when its control never shows", async ({ page }) => {
+  await serve(page, `<p>No picker here</p>`);
+  expect(await call(page, `return await pickValue(page.getByLabel("Missing"), "Anything", { ...fast, timeout: 500 });`)).toEqual({
+    error: "timeout",
+  });
+});
