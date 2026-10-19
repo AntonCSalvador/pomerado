@@ -165,6 +165,9 @@ try {
   await element.dispose();
 }`;
 
+/** How much of a file the type check reads: its first 4,096 bytes, as every host reads them. */
+const leadingBytes = 4_096;
+
 /**
  * One run's files over a host's hook. A script's reference is resolved by `resolve`, which names
  * the hook's reference for each one the run may use, such as the references in its input. A file
@@ -220,10 +223,11 @@ export const makeRunFiles = (options: {
         );
         if (bytes.byteLength !== source.size) return yield* refuse("unavailable");
         const name = safeName(source.name, "file");
-        // A program, by name, declared type or bytes, is refused; so is a type the host does not
-        // take, or bytes that are not the declared type.
+        // A program, by name, declared type or leading bytes, is refused; so is a type the host
+        // does not take, or leading bytes that are not the declared type.
         const typeRefusal =
-          declaredRefusal(name, source.media_type) ?? contentRefusal(source.media_type, bytes);
+          declaredRefusal(name, source.media_type) ??
+          contentRefusal(source.media_type, bytes.subarray(0, leadingBytes));
         if (typeRefusal === "executable") return yield* refuse("executable");
         if (typeRefusal !== undefined) return yield* refuse("type_mismatch");
         const path = yield* options.hook

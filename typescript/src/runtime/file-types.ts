@@ -245,28 +245,128 @@ const extensionOf = (name: string) => {
   return dot <= 0 ? "" : name.slice(dot + 1).toLowerCase();
 };
 
-/** Whether the bytes or the name make the file a program, which the host never moves. */
-export const isProgram = (bytes: Uint8Array, name: string) =>
-  executableContent(bytes) || declaredRefusal(name, "application/octet-stream") === "executable";
-
-/** Checks that only a type's declaration decides, which no leading bytes prove. */
-const unsigned: ReadonlySet<(bytes: Uint8Array) => boolean> = new Set([text, anyContent]);
-
-/** The type the file's first bytes prove, if they prove one: the first that takes them. */
-export const sniffedType = (bytes: Uint8Array): string | undefined =>
-  Object.entries(accepted).find(([, check]) => !unsigned.has(check) && check(bytes))?.[0];
-
 /** The media type a name's extension implies, or `application/octet-stream`. */
 export const typeOfName = (name: string) =>
   extensionTypes[extensionOf(name)] ?? "application/octet-stream";
 
-/**
- * Whether the bytes may be the declared type: a type the host takes, whose check its first bytes
- * pass. Any bytes may be the generic octet stream. A type with a signature that the bytes lack is
- * refused, so a "PDF" whose bytes are not a PDF is not one, and text must be UTF-8 without NUL.
+/*
+ * A download's checks: a program is never moved, and a download is labelled with the type its
+ * first bytes prove, else the server's. Only a strong signature proves a type, so text keeps the
+ * server's label.
  */
-export const bytesMatchType = (bytes: Uint8Array, declared: string) =>
-  accepted[essenceOf(declared)]?.(bytes) === true;
+
+/** A signature: bytes at an offset, `undefined` matching any byte. */
+type Signature = readonly [offset: number, bytes: readonly (number | undefined)[]];
+
+/** Names of programs and installers whose bytes need not carry a signature. */
+const programExtensions = new Set([
+  "apk",
+  "app",
+  "bat",
+  "cmd",
+  "com",
+  "cpl",
+  "dll",
+  "exe",
+  "jar",
+  "msi",
+  "ps1",
+  "scr",
+  "sh",
+  "vbs",
+]);
+
+/** Types a file's first bytes prove, with every declared type those bytes may carry. */
+const knownTypes: readonly {
+  readonly type: string;
+  readonly signatures: readonly Signature[];
+  readonly carries: readonly string[];
+}[] = [
+  { type: "application/pdf", signatures: [[0, ascii("%PDF-")]], carries: [] },
+  {
+    type: "image/png",
+    signatures: [[0, [0x89, ...ascii("PNG"), 0x0d, 0x0a, 0x1a, 0x0a]]],
+    carries: [],
+  },
+  { type: "image/jpeg", signatures: [[0, [0xff, 0xd8, 0xff]]], carries: ["image/jpg"] },
+  { type: "image/gif", signatures: [[0, ascii("GIF87a")], [0, ascii("GIF89a")]], carries: [] },
+  {
+    type: "image/webp",
+    signatures: [[0, [...ascii("RIFF"), undefined, undefined, undefined, undefined, ...ascii("WEBP")]]],
+    carries: [],
+  },
+  {
+    type: "image/tiff",
+    signatures: [
+      [0, [0x49, 0x49, 0x2a, 0x00]],
+      [0, [0x4d, 0x4d, 0x00, 0x2a]],
+    ],
+    carries: [],
+  },
+  { type: "image/heic", signatures: [[4, ascii("ftypheic")], [4, ascii("ftypmif1")]], carries: ["image/heif"] },
+  {
+    type: "application/zip",
+    signatures: [[0, ascii("PK\x03\x04")], [0, ascii("PK\x05\x06")]],
+    // Office and other formats that are zip containers.
+    carries: [
+      "application/x-zip-compressed",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "application/vnd.oasis.opendocument.text",
+      "application/vnd.oasis.opendocument.spreadsheet",
+      "application/vnd.oasis.opendocument.presentation",
+      "application/epub+zip",
+    ],
+  },
+  { type: "application/gzip", signatures: [[0, [0x1f, 0x8b]]], carries: ["application/x-gzip"] },
+  {
+    type: "application/x-cfb",
+    signatures: [[0, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]]],
+    // Legacy Office documents and Outlook messages share the compound file format.
+    carries: [
+      "application/msword",
+      "application/vnd.ms-excel",
+      "application/vnd.ms-powerpoint",
+      "application/vnd.ms-outlook",
+    ],
+  },
+  { type: "application/vnd.rar", signatures: [[0, ascii("Rar!\x1a\x07")]], carries: ["application/x-rar-compressed"] },
+  {
+    type: "application/x-7z-compressed",
+    signatures: [[0, [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]]],
+    carries: [],
+  },
+];
+
+const matches = (bytes: Uint8Array, [offset, expected]: Signature) =>
+  bytes.length >= offset + expected.length &&
+  expected.every((byte, index) => byte === undefined || bytes[offset + index] === byte);
+
+/** Whether the bytes or the name make the file a program, which the host never moves. */
+export const isProgram = (bytes: Uint8Array, name: string) =>
+  executableContent(bytes) || programExtensions.has(extensionOf(name));
+
+/** The type the file's first bytes prove, if they prove one. */
+export const sniffedType = (bytes: Uint8Array): string | undefined =>
+  knownTypes.find(({ signatures }) => signatures.some((signature) => matches(bytes, signature)))
+    ?.type;
+
+/**
+ * Whether the bytes may be the declared type. Bytes that prove a type must be that type or one it
+ * carries (a zip may be a .docx), unless the declaration is the generic octet stream. A type with a
+ * signature that the bytes lack is refused, so a "PDF" whose bytes are not a PDF is not one. A type
+ * without a signature, such as text or CSV, is taken as declared.
+ */
+export const bytesMatchType = (bytes: Uint8Array, declared: string) => {
+  const type = essenceOf(declared);
+  if (type === "application/octet-stream") return true;
+  const sniffed = knownTypes.find(({ signatures }) =>
+    signatures.some((signature) => matches(bytes, signature)),
+  );
+  if (sniffed !== undefined) return sniffed.type === type || sniffed.carries.includes(type);
+  return !knownTypes.some((known) => known.type === type || known.carries.includes(type));
+};
 
 /**
  * Whether a file input's `accept` attribute takes a file with this name and media type: an

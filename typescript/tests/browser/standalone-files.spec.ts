@@ -156,7 +156,7 @@ test("an MCP tool call uploads the caller's file and returns the downloaded stat
 test("a run places only a file its caller's input names, only when its bytes, the input and the caps allow it, and returns only files it collected", async () => {
   test.info().annotations.push({
     type: "slow",
-    description: "Nine native runs through six served tools, each run on a fresh page",
+    description: "Ten native runs through six served tools, each run on a fresh page",
   });
   test.setTimeout(120_000);
   const site = await startFileSite();
@@ -174,6 +174,9 @@ test("a run places only a file its caller's input names, only when its bytes, th
   const script = await write("notes.txt", "#!/bin/sh\necho hi\n");
   const table = await write("receipt.csv", "item,total\nreceipt,12.50\n");
   const large = await write("large.txt", receipt.repeat(4));
+  // Only a file's first 4,096 bytes prove its type, so a stray byte past them is no mismatch.
+  const longText = join(directory, "long.txt");
+  await writeFile(longText, Buffer.concat([Buffer.from("a".repeat(4_096)), Buffer.from([0xff])]));
   const downloads = join(directory, "downloads");
   const caps = (runFiles: number) => ({
     fileBytes: receipt.length * 2,
@@ -213,6 +216,10 @@ async () => ({ statement: { $file: { id: "made-up", name: "other.txt", media_typ
     const placed = await place(receiptField, file);
     expect(placed.structuredContent, JSON.stringify(placed)).toEqual({
       placed: { name: "receipt.txt", media_type: "text/plain", size: receipt.length },
+    });
+    const placedLong = await place(receiptField, pathToFileURL(longText).href);
+    expect(placedLong.structuredContent, JSON.stringify(placedLong)).toEqual({
+      placed: { name: "long.txt", media_type: "text/plain", size: 4_097 },
     });
     // The script sees why: a file the caller must replace is invalid input, and a refusal before
     // the page sent nothing.
