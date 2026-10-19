@@ -238,7 +238,12 @@ before the question is reported as a possible change when no answer comes.
 ## During a mint
 
 A read build's example run, or a write build's `act` step, asks the build's owner
-through the same request, and the answer comes back to the running script. Guardian
+through the same request, and the answer comes back to the running script. Ask the owner each
+decision once per build: one a declared question will ask during the run needs no
+`request_input` of your own first. The host reuses an earlier answer to a choice,
+multi_choice, text or confirm question, never a secret, code or login, for a later ask with the
+same id, type, prompt and options, so keep a declared question unchanged between runs unless its
+review asks for a rewording. Guardian
 reviews each question first. When it asks for a rewording, nobody is asked, the `ask`
 fails and the execution's result carries `scriptQuestion` with Guardian's rationale:
 change the declared question as it says and execute again. If the owner does not answer

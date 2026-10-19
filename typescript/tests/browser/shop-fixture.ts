@@ -45,7 +45,7 @@ interface ShopState extends StoreState {
   codePageLoads: number;
   /** Codes posted to the code screen. */
   codePosts: number;
-  /** Whether each code posted to the code screen was `shopCode`, whole, in order. */
+  /** Whether each code posted to the code screen was `code`, whole, in order. */
   codeMatches: boolean[];
   apiRequests: number;
   curlApiRequests: number;
@@ -88,7 +88,7 @@ interface ShopState extends StoreState {
    */
   accountRenderMs: number;
   /**
-   * Whether the one-screen sign-in asks for `shopCode` on a code screen, `/two-factor`, before it
+   * Whether the one-screen sign-in asks for `code` on a code screen, `/two-factor`, before it
    * signs the browser in. The screen's form posts the code back to it.
    */
   loginCode: boolean;
@@ -98,11 +98,13 @@ interface ShopState extends StoreState {
    */
   codeSubmitsOnEnter: boolean;
   /**
-   * How many one-character boxes the code screen splits `shopCode` across, one digit each, named
+   * How many one-character boxes the code screen splits `code` across, one digit each, named
    * `code-1` onward, under a Verify button; 0 for its one code field. Each box moves the focus to
    * the next once it holds a digit, as such widgets do.
    */
   codeBoxes: number;
+  /** The code the code screen takes: `shopCode`, or a longer one split across more boxes. */
+  code: string;
   /**
    * What the one-screen sign-in shows a signed-in session: `form` its form, as any session sees
    * it, `account` a redirect to the account page, as many sites answer a signed-in visit (to the
@@ -345,8 +347,8 @@ boxes.forEach((box, at) => box.addEventListener("input", () => {
             .map((box) => posted.get(`code-${box}`) ?? "")
             .join("")
         : posted.get("code");
-    state.codeMatches.push(code === shopCode);
-    if (code !== shopCode || cookieOf(request, "shop_pending") !== pending)
+    state.codeMatches.push(code === state.code);
+    if (code !== state.code || cookieOf(request, "shop_pending") !== pending)
       return html(response, `<title>Code</title><p id='wrong-code'>Wrong code</p>${codeForm()}`);
     response.writeHead(303, {
       location: state.workspaceChooser ? "/choose-workspace" : "/account",
@@ -682,6 +684,7 @@ export const startShop = async (directory: string): Promise<Shop> => {
     loginCode: false,
     codeSubmitsOnEnter: false,
     codeBoxes: 0,
+    code: shopCode,
     signedInLogin: "form",
     workspaceChooser: false,
     signedOutShowsForm: true,
