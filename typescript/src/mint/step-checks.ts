@@ -23,22 +23,26 @@ export const testInputNotJson =
 const JsonText = Schema.parseJson();
 
 /**
- * Preflight's refusal of a step's `testInput`, if any. Only a read signed out runs a live test on
- * an input the agent chose, as many as it needs, of the Playwright or the HTTP version alike. A
- * signed-in read and a write prove the tool with one run, the read's example or the write's act
- * session, so they run none. The host passes the build's state as it is now: a read that signed in
- * or became a write mid-build, a repair included, runs none from then on. A host that does not say
- * the read is signed out is treated as signed in.
+ * Preflight's refusal of a step's `testInput`, if any: an input the agent chose runs only as a
+ * read's live test (purpose test, target liveBrowser), as JSON text, on the Playwright or the HTTP
+ * version alike. A write never runs one: its act session is the one run that proves it. A read
+ * signed out runs as many as it needs. A signed-in read runs a few, its combined filter case: the
+ * harness holds it to `signedInTestInputLimit` distinct inputs, counted with its live_tests
+ * batches, so preflight leaves that bound to it.
  */
 export const preflightTestInput = (
   submitted: ExecutionRequest,
   scope: {
     readonly buildEffect: MintRequest["effect"] | undefined;
-    /** Whether the read signed in. Only `false`, a read signed out, runs inputs the agent chose. */
+    /**
+     * @deprecated Ignored: a signed-in read runs a bounded number of inputs it chose, and the
+     * harness, which knows the build's sign-in, enforces that bound. Kept so existing callers
+     * compile; it will be removed.
+     */
     readonly signedIn?: boolean;
     /**
-     * @deprecated Ignored: no count of agent-chosen tests limits a read signed out, and a
-     * signed-in read runs none. Kept so existing callers compile; it will be removed.
+     * @deprecated Ignored: the harness counts a signed-in read's inputs, and no count limits a
+     * read signed out. Kept so existing callers compile; it will be removed.
      */
     readonly executionHistory?: readonly {
       readonly input?: "agent_chosen" | "agent_chosen_batch";
@@ -57,10 +61,7 @@ export const preflightTestInput = (
     );
   if (Option.isNone(Schema.decodeUnknownOption(JsonText)(submitted.testInput)))
     return refused(testInputNotJson);
-  if (scope.signedIn === false) return undefined;
-  return refused(
-    `Only a read signed out runs a live test on an input you chose. ${scope.signedIn === true ? "This read signed in, so it" : "This host does not say this read is signed out, so it"} proves the tool with its example alone: run the example again after a fix, and check src/tool-http.mjs once against the example's input (omit testInput). Nothing was executed.`,
-  );
+  return undefined;
 };
 
 type InputObject = Readonly<Record<string, unknown>>;

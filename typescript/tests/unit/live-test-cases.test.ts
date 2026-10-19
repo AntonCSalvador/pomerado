@@ -6,6 +6,9 @@ import {
   decodeCasesFile,
   judgeCase,
   primaryListOf,
+  signedInTestInputRefusal,
+  testInputKey,
+  uncountedTestInputs,
 } from "../../src/mint/live-tests.js";
 
 // What the runner reads from a tool's schemas, and the verdicts, are pure and full of edge cases:
@@ -161,5 +164,44 @@ describe("decodeCasesFile", () => {
     expect(
       Either.isLeft(decodeCasesFile(JSON.stringify({ cases: [], notTested: [{ what: "Sort" }] }))),
     ).toBe(true);
+  });
+});
+
+// A signed-in read runs live tests on a few distinct inputs. What counts as one input is pure and
+// easy to get wrong: key order, nesting, repeats in one batch, and reruns of a counted input.
+describe("the signed-in test input bound", () => {
+  const combined = { query: "lamp", filters: { status: "open", tags: ["a", "b"] }, in_stock: true };
+  const reordered = { in_stock: true, filters: { tags: ["a", "b"], status: "open" }, query: "lamp" };
+
+  it("treats the same input written in another key order as one input, at every depth", () => {
+    expect(testInputKey(reordered)).toBe(testInputKey(combined));
+    expect(uncountedTestInputs([testInputKey(combined)], [reordered])).toEqual([]);
+  });
+
+  it("tells inputs apart by a value, a list's order or a missing key", () => {
+    const keys = [
+      combined,
+      { ...combined, in_stock: false },
+      { ...combined, filters: { status: "open", tags: ["b", "a"] } },
+      { query: "lamp", filters: combined.filters },
+    ].map(testInputKey);
+    expect(new Set(keys).size).toBe(4);
+  });
+
+  it("counts an input named by several cases of one batch once", () => {
+    expect(uncountedTestInputs([], [combined, reordered, { query: "desk" }])).toHaveLength(2);
+    expect(signedInTestInputRefusal([], [combined, reordered, { query: "desk" }])).toBeUndefined();
+  });
+
+  it("allows up to the limit, then refuses only a new input", () => {
+    const first = testInputKey(combined);
+    const second = testInputKey({ query: "desk" });
+    expect(signedInTestInputRefusal([first], [{ query: "desk" }])).toBeUndefined();
+    // Both counted: a rerun of either is free, a third input is refused.
+    expect(signedInTestInputRefusal([first, second], [reordered, { query: "desk" }])).toBeUndefined();
+    expect(signedInTestInputRefusal([first, second], [{ query: "chair" }])).toBeDefined();
+    // A batch that would add two inputs when one is left runs nothing.
+    expect(signedInTestInputRefusal([first], [{ query: "desk" }, { query: "chair" }])).toBeDefined();
+    expect(signedInTestInputRefusal([], [combined, { query: "desk" }, { query: "chair" }])).toBeDefined();
   });
 });

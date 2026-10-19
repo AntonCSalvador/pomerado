@@ -646,7 +646,7 @@ export const ExecutionRequest = Schema.Struct({
   testInput: Schema.optional(
     Schema.String.pipe(Schema.minLength(2), Schema.maxLength(16_384)).annotations({
       description:
-        "Only with purpose test and target liveBrowser on a read build: the tool's input you chose, as JSON text, to show the tool works for values other than the caller's, such as another route or passenger count. Public values only. Only a read signed out runs one; a signed-in read proves the tool with its example and runs none. Where the host offers live_tests, a read signed out runs its planned cases in batches with it instead. Omit it to run the caller's input.",
+        "Only with purpose test and target liveBrowser on a read build: the tool's input you chose, as JSON text, to show the tool works for values other than the caller's, such as another route or passenger count. Public values only. A read signed out runs as many as it needs. A signed-in read runs at most two distinct inputs beyond its example in a build or repair, its combined filter case (testing skill); running one again is free. Where the host offers live_tests, run planned cases in batches with it instead. Omit it to run the caller's input.",
     }),
   ),
   /** Only on authenticate, and only where the host offers autofill sign-in. */
@@ -675,8 +675,9 @@ export const ManagedSignInExecutionRequest = ExecutionRequest.omit("signInStep")
  * What a host provides for a read's live tests. The minting agent designs cases in
  * `test/cases.json` from what it saw on the site, and runs them in batches on the Playwright
  * version or the HTTP version (`entrypoint`); the harness keeps each version's results apart. A
- * batch runs only on a read that has not signed in: a signed-in read and a write prove the tool
- * with one run.
+ * read signed out runs as many as it needs. A signed-in read runs a few, on at most
+ * `signedInTestInputLimit` distinct inputs in a build or repair, as batches marked `signedIn`. A
+ * write runs none: its act session is the one run that proves it.
  */
 export interface LiveTestHost {
   /**
@@ -698,7 +699,9 @@ export interface LiveTestHost {
    * case first on a new browser with an empty profile, and marks each case run's `start`: `cold`
    * for a case that ran first on such a browser, `warm` for one that ran on a browser that kept
    * site data from earlier steps. A host with one browser runs every case warm, and the record
-   * shows that no case passed cold. `runLiveTestCase` runs a case and its next page. A
+   * shows that no case passed cold. A batch marked `signedIn` belongs to a signed-in read: the
+   * host runs each of its cases on the build's own signed-in browser, one at a time and warm,
+   * never on a new browser, which would hold no session. `runLiveTestCase` runs a case and its next page. A
    * case a host problem, a challenge, a site block or the deadline stopped is `inconclusive`; a
    * case not run by `batch.deadlineAt` (epoch milliseconds) is `inconclusive` with reason
    * `deadline`. A host may record the batch as one history entry marked `agent_chosen_batch`, as
@@ -731,6 +734,11 @@ export interface LiveTestBatch {
   readonly workers: number;
   /** When the batch must end, in epoch milliseconds. */
   readonly deadlineAt: number;
+  /**
+   * The read signed in: run every case on the build's own signed-in browser, warm, never on a new
+   * browser. The harness then asks for one worker.
+   */
+  readonly signedIn?: true;
 }
 
 export type LiveTestBatchResult =
@@ -1653,6 +1661,12 @@ export interface MintHarnessSnapshot {
    */
   readonly liveTestsOutOfTime?: boolean;
   /**
+   * The distinct inputs a signed-in read ran live tests on in this attempt (`testInputKey`), so a
+   * takeover keeps its count against `signedInTestInputLimit`. A worker from an older release
+   * drops it, and runs no live test for a signed-in read.
+   */
+  readonly signedInTestInputs?: readonly string[];
+  /**
    * The writes Guardian labelled that the outcome reviewer tracks, with their entrypoints and
    * source digests, so a takeover tracks them, and refuses their repeats, even when the
    * reviewer's own best-effort save failed.
@@ -1868,6 +1882,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   liveTests: Schema.optionalWith(Schema.Array(LiveTestRecord), { exact: true }),
   liveTestsHttp: Schema.optionalWith(Schema.Array(LiveTestRecord), { exact: true }),
   liveTestsOutOfTime: Schema.optionalWith(Schema.Boolean, { exact: true }),
+  signedInTestInputs: Schema.optionalWith(Schema.Array(Schema.String), { exact: true }),
   outcomeWrites: Schema.optionalWith(Schema.Array(OutcomeWrite), { exact: true }),
   purposes: Schema.Array(
     Schema.Struct({
@@ -2309,7 +2324,7 @@ export interface MintDependencies {
   ) => Effect.Effect<SignedInMarkerCheck, MintFailure>;
   /**
    * Runs a read's planned live tests in batches (`LiveTestHost`). Absent, the minter is offered
-   * no live_tests tool, and a read signed out tests one input at a time with execute.
+   * no live_tests tool, and a read tests one input at a time with execute.
    */
   readonly liveTests?: LiveTestHost;
   /**

@@ -423,7 +423,7 @@ export interface PendingExecution {
       /** True only after the host confirms cleanup of this execution's sandbox. */
       readonly executorStopped?: boolean;
       /**
-       * agent_chosen: the live test of a read signed out ran an input the minting agent chose.
+       * agent_chosen: a read's live test ran an input the minting agent chose.
        * agent_chosen_batch: a batch of such live tests on inputs it chose.
        */
       readonly input?: "agent_chosen" | "agent_chosen_batch";

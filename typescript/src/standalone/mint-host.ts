@@ -153,7 +153,7 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
         const { buildEffect } = context;
         const refusal =
           localStepRefusal(execution, state.writeSession.started) ??
-          preflightTestInput(execution, { buildEffect, signedIn: context.signedIn }) ??
+          preflightTestInput(execution, { buildEffect }) ??
           exampleInputRefusal(execution, {
             buildEffect,
             callerInput: context.input,

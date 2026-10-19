@@ -26,6 +26,43 @@ export const liveTestCasesPath = "test/cases.json";
 export const liveTestsEvidencePath = "publication/tests.json";
 /** The most cases one batch runs: a payload bound, not a limit on testing. */
 export const maximumBatchCases = 50;
+/**
+ * The most distinct inputs a signed-in read runs live tests on in one build or repair, beyond its
+ * example: one combined case that sets every optional input the example left unset, and one more
+ * for inputs that cannot be set with the others. Running a counted input again, after a fix or on
+ * the HTTP version, is free. A read signed out has no such limit.
+ */
+export const signedInTestInputLimit = 2;
+
+/**
+ * A test input's identity for the signed-in limit: its JSON with object keys sorted, so the same
+ * input written in another key order is the same input. Array order counts.
+ */
+export const testInputKey = (input: unknown): string => canonical(input);
+
+/**
+ * The distinct inputs among `inputs`, as keys, that `counted` does not hold yet, in their first
+ * order. A batch that names one input in several cases counts it once.
+ */
+export const uncountedTestInputs = (
+  counted: readonly string[],
+  inputs: readonly unknown[],
+): readonly string[] =>
+  [...new Set(inputs.map(testInputKey))].filter((key) => !counted.includes(key));
+
+/**
+ * Why a signed-in read may not run live tests on `inputs` now, or undefined when it may: it has
+ * already run `counted` distinct inputs, and these would take it past `signedInTestInputLimit`.
+ */
+export const signedInTestInputRefusal = (
+  counted: readonly string[],
+  inputs: readonly unknown[],
+): string | undefined => {
+  const added = uncountedTestInputs(counted, inputs).length;
+  if (added === 0 || counted.length + added <= signedInTestInputLimit) return undefined;
+  const left = Math.max(0, signedInTestInputLimit - counted.length);
+  return `A signed-in read runs live tests on at most ${signedInTestInputLimit} distinct inputs in a build or repair, beyond its example: one combined case that sets every optional input the example left unset, and one more only when those inputs cannot all be set together. It has run ${counted.length}, and this would add ${added}${left === 0 ? "" : `; ${left} more may run`}. Running an input it already ran again, after a fix or on src/tool-http.mjs, is free. Merge the inputs into the cases already run, or list the rest under notTested and in coverage. Nothing was executed.`;
+};
 
 /** Which version of a read a case ran on. */
 export type LiveTestVersion = "playwright" | "http";
@@ -600,6 +637,11 @@ export interface LiveTestRecord {
   readonly retired?: true;
   /** A retired failure whose case, unchanged, did not fail when run again on the same source. */
   readonly flaky?: true;
+  /**
+   * The case ran while the read was signed in. A signed-in read's publication record holds only
+   * such results; ones from before its sign-in tested another session.
+   */
+  readonly signedIn?: true;
 }
 
 export const LiveTestRecord: Schema.Schema<LiveTestRecord> = Schema.Struct({
@@ -633,6 +675,7 @@ export const LiveTestRecord: Schema.Schema<LiveTestRecord> = Schema.Struct({
   nextPage: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   retired: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   flaky: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  signedIn: Schema.optionalWith(Schema.Literal(true), { exact: true }),
 });
 
 /** The first few items of an output, as compact text, for an excerpt. */
@@ -842,9 +885,15 @@ export const liveTestsEvidence = (options: {
   readonly versions: readonly LiveTestVersionResults[];
   /** The attempt ran out of time for live tests. */
   readonly outOfTime?: boolean;
+  /**
+   * The read signed in, so it ran live tests on at most `signedInTestInputLimit` inputs, and
+   * `versions` holds only results run signed in.
+   */
+  readonly signedIn?: boolean;
 }) => {
   const { file, versions } = options;
   const outOfTime = options.outOfTime === true;
+  const signedIn = options.signedIn === true;
   const cases = file.cases.map((testCase) => ({
     id: testCase.id,
     purpose: testCase.purpose,
@@ -912,7 +961,7 @@ export const liveTestsEvidence = (options: {
   const retiredFailures = retired.filter((entry) => entry.lastVerdict === "fail").length;
   const summary = nothing
     ? "Host live tests on the published source: none designed or run; beyond the example, nothing was tested live."
-    : `Host live tests on the published source: ${cases.length} case${cases.length === 1 ? "" : "s"}.${versionViews
+    : `Host live tests on the published source${signedIn ? `, signed in (at most ${signedInTestInputLimit} inputs)` : ""}: ${cases.length} case${cases.length === 1 ? "" : "s"}.${versionViews
         .map(
           (entry) =>
             ` ${versionName(entry.version)}${entry.entrypoint === undefined ? "" : ` (${entry.entrypoint})`}: ${Object.entries(
@@ -932,6 +981,12 @@ export const liveTestsEvidence = (options: {
       note: nothing
         ? "Written by the host, never by the minter. The minter designed and ran no live test case, so beyond the example nothing was tested live."
         : "Written by the host from its own runs, never by the minter. The same cases run on each version of the tool: playwright, the Kernel script, and http, the HTTP version, for each version that ships: a version that does not ship, such as an HTTP version the minter ruled out, is not listed. versions names each version's entrypoint, the source digest its results are judged against, and its counts. Each case's results hold its result on each version, from that version's own batches: one version's run never counts for the other. Each case ran in a fresh script process on a page reset to the site's origin, after one Guardian review of its batch; purpose is the minter's account of what the case establishes. A result's start says how its browser started: cold, first on a new browser with an empty profile, as a caller the site remembers nothing about meets it; warm, on a browser that kept the site data earlier steps left. versions counts each version's coldPasses, the cases that passed cold; a host with one browser runs no case cold. status is against that version's source being published: stale means the source or the case changed after the case ran, and not_run means no batch ran it on that version. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists, by version, cases the minter deleted, failures it replaced by changing the case, and failures that did not repeat when the unchanged case ran again on the same source (flaky), with their last result; excusedBy names a case that passes the same input with the same expectation on that version's published source after the source changed; changedExpectationBy names a case that passes the same input with another expectation on that version's published source, for a failure on any source; it excuses nothing by itself.",
+      ...(signedIn
+        ? {
+            signedIn: true,
+            signedInNote: `This read signed in. It runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, each on the build's own signed-in browser, so none runs cold: a combined case that sets the optional inputs the example left unset, and one more only when those cannot be set together. Results list only cases run signed in; a case not_run, and notTested, is disclosure, not a gap.`,
+          }
+        : {}),
       ...(outOfTime ? { outOfTime: true } : {}),
       ...(options.fileProblem === undefined ? {} : { casesFileProblem: options.fileProblem }),
       versions: versionViews,

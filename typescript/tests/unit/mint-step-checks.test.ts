@@ -38,27 +38,20 @@ describe("preflightTestInput", () => {
     }
   });
 
-  it("runs no input a signed-in read chooses, on either version, only the caller's", () => {
-    const scope = { buildEffect: "read" as const, signedIn: true };
-    for (const submitted of [agentTest({ amountMinor: 12 }), httpTest({ amountMinor: 12 })])
-      expect(preflightTestInput(submitted, scope)).toEqual({
-        supported: false,
-        reason: expect.stringContaining("Nothing was executed."),
-      });
-    // A live test without testInput runs the caller's input: the HTTP version's one check.
-    expect(preflightTestInput(request({ purpose: "test", target: "liveBrowser" }), scope)).toBeUndefined();
-    expect(
-      preflightTestInput(
-        request({ purpose: "test", target: "liveBrowser", entrypoint: "src/tool-http.mjs" }),
-        scope,
-      ),
-    ).toBeUndefined();
-  });
-
-  it("treats a read the host does not say is signed out as signed in", () => {
-    expect(preflightTestInput(agentTest({ amountMinor: 12 }), { buildEffect: "read" })).toMatchObject({
-      supported: false,
-    });
+  // A signed-in read runs a few inputs it chose, its combined filter case; the harness, not
+  // preflight, holds it to signedInTestInputLimit, counted with its live_tests batches.
+  it("leaves a signed-in read's chosen inputs to the harness's bound, on either version", () => {
+    for (const scope of [
+      { buildEffect: "read" as const, signedIn: true },
+      { buildEffect: "read" as const },
+    ]) {
+      expect(preflightTestInput(agentTest({ amountMinor: 12 }), scope)).toBeUndefined();
+      expect(preflightTestInput(httpTest({ amountMinor: 12 }), scope)).toBeUndefined();
+      // A live test without testInput runs the caller's input.
+      expect(
+        preflightTestInput(request({ purpose: "test", target: "liveBrowser" }), scope),
+      ).toBeUndefined();
+    }
   });
 
   it.each([

@@ -10,13 +10,15 @@ inputs, desired result and permitted effects. A read build explores, then iterat
 script from a reset start by running its example until it works (re-running a read's
 example is normal); resolve its missing choices with reads when possible. A write build
 does the caller's requested task once, live (in as many write steps as it takes), then
-composes its script from what happened (the `writes` skill). Only a read signed out designs
-and runs tests beyond its example, live test cases included (the `testing` skill). A signed-in
-read proves its tool with its example and a write with its act session; neither reads the
-`testing` skill or designs further tests, and each checks its HTTP version once, against that
-run. The scope follows what the tool is now, not what the build started as: a read that signs in
-or becomes a write, in a new build or a repair, keeps to the one run from then on, and a repair
-that rebuilds a signed-in tool or a write as a read signed out tests it fully. Credentials and
+composes its script from what happened (the `writes` skill). A read tests what its example
+did not exercise with a few combined live cases (the `testing` skill): a read signed out runs a
+handful, and a signed-in read one combined case that sets the optional inputs its example left
+unset, two distinct inputs at most. A write proves its tool with its act session; it never reads
+the `testing` skill or designs further tests, and checks its HTTP version once, against that run.
+The scope follows what the tool is now, not what the build started as: a read that becomes a
+write, in a new build or a repair, keeps to the one run from then on, a read that signs in keeps
+to the signed-in bound from then on, and a repair that rebuilds a signed-in tool or a write as a
+read signed out tests it as one. Credentials and
 sign-in codes
 belong to the host; never request a password, cookie or TOTP seed in model-visible text.
 
@@ -821,7 +823,7 @@ Never recreate a write or login to recover an observation. See
 
 The tools and the files you may edit are in `AGENTS.md`. The host binds the caller's actual input/account; no tool
 argument selects another account or private reference. A live test's `testInput`, on a
-read signed out only, is an input you choose, with public values only
+read only, is an input you choose, with values the site shows and never a private identifier
 (.agents/testing/SKILL.md). Every new command/probe/execution gets Guardian review<!-- pomerado:section core.tools-and-files -->.
 Nested Playwright actions do not each trigger review. A probe operation still receives the host-bound business
 input. Its declared schema must accept that input even when the bounded observation
