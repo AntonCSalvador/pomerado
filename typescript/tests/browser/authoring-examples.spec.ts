@@ -932,20 +932,20 @@ test("picker example picks a suggested person and refuses one the site does not 
       const input = document.getElementById("owner"), list = document.getElementById("people");
       input.oninput = () => setTimeout(() => {
         list.hidden = false;
-        list.innerHTML = ["Devon Webb", "Tanya Fox", "Tom Cook"].filter((name) => name.toLowerCase().includes(input.value.toLowerCase()))
+        list.innerHTML = ["Jordan Reyes", "Quinn Avery", "Casey Lund"].filter((name) => name.toLowerCase().includes(input.value.toLowerCase()))
           .map((name) => '<li role="option">' + name + "</li>").join("");
       }, 80);
       list.onmousedown = (event) => event.preventDefault();
       list.onclick = (event) => { input.value = event.target.textContent; list.hidden = true; };
     </script>`);
-  expect((await runExample(page, assignOwner, { owner: "devon webb" })).result).toEqual(
-    Either.right({ owner: "Devon Webb" }),
+  expect((await runExample(page, assignOwner, { owner: "jordan reyes" })).result).toEqual(
+    Either.right({ owner: "Jordan Reyes" }),
   );
-  await expect(page.getByRole("combobox", { name: "Owner" })).toHaveValue("Devon Webb");
-  expect(failure((await runExample(page, assignOwner, { owner: "To" })).result)).toMatchObject({
+  await expect(page.getByRole("combobox", { name: "Owner" })).toHaveValue("Jordan Reyes");
+  expect(failure((await runExample(page, assignOwner, { owner: "Ca" })).result)).toMatchObject({
     _tag: "InvalidInput",
     field: "owner",
-    available: ["Tom Cook"],
+    available: ["Casey Lund"],
     kind: "option_missing",
   });
 });

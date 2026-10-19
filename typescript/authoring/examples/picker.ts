@@ -12,7 +12,7 @@ export default defineOperation(
     input: Schema.Struct({
       owner: Schema.NonEmptyTrimmedString.annotations({
         description: "Name of the person to assign, as the site lists them",
-        examples: ["Devon Webb"],
+        examples: ["Jordan Reyes"],
       }),
     }),
     output: Schema.Struct({

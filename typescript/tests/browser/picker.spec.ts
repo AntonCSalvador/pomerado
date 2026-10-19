@@ -14,7 +14,7 @@ const combobox = `
   <input type="hidden" name="person">
 </div></form>
 <script>
-const people = [["1","Wade Cooper"],["2","Arlene Mccoy"],["3","Devon Webb"],["4","Tom Cook"],["5","Tanya Fox"],["6","Devon Webber"]];
+const people = [["1","Riley Hart"],["2","Morgan Ellis"],["3","Jordan Reyes"],["4","Casey Lund"],["5","Quinn Avery"],["6","Jordan Reyesford"]];
 const input = document.getElementById("person"), list = document.getElementById("people"), hidden = document.querySelector("[name=person]");
 const render = () => {
   const query = input.value.toLowerCase();
@@ -39,8 +39,8 @@ list.addEventListener("click", (event) => {
 test("pickValue types into an ARIA combobox and clicks the matching option", async ({ page }) => {
   await serve(page, combobox);
   expect(
-    await call(page, `return await pickValue(page.getByRole("combobox", { name: "Assignee" }), "devon webb", fast);`),
-  ).toEqual({ result: { picked: true, kind: "typeahead", label: "Devon Webb", value: "3", rank: "normalized", refills: 0 } });
+    await call(page, `return await pickValue(page.getByRole("combobox", { name: "Assignee" }), "jordan reyes", fast);`),
+  ).toEqual({ result: { picked: true, kind: "typeahead", label: "Jordan Reyes", value: "3", rank: "normalized", refills: 0 } });
   expect(await submitted(page)).toEqual({ person: "3" });
 });
 
@@ -460,8 +460,8 @@ customElements.define("picker-box", class extends HTMLElement {
 test("pickValue works inside an iframe", async ({ page }) => {
   await serve(page, `<iframe src="/frame" style="width:400px;height:300px"></iframe>`, undefined, { "/frame": combobox });
   expect(
-    await call(page, `return await pickValue(page.frameLocator("iframe").getByRole("combobox", { name: "Assignee" }), "Tanya Fox", fast);`),
-  ).toMatchObject({ result: { picked: true, label: "Tanya Fox", value: "5" } });
+    await call(page, `return await pickValue(page.frameLocator("iframe").getByRole("combobox", { name: "Assignee" }), "Quinn Avery", fast);`),
+  ).toMatchObject({ result: { picked: true, label: "Quinn Avery", value: "5" } });
   await expect(page.frameLocator("iframe").locator("[name=person]")).toHaveValue("5");
 });
 

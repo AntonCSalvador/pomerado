@@ -126,7 +126,7 @@ test("pickValue picks from a menu with no ARIA roles that shows the choice besid
 <div class="rs__input-container"><input id="color-input" aria-autocomplete="list" aria-expanded="false" aria-haspopup="true" role="combobox" autocomplete="off"></div></div>
 <div class="rs__indicators">▾</div></div><input type="hidden" name="color"></div></form>
 <script>
-const colors = ["Ocean", "Blue", "Purple", "Red", "Orange", "Yellow", "Green", "Forest", "Slate", "Silver"];
+const colors = ["Teal", "Navy", "Coral", "Amber", "Ivory", "Olive", "Plum", "Rust", "Sage", "Mint"];
 const input = document.getElementById("color-input"), container = document.querySelector(".rs-container");
 let menu = null;
 const drawMenu = () => {
@@ -148,10 +148,10 @@ container.addEventListener("click", (event) => {
   input.setAttribute("aria-expanded", "false");
 });
 </script>`);
-  expect(await call(page, `return await pickValue(page.getByRole("combobox", { name: "Color" }), "forest", fast);`)).toEqual({
-    result: { picked: true, kind: "typeahead", label: "Forest", value: "", rank: "normalized", refills: 0 },
+  expect(await call(page, `return await pickValue(page.getByRole("combobox", { name: "Color" }), "olive", fast);`)).toEqual({
+    result: { picked: true, kind: "typeahead", label: "Olive", value: "", rank: "normalized", refills: 0 },
   });
-  expect(await submitted(page)).toEqual({ color: "forest" });
+  expect(await submitted(page)).toEqual({ color: "olive" });
 });
 
 test("pickValue ignores a screen-reader copy of the list and picks in the visible one by its title", async ({ page }) => {
@@ -163,7 +163,7 @@ test("pickValue ignores a screen-reader copy of the list and picks in the visibl
 <div class="ant-select-dropdown" style="position:absolute;top:60px;left:8px;width:260px;display:none">
 <div class="rc-virtual-list-holder" style="max-height:120px;overflow-y:auto"><div class="rc-virtual-list-holder-inner"></div></div></div>
 <script>
-const cities = [["hz", "Hangzhou"], ["nj", "Nanjing"], ["sz", "Suzhou"], ["xm", "Xiamen"], ["zh", "Zhuhai"], ["nb", "Ningbo"]];
+const cities = [["ly", "Lyon"], ["po", "Porto"], ["gz", "Graz"], ["tu", "Turku"], ["be", "Bergen"], ["gh", "Ghent"]];
 const input = document.getElementById("city"), a11y = document.getElementById("city_list");
 const dropdown = document.querySelector(".ant-select-dropdown"), inner = document.querySelector(".rc-virtual-list-holder-inner");
 input.addEventListener("input", () => {
@@ -185,16 +185,16 @@ dropdown.addEventListener("click", (event) => {
   input.setAttribute("aria-expanded", "false");
 });
 </script>`);
-  expect(await call(page, `return await pickValue(page.getByRole("combobox", { name: "City" }), "Suzhou", fast);`)).toEqual({
-    result: { picked: true, kind: "typeahead", label: "Suzhou", value: "sz", rank: "exact", refills: 0 },
+  expect(await call(page, `return await pickValue(page.getByRole("combobox", { name: "City" }), "Graz", fast);`)).toEqual({
+    result: { picked: true, kind: "typeahead", label: "Graz", value: "gz", rank: "exact", refills: 0 },
   });
-  await expect(page.locator(".ant-select-selection-item")).toHaveText("Suzhou");
+  await expect(page.locator(".ant-select-selection-item")).toHaveText("Graz");
 });
 
 test("pickValue picks from a list appended to the body while the input shows a loading class", async ({ page }) => {
   await serve(
     page,
-    `<form><label for="tags">Language</label> <input id="tags" class="ui-autocomplete-input" autocomplete="off" name="language"></form>
+    `<form><label for="tags">Material</label> <input id="tags" class="ui-autocomplete-input" autocomplete="off" name="material"></form>
 <div role="status" aria-live="assertive" class="ui-helper-hidden-accessible" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)"></div>
 <script>
 const input = document.getElementById("tags");
@@ -214,13 +214,13 @@ menu.addEventListener("click", (event) => { input.value = event.target.closest("
 </script>`,
     (params) => ({
       delayMs: 150,
-      body: ["Java", "JavaScript", "TypeScript", "CoffeeScript"].filter((name) => name.toLowerCase().includes((params.get("term") ?? "").toLowerCase())),
+      body: ["Granite", "Graphite", "Gravel", "Grain"].filter((name) => name.toLowerCase().includes((params.get("term") ?? "").toLowerCase())),
     }),
   );
-  expect(await call(page, `return await pickValue(page.getByLabel("Language"), "JavaScript", fast);`)).toEqual({
-    result: { picked: true, kind: "typeahead", label: "JavaScript", value: "", rank: "exact", refills: 0 },
+  expect(await call(page, `return await pickValue(page.getByLabel("Material"), "Graphite", fast);`)).toEqual({
+    result: { picked: true, kind: "typeahead", label: "Graphite", value: "", rank: "exact", refills: 0 },
   });
-  expect(await submitted(page)).toEqual({ language: "JavaScript" });
+  expect(await submitted(page)).toEqual({ material: "Graphite" });
 });
 
 /**
