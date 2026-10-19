@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   awsAccessKeyIdPattern,
   isCredentialAssignmentKey,
+  isProviderKey,
+  providerKeyPattern,
 } from "../../src/privacy/credential-policy.js";
 import { publicationBlockFeedback } from "../../src/mint/publication-block.js";
 import { redactDiagnosticText } from "../../src/runtime/failure-detail.js";
@@ -29,6 +31,34 @@ describe("the credential list", () => {
   ])("finds an AWS access key ID %s", (_, text) => {
     expect(text.match(awsAccessKeyIdPattern())?.[0]).toMatch(/^A[KS]IAABCDEFGHIJKLMNOP$/u);
     expect(redactDiagnosticText(text)).not.toMatch(/A[KS]IAABCDEFGHIJKLMNOP/u);
+  });
+});
+
+// A key body that may hold `-`, `+`, `/` or `=` never runs into a listed key written straight
+// after it: each key is found whole, so no part of either is left readable.
+describe("keys written one after another", () => {
+  const signing = fake("whsec_", "FAKEsyntheticSigning0000");
+  const github = fake("ghp_", "FAKEsynthetic0000abcdefghi");
+  const slack = fake("xoxb-", "FAKE0000012345");
+  const payment = fake("sk_live_", "FAKEsynthetic0000");
+  it.each([
+    ["a GitHub token after a slash", `see ${signing}/${github} ok`, github],
+    ["a Slack token after a slash", `see ${signing}/${slack} ok`, slack],
+    ["a payment key after a plus", `see ${signing}+${payment} ok`, payment],
+  ])("finds %s whole, and masks both keys", (_, text, second) => {
+    const found = [...text.matchAll(providerKeyPattern())]
+      .map((match) => match[0])
+      .filter(isProviderKey);
+    expect(found).toEqual([signing, second]);
+    const redacted = redactDiagnosticText(text);
+    expect(redacted).toBe(
+      `see [redacted_token]${text.charAt(4 + signing.length)}[redacted_token] ok`,
+    );
+  });
+
+  it("keeps a key whole where no key follows a hyphen inside it", () => {
+    const key = fake("sk-proj-", "FAKEsynthetic0000modelkey1-bl_x9");
+    expect(`use ${key} now`.match(providerKeyPattern())?.[0]).toBe(key);
   });
 });
 

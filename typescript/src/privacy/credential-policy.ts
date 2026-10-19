@@ -185,10 +185,29 @@ export const isFreeTextSchemeCredential = (scheme: string, value: string): boole
 export const isRandomKeyBody = (value: string): boolean =>
   (/[A-Z]/u.test(value) && (value.match(/[0-9]/gu) ?? []).length >= 3) || hasRandomRun(value, 16);
 
+/** Every provider key at its shortest: a prefix and the fewest body characters it takes. */
+const shortestKeys = credentialPolicy.providerKeys
+  .flatMap(({ prefixes, body, minBody }) =>
+    prefixes.map((prefix) => `${escapeRegExp(prefix)}[${body}]{${String(minBody)}}`),
+  )
+  .join("|");
+/**
+ * A key body: its characters, at least `minBody` of them. A `-`, `+`, `/` or `=` joins the body
+ * only where no provider key follows it, so a body never runs into a key written straight after
+ * it (`whsec_…/ghp_…`), which is found on its own.
+ */
+const bodyPattern = (body: string, minBody: number) => {
+  // A body's characters are letters, digits and `_`, then any separators.
+  const separators = body.replace(/A-Z|a-z|0-9|_/gu, "");
+  if (separators === "") return `[${body}]{${String(minBody)},}`;
+  const word = body.slice(0, body.length - separators.length);
+  const separator = `[${separators.replace(/[-\]^]/gu, "\\$&")}](?!${shortestKeys})`;
+  return `(?:[${word}]|${separator}){${String(minBody)},}`;
+};
 const providerShapes = credentialPolicy.providerKeys.flatMap((shape) =>
   shape.prefixes.map((prefix) => ({
     prefix,
-    body: `[${shape.body}]{${String(shape.minBody)},}`,
+    body: bodyPattern(shape.body, shape.minBody),
     random: "random" in shape && shape.random,
   })),
 );
