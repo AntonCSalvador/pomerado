@@ -102,7 +102,8 @@ pomerado:section core.execute-calls:end -->
 - When a challenge appears, call `await waitPastChallenge({ ready })`. `ready` is code that
   returns true once the page is usable. It throws `ChallengeFailure` if the page stays blocked.
   Wait for the page's expected content first, and check for a challenge only when that content
-  is missing; never probe for one on every readiness poll, since each probe is a round trip.
+  is missing, such as after a wait for it failed; never probe for one on every readiness poll,
+  since each probe is a round trip.
 - Never repeat a call that may have run.
 - When the site itself refuses a caller's value, such as a past date, an unknown airport code
   or a party size over its limit, throw `new errors.InvalidInput(message, { field })` saying why,
@@ -582,10 +583,11 @@ that depends on them:
      10 applies 40, never 50; use the control's end when the value is outside its range. Read the
      applied value back and return it, such as `applied_max_price`, beside the results. The rule above for a value
      the page does not offer covers choice lists only.
-3. Confirm. Read each choice back from the page's selected state, then wait for the values
-   that depend on it with `waitForChange`: changed, or confirmed unchanged once the page's
-   loading sign came and went; a value read before the page updates belongs to the previous
-   choice. Compare text read back with the caller's value normalized, or for a proper noun with
+3. Confirm. After a step that changed a choice, read it back from the page's selected state and
+   wait for the values that depend on it with `waitForChange`, passing that step as `action`:
+   changed, or confirmed unchanged once the page's loading sign came and went; a value read
+   before the page updates belongs to the previous choice. A choice already in the requested
+   state needs no step and no wait. Compare text read back with the caller's value normalized, or for a proper noun with
    the option it matched: ignore case, accents, repeated whitespace and punctuation such as
    curly quotes, periods and hyphens, never exact case-sensitive equality, since a page may
    echo a query or name in
@@ -600,8 +602,9 @@ that depends on them:
    them. Return a group's offered options as a list when the page shows them without extra
    clicks, as a record page shows its variants, or when the caller asks (search skill).
 
-An optional choice the caller leaves unset keeps the page's default: read it back and return
-it as applied. A control you could not find, open or read throws `OperationFailure`, never
+An optional choice the caller leaves unset keeps the page's default: never open or set its
+control for it; read it once where the page already shows it, in its state or data, with no
+click and no wait, and return it as applied. A control you could not find, open or read throws `OperationFailure`, never
 `InvalidInput`.
 
 <!-- pomerado:section core.host-ownership:start
@@ -681,7 +684,8 @@ that readiness condition from the intended page, not from having seen a particul
 challenge. Wait for a unique operation control or page state before testing absence
 or choosing a fallback. Use `locator.waitFor` for one expected state, `waitForOutcome`
 (below) when the page can answer more than one way, `waitForRows`, `waitForValues` or
-`waitForChange` (below) for the values you return, or a bounded polling loop;
+`waitForChange` (below) for the values you return, or, only where none fits, a bounded loop of
+your own that reads every condition in one `evaluate` per pass;
 `count()` and `isVisible()` only observe the current instant. A ready page should
 pass immediately; do not add a fixed sleep. Share one bounded navigation deadline across navigation
 and first-page readiness, as in `references/navigation.ts`. Readiness polling
@@ -689,7 +693,8 @@ only observes: do not repeat `goto`, reload, login, submission or another action
 inside it. Preserve site/path and account guards while waiting.
 Wait for the values you will return, not for their containers or the rest of the page. A record
 is ready when each value you return is filled in and reads the same on two looks
-(`waitForValues`). A list is ready when the rows you return, the first `limit` from the page's
+(`waitForValues`): two consecutive identical reads, the first included, and only after a step
+that changed the page. A list is ready when the rows you return, the first `limit` from the page's
 position (pagination skill), have their identifier and the values the request needs, filled in
 and reading the same twice (`waitForRows`); keeping every result row means every row up to that
 page size. A slot that is present but empty, a skeleton, `aria-busy` or reading "Loading…" is

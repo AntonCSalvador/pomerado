@@ -69,8 +69,9 @@ them), never every card's value holding still, since values that load lazily may
 Then read the choice back where the page shows it: an applied chip, the selected sort, the results
 header, or the reopened panel when nothing else shows it. A follow-up choice that will reload the
 results anyway can wait for that reload instead. Close a drawer or panel you opened with its own
-close control or Escape, and check it closed. After the last change, wait for the rows you return
-with `waitForChange`, as the core skill says.
+close control or Escape, and check it closed. After the last step that changed the results, wait
+for the rows you return with `waitForChange`, as the core skill says; when no step changed them
+since the last wait, read them without waiting again.
 
 ## Location
 
