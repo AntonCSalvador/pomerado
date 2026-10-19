@@ -270,6 +270,9 @@ export const mintRequest = (
       );
       if (context.buildEffect === undefined) return withUntrustedSignInOrigins(asked, state);
     }
+    // The request's page loads before the build's run, never during the effect question, so the
+    // run's first request says how it loaded and a first step that does not reset starts there.
+    yield* state.start.enter;
     const outcome = yield* runMint({ ...mintRequest, effect: context.buildEffect }).pipe(
       Effect.provideService(MintServices, mintDependencies(state, publicationDecisions)),
     );

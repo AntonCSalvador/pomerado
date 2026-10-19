@@ -2170,7 +2170,9 @@ export default defineOperation({name:"tenant_title",input:Schema.Struct({}),outp
         expect(shop.state.searchPageLoads).toBe(searchLoads + 1);
       } else {
         expect(shop.state.searchPageLoads).toBe(searchLoads);
-        expect(productHits).toBe(productLoads);
+        // The host loaded the request's page before the build started; the denied step loaded
+        // nothing.
+        expect(productHits).toBe(productLoads + 1);
       }
     }
   } finally {
