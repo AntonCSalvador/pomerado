@@ -27,6 +27,7 @@ import type {
 } from "../runtime/policy-metadata.js";
 import { Context, Data, Schema, type Effect } from "effect";
 import type { SiteAccessDiagnostic } from "./site-access-contracts.js";
+import type { SignInVersionFinding } from "./sign-in-version.js";
 import {
   AutofillPopup,
   AutofillApproval,
@@ -376,6 +377,11 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
     | "login_url_one_time"
     /** The login URL to publish carries a registered credential; refused every time. */
     | "login_url_contains_credential"
+    /**
+     * The sign-in to publish fails the sign-in version check (`checkSignInVersion`);
+     * `publicationFeedback.signInFindings` names each rule and part. Refused every time.
+     */
+    | "sign_in_version_refused"
     /** The name, description, site name or summary to publish carries a registered credential. */
     | "metadata_contains_credential"
     /** The site's integration has no name yet, and the metadata names no `siteName` and `siteSummary`. */
@@ -411,6 +417,8 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
       readonly part: "loginUrl" | "name" | "description" | "siteName" | "siteSummary";
       readonly credentialKinds: readonly string[];
     }[];
+    /** For `sign_in_version_refused`, each rule and the part of the sign-in it refused. */
+    readonly signInFindings?: readonly SignInVersionFinding[];
   };
   /**
    * What the publication gate refused and where, for `source_screening`, `schema_screening`
