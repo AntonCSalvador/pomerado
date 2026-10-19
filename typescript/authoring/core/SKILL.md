@@ -607,8 +607,9 @@ that depends on them:
    clicks, as a record page shows its variants, or when the caller asks (search skill).
 
 An optional choice the caller leaves unset keeps the page's default: never set its control.
-Read the default from the page's state or data where it shows, with no wait; otherwise one open,
-read and close of its control is allowed; otherwise return null and say why in the description.
+Read the default from the page's state or data where it shows, with no wait; otherwise, outside
+a search (search skill), one open, read and close of its control is allowed; otherwise return
+null and say why in the description.
 Return it as applied. A control you could not find, open or read throws `OperationFailure`, never
 `InvalidInput`.
 

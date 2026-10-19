@@ -130,7 +130,8 @@ Read the query the site applied from the page's embedded state, such as its sear
 than from a selector scoped to one container, which another layout of the results page breaks.
 When the site corrected or rewrote the caller's query, such as fixing its spelling, its echo
 shows the query it searched: return the site's results and say so, never silently, with that
-query as `applied_query` and a `query_corrected` boolean.
+query as `applied_query` and a `query_corrected` boolean. The same holds for the query an HTTP
+version's answer echoes.
 
 ## Answer quickly
 
@@ -148,7 +149,8 @@ answer. Drive the search form and read rendered rows only when they don't.
 - The main path visits only the controls an input sets: a filter, sort, quick switch or other
   optional control the caller left unset is never opened, clicked or waited on, so a run with
   every optional input unset touches none of them. Read its applied state from the page's data
-  or results where they show it (core skill, "Configure, then read"). Always return
+  or results where they show it; otherwise return it null with the reason in the description. A
+  search never opens a control to read it. Always return
   `applied_filters`: the groups the tool set, as the page reads them back.
 - Return the site's offered filter groups only when the caller asks, through an optional
   `include` list input holding `"filters"`. Their output field, such as `available_filters`, is
