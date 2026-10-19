@@ -159,6 +159,21 @@ it("reads a question declared afterCommit from a draft", () => {
   });
 });
 
+it("reads a secret question declared afterCommit, and declares nothing when afterCommit is anything but true", () => {
+  const source = operation(
+    `{name:"pay",input:Schema.Unknown,output:Schema.Unknown,questions:{code:{type:"secret",prompt:"What code did the bank send?",secretKind:"one_time_code",afterCommit:true}}}`,
+  );
+  expect(draftQuestionDeclarationFailure("src/tool.mjs", source)).toBeUndefined();
+  expect(draftQuestionDeclarations("src/tool.mjs", source)).toEqual({
+    code: { type: "secret", prompt: "What code did the bank send?", secretKind: "one_time_code", afterCommit: true },
+  });
+  const offSource = operation(
+    `{name:"book",input:Schema.Unknown,output:Schema.Unknown,questions:{slot:{type:"choice",prompt:"Which delivery slot should I book?",afterCommit:false}}}`,
+  );
+  // Only true is a valid afterCommit, so the contract declares no question and the run asks none.
+  expect(draftQuestionDeclarations("src/tool.mjs", offSource)).toEqual({});
+});
+
 describe("a local operation's questions", () => {
   const asking = operation(
     `{name:"ask_note",input:Schema.Unknown,output:Schema.Unknown,questions:{note:{type:"text",prompt:"Which note should I keep?"}}}`,

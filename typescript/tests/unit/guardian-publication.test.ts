@@ -563,7 +563,7 @@ describe("the publication policy", () => {
   it("keeps a safety default the source sets, and never asks for it as an input", () => {
     expect(guardianPublicationPolicy).toContain(`\n${publicationSafetyDefaultPolicy}\n`);
     expect(guardianPublicationPolicy).toContain(
-      "must be an input of the tool (required when the site requires a choice, optional otherwise), except a safety default, which is never an input.",
+      "must be an input of the tool, except a safety default, which is never an input,",
     );
   });
 
