@@ -1,5 +1,4 @@
-import { parse } from "tldts";
-import { sameSite, siteDomain } from "./same-site.js";
+import { publicSuffixListed, sameSite, siteDomain } from "./same-site.js";
 
 /**
  * Whether a URL is on the site or one of its configured sign-in origins, with no user name or
@@ -39,6 +38,5 @@ export const trustableSignInUrl = (url: URL) => {
   // Every trailing dot, as the public suffix list's lookup ignores them all.
   const topLevel = url.hostname.replace(/\.+$/u, "").split(".").at(-1) ?? "";
   if (unsignedTopLevels.has(topLevel)) return false;
-  const { isIcann, isPrivate } = parse(url.hostname, { allowPrivateDomains: true });
-  return isIcann === true || isPrivate === true;
+  return publicSuffixListed(url.hostname);
 };

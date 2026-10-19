@@ -136,7 +136,14 @@ export const draftQuestionDeclarationFailure = (
   const invalidIds = Object.keys(value).filter((id) =>
     Either.isLeft(Schema.decodeUnknownEither(QuestionId)(id)),
   );
-  if (invalidIds.length === 0) return undefined;
+  if (invalidIds.length === 0) {
+    const decoded = Schema.decodeUnknownEither(ScriptQuestionDeclarations, {
+      onExcessProperty: "error",
+    })(value);
+    return Either.isLeft(decoded)
+      ? `Invalid script questions: the run would declare none of them. Fix the declaration before executing: ${decoded.left.message}`
+      : undefined;
+  }
   return `Invalid script question ${invalidIds.length === 1 ? "id" : "ids"}: ${invalidIds
     .map((id) => JSON.stringify(id))
     .join(

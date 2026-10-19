@@ -10,13 +10,15 @@ inputs, desired result and permitted effects. A read build explores, then iterat
 script from a reset start by running its example until it works (re-running a read's
 example is normal); resolve its missing choices with reads when possible. A write build
 does the caller's requested task once, live (in as many write steps as it takes), then
-composes its script from what happened (the `writes` skill). Only a read signed out designs
-and runs tests beyond its example, live test cases included (the `testing` skill). A signed-in
-read proves its tool with its example and a write with its act session; neither reads the
-`testing` skill or designs further tests, and each checks its HTTP version once, against that
-run. The scope follows what the tool is now, not what the build started as: a read that signs in
-or becomes a write, in a new build or a repair, keeps to the one run from then on, and a repair
-that rebuilds a signed-in tool or a write as a read signed out tests it fully. Credentials and
+composes its script from what happened (the `writes` skill). A read tests what its example
+did not exercise with a few combined live cases (the `testing` skill): a read signed out runs a
+handful, and a signed-in read one combined case that sets the optional inputs its example left
+unset, two distinct inputs at most. A write proves its tool with its act session; it never reads
+the `testing` skill or designs further tests, and checks its HTTP version once, against that run.
+The scope follows what the tool is now, not what the build started as: a read that becomes a
+write, in a new build or a repair, keeps to the one run from then on, a read that signs in keeps
+to the signed-in bound from then on, and a repair that rebuilds a signed-in tool or a write as a
+read signed out tests it as one. Credentials and
 sign-in codes
 belong to the host; never request a password, cookie or TOTP seed in model-visible text.
 
@@ -163,8 +165,21 @@ use even when the caller's structured input is empty: pass the request's values 
 it), never as a build-time question. Decide from the request and the site which inputs are
 required. An optional input plus a declared question the tool asks before any effect is only for
 a value the request genuinely leaves open; never make a required field optional with nothing
-that asks. An input that tailors the answer on a read is the exception: it is optional unless
-the task can't run without it (below).
+that asks. A choice the request or the owner's answer settled as how the tool behaves, such as
+sorting by price or which kind of record it creates, is the tool's default, never a required
+input or a question at run time. When a caller could reasonably want another value, declare it
+with `defaultedInput(schema, answeredValue)` from the runtime, an optional input whose published
+schema shows that default and whose run gets it when the caller leaves it out, and say in its
+description that it defaults to what the owner chose; keep it fixed with no input only where
+varying it would be unsafe or meaningless. A choice that changes what the caller buys or pays,
+or whether the action can be cancelled or refunded, such as a paid add-on, a rate, fare or plan
+tier, a refundable option, shipping speed, how much of a balance to pay, the payment method or
+the delivery address, never takes one owner's answer as its default: it stays a required input
+or a declared question, and only declining it, turning it off or the option that adds no cost
+and keeps the action cancellable may be its optional input's default. A write asks
+its questions before its first save wherever the page lets it, so an unanswered question never
+leaves a partial save on the site (caller-input skill). An input that tailors the answer on a read is the
+exception: it is optional unless the task can't run without it (below).
 
 - The code works for every value the schema accepts. Never let the schema promise what
   the code rejects or ignores, such as a string the code throws on unless it is the example's
@@ -216,10 +231,16 @@ the task can't run without it (below).
   or without Ltd. or Inc. Never require an exact match.
   When more than one option matches, list them for the caller instead of picking one.
 - On a write, every choice the session met is an input: each option on the path,
-  add-ons and pre-selected defaults included. Make it required when the site requires
-  a choice (a fare class) and optional when it does not (a seat). An unset optional input
-  keeps the page's default; an add-on, a pre-selected paid option or a saved payment is
-  never left to a default, so ask about it (`AGENTS.md`, "Try hard, then ask").
+  add-ons and pre-selected defaults included, except one the request or an answer settled,
+  which is the tool's default (above). A costly choice, one that changes what the caller
+  buys or pays or whether the action can be cancelled or refunded (a paid add-on or
+  pre-selected paid option, a rate, fare or plan tier, a refundable or non-refundable option,
+  shipping speed, a saved payment or the delivery address), is never left to the page's
+  default: make it a required input or ask about it (`AGENTS.md`, "Try hard, then ask"), and
+  an optional input for it may default only to declining it, turning it off or the option
+  that adds no cost. Any other option is an optional input (a seat), required only when the
+  site requires a choice and nothing settled it; an unset optional input keeps the page's
+  default.
 - Never make an account-specific value (a passenger, loyalty number, saved card or
   address, account or member ID) an enum member, example or default in a public
   schema. Take it as a free-form input when the caller can name it, such as a loyalty
@@ -312,9 +333,11 @@ the task can't run without it (below).
 - A choice the request, the caller or the owner declined, or a step they said not to take (no
   location, no store, skip a filter, don't sign in), is not part of the tool for any caller:
   never offer it as an input, never set it in the example or a test, and never put it in
-  `exampleInput`. Note it in coverage. That covers a step the tool then never takes. A paid
-  add-on, payment method or address a write still meets on its path is never settled this way:
-  it stays an input or a run-time question (writes skill).
+  `exampleInput`. Note it in coverage. That covers a step the tool then never takes. A costly
+  choice a write still meets on its path, one that changes what the caller buys or pays or
+  whether the action can be cancelled or refunded (a paid add-on, a rate, fare or plan tier, a
+  refundable option, shipping speed, the payment method or the address), is never settled this
+  way: it stays an input or a run-time question (writes skill), whose default may only decline it.
 - When the caller input is empty (`{}`), write the tool's input from the request and the
   owner's answers, with dates normalized (10/4 is the next October 4, as `2026-10-04`), and
   pass it as `exampleInput`: on a read's example, or on each write act step that needs it. The
@@ -330,7 +353,9 @@ the task can't run without it (below).
   example.
 - Make each input as strict as the site's field: required text is non-empty and not whitespace
   alone (`Schema.NonEmptyString.pipe(Schema.pattern(/\S/u))`, which still takes a caller's stray
-  space); a date, time or code keeps its `pattern`; a fixed set is a `Literal` enum. Make an input
+  space); free text takes a `maxLength` no longer than the site's own field takes, so a blank or
+  over-long value is refused before the site is touched; a date, time or code keeps its
+  `pattern`; a fixed set is a `Literal` enum. Make an input
   optional only when the site accepts the field blank and the tool works without it.
 - Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear. A description that starts "By design:" keeps that marker first and puts the number of values after it, such as "By design: one postal code, …", never before it.
 - When a field takes one value and a caller might send several, say "one per call" and prefer a
@@ -343,13 +368,21 @@ the task can't run without it (below).
   guest rating out of 5, not a count of reviews". Effect's stock text, such as "a non empty
   string", is no description. Annotate the field's own schema, inside `Schema.optional(...)`
   for an optional one. Callers see each beside its name.
-- Shape inputs and outputs like Pomerado's own API, so every tool reads alike: field names in
-  snake_case; dates as `YYYY-MM-DD` and timestamps as ISO 8601 with an offset; money as an
-  integer in minor units with the ISO 4217 `currency` the page shows beside it, such as
-  `total_minor` 12999 and `currency` `"EUR"` read from "€129.99"; enum values in lowercase
-  snake_case (`"premium_economy"`); booleans named as statements (`refundable`, not
-  `is_refundable_flag`); lists named in the plural; and the unit in the field name or its
-  description (`duration_minutes`). Convert between these and the site's own formats in code.
+- Shape inputs and outputs like Pomerado's own API, so every tool reads alike. A notation the
+  request states, such as amounts as decimal strings or signed amounts, always wins; follow it
+  and say so in the field's description. Otherwise: field names in snake_case; dates as
+  `YYYY-MM-DD` and timestamps as ISO 8601 with an offset; money as an integer in minor units
+  with the ISO 4217 `currency` the page shows beside it, such as `total_minor` 12999 and
+  `currency` `"EUR"` read from "€129.99", and an amount that can go either way, such as a
+  ledger entry, unsigned with a field that says its direction, such as `direction` `"debit"`
+  or `"credit"`; enum values, statuses included, in lowercase
+  snake_case (`"premium_economy"`, `"partially_paid"`), with the site's own wording, where a
+  caller may want it, in a separate `*_label` field (`status_label` `"Partially Paid"`);
+  booleans named as statements (`refundable`, not `is_refundable_flag`); lists named in the
+  plural; and the unit in the field name or its description (`duration_minutes`). Convert
+  between these and the site's own formats in code. The output check flags a date or timestamp
+  not in the form its field declares (`format_mismatch`) and one value in two letter cases
+  across a list (`case_variant`).
 - When `reference/site-tools.json` exists, you can view the site's other tools. Read
   `reference/site-tools/README.md` first: it indexes them, one folder each, with each tool's
   effect, sign-in and a short description. Then read the folders you need: each holds a
@@ -403,8 +436,13 @@ stop. When they need it, end with `report_blocked` reason `site_lacks_capability
 names, the record's identifier as the site shows it, and the context those depend on as the page
 shows it, such as dates, a party size or a location. Make each one required and non-null, typed
 so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for
-text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the
-request's wording or a description says. A run whose output fails its schema goes to repair.
+text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever a
+description says. A run whose output fails its schema goes to repair.
+- The owner may settle a different form for every run: in the request's own explicit words, in
+  an answer to your design question or in a task update, such as blank fields returned as empty
+  strings. Publication review honours that decision as stated. Build it that way, and say in
+  the field's description what the owner chose. It never covers a value the page shows that
+  the code failed to read, or anything personal or account-specific.
 - Type each output field as strictly as its value: required text is non-empty and trimmed
   (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports
   an input's value reuses that input's enum or pattern. Make one optional or nullable only where
@@ -821,7 +859,7 @@ Never recreate a write or login to recover an observation. See
 
 The tools and the files you may edit are in `AGENTS.md`. The host binds the caller's actual input/account; no tool
 argument selects another account or private reference. A live test's `testInput`, on a
-read signed out only, is an input you choose, with public values only
+read only, is an input you choose, with values the site shows and never a private identifier
 (.agents/testing/SKILL.md). Every new command/probe/execution gets Guardian review<!-- pomerado:section core.tools-and-files -->.
 Nested Playwright actions do not each trigger review. A probe operation still receives the host-bound business
 input. Its declared schema must accept that input even when the bounded observation

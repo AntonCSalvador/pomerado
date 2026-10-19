@@ -4,6 +4,7 @@ import type { AutofillPopup, DateOfBirthFormat } from "./autofill-contracts.js";
 import { elementReadMs, locateCode, questionTextCode } from "./autofill-locate-code.js";
 import { clipCode, controlNamingCode } from "./control-naming-code.js";
 import { pageCode, primaryPageCode } from "../runtime/host-execute.js";
+import { hostOnSiteSource } from "../runtime/same-site.js";
 import { submissionGuardCode } from "./autofill-submission-guard.js";
 import { pageControlsCode } from "./page-controls.js";
 
@@ -49,10 +50,11 @@ return {
  *   it guards the submission as it fires (`submissionGuardCode`, under the host's
  *   `guardKey` and armed for `guardCall`, with every form action and link destination as the
  *   step's inspection found them, which the page kept under `inspection`, the submission's method
- *   as judged, and how each field's secret is found by value, if it is one), clicks the submit
- *   (or, for a step with a submit key, presses that key in its last field, which stands as the
- *   submit),
- *   waits for the page to settle and reads its controls (`pageControlsCode`). A disabled submit it
+ *   as judged, and how each field's secret is found by value, if it is one), reads the page's
+ *   alert text when the host counts new alerts (`alertsBefore`), clicks the submit (or, for a step
+ *   with a submit key, presses that key in its last field, which stands as the submit),
+ *   waits for the page to settle and reads its controls (`pageControlsCode`), with how many of
+ *   their alerts did not show before the click (`newAlerts`) when it read them. A disabled submit it
  *   never clicks: it says so and does nothing, and the host calls again while the page may still
  *   enable it.
  */
@@ -88,7 +90,15 @@ export type AutofillFillCall =
       readonly fieldGet: readonly boolean[];
       /** Only look: a call that finds the step's fields clicks nothing and answers `none`. */
       readonly look?: true;
+      /**
+       * Read the page's alerts just before the click, waiting at most `alertsBeforeMs`, so the
+       * answer counts the new ones after it (`newAlerts`); a read that runs out counts nothing.
+       */
+      readonly alertsBefore?: true;
     };
+
+/** How long the read of the page's alerts before a submit's click may hold the click back. */
+const alertsBeforeMs = 500;
 
 /**
  * Page code: when any control differs from the one the host last judged (the submit's `editable`
@@ -299,6 +309,17 @@ const refusedSubmission = async () => {
   }
   return null;
 };
+${pageControlsCode}
+// The alert text the page shows before the click, so the host counts only what the submit brought:
+// read only for a host that counts, and never past a short bound, so no frame holds the click back.
+const alertsBefore = ${
+    call.alertsBefore === true
+      ? `await Promise.race([
+  pageControls(true).then((found) => found.alerts, () => null),
+  new Promise((resolve) => setTimeout(() => resolve(null), ${alertsBeforeMs})),
+])`
+      : "null"
+  };
 const navigated = primary
   .waitForEvent("framenavigated", { predicate: (frame) => frame === primary.mainFrame(), timeout: ${call.settleMs} })
   .then(() => true, () => false);
@@ -314,10 +335,15 @@ if (submission === null && (await navigated))
   await primary.waitForLoadState("domcontentloaded", { timeout: ${call.settleMs} }).catch(() => undefined);
 submission ??= await refusedSubmission();
 if (submission !== null) return { submission, url: primary.url() };
-${pageControlsCode}
 // What the page shows once the submit settled, never a value, for the minter's next step.
 const controls = await pageControls().catch(() => null);
-return { submit: "clicked", url: primary.url(), ...(controls === null ? {} : { controls }) };`;
+const newAlerts =
+  controls === null || alertsBefore === null ? null : controls.alerts.filter((text) => !alertsBefore.includes(text)).length;
+return {
+  submit: "clicked",
+  url: primary.url(),
+  ...(controls === null ? {} : { controls: newAlerts === null ? controls : { ...controls, newAlerts } }),
+};`;
 };
 
 /**
@@ -526,7 +552,7 @@ const challengeOrigin = (frame) => {
   } catch {
     return false;
   }
-  return url.hostname === siteHost || url.hostname.endsWith("." + siteHost) || authenticationOrigins.includes(url.origin);
+  return onSiteHost(url.hostname) || authenticationOrigins.includes(url.origin);
 };
 // The frame and every frame above it show, as a question's frames are read.
 const frameShows = async (frame) => {
@@ -565,9 +591,10 @@ const recordedChallengeVisible = async (fields) => {
 
 /**
  * One host call: the page URL, whether the indicator is visible in a frame on the site (its host
- * `siteHost` or a subdomain of it), and whether a password field of the sign-in's own shows in any
- * frame: one of its fields (`signInFields`, by selector), or one in the form of a visible one.
- * Another form's password field, such as a change-password form or an inner service's login,
+ * `siteHost` or a subdomain of it on the same site, as `hostOnSiteSource` reads it), and whether a
+ * password field of the sign-in's own shows in any frame: one of its fields (`signInFields`, by
+ * selector), or one in the form of a visible one. Another form's password field, such as a
+ * change-password form or an inner service's login,
  * does not count unless one of those selectors matches in it. A hidden match, such as the username
  * a change-password form keeps for password managers, is no sign-in form showing. With no
  * `signInFields`, any visible password field counts. A recorded challenge field
@@ -596,7 +623,7 @@ for (const candidate of context.pages()) {
   try { origin = new URL(candidate.url()).origin; } catch { continue; }
   if (popupOrigins.includes(origin)) return { url: primary.url(), indicator: false, passwordVisible: false, challengeFormVisible: false };
 }
-const siteHost = ${JSON.stringify(siteHost)};
+const onSiteHost = ${hostOnSiteSource(siteHost)};
 const onSite = (frame) => {
   let host = "";
   try {
@@ -604,7 +631,7 @@ const onSite = (frame) => {
   } catch {
     return false;
   }
-  return host === siteHost || host.endsWith("." + siteHost);
+  return onSiteHost(host);
 };
 const authenticationOrigins = ${JSON.stringify(authenticationOrigins)};
 const visibleIn = async (selector, scopes) => {
