@@ -60,12 +60,13 @@ numbers, or replays the steps. Never edit a page number or offset into a URL you
 
 While building, return `await pager.detect()` after `start` to see the mechanism and controls it
 finds, and name that mechanism in `startList` and `pagedListReader`, which hands it to the pager,
-so a short list that shows no control still pages that way. Name a control in `listPager` (`next`, `loadMore`,
-`summary`, `controls`, `current`, `end` and the rest) only when the pager picks the wrong one, and
-replace one judgement with a hook (`step`, `hasNext`, `pageNumber`, `readTotal`, `echo`) only on a
-site it misreads. A pager failure names its reason: `pager_ambiguous` when two Next controls lead
-to different pages (name the list's own), `pager_no_control`, `pager_step_timeout` or
-`pager_page_unreachable`. Within one call, `pager.find(match)` walks to the page that holds a wanted
+so a short list that shows no control still pages that way. Name a control in `listPager`
+(`next`, `loadMore`, `summary`, `controls`, `current`, `end` and the rest) only when the pager
+picks the wrong one, and replace one judgement with a hook (`step`, `hasNext`, `pageNumber`,
+`readTotal`, `echo`) only on a site it misreads. A pager failure names its reason:
+`pager_ambiguous` when two Next controls lead to different pages (name the list's own),
+`pager_stalled` when a step changed nothing twice while the page shows more rows,
+`pager_no_control`, `pager_step_timeout` or `pager_page_unreachable`. Within one call, `pager.find(match)` walks to the page that holds a wanted
 record and `pager.collect({ limit, until })` gathers rows each once, for a tool that needs one
 record or a bounded set rather than a page per call.
 

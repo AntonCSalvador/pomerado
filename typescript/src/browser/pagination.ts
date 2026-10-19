@@ -176,6 +176,8 @@ const pagerScanInPage = (rowElements, args) => {
   let containers = named("controls");
   let records = [];
   if (containers !== undefined) records = containers.flatMap(recordsIn);
+  // Without rows there is no list to measure from: choose no pager rather than another list's.
+  else if (listElement === null) containers = [];
   else {
     // Pagination containers by their markup, and the element around any run of page numbers
     // whatever its markup, such as a plain div of links.
@@ -890,9 +892,15 @@ const listPager = (spec) => {
       step.seen.page = hooks.pageNumber === undefined ? pagerPageOf(step.seen, urlBase) : step.seen.page;
     }
     if (!step.moved && !growing) {
-      // The control led nowhere: the rows did not change once the page went quiet.
+      // The control led nowhere: the rows did not change once the page went quiet. With
+      // options.stall "fail", a page that still shows more rows gets one more try, then fails.
       const seen = step.seen;
-      return echoOf(segmentOf(seen, mechanism, [], false, evidenceOfMore(seen), { stalled: true }));
+      const more = evidenceOfMore(seen);
+      if (more && options.stall === "fail") {
+        if (options.retried !== true) return next(count, { ...options, retried: true });
+        throw pagerFailure("pager_stalled", "a step changed nothing while the page shows more rows");
+      }
+      return echoOf(segmentOf(seen, mechanism, [], false, more, { stalled: true }));
     }
     const segment = await read(count, { ...options, seen: step.seen });
     return step.moved ? segment : { ...segment, stalled: true };
@@ -1024,7 +1032,7 @@ const listPager = (spec) => {
       if (segment.totalResults !== null) siteTotal = segment.totalResults;
       const needed = skipping || rows.length < limit;
       // The rest of this page comes before the next one.
-      if (segment.more && needed) {
+      if (segment.more && needed && Date.now() < deadline) {
         const before = segment.rows.length;
         const again = await read(Math.max(before + 1, Math.min(before + pageRows, before * 2 + 1)));
         if (again.rows.length > before) {
@@ -1181,8 +1189,9 @@ const listPager = (spec) => {
  * walk the list, each row once, and return `{ rows, row?, found, hasMore, stoppedBy, steps,
  * listChanged, duplicates, totalResults, siteTotal?, totalMismatch? }`; `detect()` reports the
  * mechanism and controls without acting; `setPageSize(n)` picks a page size. A failure is a
- * `PagerFailure` whose `reason` is `pager_no_control`, `pager_ambiguous`, `pager_step_timeout` or
- * `pager_page_unreachable`; the waits' own failures pass through.
+ * `PagerFailure` whose `reason` is `pager_no_control`, `pager_ambiguous`, `pager_step_timeout`,
+ * `pager_page_unreachable` or, for a `next` told `{ stall: "fail" }`, `pager_stalled`: a step that
+ * changed nothing twice while the page shows more rows. The waits' own failures pass through.
  */
 export const paginationCode = `${scanCode}${pagerCode}`;
 
@@ -1334,9 +1343,8 @@ export const pagedListReader = <Row>(
         growing || segment.page !== undefined || segment.href === undefined
           ? ""
           : `if (page.url() !== ${JSON.stringify(segment.href)}) await page.goto(${JSON.stringify(segment.href)}, { waitUntil: "domcontentloaded", timeout: waitLimits.navigation });\n`;
-      const from = growing || segment.page === undefined ? "" : `, { from: ${String(segment.page)} }`;
-      const after = await run(`${back}return await pager.next(${String(count)}${from});`);
-      return merged(segment, after.stalled === true && !growing ? { ...after, hasNext: false } : after);
+      const options = growing ? "" : `, { stall: "fail"${segment.page === undefined ? "" : `, from: ${String(segment.page)}`} }`;
+      return merged(segment, await run(`${back}return await pager.next(${String(count)}${options});`));
     },
   };
 };

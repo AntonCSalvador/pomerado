@@ -116,6 +116,11 @@ test.describe("numbered pages that re-render in place", () => {
     expect(result).toMatchObject({ rows: records(30), stoppedBy: "end", steps: 2 });
   });
 
+  test("a Next mid-list that does nothing while the page shows more stops with more to come", async ({ page }) => {
+    const result = await table(page, { style: "datatables", total: 40, pageSize: 10, deadNextOnPage: 2 });
+    expect(result).toMatchObject({ rows: records(20), stoppedBy: "stalled", hasMore: true });
+  });
+
   test("a last page whose Next stays enabled and does nothing ends without more", async ({ page }) => {
     const result = await table(page, { style: "datatables", total: 25, pageSize: 10, deadLastNext: true });
     expect(result).toMatchObject({ rows: records(25), hasMore: false, stoppedBy: "stalled", totalResults: 25 });
@@ -813,4 +818,13 @@ test.describe("readList through the pager on lists that show no control", () => 
     expect(first).toEqual(pageOf(records(15), true, null));
     expect(second).toEqual(pageOf(records(15, 16), false, null));
   });
+});
+
+test("readList fails a call whose step leads nowhere while the page shows more, never calling the list ended", async ({
+  page,
+}) => {
+  await openTable(page, { style: "datatables", total: 40, pageSize: 10, deadNextOnPage: 2 });
+  const tool = readerTool("pages", `rows: page.locator("#rows > tr")`, `await page.goto(${JSON.stringify(`${origin}/`)});`);
+  const { result } = await runExample(page, tool, { limit: 25 }, { siteOrigin: origin, list: {}, deadlineMs: 40_000 });
+  expect(Either.isLeft(result) ? String(result.left) : "no failure").toContain("pager_stalled");
 });

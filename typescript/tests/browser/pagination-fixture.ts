@@ -93,6 +93,8 @@ export interface TableApp {
   readonly clearRows?: boolean;
   /** Previous and Next are bare arrows, with no label. */
   readonly arrowsOnly?: boolean;
+  /** Next on this page is shown enabled and does nothing. */
+  readonly deadNextOnPage?: number;
 }
 
 export const tableApp = (options: TableApp) => `<!doctype html>
@@ -228,6 +230,7 @@ export const tableApp = (options: TableApp) => `<!doctype html>
     if (control.closest(".disabled, .ant-pagination-disabled") || control.disabled || control.getAttribute("aria-disabled") === "true") return;
     const target = Number(control.dataset.go);
     if (target > pages()) return;
+    if (config.deadNextOnPage === current && target === current + 1) return;
     steps += 1;
     if (config.insertAfterFirstStep && steps === 1) data = [{ id: "R000", name: "Record 0" }, ...data];
     load(config.resetFromPage !== undefined && current >= config.resetFromPage && target > current ? 1 : target);
