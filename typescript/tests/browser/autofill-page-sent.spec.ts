@@ -567,15 +567,20 @@ test("a sign-in form with a button that draws itself again, empty, once the pass
 /**
  * A code screen of one field and a "Continue" button whose own script submits its form once the
  * field holds six digits, so the page leaves for the site's answer before the host clicks. `leaves`
- * names what the page does then: `submits` loads the answer as a new document; `pushes` puts a new
- * path in the address with pushState and draws a "Verifying" line in place of the form, and
- * `redraws` only draws that line, so neither loads a new document or sends anything.
+ * names what the page does then: `submits` loads the answer as a new document; `fetches` draws a
+ * "Verifying" line in place of the form, sends the code itself, and loads the account once the
+ * site took it; `pushes` puts a new path in the address with pushState and draws that line,
+ * `redraws` only draws it, and `restores` draws it, then puts the form back, code and all, a moment
+ * later, so none of those three loads a new document or sends anything.
  */
-type Leaves = "submits" | "pushes" | "redraws";
+type Leaves = "submits" | "fetches" | "pushes" | "redraws" | "restores";
+const verifying = `const shown = Object.assign(document.createElement("p"), { id: "verifying", textContent: "Verifying" }); form.replaceWith(shown);`;
 const leaving: Record<Leaves, string> = {
   submits: "form.submit();",
-  pushes: `history.pushState(null, "", "/verify/sent"); form.replaceWith(Object.assign(document.createElement("p"), { id: "verifying", textContent: "Verifying" }));`,
-  redraws: `form.replaceWith(Object.assign(document.createElement("p"), { id: "verifying", textContent: "Verifying" }));`,
+  fetches: `${verifying} fetch("/api/code", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: event.target.value }) }).then((response) => { if (response.ok) location.assign("/account"); });`,
+  pushes: `history.pushState(null, "", "/verify/sent"); ${verifying}`,
+  redraws: verifying,
+  restores: `${verifying} setTimeout(() => shown.replaceWith(form), 300);`,
 };
 const selfSubmitting = (leaves: Leaves) =>
   `<form id="code-form" action="/verify/code" method="post"><label>Code<input id="code" name="code" maxlength="6" inputmode="numeric" autocomplete="one-time-code"></label><button id="continue">Continue</button></form><script>
@@ -586,18 +591,22 @@ document.getElementById("code").addEventListener("input", (event) => {
 </script>`;
 const continueStep: AutofillStep = { fields: [{ selector: "#code", slot: "code" }], submit: "#continue" };
 
-/** The host's calls, its submit call made only once the page shows `shown`. */
+/** The host's calls, its first submit call made only once the page shows `shown`. */
 const submitOnceShown =
   (page: Page, shown: string) =>
-  (host: AutofillPage): AutofillPage => ({
-    ...host,
-    execute: (script, timeout) =>
-      script.includes("guardCall")
-        ? Effect.promise(() => expect(page.locator(shown)).toBeVisible()).pipe(
-            Effect.zipRight(host.execute(script, timeout)),
-          )
-        : host.execute(script, timeout),
-  });
+  (host: AutofillPage): AutofillPage => {
+    let waited = false;
+    return {
+      ...host,
+      execute: (script, timeout) => {
+        if (!script.includes("guardCall") || waited) return host.execute(script, timeout);
+        waited = true;
+        return Effect.promise(() => expect(page.locator(shown)).toBeVisible()).pipe(
+          Effect.zipRight(host.execute(script, timeout)),
+        );
+      },
+    };
+  };
 
 test("a code screen with a button whose form submits itself on its last input is reported sent by the page, never clicked, and signs in", async ({
   page,
@@ -625,8 +634,43 @@ test("a code screen with a button whose form submits itself on its last input is
   expect(signedIn).toMatchObject({ signedIn: true });
 });
 
-for (const leaves of ["pushes", "redraws"] as const)
-  test(`a code screen with a button whose script ${leaves === "pushes" ? "puts a new path in the address and takes" : "takes"} its form away on its last input, with no new document, is refused`, async ({
+test("a code screen with a button that hides its form and sends the code itself, then loads the account after the host first looked, is reported sent by the page", async ({
+  page,
+}) => {
+  const { sent, posted, release } = await serve(page, selfSubmitting("fetches"));
+  // The site answers only once the host's first submit call found the form gone, so the account
+  // loads as a new document while the host still looks.
+  const answeredAfterFirstLook = (host: AutofillPage): AutofillPage => {
+    const shown = submitOnceShown(page, "#verifying")(host);
+    return {
+      ...shown,
+      execute: (script, timeout) =>
+        script.includes("guardCall")
+          ? shown.execute(script, timeout).pipe(Effect.tap(() => Effect.sync(release)))
+          : shown.execute(script, timeout),
+    };
+  };
+  const report = await fill(page, continueStep, [code], {
+    wrap: answeredAfterFirstLook,
+    settleMs: 5_000,
+  });
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: [{ slot: "code", status: "filled" }],
+    submit: "page",
+  });
+  expect(report).not.toHaveProperty("clicked");
+  expect(sent).toEqual([code]);
+  expect(posted).toEqual([]);
+  await expect(page.locator("#account")).toBeVisible();
+});
+
+for (const [leaves, name] of [
+  ["pushes", "puts a new path in the address and takes its form away"],
+  ["redraws", "takes its form away"],
+  ["restores", "takes its form away, then puts it back with the code,"],
+] as const)
+  test(`a code screen with a button whose script ${name} on its last input, with no new document, is refused and never clicked`, async ({
     page,
   }) => {
     const { sent, posted } = await serve(page, selfSubmitting(leaves));

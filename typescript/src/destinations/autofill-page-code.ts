@@ -83,6 +83,8 @@ export type AutofillFillCall =
       readonly submitGet: boolean;
       /** Whether each field's own form was judged to submit by GET. */
       readonly fieldGet: readonly boolean[];
+      /** Only look: a call that finds the step's fields clicks nothing and answers `none`. */
+      readonly look?: true;
     };
 
 /**
@@ -251,7 +253,7 @@ try {
 } catch {
   return { dated: false, url: primary.url() };
 }`;
-  return `if (submit === null) return { submit: "none", url: primary.url() };
+  return `${call.look === true ? "return { submit: \"none\", url: primary.url() };\n" : ""}if (submit === null) return { submit: "none", url: primary.url() };
 // Disabled as Playwright's own click judges it, read where page code cannot redefine the answer.
 if (await submit.locator.isDisabled({ timeout: 5000 })) return { submit: "disabled", url: primary.url() };
 const guardKey = ${JSON.stringify(call.guardKey)};
@@ -385,7 +387,7 @@ const fields = [];
 for (let index = 0; index < selectors.length; index++) {
   const found = await locate(selectors[index], questionSelectors[index]);
   if ("error" in found)
-    return { ...found, target: index, url: primary.url()${fill === undefined ? "" : ", document: await documentStart()"} };
+    return { ...found, target: index, url: primary.url()${fill?.call.kind === "submit" ? ", document: await documentStart()" : ""} };
   fields.push(found);
 }
 const submitSelector = ${JSON.stringify(step.submit ?? null)};

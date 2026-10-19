@@ -79,8 +79,16 @@ const Changed = Schema.Struct({
   located: Schema.optional(FoundAt),
   url: Schema.String,
 });
-/** A call the host refused, with the primary page then. */
-type Stop = { readonly refusal: AutofillRefusal; readonly url?: string | undefined };
+/**
+ * A call the host refused, with the primary page then. `left`: a submit call of a step with a
+ * submit found a field gone from the document the host typed in, which a new document may yet
+ * replace (`screenGone`).
+ */
+type Stop = {
+  readonly refusal: AutofillRefusal;
+  readonly url?: string | undefined;
+  readonly left?: true;
+};
 /** A fill call's answer once the host judged it: a refusal, or the call's own answer. */
 type CallAnswer = Exclude<FillAnswer, typeof LocatedError.Type> | Stop;
 
@@ -334,25 +342,28 @@ const rejudge = (
 };
 
 /**
- * A submit call that found the screen gone once every field was typed: the page took it away
- * itself. On a step with no submit, a field gone or its popup closed, as a code widget does when
- * it sends what its last box completed. On a step with a submit, only a field gone because a new
- * document replaced the one the host typed the last field in (`typedIn`), as a form that submits
- * itself on its last input does: the host's click never ran, so nothing went out twice, and the
- * sign-in's next check decides what the page sent. A form that takes its fields away or puts a
- * new path in the address with pushState loaded no new document, so it stays a refusal.
+ * A submit call that found the screen gone once every field was typed: `sent` when the page took
+ * it away itself. On a step with no submit, a field gone or its popup closed, as a code widget does
+ * when it sends what its last box completed. On a step with a submit, only a field gone because a
+ * new document replaced the one the host typed the last field in (`typedIn`), as a form that
+ * submits itself on its last input does: the host's click never ran, so nothing went out twice, and
+ * the sign-in's next check decides what the page sent. A field gone from that same document is
+ * `left`: a form that takes its fields away or puts a new path in the address with pushState
+ * loaded no new document, so it stays a refusal unless one loads within the host's wait.
  */
 const screenGone = (
   step: AutofillStep<FillSlot>,
   answer: typeof LocatedError.Type,
   typedIn: number | undefined,
-) => {
-  if (step.fields.length === 0) return false;
+): "sent" | "left" | undefined => {
+  if (step.fields.length === 0) return undefined;
   const fieldGone = answer.error === "not_found" && typeof answer.target === "number";
-  if (step.submit === undefined) return fieldGone || answer.error === "popup_missing";
-  return (
-    fieldGone && typedIn !== undefined && answer.document !== undefined && answer.document !== typedIn
-  );
+  if (step.submit === undefined)
+    return fieldGone || answer.error === "popup_missing" ? "sent" : undefined;
+  if (!fieldGone) return undefined;
+  return typedIn !== undefined && answer.document !== undefined && answer.document !== typedIn
+    ? "sent"
+    : "left";
 };
 
 /**
@@ -385,15 +396,19 @@ const fillCall =
           );
         if (answered._tag === "Left") return Either.left(answered.left);
         const answer = answered.right;
-        if ("error" in answer)
+        if ("error" in answer) {
+          const gone =
+            call.kind === "submit" ? screenGone(input.step, answer, progress.typedIn) : undefined;
           return Either.right<CallAnswer>(
-            call.kind === "submit" && screenGone(input.step, answer, progress.typedIn)
+            gone === "sent"
               ? { pageSent: true, url: answer.url ?? "" }
               : {
                   refusal: locatedRefusal(answer, evidenceOrigins(input, progress)),
                   url: answer.url,
+                  ...(gone === "left" ? { left: true as const } : {}),
                 },
           );
+        }
         if (!("changed" in answer)) return Either.right(answer);
         const changed = changedProperties(progress.judged, answer.changed);
         changes.count++;
@@ -434,9 +449,43 @@ const submitPollMs = 250;
 const unclicked = (answered: Either.Either<CallAnswer, Error>, submit: "disabled" | "none") =>
   Either.isRight(answered) && "submit" in answered.right && answered.right.submit === submit;
 
+/** A submit call that found a field gone from the document the host typed in (`screenGone`). */
+const leftOnly = (answered: Either.Either<CallAnswer, Error>) =>
+  Either.isRight(answered) && "left" in answered.right && answered.right.left === true;
+
 /** A submit call that found the page sent what was typed itself. */
 const pageSent = (answered: Either.Either<CallAnswer, Error>) =>
   Either.isRight(answered) && "pageSent" in answered.right;
+
+/**
+ * After a submit call of a step with a submit found its fields gone from the document the host
+ * typed in (`left`, a refusal): looks again for up to `sendMs`, the step's settle wait at most
+ * `pageSendMs`, in case a new document replaces it, as a form that hides itself while it sends what
+ * was typed, then loads the site's answer, does. Each look only reads the page, never clicks, so a
+ * look that fails, as one does while the page navigates, is a look lost. A look that finds the page
+ * sent what was typed reports that (`page`); one that finds the fields back, or the wait's end,
+ * leaves the first refusal standing.
+ */
+const awaitNewDocument = (
+  input: FillInput,
+  progress: FillProgress,
+  call: AutofillFillCall,
+  left: Either.Either<CallAnswer, Error>,
+  sendMs: number,
+  changes: { count: number },
+) =>
+  Effect.gen(function* () {
+    if (call.kind !== "submit") return left;
+    const since = Date.now();
+    const look: AutofillFillCall = { ...call, look: true };
+    while (Date.now() - since < sendMs) {
+      yield* Effect.sleep(submitPollMs);
+      const answered = yield* fillCall(input, progress, changes)(look);
+      if (pageSent(answered)) return answered;
+      if (Either.isRight(answered) && !leftOnly(answered)) return left;
+    }
+    return left;
+  });
 
 /**
  * The step's submit call, made again while the page keeps the submit disabled, for up to
@@ -447,7 +496,9 @@ const pageSent = (answered: Either.Either<CallAnswer, Error>) =>
  * fall between the calls. On a step with no submit the call only reads the page, so one that fails
  * there, as when the page navigates or draws itself again while the call reads it, is a look lost:
  * the host looks again, at least once after it, even past the wait. When a later look finds the
- * page sent what was typed, the fill reports that; otherwise the first failure stands.
+ * page sent what was typed, the fill reports that; otherwise the first failure stands. On a step
+ * with a submit whose fields are gone from the document the host typed in, the host looks again
+ * without clicking (`awaitNewDocument`).
  */
 const submitWhenEnabled = (input: FillInput, progress: FillProgress, call: AutofillFillCall) =>
   Effect.gen(function* () {
@@ -460,6 +511,8 @@ const submitWhenEnabled = (input: FillInput, progress: FillProgress, call: Autof
     const changes = { count: 0 };
     for (;;) {
       const answered = yield* fillCall(input, progress, changes)(call);
+      if (leftOnly(answered) && sendMs > 0)
+        return yield* awaitNewDocument(input, progress, call, answered, sendMs, changes);
       const failed = readsOnly && Either.isLeft(answered);
       const unsent = unclicked(answered, "none") || failed;
       if (unsent) unsentSince ??= Date.now();
@@ -607,10 +660,11 @@ const afterFieldCall = (
  * path, or a step of several fields came back emptied. The host gives the page up to `pageSendMs`
  * to do so, and a submit call that fails meanwhile is followed by another look (`submitWhenEnabled`).
  * A step with a submit is the host's to click, whatever its page does meanwhile, unless a new
- * document took the place of the one the host typed the last field in before the click and the
- * step's fields went with it: the page sent the form itself (`page`, `screenGone`), and the host
- * clicks nothing. A form that locks, redraws itself or changes its address with pushState has sent
- * nothing, and the host waits on it or refuses as before.
+ * document took the place of the one the host typed the last field in, and the step's fields went
+ * with it, before the click or within `pageSendMs` of a look that found them gone: the page sent
+ * the form itself (`page`, `screenGone`, `awaitNewDocument`), and the host clicks nothing. A form
+ * that locks, redraws itself or changes its address with pushState has sent nothing, and the host
+ * waits on it or refuses as before.
  * Guardian's refusals still come first: a control that moved off the site or changed how it
  * submits refuses the submit as before.
  */
