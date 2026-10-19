@@ -110,7 +110,7 @@ first:
   record lacked that fact. A field the code never reads is a defect, not a limit to disclose,
   and a fact the page shows is never listed as unsupported instead of being returned.
 - **Coverage.** `coverage` says what exercised each behavior: live (the example or the act
-  session, and a read signed out's live tests, with the input each ran, such as page 1 of one
+  session, and a read's live tests, with the input each ran, such as page 1 of one
   query), offline only where a read signed out ran such checks (fixture<!-- pomerado:section publication.saved-http --> and parser tests, synthetic cases such as page boundaries included) and untested (such as
   a later page or another layout, live). Name each exposed input under
   the run that set it, or under untested (testing skill). An offline or synthetic check never
@@ -119,8 +119,10 @@ first:
   purpose, input, expectation and result on the source you publish, and what you listed under
   `notTested` with why. Guardian judges the tool's claims no passing case tests, and failing and
   stale cases, and checks every `notTested` reason against the captures and the request. A
-  signed-in read or a write reports its one run, the example or the act session, and lists what
-  that run did not exercise as untested without testing it; the review judges that run alone.
+  signed-in read reports its example and its combined case, and gets the same host record of the
+  cases it ran signed in; the review judges a failing case but never a gap. A write reports its
+  one run, the act session, and lists what that run did not exercise as untested without testing
+  it; the review judges that run alone.
 - **Errors.** A thrown message states the cause the code observed, such as a status or a missing
   element, never a guessed one.
 - **Edge cases.** Review misses these most often, so check each before every `finish_build`; the

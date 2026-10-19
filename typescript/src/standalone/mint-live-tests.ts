@@ -62,6 +62,8 @@ export const localLiveTests = (state: MintState): LiveTestHost => {
   );
   return {
     maxWorkers: 1,
+    // Every case runs on the build's own browser, so a signed-in read's cases keep its session.
+    signedInBatches: true,
     caseTimeoutMs,
     schemas: (entrypoint) =>
       Effect.gen(function* () {

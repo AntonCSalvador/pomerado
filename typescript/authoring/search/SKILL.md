@@ -151,8 +151,9 @@ order, sponsored ones in place.
 
 The description briefly states the design decisions, limits and interpretations a caller needs,
 such as the site's default location, how many results one call returns and how the site pages. A
-search signed out sets every input you expose in at least one live run before publishing, as the
-testing skill says; a signed-in one proves the tool with its example. Its cases include at least
-one broad query and one query the site answers with a fallback or "no exact matches" view, whose
-expectation you write only after seeing what the site shows for it. Give each input an
+search sets every input you expose in at least one live run before publishing, as the testing
+skill says, most of them together in one combined case; a signed-in one runs that combined case
+and at most one more. A search signed out's cases also include one query the site answers with a
+fallback or "no exact matches" view, whose expectation you write only after seeing what the site
+shows for it. Give each input an
 `examples` value the site offers for a typical query.

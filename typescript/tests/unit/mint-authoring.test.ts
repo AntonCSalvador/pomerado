@@ -300,7 +300,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   // when the build finds one, and neither skill names it as a gap.
   [
     "testing",
-    "and an option the page lists but greys out, such as a sold-out size, which a read returns as unavailable data. Prefer also a query or filter with no results (`empty`, never a throw) when you find one. Without one, move on: it needs no `notTested` entry and no question;",
+    "Without a no-results answer, move on: it needs no `notTested` entry and no question;",
   ],
   ["publication", "and untested (such as a later page or another layout, live)."],
   [
@@ -418,7 +418,7 @@ const formerSections: readonly (readonly [string, string])[] = [
   ["workspace/AGENTS.md", "Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md)."],
   ["workspace/AGENTS.md", "- `src/`: your operation. It exists from the start and is empty until you write to it"],
   ["testing", "Choose cases that catch actual risk: applied filters, IDs, units, authoritative empty"],
-  ["testing", "Where the host offers `live_tests`, a read signed out has no limit on live tests, and the host runs them for you in parallel."],
+  ["testing", "Where the host offers `live_tests`, the host runs a read signed out's cases for you in parallel."],
 ];
 
 const renderedTexts = async (directory: string, render?: (text: string) => string) => {
@@ -789,18 +789,18 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["f06d7ec00ea1c7a0de20c5bf215fc43545377922269f6bcc9cd352da4d6a4d7c", "core"],
-    ["cbf9d84d1cdc1a192ec07df90bf99192a72c7b03c0aefb89096f4f0b5bf6ef27", "search"],
+    ["a14f1b62b31578845bd7646b77876ace7a242a666f8d116bd8cad3447836e95f", "core"],
+    ["fe1283cbe9de49c475065da5c44f55bddafb854a141f9151b2c8d54a8dae749b", "search"],
     ["ac66bcd6e97b1126cd643bbaee17f1333decc5af5273748060a07b0b82f2b99c", "auth"],
-    ["48ba91768a4c1cbb8d6d325bb6b3ef41182bcbdf8097db014391137e29fb7f7d", "testing"],
-    ["fc4707b0cd5692efe8cc9b96be4ec88b1f8807451348056eb13dfc3d88486b0f", "pagination"],
+    ["e12b81c44319ecfb5d4a6fd6dccdb0576127cbf337eb40cb131aa13e99e6a622", "testing"],
+    ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
     ["3c9a5f4e12e33f5d10758225f0a233f98f9504fce618108fc93a52b5933e0048", "records"],
-    ["7e39ab2d515b817c3d42070922a575f6d3cd5b8427d3c97a4af151cec7a32656", "forms"],
+    ["12b198d6503ef35853f9ff42aefefe641dc3b59c8b2a3e5a1424aabb4f6af2f4", "forms"],
     ["482a1233b82951350ebb66f373a56667a47e37796a70a62ff84a6dd6c3abbc7a", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["5e3017df8368f31f52d925062ca0d7f24f2a8badffd8da1589ba9c7860e27b7a", "caller-input"],
-    ["3c11e86df509740394a8913710175dbdb364a84afbd2cd755ea19f676be6e0db", "publication"],
-    ["65366fa94b5d4203fa00724566b5f509fff2ebf8536bc388b62ad8ba0d8e2e0c", "workspace/AGENTS.md"],
+    ["c2dd673571bee73706a5b392926b0b9edcd9860fd20104789c353573b72cc9f6", "publication"],
+    ["a0d3eb391c301814d9bbf38ace731a4d280ebe2ca86c748962baaf4d291552ed", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
