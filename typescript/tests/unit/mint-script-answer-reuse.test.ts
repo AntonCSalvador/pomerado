@@ -5,13 +5,17 @@
 // reuse changes the answer's shape; a host reading kept answers back decodes one it cannot read,
 // or refuses one an earlier release kept with more fields. By decision: a script's question that
 // names the agent's earlier question asks the owner again; an answer carries over to an option
-// with another label, to another type, to a confirm with a follow-up the owner never saw, or with
-// the owner's own words the question does not take; an older answer to the decision wins over a
-// newer one; one protected question makes the request ask what the owner already answered.
+// with another label, to another type, to a confirm, with a note that qualified the pick, from a
+// label two earlier options shared, by an option's listed "id (label)" form, or with the owner's
+// own words the question does not take; an answer to a differently worded question is taken
+// without Guardian; an older answer to the decision wins over a newer one; a script question's
+// own id stands for the agent's question of that id; one protected question makes the request ask
+// what the owner already answered.
 import { Effect, Option, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   declaredDecisions,
+  earlierAnswerForReview,
   forgetScriptAnswers,
   KeptScriptAnswer,
   keptScriptAnswers,
@@ -59,7 +63,7 @@ describe("a later step's script question", () => {
     // Reusing leaves the kept answer in place, so every later ask of the same question reuses it.
     for (let ask = 0; ask < 3; ask++) expect(reuse(plan, entries)).toEqual(gold);
     // A kept answer carries no time and no step, so neither age nor the asking step ends it.
-    expect(entries).toEqual([{ question: keys(plan)[0], answer: gold["plan"], decision: "plan" }]);
+    expect(entries).toEqual([{ question: keys(plan)[0], answer: gold["plan"] }]);
     // Only a newer answer to the same prompt replaces it; another prompt's answer keeps it.
     expect(keptScriptAnswers(entries, keys(request([])), {})).toEqual(entries);
   });
@@ -187,14 +191,29 @@ const agentAsked = (questions: InputRequest["questions"]): InputRequest => ({
   source: "agent",
   questions,
 });
-const agentKept = (asked: InputRequest, answers: ValidAnswers) =>
-  keptScriptAnswers([], keys(asked), answers);
+/** The owner's answers to the minter's question, each settling the decision its id names. */
+const agentKept = (
+  asked: InputRequest,
+  answers: ValidAnswers,
+  entries: readonly KeptScriptAnswer[] = [],
+) =>
+  keptScriptAnswers(
+    entries,
+    keys(asked),
+    answers,
+    keys(asked).map((key) => key?.id),
+  );
 /** What a script's request reuses and leaves to ask, each question naming its decision. */
 const settle = (
   asked: InputRequest,
   entries: readonly KeptScriptAnswer[],
   decisions: readonly (string | undefined)[],
 ) => settledScriptAnswers(asked, keys(asked), entries, decisions);
+/** Every answer the request would take, reused or decided, once Guardian agrees to the decided. */
+const offered = (settled: ReturnType<typeof settle>) => ({
+  ...settled.reused,
+  ...Object.fromEntries(settled.decided.map((entry) => [entry.question.id, entry.answer])),
+});
 const cabin = agentAsked([
   {
     id: "cabin",
@@ -219,34 +238,55 @@ const pageCabinQuestion = {
   ],
 };
 const pageCabin = request([pageCabinQuestion]);
+const economy = agentKept(cabin, { cabin: { type: "choice", value: "economy" } });
 
 describe("a script's question that names an earlier decision", () => {
-  it("takes the owner's answer to the agent's question, picking the page's option by its label", () => {
-    const entries = agentKept(cabin, {
-      cabin: { type: "choice", value: { option: "economy", note: "the cheapest fare" } },
-    });
-    // The note went to the agent with the answer; the script's question takes none.
-    expect(settle(pageCabin, entries, ["cabin"])).toEqual({
-      reused: { seat_class: { type: "choice", value: "o2" } },
-      remaining: undefined,
+  it("offers the owner's answer to the agent's question for Guardian, by the page's option label", () => {
+    const settled = settle(pageCabin, economy, ["cabin"]);
+    // The owner saw another prompt, so the host asks Guardian before it takes the answer.
+    expect(settled.reused).toEqual({});
+    expect(settled.decided).toEqual([
+      {
+        question: pageCabinQuestion,
+        answer: { type: "choice", value: "o2" },
+        earlier: economy[0],
+      },
+    ]);
+    expect(settled.remaining).toBeUndefined();
+    expect(
+      Effect.runSync(earlierAnswerForReview(settled.decided[0]!, (text) => Effect.succeed(text))),
+    ).toEqual({
+      id: "seat_class",
+      answered: { question: "Which cabin should the booking use?", answer: "Economy" },
     });
     // Without a decision, a different question is never matched to it.
-    expect(settle(pageCabin, entries, [undefined]).remaining).toEqual(pageCabin);
-    expect(settle(pageCabin, entries, ["plan"]).remaining).toEqual(pageCabin);
+    expect(settle(pageCabin, economy, [undefined]).remaining).toEqual(pageCabin);
+    expect(settle(pageCabin, economy, ["plan"]).remaining).toEqual(pageCabin);
+  });
+
+  it("takes the answer without Guardian when the owner saw the same prompt", () => {
+    const same = request([{ ...pageCabinQuestion, prompt: "Which cabin should the booking use?" }]);
+    expect(settle(same, economy, ["cabin"])).toEqual({
+      reused: { seat_class: { type: "choice", value: "o2" } },
+      decided: [],
+      remaining: undefined,
+    });
   });
 
   it("asks again when the page offers no single option for the owner's pick or words", () => {
     const other = (text: string) =>
       agentKept(cabin, { cabin: { type: "choice", value: { other: text } } });
-    expect(settle(pageCabin, other("business"), ["cabin"]).reused).toEqual({
+    expect(offered(settle(pageCabin, other("business"), ["cabin"]))).toEqual({
       seat_class: { type: "choice", value: "o1" },
     });
     // The owner's own words reach a script's choice only where it takes them.
     expect(settle(pageCabin, other("Premium economy"), ["cabin"]).remaining).toEqual(pageCabin);
     const ownWords = request([{ ...pageCabinQuestion, allowOther: true }]);
-    expect(settle(ownWords, other("Premium economy"), ["cabin"]).reused).toEqual({
+    expect(offered(settle(ownWords, other("Premium economy"), ["cabin"]))).toEqual({
       seat_class: { type: "choice", value: { other: "Premium economy" } },
     });
+    // Only an option's label names it, never the form's listed "id (label)" entry.
+    expect(settle(pageCabin, other("o1 (business)"), ["cabin"]).remaining).toEqual(pageCabin);
     const first = request([
       {
         id: "seat_class",
@@ -255,8 +295,27 @@ describe("a script's question that names an earlier decision", () => {
         options: [{ id: "o1", label: "First" }],
       },
     ]);
-    const economy = agentKept(cabin, { cabin: { type: "choice", value: "economy" } });
     expect(settle(first, economy, ["cabin"]).remaining).toEqual(first);
+  });
+
+  it("asks again for a pick the owner qualified with a note, or whose label was not one option's", () => {
+    const noted = agentKept(cabin, {
+      cabin: { type: "choice", value: { option: "economy", note: "only the cheapest fare" } },
+    });
+    expect(settle(pageCabin, noted, ["cabin"]).remaining).toEqual(pageCabin);
+    const twice = agentAsked([
+      {
+        id: "cabin",
+        type: "choice",
+        prompt: "Which cabin should the booking use?",
+        options: [
+          { id: "economy", label: "Economy" },
+          { id: "economy_flex", label: "economy" },
+        ],
+      },
+    ]);
+    const shared = agentKept(twice, { cabin: { type: "choice", value: "economy" } });
+    expect(settle(pageCabin, shared, ["cabin"]).remaining).toEqual(pageCabin);
   });
 
   it("maps every pick of a multiple choice, or asks again", () => {
@@ -287,34 +346,34 @@ describe("a script's question that names an earlier decision", () => {
     const both = agentKept(extras, {
       extras: { type: "multi_choice", value: ["bag", "seat"] },
     });
-    expect(settle(page(["Seat selection", "Checked bag", "Insurance"]), both, ["extras"]).reused)
+    expect(offered(settle(page(["Seat selection", "Checked bag", "Insurance"]), both, ["extras"])))
       .toEqual({ add_ons: { type: "multi_choice", value: ["o2", "o1"] } });
-    expect(settle(page(["Checked bag"]), both, ["extras"]).reused).toEqual({});
+    expect(offered(settle(page(["Checked bag"]), both, ["extras"]))).toEqual({});
     // Nothing picked carries over as nothing picked.
     const none = agentKept(extras, { extras: { type: "multi_choice", value: [] } });
-    expect(settle(page(["Checked bag"]), none, ["extras"]).reused).toEqual({
+    expect(offered(settle(page(["Checked bag"]), none, ["extras"]))).toEqual({
       add_ons: { type: "multi_choice", value: [] },
     });
+    const noted = agentKept(extras, {
+      extras: { type: "multi_choice", value: { options: ["bag"], note: "one bag only" } },
+    });
+    expect(offered(settle(page(["Checked bag"]), noted, ["extras"]))).toEqual({});
   });
 
-  it("carries a confirm over only to a confirm whose follow-up the owner saw", () => {
+  it("never carries a confirm over to another question", () => {
     const terms = agentAsked([{ id: "terms", type: "confirm", prompt: "Accept the site terms?" }]);
     const yes = agentKept(terms, { terms: { type: "confirm", value: { confirmed: true } } });
-    const accept = request([{ id: "accept", type: "confirm", prompt: "Accept?" }]);
-    expect(settle(accept, yes, ["terms"]).reused).toEqual({
-      accept: { type: "confirm", value: { confirmed: true } },
-    });
-    const dialog = request([
-      { id: "accept", type: "confirm", prompt: "Accept?", followUp: { prompt: "Your name?" } },
-    ]);
-    expect(settle(dialog, yes, ["terms"]).remaining).toEqual(dialog);
+    // The owner's yes stands only for the prompt they saw, however the decision is named.
+    for (const prompt of ["Accept?", "Accept the site terms?"]) {
+      const accept = request([{ id: "accept", type: "confirm", prompt }]);
+      expect(settle(accept, yes, ["terms"]).remaining).toEqual(accept);
+    }
     // Another type of question is another decision's shape: asked again.
     const text = request([{ id: "accept", type: "text", prompt: "Accept?" }]);
     expect(settle(text, yes, ["terms"]).remaining).toEqual(text);
   });
 
   it("takes the owner's latest answer to the decision, from the agent or a script", () => {
-    const economy = agentKept(cabin, { cabin: { type: "choice", value: "economy" } });
     // A script's answer to the same decision replaces the agent's.
     const scriptBusiness = keptScriptAnswers(
       economy,
@@ -323,35 +382,35 @@ describe("a script's question that names an earlier decision", () => {
       ["cabin"],
     );
     expect(scriptBusiness).toHaveLength(1);
-    expect(settle(pageCabin, scriptBusiness, ["cabin"]).reused).toEqual({
+    expect(offered(settle(pageCabin, scriptBusiness, ["cabin"]))).toEqual({
       seat_class: { type: "choice", value: "o1" },
     });
     // And the agent's newer answer replaces the script's.
-    const again = keptScriptAnswers(scriptBusiness, keys(cabin), {
-      cabin: { type: "choice", value: "economy" },
-    });
-    expect(settle(pageCabin, again, ["cabin"]).reused).toEqual({
+    const again = agentKept(cabin, { cabin: { type: "choice", value: "economy" } }, scriptBusiness);
+    expect(offered(settle(pageCabin, again, ["cabin"]))).toEqual({
       seat_class: { type: "choice", value: "o2" },
     });
   });
 
-  it("takes the answer to an earlier script question it names by id, reworded", () => {
-    const entries = kept(plan, gold);
-    const reworded = request([{ ...choice, id: "tier", prompt: "Which plan is on the account?" }]);
-    expect(settle(reworded, entries, ["plan"]).reused).toEqual({
+  it("never takes a script question's own id for the agent's question of that id", () => {
+    const agentPlan = agentKept(agentAsked([choice]), gold);
+    // A script question that names no decision has the same id but asks something else.
+    const renewal = request([{ ...choice, prompt: "Which plan should the renewal use?" }]);
+    const silver: ValidAnswers = { plan: { type: "choice", value: "silver" } };
+    const entries = keptScriptAnswers(agentPlan, keys(renewal), silver);
+    // A later question naming the decision `plan` takes the agent's answer, not the script's.
+    const named = request([{ ...choice, id: "tier", prompt: "Which plan is on the account?" }]);
+    expect(offered(settle(named, entries, ["plan"]))).toEqual({
       tier: { type: "choice", value: "gold" },
     });
-    // A question that names no decision is never matched by id alone.
-    expect(settle(request([{ ...choice, prompt: "Which plan?" }]), entries, []).reused).toEqual(
-      {},
-    );
+    // Nor does a script's undeclared answer settle a decision on its own.
+    expect(settle(named, kept(renewal, silver), ["plan"]).remaining).toEqual(named);
   });
 
   it("asks only what the owner has not answered", () => {
-    const economy = agentKept(cabin, { cabin: { type: "choice", value: "economy" } });
     const both = request([pageCabinQuestion, { id: "meal", type: "text", prompt: "Which meal?" }]);
     const settled = settle(both, economy, ["cabin", undefined]);
-    expect(settled.reused).toEqual({ seat_class: { type: "choice", value: "o2" } });
+    expect(offered(settled)).toEqual({ seat_class: { type: "choice", value: "o2" } });
     expect(settled.remaining).toEqual({ ...both, questions: [both.questions[1]] });
   });
 

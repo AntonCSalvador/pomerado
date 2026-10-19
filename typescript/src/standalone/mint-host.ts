@@ -97,8 +97,8 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
           ),
         ),
         // The owner's answer settles the decision its question's id names, which a script's
-        // question may name to reuse it, and replaces any kept answer to the same prompt. The
-        // read-or-write choice is the host's, never a script's decision.
+        // question may name to reuse it, and replaces any kept answer to the same prompt or
+        // decision. The read-or-write choice is the host's, never a script's decision.
         Effect.tap((answers) =>
           isReadOrWriteChoice(candidate)
             ? Effect.void
@@ -111,6 +111,7 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
                     state.scriptAnswers.kept,
                     keys,
                     answers,
+                    keys.map((key) => key?.id),
                   );
                 }),
               ),
@@ -125,11 +126,22 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
         Effect.map((result) => ({ ...result.decision, reviewId: result.reviewId })),
         Effect.mapError(mintError),
       ),
-    applyTaskUpdate: (application) =>
-      // The owner's answers stand for the updated task: a build never asks a decision twice.
-      context
-        .applyTaskUpdate(application, (siteOrigin) => state.rebindSite(siteOrigin))
-        .pipe(Effect.mapError(mintError)),
+    applyTaskUpdate: (application) => {
+      // The owner's answers stand for an update on the same site, which tells the minter to ask
+      // again what it changes; on another site none of them do.
+      const { siteOrigin } = application.next;
+      const moves = siteOrigin !== undefined && siteOrigin !== context.siteOrigin;
+      return context
+        .applyTaskUpdate(application, (origin) => state.rebindSite(origin))
+        .pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              if (moves && result.outcome === "applied") state.scriptAnswers.kept = [];
+            }),
+          ),
+          Effect.mapError(mintError),
+        );
+    },
     repeatableRead: context.repeatableRead(),
     // A repeatable read's example claims nothing, so it may run again.
     claimExample: Effect.suspend(() =>

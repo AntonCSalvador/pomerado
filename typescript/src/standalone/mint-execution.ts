@@ -66,9 +66,11 @@ import {
 import type { MintState } from "./mint-state.js";
 import {
   declaredDecisions,
+  earlierAnswerForReview,
   keptScriptAnswers,
   scriptQuestionKeys,
   settledScriptAnswers,
+  unansweredRequest,
 } from "../mint/script-answer-reuse.js";
 import { error, mintError } from "./errors.js";
 import { mintSessionSignInFailure, type SessionSignInFailed } from "./session-sign-in.js";
@@ -276,27 +278,43 @@ const scriptQuestions = (
     Effect.gen(function* () {
       // What the owner already answered in this build is never asked again: the same question,
       // or the decision its declaration names, whether the agent or a script asked it, however
-      // long ago and whether or not a step entered a commit since. Nobody is asked, so Guardian
-      // reviews only what is left, and the reused answers are already the owner's latest in its
-      // list (`keptScriptAnswers`).
+      // long ago and whether or not a step entered a commit since. An answer to the same
+      // decision under another prompt stands only once Guardian agrees it answers this one;
+      // otherwise the owner is asked. Guardian reviews only what is left to ask, and the reused
+      // answers are already the owner's latest in its list (`keptScriptAnswers`).
       const keys = yield* scriptQuestionKeys(candidate, (text) => projection.text(text));
       const decisions = declaredDecisions(candidate, declared);
-      const { reused, remaining } = settledScriptAnswers(
-        candidate,
-        keys,
-        scriptAnswers.kept,
-        decisions,
+      const settled = settledScriptAnswers(candidate, keys, scriptAnswers.kept, decisions);
+      const call = { entrypoint: `operation/${entrypoint}`, sources: sourceMap, input };
+      const decided = Object.fromEntries(
+        settled.decided.map((entry) => [entry.question.id, entry.answer]),
       );
+      const agreed =
+        settled.decided.length === 0
+          ? false
+          : yield* questionForReview(
+              { ...candidate, questions: settled.decided.map((entry) => entry.question) },
+              {
+                credentialsAvailable: false,
+                scriptAsk: true,
+                reusedAnswers: yield* Effect.forEach(settled.decided, (entry) =>
+                  earlierAnswerForReview(entry, (text) => projection.text(text)),
+                ),
+              },
+              projection.text,
+            ).pipe(
+              Effect.flatMap((question) => context.reviewQuestion(call, question)),
+              Effect.map((review) => review.decision.outcome === "allow_business"),
+            );
+      const reused = agreed ? { ...settled.reused, ...decided } : settled.reused;
+      const remaining = unansweredRequest(candidate, reused);
       if (remaining === undefined) return reused;
       const question = yield* questionForReview(
         remaining,
         { credentialsAvailable: false, scriptAsk: true },
         projection.text,
       );
-      const review = yield* context.reviewQuestion(
-        { entrypoint: `operation/${entrypoint}`, sources: sourceMap, input },
-        question,
-      );
+      const review = yield* context.reviewQuestion(call, question);
       if (review.decision.outcome !== "allow_business") {
         scriptQuestion = {
           requestId: candidate.id,

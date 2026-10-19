@@ -41,7 +41,7 @@ export const publicOptionLabel = (option: InputOption) =>
 export const listedOption = (option: InputOption, label: string) => `${option.id} (${label})`;
 
 /** Folds case, accents and spacing, as `chooseOption` does, without its punctuation step. */
-const foldedAnswer = (text: string) =>
+export const foldedAnswer = (text: string) =>
   text
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")

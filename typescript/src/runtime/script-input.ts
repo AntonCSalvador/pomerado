@@ -24,10 +24,11 @@ import {
 const Prompt = ConfirmQuestion.fields.prompt;
 const Selections = Schema.Int.pipe(Schema.between(0, 50));
 /**
- * The decision the question asks the owner, by the id of the build's earlier question about it:
- * the agent's own, or another script question's id or `decision`. While a build runs, an
- * ask reuses the owner's latest answer to that decision instead of asking again; a published
- * tool's run asks its caller every time. A secret never names one.
+ * The decision the question asks the owner: the id of the agent's own earlier question about it,
+ * or a `decision` another script question names. While a build runs, an ask takes the owner's
+ * latest answer to that decision instead of asking again, once Guardian agrees it answers the
+ * question as now worded; a published tool's run asks its caller every time. A confirm or a
+ * secret never names one.
  */
 const decision = { decision: Schema.optional(QuestionId) };
 
@@ -57,7 +58,6 @@ export const ScriptQuestionDeclaration = Schema.Union(
     type: Schema.Literal("confirm"),
     prompt: Prompt,
     followUp: ConfirmQuestion.fields.followUp,
-    ...decision,
   }),
   Schema.Struct({
     type: Schema.Literal("secret"),

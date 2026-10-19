@@ -3271,7 +3271,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             ? [
                 "The build now targets task.siteOrigin: the host rebound its site, sign-in and publication there. Navigate there yourself; pages, captures and sign-ins from the earlier site are evidence about that site only. Sign in with execute purpose authenticate if the task needs it there.",
               ]
-            : []),
+            : [
+                "The caller's earlier answers stand unless this update changes what one decided: ask that question again.",
+              ]),
           ...(settings.has("input")
             ? [
                 "The changed input values are the host-bound input from now on: an example or act step runs them, and the tool's input schema takes them.",

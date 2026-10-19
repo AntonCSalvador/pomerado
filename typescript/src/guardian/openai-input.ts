@@ -102,6 +102,9 @@ export const guardianReviewInput = (
             ...(turn.pending.questionCandidate.signInMethodByHost === true
               ? { signInMethodByHost: true }
               : {}),
+            ...(turn.pending.questionCandidate.reusedAnswers === undefined
+              ? {}
+              : { reusedAnswers: turn.pending.questionCandidate.reusedAnswers }),
           },
         }),
     ...(turn.pending.updateCandidate === undefined
