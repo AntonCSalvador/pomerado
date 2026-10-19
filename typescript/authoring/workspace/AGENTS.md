@@ -549,8 +549,9 @@ the example last, before `finish_build`. A signed-in read runs that combined cas
 only for inputs that cannot be set together: two distinct inputs at most, which the host
 enforces, on its own signed-in browser. A write does the original task: its act session is the
 one run that proves the tool. It designs no tests and runs no live tests or offline test suites
-beyond it<!-- pomerado:section agents.write-http-check -->. The scope follows what the tool is
-now: a read that becomes a write keeps to the one run from then on, a read that signs in keeps to
+beyond it<!-- pomerado:section agents.write-http-check -->. It still checks its composed
+script's read-back and comparison offline over what the session read (writes skill). The scope
+follows what the tool is now: a read that becomes a write keeps to the one run from then on, a read that signs in keeps to
 the signed-in bound, and a repair that rebuilds one as a read signed out tests it as one.
 Report skipped, unsupported or missing bodies honestly.
 
