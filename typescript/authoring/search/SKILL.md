@@ -55,9 +55,7 @@ unreliable (testing skill), never by filtering the returned rows, then read it b
 applied-filter chips, the selected sort, an option the site shows selected, or the results header.
 A URL naming the input does not show it applied. When a filter did not apply, the tool throws
 `OperationFailure` naming it, so the run fails and the tool gets repaired; it never returns
-unfiltered results as filtered.
-An HTTP version reads each input back from the answer instead: the echoed query, sort, filters
-and store or location in its own state.
+unfiltered results as filtered.<!-- pomerado:section search.http-read-back -->
 
 When setting one control reloads the result list, order matters: set that control, commonly a
 location or store, before the filters and sorts its reload would drop. Open only the groups the
