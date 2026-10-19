@@ -159,10 +159,16 @@ type Outcomes =
   | Readonly<Record<string, LiveTestOutcome>>
   | ((batch: number) => Readonly<Record<string, LiveTestOutcome>>);
 
-const liveTestHost = (outcomes: Outcomes, result?: LiveTestBatchResult) => {
+/** A host that supports signed-in batches unless `signedInBatches` is false. */
+const liveTestHost = (
+  outcomes: Outcomes,
+  result?: LiveTestBatchResult,
+  { signedInBatches = true }: { readonly signedInBatches?: boolean } = {},
+) => {
   const batches: LiveTestBatch[] = [];
   const host: LiveTestHost = {
     maxWorkers: 3,
+    ...(signedInBatches ? { signedInBatches: true as const } : {}),
     schemas: () => Effect.succeed(schemas),
     run: (batch) =>
       Effect.sync(() => {
@@ -900,52 +906,6 @@ it("runs nothing when Guardian denies the batch, and says why", async () => {
   expect(record.cases.every((testCase) => testCase.results.playwright.status === "not_run")).toBe(true);
 });
 
-it("runs no live tests for a signed-in read, which its example alone proves", async () => {
-  const { host, batches } = liveTestHost({});
-  const published = publications();
-  const f = await fixture(
-    (_request, index) =>
-      [
-        call(
-          "execute",
-          { ...example, purpose: "authenticate", entrypoint: "src/sign-in.ts" },
-          "sign_in",
-        ),
-        call("live_tests", runAll, "run"),
-        call("execute", example, "example"),
-        call("finish_build", finish, "finish"),
-      ][index] ?? prose(),
-    {
-      liveTests: host,
-      deadline: Deadline.after(30 * 60_000),
-      reviewAndExecute: (input, beforeDispatch) =>
-        input.purpose === "authenticate"
-          ? (beforeDispatch?.(readAllow) ?? Effect.void).pipe(
-              Effect.as({
-                executionId: "sign_in_one",
-                status: "completed" as const,
-                effect: "verified" as const,
-                authentication: { state: "authenticated" as const, effect: "verified" as const },
-                observations: {},
-              }),
-            )
-          : completedExample(input, beforeDispatch),
-      publish: published.publish,
-    },
-    read,
-  );
-  const root = (f.workspace as unknown as { root: string }).root;
-  await writeWorkspace(root, {
-    "src/tool.ts": toolSource,
-    "src/sign-in.ts": toolSource,
-    "test/cases.json": JSON.stringify(cases),
-  });
-  await f.run();
-  expect(batches).toHaveLength(0);
-  expect(resultOf(f.requests[2], "run")).toMatchObject({ status: "unavailable" });
-  expect(published.seen[0]?.liveTests).toBeUndefined();
-});
-
 const httpSource = "export default { name: 'search_catalog_http' };\n";
 const runHttp = { action: "run", entrypoint: "src/tool-http.mjs", cases: null, maxWorkers: 3 };
 const planOf = (entrypoint: string) => ({ action: "plan", entrypoint, cases: null, maxWorkers: null });
@@ -1153,12 +1113,289 @@ const signingIn: MintDependencies["reviewAndExecute"] = (input, beforeDispatch) 
       )
     : completedExample(input, beforeDispatch);
 
+// A signed-in read sets every optional input its example left unset in one combined case, and may
+// run a second input when they cannot all be set together. Running an input again, after a fix or
+// on the HTTP version, is free; a third input is refused and runs nothing.
+const combined = {
+  cases: [
+    {
+      id: "every-filter",
+      purpose: "The sort and in-stock filter the example left unset, set from its own rows; each row shows both.",
+      input: { query: "lamp", sort: "price_low", in_stock: true },
+      expect: "result",
+      next_page: true,
+    },
+    {
+      id: "other-sort",
+      purpose: "The descending sort opens a results page laid out differently.",
+      input: { query: "lamp", sort: "price_high" },
+      expect: "result",
+    },
+  ],
+  notTested: [{ what: "A query with no results", reason: "A signed-in read runs its combined case only." }],
+};
+const thirdCase = { id: "third", purpose: "Another query.", input: { query: "desk" }, expect: "result" };
+const filterIgnored = {
+  status: "failed" as const,
+  errorClass: "InputNotApplied",
+  message: "The in-stock filter did not apply.",
+  frame: "src/tool.ts:4",
+};
+
+it("runs a signed-in read's combined filter case on its signed-in browser and refuses a third input", async () => {
+  const { host, batches } = liveTestHost((batch) =>
+    batch === 0 ? { "every-filter": filterIgnored } : {},
+  );
+  const published = publications();
+  let root = "";
+  const f = await fixture(
+    async (_request, index) => {
+      if (index === 3)
+        await writeWorkspace(root, {
+          "test/cases.json": JSON.stringify({ ...combined, cases: [...combined.cases, thirdCase] }),
+        });
+      // The fix for the ignored filter.
+      if (index === 4) await writeWorkspace(root, { "src/tool.ts": `${toolSource}// fixed\n` });
+      return (
+        [
+          call("execute", signInStep, "sign_in"),
+          call("execute", example, "example"),
+          call("live_tests", runAll, "run"),
+          call("live_tests", { ...runAll, cases: ["third"] }, "third"),
+          call("live_tests", { ...runAll, cases: ["every-filter"] }, "rerun"),
+          call("live_tests", { ...runHttp, cases: ["every-filter", "other-sort"] }, "http"),
+          call("finish_build", finish, "finish"),
+        ][index] ?? prose()
+      );
+    },
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: signingIn,
+      publish: published.publish,
+    },
+    read,
+  );
+  root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/tool-http.mjs": httpSource,
+    "src/sign-in.ts": toolSource,
+    "test/cases.json": JSON.stringify(combined),
+  });
+  await f.run();
+
+  // The first passing example reminds a signed-in read of its combined case too.
+  expect(resultOf(f.requests[2], "example")["testPlan"]).toMatchObject({ plannedCases: 2 });
+  // Two inputs run, on the build's own signed-in browser only.
+  expect(statuses(resultOf(f.requests[3], "run"))).toEqual({
+    "every-filter": "fail",
+    "other-sort": "pass",
+  });
+  // A third input runs nothing.
+  expect(resultOf(f.requests[4], "third")).toMatchObject({ status: "limit" });
+  // The same input again after the fix, and on the HTTP version, runs.
+  expect(statuses(resultOf(f.requests[5], "rerun"))).toEqual({ "every-filter": "pass" });
+  expect(statuses(resultOf(f.requests[6], "http"))).toEqual({
+    "every-filter": "pass",
+    "other-sort": "pass",
+  });
+  expect(batches.map((batch) => batch.cases.map((testCase) => testCase.id))).toEqual([
+    ["every-filter", "other-sort"],
+    ["every-filter"],
+    ["every-filter", "other-sort"],
+  ]);
+  expect(batches.every((batch) => batch.signedIn === true && batch.workers === 1)).toBe(true);
+  // Page two runs within the combined case, through the cursor page one returned.
+  expect(batches[0]?.cases[0]?.nextPage).toEqual({ inputField: "cursor", outputField: "next_cursor" });
+
+  // Publication gets the host's record of the signed-in cases, marked as a signed-in read's.
+  const record = published.seen[0]?.liveTests as {
+    signedIn?: boolean;
+    cases: { id: string; results: Record<string, { status: string }> }[];
+  };
+  expect(record.signedIn).toBe(true);
+  expect(
+    Object.fromEntries(
+      record.cases.map((testCase) => [
+        testCase.id,
+        [testCase.results["playwright"]?.status, testCase.results["http"]?.status],
+      ]),
+    ),
+  ).toEqual({
+    // other-sort ran on the source before the fix.
+    "every-filter": ["pass", "pass"],
+    "other-sort": ["stale", "pass"],
+    third: ["not_run", "not_run"],
+  });
+});
+
+it("counts a signed-in read's test inputs across live_tests and execute", async () => {
+  const { host, batches } = liveTestHost({});
+  const ran: (string | undefined)[] = [];
+  const test = (testInput: object) => ({
+    ...example,
+    purpose: "test",
+    testInput: JSON.stringify(testInput),
+  });
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", signInStep, "sign_in"),
+        call("execute", example, "example"),
+        call("live_tests", { ...runAll, cases: ["every-filter"] }, "batch"),
+        call("execute", test({ query: "lamp", sort: "price_high" }), "second"),
+        call("execute", test({ query: "desk" }), "third"),
+        // The second input again, its keys in another order: no new input.
+        call("execute", test({ sort: "price_high", query: "lamp" }), "again"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: (input, beforeDispatch) => {
+        if (input.purpose === "test") ran.push(input.testInput);
+        return signingIn(input, beforeDispatch);
+      },
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/sign-in.ts": toolSource,
+    "test/cases.json": JSON.stringify(combined),
+  });
+  await f.run();
+  expect(batches).toHaveLength(1);
+  expect(resultOf(f.requests[5], "third")).toMatchObject({ status: "unsupported" });
+  expect(ran.map((input) => JSON.parse(input ?? "null") as unknown)).toEqual([
+    { query: "lamp", sort: "price_high" },
+    { sort: "price_high", query: "lamp" },
+  ]);
+});
+
+// A takeover keeps a signed-in read's count: an input that ran before it runs again for free, and a
+// third distinct input stays refused.
+it("keeps a signed-in read's counted inputs across a takeover", async () => {
+  const { host, batches } = liveTestHost({});
+  const checkpoints: { agent: MintAgentSnapshot; harness: MintHarnessSnapshot }[] = [];
+  const files = {
+    "src/tool.ts": toolSource,
+    "src/sign-in.ts": toolSource,
+    "test/cases.json": JSON.stringify({ ...combined, cases: [...combined.cases, thirdCase] }),
+  };
+  const before = checkpointingMinter(
+    (index) =>
+      [
+        call("execute", signInStep, "sign_in"),
+        call("execute", example, "example"),
+        call("live_tests", { ...runAll, cases: ["every-filter", "other-sort"] }, "run"),
+      ][index] ?? prose(),
+  );
+  const first = await fixture(() => prose(), {
+    model: before.model,
+    liveTests: host,
+    deadline: Deadline.after(30 * 60_000),
+    reviewAndExecute: signingIn,
+    agentRecovery: {
+      save: (agent, harness) =>
+        Effect.sync(() => {
+          checkpoints.push({ agent, harness });
+        }),
+    },
+  }, read);
+  await writeWorkspace((first.workspace as unknown as { root: string }).root, files);
+  await first.run().catch(() => undefined);
+  const saved = checkpoints.find((checkpoint) => (checkpoint.harness.liveTests ?? []).length > 0);
+  if (saved === undefined) throw new Error("No checkpoint with live test results");
+  // The checkpoint round-trips as a stored one does.
+  const stored = Schema.decodeUnknownSync(MintHarnessSnapshot)(
+    JSON.parse(JSON.stringify(saved.harness)),
+  );
+
+  const after = checkpointingMinter(
+    (index) =>
+      [
+        call("live_tests", { ...runAll, cases: ["every-filter"] }, "again"),
+        call("live_tests", { ...runAll, cases: ["third"] }, "third"),
+      ][index] ?? prose(),
+  );
+  const second = await fixture(() => prose(), {
+    model: after.model,
+    liveTests: host,
+    deadline: Deadline.after(30 * 60_000),
+    reviewAndExecute: signingIn,
+    agentRecovery: { initial: { agent: saved.agent, harness: stored }, save: () => Effect.void },
+  }, read);
+  await writeWorkspace((second.workspace as unknown as { root: string }).root, files);
+  await second.run().catch(() => undefined);
+  expect(statuses(resultOf(after.requests[1], "again"))).toEqual({ "every-filter": "pass" });
+  expect(resultOf(after.requests[2], "third")).toMatchObject({ status: "limit" });
+  expect(batches.map((batch) => batch.cases.map((testCase) => testCase.id))).toEqual([
+    ["every-filter", "other-sort"],
+    ["every-filter"],
+  ]);
+});
+
+// A host on the contract before signed-in batches never declares them, and would run a signed-in
+// read's cases on new browsers with no session: such a read keeps proving its tool with its example.
+it("runs no live tests for a signed-in read on a host that does not support signed-in batches", async () => {
+  const { host, batches } = liveTestHost({}, undefined, { signedInBatches: false });
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", signInStep, "sign_in"),
+        call("execute", example, "example"),
+        call("live_tests", { ...runAll, cases: ["every-filter"] }, "run"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: signingIn,
+      publish: published.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/sign-in.ts": toolSource,
+    "test/cases.json": JSON.stringify(combined),
+  });
+  await f.run();
+  // No test plan reminder after the example, the batch is refused, and nothing ran.
+  expect(resultOf(f.requests[2], "example")["testPlan"]).toBeUndefined();
+  expect(resultOf(f.requests[3], "run")).toMatchObject({ status: "unavailable" });
+  expect(batches).toHaveLength(0);
+  expect(published.seen[0]?.liveTests).toBeUndefined();
+});
+
+it("runs no live tests for a write, signed in or not", async () => {
+  const { host, batches } = liveTestHost({});
+  const f = await fixture(
+    (_request, index) =>
+      [call("execute", signInStep, "sign_in"), call("live_tests", runAll, "run")][index] ?? prose(),
+    { liveTests: host, deadline: Deadline.after(30 * 60_000), reviewAndExecute: signingIn },
+    { ...read, effect: "write" },
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/sign-in.ts": toolSource,
+    "test/cases.json": JSON.stringify(combined),
+  });
+  await f.run();
+  expect(resultOf(f.requests[2], "run")).toMatchObject({ status: "unavailable" });
+  expect(batches).toHaveLength(0);
+});
+
 // Testing scope follows what the tool is now. A repair of a read that starts signed out runs its
-// cases; once it signs in, it is a signed-in read: live tests are refused from then on, and its
-// publication carries no test record, so the review judges its one run.
-// The harness already gated live tests on a sign-in before this scope change, so this pins that
-// behavior for a repair rather than failing first; the site-change case below fails first.
-it("drops a repair that signs in mid-build to the one-run rule", async () => {
+// cases; once it signs in, it is a signed-in read held to two test inputs, and its publication
+// carries only what ran signed in: here nothing, so the review judges its example.
+it("holds a repair that signs in mid-build to the signed-in bound", async () => {
   const { host, batches } = liveTestHost({
     nothing: { status: "completed", output: { results: [], has_next_page: false, next_cursor: null } },
   });
@@ -1188,7 +1425,8 @@ it("drops a repair that signs in mid-build to the one-run rule", async () => {
   });
   await f.run();
   expect(resultOf(f.requests[1], "before_sign_in")).toMatchObject({ status: "ran" });
-  expect(resultOf(f.requests[3], "after_sign_in")).toMatchObject({ status: "unavailable" });
+  // Its cases hold three inputs, one more than a signed-in read runs.
+  expect(resultOf(f.requests[3], "after_sign_in")).toMatchObject({ status: "limit" });
   expect(batches).toHaveLength(1);
   expect(published.seen).toHaveLength(1);
   expect(published.seen[0]?.liveTests).toBeUndefined();
@@ -1882,6 +2120,44 @@ it("sends a read below the bar to review when no further batch fits after its la
   expect(published.seen).toHaveLength(1);
   expect(published.seen[0]?.coverage).toContain("8 pass, 15 fail");
   expect(outcome.build).toBe("published");
+});
+
+// A signed-in read is held to the bar on the cases it ran signed in, the only ones its record
+// holds: its combined case failing beside the one other case it ran is 1 of 2.
+it("holds a signed-in read to the bar on the cases it ran signed in", async () => {
+  const { host, batches } = liveTestHost({ "every-filter": filterIgnored });
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", signInStep, "sign_in"),
+        call("execute", example, "example"),
+        call("live_tests", runAll, "run"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: signingIn,
+      publish: published.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/sign-in.ts": toolSource,
+    "test/cases.json": JSON.stringify(combined),
+  });
+  await f.run();
+  expect(batches).toHaveLength(1);
+  expect(batches[0]?.signedIn).toBe(true);
+  expect(published.seen).toHaveLength(0);
+  expect(resultOf(f.requests[4], "finish")).toMatchObject({
+    reason: "live_tests_below_threshold",
+    instruction:
+      "Publication review not started: only 1 of 2 live test cases on src/tool.ts pass on this source (50%), and review starts at 70%. Fix the code where a case fails, or the case where it is wrong, run every case again, then call finish_build.",
+  });
 });
 
 // Only the version finish_build publishes is held to the bar. An HTTP version beside a published

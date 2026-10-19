@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { test, expect, type Page } from "@playwright/test";
 import { Effect, Schema } from "effect";
 import type { HostExecute } from "../../src/runtime/host-execute.js";
+import { configureSiteIdentity } from "../../src/runtime/same-site.js";
 import {
   localStartHooks,
   SavedSession,
@@ -250,4 +251,41 @@ test("a restore puts back the tab's session storage the saved session had", asyn
     await reset({ siteData: "restore", session });
     expect(await page.evaluate(() => sessionStorage.getItem("login"))).toBe("member");
   });
+});
+
+// A saved session keeps the tab storage of frames on the site only, by the site identity: with a
+// host's added private suffix, a sibling subdomain's frame below it is another site's.
+test("saves a sibling subdomain's tab storage only while no added suffix splits them", async ({
+  page,
+}) => {
+  const site = "http://alpha.apps.example.test";
+  const sibling = "http://beta.apps.example.test";
+  await page.route("**/*", (route) => {
+    const url = new URL(route.request().url());
+    return route.fulfill({
+      contentType: "text/html",
+      body:
+        url.origin === site
+          ? `<script>sessionStorage.setItem("site", "alpha")</script><iframe src="${sibling}/frame"></iframe>`
+          : `<script>sessionStorage.setItem("site", "beta")</script>`,
+    });
+  });
+  const { execute, targetId } = await host(page);
+  const save = () =>
+    Effect.runPromise(
+      execute(saveSessionCode(targetId, site), 60).pipe(
+        Effect.flatMap(Schema.decodeUnknown(SavedSession)),
+      ),
+    );
+  await page.goto(`${site}/`);
+  await expect(page.frameLocator("iframe").locator("script")).toHaveCount(1);
+  expect((await save()).sessionStorage.map(({ origin }) => origin)).toEqual([site, sibling]);
+  configureSiteIdentity({ privateSuffixes: ["apps.example.test"] });
+  try {
+    expect((await save()).sessionStorage).toEqual([
+      { origin: site, entries: [["site", "alpha"]] },
+    ]);
+  } finally {
+    configureSiteIdentity({});
+  }
 });

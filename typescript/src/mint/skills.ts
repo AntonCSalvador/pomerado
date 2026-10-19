@@ -33,7 +33,7 @@ const catalog = [
   {
     name: "testing",
     description:
-      "Only for a read signed out: design live test cases and run them in parallel. A signed-in read or a write skips it and proves its tool with one run",
+      "For a read: design a few combined live test cases and run them. A read signed out runs a handful; a signed-in read runs one combined filter case, two at most. A write skips it and proves its tool with one run",
     references: [],
   },
   {

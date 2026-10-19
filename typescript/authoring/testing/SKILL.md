@@ -1,19 +1,21 @@
 ---
 name: testing
-description: Design and run live test cases for a read signed out. A signed-in read or a write skips this skill and proves its tool with one run.
+description: Design and run a few combined live test cases for a read. A read signed out runs a handful; a signed-in read runs one combined filter case, two at most. A write skips this skill and proves its tool with one run.
 ---
 
-# Test a read signed out
+# Test a read with a few combined cases
 
-This skill is for a read signed out only. A signed-in read or a write does the original task: it
-proves its tool with one run, the read's example (run again after each fix, as the core skill
-says) or the write's act session (writes skill). It designs no tests beyond that run: no
-`test/cases.json`, no live test on an input it chose and no offline test suite. Its HTTP version
-is checked once, against that run (http-mcp skill). Report what that run did not exercise as
-untested in `coverage`. The scope follows what the tool is now: a read that signs in or becomes
-a write mid-build, a repair included, stops designing and running tests from then on, and a
-repair that rebuilds a signed-in tool or a write as a read signed out tests it fully. Stop reading
-here unless the build is a read that has not signed in.
+This skill is for reads. A write does the original task: it proves its tool with its act session
+(writes skill), designs no tests, runs no live test and builds no offline test suite, and checks
+its HTTP version once, against that session (http-mcp skill). A read proves its operation with its
+example, run again after each fix as the core skill says, then tests what the example did not
+exercise with a few live cases, each designed to cover as much as it can. A read signed out runs a
+handful (below). A signed-in read runs at most two distinct inputs beyond its example: one
+combined filter case, and a second only when it needs one (Signed-in reads, below). Report what
+no run exercised as untested in `coverage`. The scope follows what the tool is now: a read that
+becomes a write mid-build, a repair included, stops testing from then on; a read that signs in
+mid-build keeps to the signed-in bound from then on, and only cases run signed in count for it;
+and a repair that rebuilds a signed-in tool or a write as a read signed out tests it as one.
 
 Use execute with purpose=test, target, relative entrypoint/test file, fixtureRefs,
 caseFilter, maxWorkers and timeoutSeconds. Fixtures are host-authorized immutable
@@ -23,68 +25,114 @@ the tool sets every value its input controls itself, never relying on what the s
 A read proves its operation with purpose=example and iterates from that start; running the
 example or a live test again is normal.
 
-## Test a read signed out as much as it needs
+## The combined case
 
-Where the host offers `live_tests`, a read signed out has no limit on live tests, and the host runs
-them for you in parallel. Testing is your job, not the caller's: never wait to be told to try another record, retailer or value.
+Optional inputs the example left unset are where tools ship broken: a filter the site ignores, a
+value read from the wrong field, an input the code drops. One well-designed case finds all three.
+Design it as soon as you know the page and its inputs, and run it once the example passes:
+
+- Set every optional input and filter the example left unset, together, in one case. Take each
+  value from what the site shows: an option in the page's own picker or filter panel, or a value
+  in the example's own output rows. Choose each value so it excludes something: at least one row
+  the example returned, or the site shows unfiltered, fails it, while some rows still pass every
+  filter. A status that only some of those rows have, a date range that leaves out one row's
+  date, a price ceiling below one row's price and above another's, a category the page lists
+  beside others. A value every example row already satisfies proves nothing: a tool that ignores
+  that filter passes anyway. Never a person's, account's or record's name, number, code or
+  email, which Guardian refuses as a private identifier: list such a filter under `notTested`
+  unless the caller's own input supplied its value.
+- Expect `result`, and say in `purpose`, for each input, the row field that shows it applied and
+  an example row it excludes. After it runs, read its full output (`live_tests` action `plan`,
+  naming the case) and check that every returned row satisfies every input it set, such as each
+  row's status the one asked for, each date inside the range and each price under the ceiling;
+  that the rows it excludes are absent, so the rows differ from the example's; and that the tool
+  read each input back as the site applied it. A row that breaks a filter, or a result no
+  different from the example's, is a bug in the tool: fix the code, never the case.
+- When the tool returns a list and the example did not run page two, set `next_page: true` on
+  this case, so it runs page two through the cursor page one returned, under the same filters.
+  Check that page two holds rows page one did not and that they still satisfy every filter. The
+  host fails a page two whose rows were all on page one already.
+- Add a second case only for inputs that cannot be satisfied together: options of one control
+  that exclude each other, filters that together leave no rows, or an input that opens a page
+  with a different structure (other fields or sections). Never one case per input.
+- List anything the combined cases did not set under `notTested`, with why, and in `coverage`.
+
+## Signed-in reads
+
+Where the host runs no signed-in live tests, `live_tests` answers `unavailable` and the example
+alone proves a signed-in read's tool. Otherwise a signed-in read runs its combined case and, only
+where it needs one, the second case above:
+at most two distinct inputs in a build or repair, beyond its example. The host enforces it: a
+batch or `testInput` that would add a third input is refused as `limit` and runs nothing.
+Running an input that already ran again, after a fix or on `src/tool-http.mjs`, is free, so
+merge inputs into those two cases rather than adding a case. The host runs them on the build's
+own signed-in browser, one at a time and warm, never on a new browser. Each case stays a read
+under the signed-in session rules that already apply to the example: it saves no record, view or
+setting, and a filter the site saves with a view or setting goes through the page's own row query
+or is restored in the same step, as the workspace guide says. Design no other cases: no example
+run cold, no no-results case and no edge cases.
+Check `src/tool-http.mjs` once against the example's input (execute purpose `test`, target
+`liveBrowser`, no `testInput`), and run the combined case on it too. Publication review reads
+the host's record of the cases you ran signed in, judges a failing case as a bug, and treats
+what you did not test as disclosure, not a gap. Then go on at "Run and fix the cases", below.
+
+## A read signed out: a handful of cases
+
+Where the host offers `live_tests`, the host runs a read signed out's cases for you in
+parallel. Testing is your job, not the caller's: never wait to be told to try another record, retailer or value.
 
 Design the tests yourself. You saw the site: its controls, the values it offers and the ways its
 pages differ. Choose the cases that would show the tool works for callers other than this one,
-not mechanical variations of the example's input. Start as soon as you know the page and its
-inputs, and refine the cases once the example passes; run no batch before then. Plan up front the
-cases builds most often add late: no results, one broad query, page two, and one case per
-selectable variant the schema offers, such as a second store or seller. Run a no-results query
-once and see what the site shows before you write its expectation: some sites answer it with a
-fallback grid or a "no exact matches" view rather than an empty list. Every free-text input, one
-the caller types rather than picks, gets three cases of its own in a build: a blank value
-(`invalid_input` when the input is required; an optional one may treat it as left out), an
-over-long value and a made-up value the site has no match for; a repair adds only the made-up one.
-The over-long value expects `invalid_input` too, refused by the input schema (caller-input skill).
-The made-up value expects what the caller-input skill says: `invalid_input` naming the field,
-`empty` for a search query, or a labeled `result` for a location the site won't apply. None of the
-three may end in another throw. Skip the made-up value for an input that takes a person's,
-account's or record's name, number or code. Beyond those, consider each of these where the site has
-it; none is required, and one case may serve several:
-- every input, alone and together with the others. Each input needs a case that uses it, or
-  changes it from its default, and that case covers it: its other values, such as each order a
-  sort offers, need no case or `notTested` entry of their own unless one opens a page with a
-  different structure (other fields or sections), never one that only reorders or filters the
-  same rows. One case may set several inputs together when that combination still returns
-  results whose output shows each input was applied, such as rows that satisfy each filter;
-- smart combinations: controls that share a panel, a drawer or a page reload, a location or store
-  set with a filter, controls that could undo or hide each other, and the combination a real
-  caller would most likely send;
-- different real values unlike the example's: another retailer, store or seller, another
-  category, a record whose page is laid out differently (a single option, grouped options, a
-  multi-item page, sold out); for other reads, another route, date range or region, another
-  category of listing, or a document or order page of another kind. Find them on the site, in a
-  listing or picker you opened; never invent them. Prefer trying other records as one batch of
-  live cases rather than one probe at a time, so they're reviewed together;
-- edge cases: a value the site does not list at all (`invalid_input`, with the page's choices
-  listed), and an option the page lists but greys out, such as a sold-out size, which a read returns
-  as unavailable data. Prefer also a query or filter with no results (`empty`, never a throw) when
-  you find one. Without one, move on: it needs no `notTested` entry and no question;
-- page two, with `next_page` or a cursor copied from a result, holding other results than page
-  one;
-- a location or other input that tailors the answer applied and read back, and one the site
-  won't apply (`result`, with the applied value beside the requested one and the site's message,
-  never presented as the requested one's results);
+not mechanical variations of the example's input, and make each case cover as much as it can.
+Start as soon as you know the page and its inputs, and refine the cases once the example passes;
+run no batch before then. Aim for a handful of cases, not dozens:
+- the combined case above, with page two in it, and its second case where needed;
 - the example's own input once more, which a host with several browsers runs cold, first on a
   new browser with an empty profile: the proof that the tool works for a caller the site
   remembers nothing about, with no location, store or filter left from your exploration;
-- whatever you saw this site could break on while exploring: a panel that loads late, a pop-up,
-  a layout that changes with the number of results, a value written differently on another page.
+- one query or filter with no results (`empty`, never a throw). Run it once and see what the
+  site shows before you write its expectation: some sites answer it with a fallback grid or a
+  "no exact matches" view rather than an empty list. When the tool takes a free-text input, one
+  the caller types rather than picks, use a made-up value the site has no match for here, so
+  this case also shows that value ends as the caller-input skill says: `empty` for a search
+  query, `invalid_input` naming the field, or a labeled `result` for a location the site won't
+  apply, never another throw. Skip the made-up value for an input that takes a person's,
+  account's or record's name, number or code. Without a no-results answer, move on: it needs no
+  `notTested` entry and no question;
+- another case only where a different page structure or a real variant needs one, and each such
+  case sets as many inputs as still return rows: another retailer, store or seller; another
+  category; a record whose page is laid out differently (a single option, grouped options, a
+  multi-item page, sold out); for other reads, another route, date range or region, or a
+  document or order page of another kind; a location or other tailoring input the site won't
+  apply (`result`, with the applied value beside the requested one and the site's message, never
+  presented as the requested one's results); an option the page lists but greys out, such as a
+  sold-out size, which a read returns as unavailable data. Find them on the site, in a listing
+  or picker you opened; never invent them. Prefer trying other records as one batch of live
+  cases rather than one probe at a time, so they're reviewed together.
 
-About 10 to 20 cases is typical. Write them in `test/cases.json`:
+A blank or over-long value of a free-text input needs no live case: the input schema refuses it
+before the site is touched, so bound every free-text input there, non-empty and with a
+`maxLength` no longer than the site's own field takes (core skill), and
+publication reads that schema. So does a value
+outside an enum input. A free-text value the tool matches against the site's own list, such as
+a store name, that the site does not list at all (`invalid_input`, with the page's choices
+listed) can be the made-up value of the no-results case. An input is covered by a
+case that uses it, or changes it from its default: its other values, such as each order a sort
+offers, need no case or `notTested` entry of their own unless one opens a page with a different
+structure (other fields or sections), never one that only reorders or filters the same rows.
+Whatever you saw this site could break on while exploring, such as a panel that loads late, a
+pop-up, a layout that changes with the number of results or a value written differently on
+another page, belongs in the cases above rather than in cases of its own.
+
+Write them in `test/cases.json`:
 
 ```json
 {
   "cases": [
+    { "id": "every-filter", "purpose": "Sort, the in-stock switch and the Lamps category the example left unset, from the filter drawer's options: every row is in stock and in Lamps, prices ascend, and page two continues under the same filters.", "input": { "query": "desk lamp", "sort": "price_low", "in_stock": true, "category": "Lamps" }, "expect": "result", "next_page": true },
     { "id": "example-again", "purpose": "The example's input on a new browser, cold.", "input": { "query": "desk lamp" }, "expect": "result" },
-    { "id": "second-store", "purpose": "Another store from the store picker; its results page has no pickup column.", "input": { "query": "desk lamp", "store": "Mill Street" }, "expect": "result" },
-    { "id": "sort-in-stock", "purpose": "Sort and the in-stock switch share the filter drawer, which reloads the list.", "input": { "query": "desk lamp", "sort": "price_low", "in_stock": true }, "expect": "result" },
-    { "id": "nothing", "purpose": "A price ceiling no lamp is under returns an empty list.", "input": { "query": "desk lamp", "max_price": 1 }, "expect": "empty" },
-    { "id": "page-2", "purpose": "Page two through the cursor page one returned.", "input": { "query": "desk lamp" }, "expect": "result", "next_page": true }
+    { "id": "second-store", "purpose": "Another store from the store picker; its results page has no pickup column.", "input": { "query": "desk lamp", "store": "Mill Street", "in_stock": true }, "expect": "result" },
+    { "id": "nothing", "purpose": "A made-up query no product matches returns an empty list.", "input": { "query": "qzvx lamp" }, "expect": "empty" }
   ],
   "notTested": [
     { "what": "A location the site cannot apply", "reason": "The site ships one catalog everywhere and has no location control." }
@@ -97,17 +145,20 @@ About 10 to 20 cases is typical. Write them in `test/cases.json`:
 other throw is a bug and fails the case. Expect `empty`, `invalid_input` or `error` only for an
 input the site really has no results for, does not offer or cannot apply, or a blank or over-long
 value the input schema refuses; an input that tailors the answer and that the site won't apply
-expects `result`, labeled with the applied value. Apart from the made-up, blank and over-long
-cases, use real values the site offers, which you saw while
+expects `result`, labeled with the applied value. Apart from a made-up value in the no-results
+case, use real values the site offers, which you saw while
 exploring: listed options, places, dates, counts, records and retailers the site lists. Never use
 a person's, account's or record's name, number or code, and never the caller's own values beyond
 the example's input. List under `notTested` anything the tool claims that you chose not to test,
 with why. A choice the request, the caller or the owner declined is not part of the tool (core
 skill), so it is never tested.
 
+## Run and fix the cases
+
 Run them with `live_tests` action `run` (`cases` null runs them all). One
 Guardian review covers the batch; each case starts like the example, on a page reset to the
-site origin that keeps its browser's site data, in parallel browsers where the host has them.
+site origin that keeps its browser's site data, in parallel browsers where the host has them
+(a signed-in read's on its own browser).
 Each result says whether the case ran `cold`, first on a new browser with an empty profile, or
 `warm`, on a browser that kept what earlier steps left. A case that passes warm and fails cold
 relies on something the site remembered: set that value from the input. You get every result: its status, what it returned, and a failure's
@@ -153,26 +204,26 @@ After each run with output the host reports output checks: values that hold code
 or template leftovers, text read collapsed or cut short, a whole card's text, repeated entries or
 records, and fields that never vary or are always empty. Check each against the page: fix a wrong
 value at the read in source, never by cleaning the string afterwards; a correct value needs no
-change (publication skill). Set each `include` value the tool offers in at least one live run, and
-add any case that catches a real risk. A tool that returns a list runs page two live with the
-cursor page one returned, and reaches a last page (pagination skill).
+change (publication skill). Set each `include` value the tool offers in the combined case or
+another live run. A tool that returns a list runs page two live with the cursor page one
+returned (pagination skill).
 
 Results count only for the version, the source and the case as they ran: an edit makes them stale.
 After an edit, rerun only the cases it can affect, never the whole suite after each small change.
 Finish in this order: make your last edit, run every case once more (`cases` null) on each
 version you ship, run the example last, then call `finish_build`. Publication review reads the
 host's record of your cases (`publication/tests.json`), not your account of them, and judges
-them against what the tool claims: a failing case, or a claim no passing case tests while time
-remained, holds publication back.
+them against what the tool claims: a failing case, or, for a read signed out, a claim no passing
+case tests while time remained, holds publication back.
 Publication review starts only when at least 70% of the cases you ran on the code you publish pass. Inconclusive results count neither way.
 Deleting or changing a case after it failed does not hide the
 failure: the record keeps its last result as retired, and so does a failure that passes when run again on the same code, as
 flaky. When `live_tests` answers `no_time`, run the example last and publish; the record says time
 ran out.
 
-When the host offers no `live_tests`, a read signed out runs its cases one input at a time
-instead: execute purpose `test`, target `liveBrowser`, with `testInput`, the tool's input as JSON
-text; the host may limit how many.
+When the host offers no `live_tests`, a read runs its cases one input at a time instead: execute
+purpose `test`, target `liveBrowser`, with `testInput`, the tool's input as JSON text; the host
+may limit how many. A signed-in read's inputs there count toward the same two.
 
 Test the HTTP version, `src/tool-http.mjs`, the same way as `src/tool.mjs`: run the same cases as
 a batch on it with `live_tests` entrypoint `src/tool-http.mjs`, in parallel, and fix it until

@@ -177,9 +177,10 @@ site shows the whole list.
 On a read signed out, run page one, then page two live with the cursor page one returned: page
 two continues the order and repeats no row. Where the site's page size is known, try a `limit`
 that ends inside a site page and check that page two finishes that page and continues on the
-next. Reach a last page, for example with a narrow query, and check that `next_cursor` is null
-(testing skill). A signed-in read proves the list with its example alone and reports later pages
-as untested. `references/pagination.ts` is a compiling pattern for a paged site with a Next link,
+next. Reach a last page where a case you already run ends on one, such as the combined case's
+narrow filters, and check that `next_cursor` is null (testing skill). A signed-in read runs page
+two within its combined case when its example did not, and reports what it did not reach as
+untested. `references/pagination.ts` is a compiling pattern for a paged site with a Next link,
 and for a "Show more" list (`readRooms`), both on `readList`; their reads are site logic.
 <!-- pomerado:section pagination.cursor-scope:start
 
