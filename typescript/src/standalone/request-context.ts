@@ -25,7 +25,16 @@ import {
   type SdkFiles,
 } from "../guardian/source.js";
 import type { ExecutionEvidence } from "../mint/contracts.js";
-import { publicationScope, type PublicationReview } from "../mint/publication-review.js";
+import { publicDefinitionPath } from "../guardian/publication.js";
+import {
+  exampleOutputPath,
+  inlineFilesNote,
+  inlinePublicationPaths,
+  outputDigestPath,
+  publicationScope,
+  withInlineFiles,
+  type PublicationReview,
+} from "../mint/publication-review.js";
 import {
   allowedEffectsFor,
   currentDateObservations,
@@ -337,17 +346,25 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
     /**
      * Guardian's publication review: the bundle under `operation/`, the source a read example ran
      * under `executed/`, and the publication files the host wrote, read against the caller's
-     * input. A denial carries Guardian's reason and findings.
+     * input. The small files it reads first go in the request (`withInlineFiles`), and its notes
+     * say so. A denial carries Guardian's reason and findings.
      */
     const reviewPublication: PublicationReview = (publication) =>
       Effect.gen(function* () {
+        const inline = inlinePublicationPaths({
+          definition: publication.evidence.get(publicDefinitionPath) ?? "",
+          entrypoint: publication.entrypoint,
+          files: publication.files,
+          digest: publication.evidence.get(outputDigestPath),
+          exampleOutput: publication.evidence.get(exampleOutputPath),
+        });
         const { turn, readSource } = yield* pending({
           entrypoint: `operation/${publication.entrypoint}`,
           sources: new Map(
             [...publication.files].map(([path, text]) => [`operation/${path}`, text] as const),
           ),
           input,
-          note: publication.notes,
+          note: `${inline.length === 0 ? "" : `${inlineFilesNote} `}${publication.notes}`,
           // References are readable but stay out of the index below.
           evidence: new Map([
             ...(publication.references ?? []),
@@ -357,19 +374,21 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
             ...publication.evidence,
           ]),
         });
+        const reviewed = yield* withInlineFiles(
+          {
+            ...turn,
+            allowedEffects: publication.allowedEffects,
+            publication: publicationScope(
+              publication.files,
+              publication.evidence,
+              publication.references === undefined ? {} : { references: publication.references },
+            ),
+          },
+          readSource,
+          inline,
+        );
         const result = yield* guardian
-          .review(
-            {
-              ...turn,
-              allowedEffects: publication.allowedEffects,
-              publication: publicationScope(
-                publication.files,
-                publication.evidence,
-                publication.references === undefined ? {} : { references: publication.references },
-              ),
-            },
-            readSource,
-          )
+          .review(reviewed, readSource)
           .pipe(Effect.mapError((failure) => reviewFailureOf(failure)));
         const { outcome } = result.decision;
         if (outcome !== "allow")
