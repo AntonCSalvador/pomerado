@@ -90,6 +90,7 @@ import type {
   DecisionLedger,
   LedgerDenial,
   LedgerTestFailure,
+  LiveTestHost,
   PublicationDecision,
   PublicationRecovery,
   SpentSignIn,
@@ -3715,6 +3716,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           attemptBound: attemptLeft <= 10 * 60_000,
         };
       });
+      /**
+       * Whether a batch ending at `deadlineAt` has time for one case on `host`, as long as one case
+       * may take there (`LiveTestHost.caseTimeoutMs`). A host that caps its batches raises that
+       * limit past any deadline once its last batch ran, so no batch fits from then on.
+       */
+      const liveTestBatchFits = (host: LiveTestHost, deadlineAt: number) =>
+        Effect.map(
+          Clock.currentTimeMillis,
+          (now) => deadlineAt - now >= (host.caseTimeoutMs ?? defaultLiveTestCaseMs),
+        );
       const runLiveTests = (request: LiveTestsRequest) =>
         Effect.gen(function* () {
           const host = dependencies.liveTests;
@@ -3770,8 +3781,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const { deadlineAt, attemptBound } = yield* liveTestDeadline;
           // A batch with less time left than one case may take could only end every case
           // inconclusive, so it runs nothing.
-          const caseLimitMs = host.caseTimeoutMs ?? defaultLiveTestCaseMs;
-          if (deadlineAt - (yield* Clock.currentTimeMillis) < caseLimitMs) {
+          if (!(yield* liveTestBatchFits(host, deadlineAt))) {
             liveTestsOutOfTime = true;
             return JSON.stringify({
               kind: "host_live_tests",
@@ -4602,14 +4612,23 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               // as evidence, and its line to coverage. It refuses publication by itself only
               // when the published version's cases pass below the bar on its source: the review
               // would hold it back on those failures anyway, so it is not started. Once the
-              // attempt ran out of time for live tests no case can run again, so the review
-              // decides on the record as it is.
+              // attempt ran out of time for live tests, or no further batch fits, as after a
+              // host's batch cap, no case can run again, so the review decides on the record as
+              // it is.
               const liveTests = yield* liveTestsForPublication(
                 proposed.entrypoint,
                 proposed.httpVersion?.outcome === "ruled_out",
               );
+              const testsCanRunAgain =
+                liveTests !== undefined &&
+                dependencies.liveTests !== undefined &&
+                !liveTestsOutOfTime &&
+                (yield* liveTestBatchFits(
+                  dependencies.liveTests,
+                  (yield* liveTestDeadline).deadlineAt,
+                ));
               const shortfall =
-                liveTests === undefined || liveTestsOutOfTime
+                liveTests === undefined || !testsCanRunAgain
                   ? undefined
                   : liveTestsShortfall(
                       liveTests.record.versions,

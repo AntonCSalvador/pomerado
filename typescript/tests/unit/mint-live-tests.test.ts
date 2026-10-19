@@ -1803,6 +1803,14 @@ it("records a refusal for the bar as needing new live tests, and grants no host_
   expect(outcome.blocked?.reason).not.toBe("host_refused");
 });
 
+/** `host` as a host that caps its batches leaves it once one ran: no case fits in what is left. */
+const cappedAfterOneBatch = (host: LiveTestHost, batches: readonly LiveTestBatch[]): LiveTestHost => ({
+  ...host,
+  get caseTimeoutMs() {
+    return batches.length === 0 ? 60_000 : Number.POSITIVE_INFINITY;
+  },
+});
+
 // Once the attempt ran out of time for live tests, no case can run again, so a refusal that asks
 // for that could never be met: the review decides on the record as it is, as before the bar.
 it.each([
@@ -1816,16 +1824,7 @@ it.each([
       ? { ...outcomes, "case-3": { status: "inconclusive" as const, reason: "deadline" as const } }
       : outcomes;
   const { host, batches } = liveTestHost(scored);
-  // As a host that caps its batches does: once one ran, no case fits in what is left.
-  const capped: LiveTestHost =
-    way === "no_time"
-      ? {
-          ...host,
-          get caseTimeoutMs() {
-            return batches.length === 0 ? 60_000 : Number.POSITIVE_INFINITY;
-          },
-        }
-      : host;
+  const capped = way === "no_time" ? cappedAfterOneBatch(host, batches) : host;
   const steps =
     way === "no_time"
       ? [call("live_tests", runAll, "run"), call("live_tests", runAll, "again")]
@@ -1851,6 +1850,37 @@ it.each([
   expect(published.seen).toHaveLength(1);
   expect(published.seen[0]?.liveTests).toMatchObject({ outOfTime: true });
   expect(published.seen[0]?.coverage).toContain(way === "deadline" ? "2 pass, 4 fail" : "2 pass, 5 fail");
+  expect(outcome.build).toBe("published");
+});
+
+// A host that caps its batches says nothing as its last batch ends: no further batch fits from
+// then on. A finish_build right after it cannot be asked to run the cases again either, or a fix
+// it asks for would reach the review untested.
+it("sends a read below the bar to review when no further batch fits after its last one", async () => {
+  const { file, outcomes } = scoredBatch({ pass: 8, fail: 15 });
+  const { host, batches } = liveTestHost(outcomes);
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("live_tests", runAll, "run"),
+        call("execute", example, "example"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: cappedAfterOneBatch(host, batches),
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  const outcome = await f.run();
+  expect(batches).toHaveLength(1);
+  expect(published.seen).toHaveLength(1);
+  expect(published.seen[0]?.coverage).toContain("8 pass, 15 fail");
   expect(outcome.build).toBe("published");
 });
 

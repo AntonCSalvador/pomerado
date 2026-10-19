@@ -977,8 +977,8 @@ export interface LiveTestsShortfall {
  * is no longer one of the cases. A version with no counted case reaches the bar: the review judges
  * its coverage as before. Only the published version is held to it: the publication review
  * judges an HTTP version beside a published Playwright version from its own results, as before.
- * The harness does not apply the bar once the attempt ran out of time for live tests, since no
- * case can run again then.
+ * The harness does not apply the bar once the attempt ran out of time for live tests, or when no
+ * further batch fits, as after a host's batch cap, since no case can run again then.
  */
 export const liveTestsShortfall = (
   versions: readonly {
