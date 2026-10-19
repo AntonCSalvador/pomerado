@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { fillAutofillStep } from "../../src/destinations/autofill-fill.js";
 import {
   inspectAutofillStep,
@@ -9,6 +9,7 @@ import {
   type FillSlot,
 } from "../../src/destinations/autofill-step.js";
 import { paymentFrameOrigins } from "../../src/destinations/payment-frames.js";
+import { configureSiteIdentity } from "../../src/runtime/same-site.js";
 import { trustableSignInUrl } from "../../src/runtime/sign-in-origins.js";
 
 // A host may trust more sign-in addresses for a sign-in step with its own predicate
@@ -603,4 +604,39 @@ describe("the fill's judgment when a control moves", () => {
       );
     },
   );
+});
+
+// Where a sign-in's values may be typed follows the site identity: with a host's added private
+// suffix, a sibling subdomain below it is another site, and the host types nothing there.
+describe("the credential gate under a host's added private suffixes", () => {
+  const alpha = "https://alpha.apps.example.test";
+  const inspectOn = (frameUrl: string) => {
+    const page = pageWith(signInStep, frameUrl);
+    return Effect.runPromise(
+      inspectAutofillStep({
+        step: signInStep,
+        page: { ...page, execute: () => page.execute().pipe(Effect.map((found) => ({ ...found, url: frameUrl }))) },
+        siteOrigin: alpha,
+        authenticationOrigins: [],
+      }),
+    );
+  };
+  afterEach(() => {
+    configureSiteIdentity({});
+  });
+
+  it("types into a sibling subdomain's form only while no added suffix splits them", async () => {
+    expect(await inspectOn("https://beta.apps.example.test/sign-in")).not.toHaveProperty("outcome");
+    configureSiteIdentity({ privateSuffixes: ["apps.example.test"] });
+    const report = await inspectOn("https://beta.apps.example.test/sign-in");
+    expect(report).toMatchObject({ outcome: "refused", reason: "credential_target_refused" });
+    expect(refusedCheck(report)).toMatchObject({ check: "destination", part: "frame" });
+  });
+
+  it("still types on the site's own subdomains under an added suffix", async () => {
+    configureSiteIdentity({ privateSuffixes: ["apps.example.test"] });
+    expect(await inspectOn("https://login.alpha.apps.example.test/sign-in")).not.toHaveProperty(
+      "outcome",
+    );
+  });
 });

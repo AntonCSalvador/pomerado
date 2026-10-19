@@ -22,7 +22,7 @@ import {
   type FileRefusalReason,
   type PlacedFile,
 } from "./files.js";
-import { siteDomain } from "./same-site.js";
+import { hostOnSiteSource, siteDomain } from "./same-site.js";
 
 /** A caller's file as the host found it: its metadata now, its bytes when read. */
 export interface SourceFile {
@@ -155,8 +155,8 @@ try {
   if (!facts.file) return { refused: "not_file_input" };
   const frame = await element.ownerFrame();
   const address = (() => { try { return new URL(frame === null ? "" : frame.url()); } catch { return null; } })();
-  const domain = ${JSON.stringify(options.siteDomain ?? null)};
-  const onSite = address !== null && (address.origin === ${JSON.stringify(options.siteOrigin)} || (domain !== null && address.protocol === "https:" && (address.hostname === domain || address.hostname.endsWith("." + domain))));
+  const onSiteHost = ${options.siteDomain === undefined ? "() => false" : hostOnSiteSource(options.siteDomain)};
+  const onSite = address !== null && (address.origin === ${JSON.stringify(options.siteOrigin)} || (address.protocol === "https:" && onSiteHost(address.hostname)));
   if (!onSite) return { refused: "other_site" };
   if (!accepts(facts.accept, ${JSON.stringify(options.file)})) return { refused: "not_accepted" };
   await element.setInputFiles(${JSON.stringify(options.path)}, { timeout: ${options.timeoutMs} });

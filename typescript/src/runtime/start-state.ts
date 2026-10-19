@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
-import { getDomain } from "tldts";
 import { primaryPageCode, type HostExecute } from "./host-execute.js";
+import { hostOnSiteSource, siteOf } from "./same-site.js";
 
 /**
  * How a live step's page starts. `none` continues the page as the previous step left it. The
@@ -170,14 +170,13 @@ export type SavedSession = typeof SavedSession.Type;
  */
 export const saveSessionCode = (targetId: string, primaryOrigin: string) => {
   const url = new URL(primaryOrigin);
-  const site = getDomain(url.hostname, { allowPrivateDomains: true }) ?? url.hostname;
   return `${primaryPageCode(targetId)}
 const scheme = ${JSON.stringify(url.protocol)};
-const site = ${JSON.stringify(site)};
+const onSiteHost = ${hostOnSiteSource(siteOf(url))};
 const sameSite = (href) => {
   try {
     const url = new URL(href);
-    return url.protocol === scheme && (url.hostname === site || url.hostname.endsWith("." + site));
+    return url.protocol === scheme && onSiteHost(url.hostname);
   } catch {
     return false;
   }

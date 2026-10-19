@@ -425,6 +425,9 @@ conversation:
   answer as one instance of the caller's input. In published source that value comes from
   the tool's input or `ask()` (.agents/caller-input/SKILL.md), never a literal copied from
   the answer.
+- `reference/publication-review.md` holds the rules Guardian's publication review applies
+  to live tests and output, in the review's own words: read it while you explore, and gather
+  the evidence it asks for before your first `finish_build`.
 
 ## Reviews and retries
 
