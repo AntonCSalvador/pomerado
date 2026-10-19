@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
+import { publicationDelta, publicationRound } from "../../src/guardian/publication-delta.js";
 import { MintFailure } from "../../src/mint/contracts.js";
 import {
   exampleInputFeedback,
@@ -81,18 +82,16 @@ describe("the example's output evidence", () => {
       screenedBytes: Buffer.byteLength('{"heading":"Public"}'),
       output: { heading: "Public" },
     });
-    // The record is compact JSON with its fields in this order.
-    expect(Object.keys(JSON.parse(text) as object)).toEqual([
-      "kind",
-      "executionId",
-      "executedEntrypoint",
-      "executedSourceDigest",
-      "state",
-      "screenedBytes",
-      "output",
+    // The record is compact JSON with each field on its own line, in this order.
+    expect(text.split("\n")).toEqual([
+      '{"kind":"verified_example_output",',
+      '"executionId":"execution_a",',
+      '"executedEntrypoint":"executed/src/tool.mjs",',
+      '"executedSourceDigest":"digest_a",',
+      '"state":"available",',
+      '"screenedBytes":20,',
+      '"output":{"heading":"Public"}}',
     ]);
-    expect(text.startsWith('{"kind":"verified_example_output","executionId":')).toBe(true);
-    expect(text).not.toContain("\n");
   });
 
   it("names a write session's step instead of a source digest", async () => {
@@ -244,6 +243,113 @@ describe("the example's output evidence", () => {
     );
     expect(checked).toEqual(["available", "truncated"]);
     expect(envelope).toMatchObject({ state: "withheld", reason: "credential_precheck" });
+  });
+
+  it("keeps a deeply nested output, writing the levels below the record's lists whole", async () => {
+    let value: unknown = "leaf";
+    for (let level = 0; level < 3000; level += 1) value = { next: value };
+    const checked: string[] = [];
+    const evidence = await Effect.runPromise(
+      exampleOutputEvidence(source, JSON.stringify(value), (text) =>
+        Effect.sync(() => (checked.push(text), true)),
+      ),
+    );
+    expect(evidence.state).toBe("available");
+    expect(checked).toEqual([evidence.text]);
+    // Compared as text: a recursive deep equality would run out of stack itself.
+    const record = JSON.parse(evidence.text) as { readonly output: unknown };
+    expect(JSON.stringify(record.output)).toBe(JSON.stringify(value));
+    expect(evidence.text.replaceAll("\n", "")).toBe(JSON.stringify(JSON.parse(evidence.text)));
+    expect(evidence.text.split("\n").length).toBeLessThan(15);
+  });
+
+  it("writes a field the way JSON.stringify does when it holds what JSON never parses to", () => {
+    const sparse = [1];
+    sparse[2] = 3;
+    const fields = {
+      list: [1, undefined, () => 1, 2],
+      sparse,
+      at: new Date(0),
+      custom: { toJSON: () => "custom" },
+      nested: { at: new Date(0), skipped: () => 1, missing: undefined, kept: 1 },
+      skipped: () => 1,
+      missing: undefined,
+    };
+    const { text } = exampleOutputRecord(source, "available", fields);
+    expect(text.replaceAll("\n", "")).toBe(
+      JSON.stringify({ kind: "verified_example_output", ...source, state: "available", ...fields }),
+    );
+  });
+});
+
+describe("the example output record across publication rounds", () => {
+  const path = "publication/example-output.json";
+  const decision = { outcome: "deny", reason: "source_correction", rationale: "Fix", findings: [] };
+  const products = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: `id-${index}`,
+      name: `Product ${index}`,
+      price: index,
+    }));
+  const recordOf = async (executionId: string, results: readonly unknown[]) =>
+    (
+      await Effect.runPromise(
+        exampleOutputEvidence(
+          { ...source, executionId, executedSourceDigest: `digest_${executionId}` },
+          JSON.stringify({ results }),
+          precheck(),
+        ),
+      )
+    ).text;
+  /** What the next round's request carries for the record, after a round that read `before`. */
+  const nextRound = (before: string, after: string) => {
+    const file = (text: string) => ({
+      path,
+      published: false,
+      current: true,
+      owner: "host" as const,
+      text,
+    });
+    const prior = publicationRound([file(before)], {}, decision, new Set([path]), undefined);
+    if (prior === undefined) throw new Error("No round");
+    return publicationDelta(prior, [file(after)], {}).files[0];
+  };
+  const added = (diff: string) =>
+    diff.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++"));
+
+  it.each([150, 400, 900])(
+    "a rerun with the same output diffs as a few lines on the next round: %i records",
+    async (count) => {
+      const entry = nextRound(
+        await recordOf("run_a", products(count)),
+        await recordOf("run_b", products(count)),
+      );
+      expect(entry).toMatchObject({ status: "changed" });
+      const diff = entry !== undefined && "diff" in entry ? (entry.diff ?? "") : "";
+      expect(Buffer.byteLength(diff)).toBeGreaterThan(0);
+      expect(Buffer.byteLength(diff)).toBeLessThan(1024);
+      expect(added(diff)).toEqual([
+        '+"executionId":"run_b",',
+        '+"executedSourceDigest":"digest_run_b",',
+      ]);
+    },
+  );
+
+  it("one changed record diffs as about that one line", async () => {
+    const changed = products(900).map((product, index) =>
+      index === 450 ? { ...product, name: "Renamed" } : product,
+    );
+    const entry = nextRound(
+      await recordOf("run_a", products(900)),
+      await recordOf("run_a", changed),
+    );
+    const diff = entry !== undefined && "diff" in entry ? (entry.diff ?? "") : "";
+    expect(Buffer.byteLength(diff)).toBeGreaterThan(0);
+    expect(Buffer.byteLength(diff)).toBeLessThan(1024);
+    expect(added(diff)).toEqual([
+      expect.stringMatching(/^\+"screenedBytes":\d+,$/),
+      '+{"id":"id-450","name":"Renamed","price":450},',
+    ]);
   });
 });
 
