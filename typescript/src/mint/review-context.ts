@@ -43,12 +43,14 @@ export interface MintReviewHost {
 
 /**
  * What Guardian may approve for an anonymous read or exploration. Opening the public sign-in
- * page, including the site's own redirects to its sign-in origin, is discovery; entering or
- * submitting any credential is the host-owned sign-in step, never authored exploration. A read
- * keeps the limits the request states; context it gives, such as today's date, is no filter.
+ * page, including the site's own redirects to its sign-in origin and its own sign-in link or
+ * button, is discovery; entering or submitting any credential is the host-owned sign-in step,
+ * never authored exploration. After the host signed in, a context step that asks for no
+ * credential and verifies no one, such as choosing a company, is navigation. A read keeps the
+ * limits the request states; context it gives, such as today's date, is no filter.
  */
-const explorationAllowedEffect =
-  "Authorized repeatable reads, navigation, observation and transient search/query interactions, including query submission when its read semantics are established. Respect constraints the request states, such as a date range, filter, sort or limit. Context it gives, such as the current date or the caller's location, is not a constraint unless the request applies it. Navigating to and observing the site's public sign-in pages, including the site's own redirects to its sign-in origin, is allowed. Entering or submitting a username, email, phone number, password or code, submitting a sign-in step, or switching accounts is not: credential submission belongs only to the host-owned authenticate step. No autosave, holds, drafts, uploads, business commitments, account changes or other writes, even for exploration/test setup.";
+export const explorationAllowedEffect =
+  "Authorized repeatable reads, navigation, observation and transient search/query interactions, including query submission when its read semantics are established. Respect constraints the request states, such as a date range, filter, sort or limit. Context it gives, such as the current date or the caller's location, is not a constraint unless the request applies it. Navigating to and observing the site's public sign-in pages, including the site's own redirects to its sign-in origin, is allowed. Clicking the site's own sign-in link or button to open its sign-in screen or dialog is navigation, even when the page says results need a login. Entering or submitting a username, email, phone number, password or code, submitting a sign-in step, or switching accounts is not: credential submission belongs only to the host-owned authenticate step. After the host has signed in, entering the caller's own input into a context step that asks for no username, email, phone number, password, code, date of birth, ZIP or security answer and does not verify who the user is, such as choosing a supplier, company, client or language, and continuing past it is navigation, not a sign-in step or an account switch. No autosave, holds, drafts, uploads, business commitments, account changes or other writes, even for exploration/test setup.";
 
 /**
  * What Guardian may approve for a write build's `act` step. The write is the whole task the
@@ -56,7 +58,7 @@ const explorationAllowedEffect =
  * only redoing the task or a finished commit is out.
  */
 const writeSessionAllowedEffect =
-  "The caller's requested task, done once with the caller's values across this session's steps. The task may take several write steps: steps may navigate, fill, select, advance, save and submit toward it, and drafts, autosaves and step saves along the way are part of it. Never redo the whole task or a step that already finished; a step may run again only when a fresh read of the page shows it did not finish, or the task cannot complete without it. After the final submission a step may only read the site's confirmation or saved state, or finish the same request's remaining sub-steps; never submit the task a second time. An add-on, pre-selected paid option, saved payment or private detail is enabled, accepted or declined only as the caller's input or answer says; when neither settles it, the step stops before choosing it.";
+  "The caller's requested task, done once with the caller's values across this session's steps. The task may take several write steps: steps may navigate, fill, select, advance, save and submit toward it, and drafts, autosaves and step saves along the way are part of it. Never redo the whole task or a step that already finished; a step may run again only when a fresh read of the page shows it did not finish, or the task cannot complete without it. After the final submission a step may only read the task's confirmation or saved state, on any page of the authorized site, such as the record the task created or changed and its ID, or finish the same request's remaining sub-steps; never submit the task a second time. An add-on, pre-selected paid option, saved payment or private detail is enabled, accepted or declined only as the caller's input or answer says; when neither settles it, the step stops before choosing it.";
 
 /**
  * The same, for a session that runs the agent's `exampleInput` because the caller sent none: the
@@ -64,7 +66,7 @@ const writeSessionAllowedEffect =
  * question does not.
  */
 const intentDerivedWriteSessionAllowedEffect =
-  "The caller's requested task, done once across this session's steps with the input the agent read from the trusted intent and the owner's answered questions, because the caller sent no input. Every value in that input must be stated by the trusted intent or an answered question; deny a step whose input holds any other value, such as a quantity, amount, recipient or date the agent chose itself. Values the page supplies, such as a site option the request selects, a default, a form token or a suggestion, follow the general policy as before. The task may take several write steps: steps may navigate, fill, select, advance, save and submit toward it, and drafts, autosaves and step saves along the way are part of it. Never redo the whole task or a step that already finished; a step may run again only when a fresh read of the page shows it did not finish, or the task cannot complete without it. After the final submission a step may only read the site's confirmation or saved state, or finish the same request's remaining sub-steps; never submit the task a second time. An add-on, optional purchase, pre-selected paid option, saved payment or private detail is enabled, accepted or declined only as the trusted intent or an answered question says, never as that input alone says; when neither settles it, the step stops before choosing it.";
+  "The caller's requested task, done once across this session's steps with the input the agent read from the trusted intent and the owner's answered questions, because the caller sent no input. Every value in that input must be stated by the trusted intent or an answered question; deny a step whose input holds any other value, such as a quantity, amount, recipient or date the agent chose itself. Values the page supplies, such as a site option the request selects, a default, a form token or a suggestion, follow the general policy as before. The task may take several write steps: steps may navigate, fill, select, advance, save and submit toward it, and drafts, autosaves and step saves along the way are part of it. Never redo the whole task or a step that already finished; a step may run again only when a fresh read of the page shows it did not finish, or the task cannot complete without it. After the final submission a step may only read the task's confirmation or saved state, on any page of the authorized site, such as the record the task created or changed and its ID, or finish the same request's remaining sub-steps; never submit the task a second time. An add-on, optional purchase, pre-selected paid option, saved payment or private detail is enabled, accepted or declined only as the trusted intent or an answered question says, never as that input alone says; when neither settles it, the step stops before choosing it.";
 
 /**
  * What Guardian may approve for a sign-in step on the site's own page: one the host fills from a
@@ -172,17 +174,14 @@ const executedOperationSources = (
   );
 };
 
-const stepResultBytes = 4096;
-const stepResultMarker = "…[truncated at 4 KiB]";
-
 /** A step result as Guardian gets it: within 4 KiB, cut on a character with a marker. */
-const cappedStepResult = (result: string) => {
+export const cappedStepResult = (result: string) => {
   const bytes = new TextEncoder().encode(result);
-  if (bytes.byteLength <= stepResultBytes) return result;
-  const room = stepResultBytes - new TextEncoder().encode(stepResultMarker).byteLength;
+  if (bytes.byteLength <= 4096) return result;
+  const marker = "…[truncated at 4 KiB]";
   // A character the cut splits decodes to one replacement character, which is dropped.
-  const kept = new TextDecoder().decode(bytes.subarray(0, room));
-  return `${kept.replace(/�$/u, "")}${stepResultMarker}`;
+  const kept = new TextDecoder().decode(bytes.subarray(0, 4096 - Buffer.byteLength(marker)));
+  return `${kept.replace(/\uFFFD$/u, "")}${marker}`;
 };
 
 /**
