@@ -70,6 +70,8 @@ export const LocalOperationStart = Schema.Struct({
   timeoutMs: Schema.Number.pipe(Schema.positive(), Schema.finite()),
   mode: Schema.Literal("run", "contract"),
   validateInput: Schema.optionalWith(Schema.Boolean, { exact: true }),
+  /** An output that fails its schema returns as the result, flagged as drift, not as a failure. */
+  keepDriftedOutput: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   /** A run with no browser, such as a parser: it never marks a possible dispatch. */
   offline: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   /** A mint step: it counts as possibly sent from its first browser call, not from its start. */
@@ -159,6 +161,8 @@ export const LocalOperationMessage = Schema.Union(
   Schema.Struct({
     kind: Schema.Literal("result"),
     output: Schema.optionalWith(Schema.Unknown, { exact: true }),
+    /** The output failed the operation's output schema; the host keeps it as drift. */
+    outputDrift: Schema.optionalWith(Schema.Literal(true), { exact: true }),
     inputSchema: Schema.Unknown,
     outputSchema: Schema.Unknown,
     write: Schema.optionalWith(WriteDeclaration, { exact: true }),

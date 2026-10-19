@@ -4,6 +4,10 @@ import { MintFailure } from "../../src/mint/contracts.js";
 import {
   exampleInputFeedback,
   exampleOutputEvidence,
+  exampleOutputRecord,
+  outputDigest,
+  outputDigestNote,
+  outputDigestPath,
   publicationEvidenceNote,
   publicationScope,
   publicDefinition,
@@ -24,9 +28,15 @@ const Envelope = Schema.parseJson(
     state: Schema.String,
     reason: Schema.optional(Schema.String),
     screenedBytes: Schema.optional(Schema.Int),
-    output: Schema.optional(Schema.String),
+    truncation: Schema.optional(
+      Schema.Struct({ list: Schema.String, kept: Schema.Int, records: Schema.Int }),
+    ),
+    output: Schema.optional(Schema.Unknown),
   }),
 );
+/** A truncated record's output: a prefix of the screened output's text. */
+const prefixOf = (envelope: { readonly output?: unknown }) =>
+  typeof envelope.output === "string" ? envelope.output : "missing";
 /** A fake host's credential precheck: a record passes unless it holds one of `secrets`. */
 const precheck =
   (...secrets: string[]) =>
@@ -37,6 +47,17 @@ const source = {
   executedEntrypoint: "executed/src/tool.mjs",
   executedSourceDigest: "digest_a",
 };
+/** A small record of short fields, which indenting makes about twice as long. */
+const smallRecord = (index: number) => ({
+  id: index,
+  name: `Item ${index}`,
+  price: 9.99,
+  inStock: true,
+  rating: 4.5,
+  reviews: 120,
+  sale: false,
+  qty: 3,
+});
 const evidenceFor = async (value: unknown, credentialFree = precheck("private-canary")) => {
   const { state, text } = await Effect.runPromise(
     exampleOutputEvidence(
@@ -58,9 +79,9 @@ describe("the example's output evidence", () => {
       ...source,
       state: "available",
       screenedBytes: Buffer.byteLength('{"heading":"Public"}'),
-      output: '{"heading":"Public"}',
+      output: { heading: "Public" },
     });
-    // The record is indented JSON with its fields in this order.
+    // The record is compact JSON with its fields in this order.
     expect(Object.keys(JSON.parse(text) as object)).toEqual([
       "kind",
       "executionId",
@@ -70,7 +91,8 @@ describe("the example's output evidence", () => {
       "screenedBytes",
       "output",
     ]);
-    expect(text).toContain('\n  "kind": "verified_example_output",\n');
+    expect(text.startsWith('{"kind":"verified_example_output","executionId":')).toBe(true);
+    expect(text).not.toContain("\n");
   });
 
   it("names a write session's step instead of a source digest", async () => {
@@ -91,13 +113,78 @@ describe("the example's output evidence", () => {
       executedEntrypoint: "publication/session/1/src/save.mjs",
       state: "available",
       screenedBytes: 14,
-      output: '{"saved":true}',
+      output: { saved: true },
     });
   });
 
-  it("serializes a bare string result as JSON", async () => {
-    const { envelope } = await evidenceFor("plain result");
-    expect(envelope.output).toBe(JSON.stringify("plain result"));
+  it("embeds a bare string result as its JSON value, not a JSON string inside JSON", async () => {
+    const { text, envelope } = await evidenceFor("plain result");
+    expect(envelope.output).toBe("plain result");
+    expect(text).not.toContain(String.raw`\"plain result\"`);
+  });
+
+  it("returns the whole screened output, parsed, beside the record", async () => {
+    const value = { rows: Array.from({ length: 20_000 }, (_, index) => `row ${index}`) };
+    const evidence = await Effect.runPromise(
+      exampleOutputEvidence(source, JSON.stringify(value), precheck()),
+    );
+    expect(evidence.state).toBe("truncated");
+    expect(evidence.screened).toEqual(value);
+  });
+
+  it("cuts a large list of records to its first whole records", async () => {
+    const records = Array.from({ length: 4000 }, (_, index) => ({
+      id: index,
+      title: `Result ${index} ${"x".repeat(40)}`,
+    }));
+    const { text, envelope } = await evidenceFor({ total: 4000, results: records });
+    expect(envelope.state).toBe("truncated");
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(limit);
+    const kept = envelope.truncation?.kept ?? 0;
+    expect(envelope.truncation).toEqual({ list: "results", kept, records: 4000 });
+    expect(kept).toBeGreaterThan(100);
+    expect(envelope.output).toEqual({ total: 4000, results: records.slice(0, kept) });
+  });
+
+  it("keeps every record of an output that fits in 96 KiB as compact JSON", async () => {
+    const records = Array.from({ length: 600 }, (_, index) => smallRecord(index));
+    const value = { total: 600, results: records };
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThan(limit - 1024);
+    expect(Buffer.byteLength(JSON.stringify(value, null, 2))).toBeGreaterThan(limit);
+    const { text, envelope } = await evidenceFor(value);
+    expect(envelope.state).toBe("available");
+    expect(envelope.truncation).toBeUndefined();
+    expect(envelope.output).toEqual(value);
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(limit);
+  });
+
+  it("cuts an output past 96 KiB as compact JSON, and its digest covers every record", async () => {
+    const records = Array.from({ length: 1500 }, (_, index) => smallRecord(index));
+    const value = { total: 1500, results: records };
+    const evidence = await Effect.runPromise(
+      exampleOutputEvidence(source, JSON.stringify(value), precheck()),
+    );
+    const envelope = Schema.decodeUnknownSync(Envelope)(evidence.text);
+    expect(envelope.state).toBe("truncated");
+    expect(Buffer.byteLength(evidence.text)).toBeLessThanOrEqual(limit);
+    const kept = envelope.truncation?.kept ?? 0;
+    expect(envelope.truncation).toEqual({ list: "results", kept, records: 1500 });
+    expect(envelope.output).toEqual({ total: 1500, results: records.slice(0, kept) });
+    // The kept records fill the limit as compact JSON.
+    expect(Buffer.byteLength(JSON.stringify(records.slice(0, kept)))).toBeGreaterThan(limit * 0.95);
+    const digest = JSON.parse(outputDigest(evidence.screened) ?? "{}") as {
+      readonly lists: readonly { readonly path: string; readonly records: number }[];
+    };
+    expect(digest.lists).toContainEqual(expect.objectContaining({ path: "results", records: 1500 }));
+  });
+
+  it("writes the record of an output the host could not read", () => {
+    expect(JSON.parse(exampleOutputRecord(source, "unavailable", { reason: "result_read" }).text)).toEqual({
+      kind: "verified_example_output",
+      ...source,
+      state: "unavailable",
+      reason: "result_read",
+    });
   });
 
   it("marks an output the host kept none of as not_retained, without output", async () => {
@@ -113,8 +200,8 @@ describe("the example's output evidence", () => {
     expect(envelope.state).toBe("truncated");
     expect(envelope.screenedBytes).toBe(Buffer.byteLength(full));
     expect(Buffer.byteLength(text)).toBeLessThanOrEqual(limit);
-    expect(full.startsWith(envelope.output ?? "missing")).toBe(true);
-    expect((envelope.output ?? "").length).toBeGreaterThan(limit / 4);
+    expect(full.startsWith(prefixOf(envelope))).toBe(true);
+    expect(prefixOf(envelope).length).toBeGreaterThan(limit / 4);
   });
 
   it.each(["é", "😀"])("truncates on a code point boundary: %s", async (character) => {
@@ -122,9 +209,9 @@ describe("the example's output evidence", () => {
     const { text, envelope } = await evidenceFor(value);
     expect(envelope.state).toBe("truncated");
     expect(Buffer.byteLength(text)).toBeLessThanOrEqual(limit);
-    expect(envelope.output).not.toContain("�");
-    expect(JSON.stringify(value).startsWith(envelope.output ?? "missing")).toBe(true);
-    expect(Buffer.from(envelope.output ?? "").toString()).toBe(envelope.output);
+    expect(prefixOf(envelope)).not.toContain("�");
+    expect(JSON.stringify(value).startsWith(prefixOf(envelope))).toBe(true);
+    expect(Buffer.from(prefixOf(envelope)).toString()).toBe(envelope.output);
   });
 
   it("withholds an output whose URL carries a secret the truncation point would split", async () => {
@@ -157,6 +244,62 @@ describe("the example's output evidence", () => {
     );
     expect(checked).toEqual(["available", "truncated"]);
     expect(envelope).toMatchObject({ state: "withheld", reason: "credential_precheck" });
+  });
+});
+
+describe("the example output's digest", () => {
+  it("digests a nested list across every parent record, not only the first", () => {
+    const Digest = Schema.parseJson(
+      Schema.Struct({
+        lists: Schema.Array(
+          Schema.Struct({
+            path: Schema.String,
+            records: Schema.Number,
+            parents: Schema.optional(Schema.Number),
+            fields: Schema.Record({
+              key: Schema.String,
+              value: Schema.Struct({ withValue: Schema.Number }),
+            }),
+          }),
+        ),
+      }),
+    );
+    const digest = Schema.decodeUnknownSync(Digest, { onExcessProperty: "ignore" })(
+      outputDigest({
+        results: [
+          {
+            id: "a",
+            offers: [
+              { seller: "one", price: 1 },
+              { seller: "two", price: 2 },
+            ],
+          },
+          {
+            id: "b",
+            offers: [
+              { seller: "three", price: 3 },
+              { seller: null, price: 4 },
+              { seller: "five", price: 5 },
+            ],
+          },
+          { id: "c" },
+        ],
+      }),
+    );
+    const offers = digest.lists.find((list) => list.path === "results[].offers");
+    expect(offers).toMatchObject({ records: 5, parents: 2 });
+    expect(offers?.fields.seller?.withValue).toBe(4);
+    expect(offers?.fields.price?.withValue).toBe(5);
+  });
+
+  it("has none for an output without a list of records", () => {
+    expect(outputDigest({ heading: "Public", tags: ["a", "b"] })).toBeUndefined();
+  });
+
+  it("tells the review where the digest is and what it covers", () => {
+    expect(outputDigestNote).toBe(
+      `${outputDigestPath} summarizes every field of each list in the example output across all its records, including records past what publication/example-output.json keeps.`,
+    );
   });
 });
 
@@ -237,6 +380,32 @@ describe("the evidence index", () => {
         owner: "host",
       },
     ]);
+  });
+
+  it("marks bundle files the host wrote as the host's, and lists the review's references", () => {
+    const scope = publicationScope(
+      new Map([
+        ["src/tool.mjs", "export {};"],
+        ["operation.mjs", "export * from './src/tool.mjs';"],
+      ]),
+      new Map([["publication/definition.json", "{}"]]),
+      {
+        hostWritten: new Set(["operation.mjs"]),
+        references: new Map([[".agents/write-tools/SKILL.md", "# Skill é"]]),
+      },
+    );
+    expect(Object.keys(scope)).toEqual(["references", "files"]);
+    expect(scope.references).toEqual([
+      { path: ".agents/write-tools/SKILL.md", byteLength: Buffer.byteLength("# Skill é") },
+    ]);
+    expect(scope.files.map(({ path, owner }) => [path, owner])).toEqual([
+      ["operation/src/tool.mjs", "minter"],
+      ["operation/operation.mjs", "host"],
+      ["publication/definition.json", "host"],
+    ]);
+    expect(publicationScope(new Map(), new Map(), { references: new Map() })).not.toHaveProperty(
+      "references",
+    );
   });
 
   it("keeps each act step's entrypoint and its imports, in order, and drops what it never ran", () => {

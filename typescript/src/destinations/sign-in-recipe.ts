@@ -1,12 +1,17 @@
 import { Deferred, Effect, Either, FiberId, Option, Schema } from "effect";
-import type { AutofillApproval, AutofillPopup, RejectedMarker } from "./autofill-contracts.js";
+import type {
+  AutofillApproval,
+  AutofillPopup,
+  RejectedMarker,
+  SubmitKey,
+} from "./autofill-contracts.js";
 import {
   autofillRecipe,
   autofillRecipePath,
+  KeySubmitAutofillRecipe,
   LegacyAutofillRecipe,
   PopupAutofillRecipe,
   publishedAutofillRecipe,
-  RefillAutofillRecipe,
   WorkspaceAutofillRecipe,
   type AutofillRecipeOrigins,
   type AutofillRecipeStep,
@@ -54,7 +59,7 @@ export const SignInRecipe = Schema.Union(
   PopupAutofillRecipe,
   SignInRecipeV3,
   WorkspaceAutofillRecipe,
-  RefillAutofillRecipe,
+  KeySubmitAutofillRecipe,
 );
 export type SignInRecipe = typeof SignInRecipe.Type;
 export type SignInRecipeStep = AutofillRecipeStep;
@@ -94,6 +99,8 @@ export interface RecordedSignInStep {
   /** With each identifier field's accepted kinds, never a value. */
   readonly fields: readonly AutofillField[];
   readonly submit?: string | undefined;
+  /** The key pressed in the last field to submit its form, on a form with no submit control. */
+  readonly submitKey?: SubmitKey | undefined;
   readonly submittedBy?: "host" | "minter" | undefined;
   /** A two-factor method choice's recorded methods. */
   readonly methods?: AutofillStep["methods"];
@@ -144,6 +151,7 @@ const inStepOrder = (step: SignInRecipeStep): SignInRecipeStep => ({
   ),
   ...(step.refills === undefined ? {} : { refills: step.refills }),
   ...(step.submit === undefined ? {} : { submit: step.submit }),
+  ...(step.submitKey === undefined ? {} : { submitKey: step.submitKey }),
   ...(step.submittedBy === undefined ? {} : { submittedBy: step.submittedBy }),
   ...(step.methods === undefined ? {} : { methods: step.methods }),
 });
@@ -492,6 +500,7 @@ export const armStep = (
       field.slot === "date_of_birth" ? { ...field, control: control(index) } : field,
     ),
     ...(step.submit === undefined ? {} : { submit: step.submit }),
+    ...(step.submitKey === undefined ? {} : { submitKey: step.submitKey }),
     ...(step.methods === undefined ? {} : { methods: step.methods }),
     page: inspection.page,
   });

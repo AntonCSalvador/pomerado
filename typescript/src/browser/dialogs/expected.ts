@@ -1,9 +1,10 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Effect, Schema } from "effect";
 import { MintFailure } from "../../mint/contracts.js";
 import type { IncidentStore } from "../../runtime/incidents.js";
-import { ExpectedConfirm } from "./contracts.js";
-import type { DialogChoice, DialogFacts, DialogFailure, DialogType } from "./contracts.js";
+import type { AskBounds, InputAsker, InputRequest } from "../../runtime/input-request.js";
+import { DialogFailure, ExpectedConfirm } from "./contracts.js";
+import type { DialogChoice, DialogFacts, DialogType } from "./contracts.js";
 
 /** How many accepted confirms one published revision keeps. */
 export const expectedConfirmLimit = 32;
@@ -229,3 +230,66 @@ export const makeRunDialogDecision = <Event extends DialogEvent>(input: {
       .pipe(Effect.as(choice));
   };
 };
+
+const promptLimit = 2000;
+
+const dialogPrompt = (event: { readonly type: DialogType; readonly message: string }) => {
+  const shown = event.message.trim() === "" ? "" : `: "${event.message}"`;
+  const prompt =
+    event.type === "beforeunload"
+      ? "The website asks whether to leave the page. Leave it?"
+      : event.type === "alert"
+        ? `The website shows a message${shown}. Close it and continue?`
+        : event.type === "prompt"
+          ? `The website asks for text${shown}. Answer it?`
+          : `The website asks you to confirm${shown}. Confirm?`;
+  return prompt.length <= promptLimit ? prompt : `${prompt.slice(0, promptLimit - 1)}…`;
+};
+
+/**
+ * A native dialog the host cannot decide itself, asked as one `confirm` question: yes accepts it,
+ * with the caller's text for a prompt dialog, and no dismisses it. `event.message` is the dialog's
+ * message as the caller may see it, with any secret already masked. `bounds` holds the dialog's
+ * own end, when the host keeps one. A question whose window ends unanswered fails as `expired`.
+ */
+export const askDialogCaller = (
+  ask: InputAsker,
+  event: { readonly type: DialogType; readonly message: string },
+  bounds?: AskBounds,
+): Effect.Effect<DialogChoice, DialogFailure> =>
+  Effect.gen(function* () {
+    const questionId = "decision";
+    const request: InputRequest = {
+      id: randomUUID(),
+      source: "system",
+      questions: [
+        {
+          id: questionId,
+          type: "confirm",
+          prompt: dialogPrompt(event),
+          ...(event.type === "prompt" ? { followUp: { prompt: "Text to enter" } } : {}),
+        },
+      ],
+    };
+    const answers = yield* ask(request, bounds).pipe(
+      Effect.mapError(
+        (error) =>
+          new DialogFailure({
+            reason:
+              error._tag === "InputSuperseded"
+                ? "stale_decision"
+                : error.code === "Unauthorized"
+                  ? "unauthorized"
+                  : error.code === "NoResponse"
+                    ? "expired"
+                    : "unavailable",
+          }),
+      ),
+    );
+    const answer = answers[questionId];
+    if (answer?.type !== "confirm") return yield* new DialogFailure({ reason: "unavailable" });
+    if (!answer.value.confirmed) return { choice: "dismiss" as const };
+    return answer.value.text === undefined
+      ? { choice: "accept" as const }
+      : { choice: "accept" as const, promptText: answer.value.text };
+  });
