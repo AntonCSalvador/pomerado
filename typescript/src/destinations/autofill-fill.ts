@@ -43,7 +43,15 @@ import { PageControls } from "./page-controls.js";
 /** One fill call's answer: a control that moved, an empty field the host typed, or its own. */
 const FillAnswer = Schema.Union(
   LocatedError,
-  Schema.Struct({ checked: Schema.Literal(false), url: Schema.String }),
+  /**
+   * A typed field holds nothing, or, before a submit, a code box (`field`) does not hold exactly
+   * one character.
+   */
+  Schema.Struct({
+    checked: Schema.Literal(false),
+    field: Schema.optional(Schema.Number),
+    url: Schema.String,
+  }),
   Schema.Struct({
     focused: Schema.Boolean,
     /** Why the field did not take the focus: the error focusing threw, or the tag that holds it. */
@@ -150,6 +158,17 @@ const resubmitted = (
   );
 };
 
+/**
+ * The step's code boxes, by field index: its code fields whose values are one character each, when
+ * there are two or more, as the host splits one code across one-character boxes. Otherwise none.
+ */
+const codeBoxes = (step: AutofillStep<FillSlot>, values: readonly string[]) => {
+  const boxes = step.fields.flatMap((field, index) =>
+    field.slot === "code" && Array.from(values[index] ?? "").length === 1 ? [index] : [],
+  );
+  return boxes.length > 1 ? boxes : [];
+};
+
 /** What the fill has done so far. */
 interface FillProgress {
   readonly statuses: AutofillFieldStatus[];
@@ -253,16 +272,20 @@ const failedCall = (
 /**
  * A control the host refused, or a field the host typed that holds nothing: a refusal before
  * anything was typed. After, the field about to be typed fails untyped, as a fill into it would, a
- * typed field left empty fails, and only the submit's recheck refuses the submit.
+ * typed field left empty fails, as does a code box that holds other than one character when the
+ * host is about to submit, and only the submit's recheck refuses the submit.
  */
 const stopped = (
   step: AutofillStep<FillSlot>,
   progress: FillProgress,
-  answer: Stop | { readonly checked: false; readonly url: string },
+  answer:
+    | Stop
+    | { readonly checked: false; readonly field?: number | undefined; readonly url: string },
   during: "field" | "submit",
 ): AutofillStepReport => {
   if ("checked" in answer) {
-    if (progress.check !== null) progress.statuses[progress.check] = "failed";
+    const failed = answer.field ?? progress.check;
+    if (failed !== null) progress.statuses[failed] = "failed";
     return filledReport(step, progress, "not_attempted", answer.url);
   }
   if (!progress.typed) return answer.refusal;
@@ -662,8 +685,10 @@ const afterFieldCall = (
  * the submit. That click ran, though, so the report says so (`clicked`): the page's own handlers
  * ran on it, and what the step filled may have gone out. A submit the page keeps disabled is never
  * clicked: the host waits for the page to enable it once the fields are filled, and when it stays
- * disabled the report says so (`stayed_disabled`). On a step with fields and no submit, a page
- * that moves on once every field is typed sent what was typed itself (`page`), never a refusal:
+ * disabled the report says so (`stayed_disabled`). A step whose code the host typed one character
+ * per box into several code fields is submitted only once every box holds exactly one character;
+ * otherwise that box fails and the submit is not attempted. On a step with fields and no submit, a
+ * page that moves on once every field is typed sent what was typed itself (`page`), never a refusal:
  * the step's fields went away or were all disabled, its popup closed, its address moved to another
  * path, or a step of several fields came back emptied. The host gives the page up to `pageSendMs`
  * to do so, and a submit call that fails meanwhile is followed by another look (`submitWhenEnabled`).
@@ -711,6 +736,7 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
           input.inspection.judgedBeforeTyping === undefined
             ? null
             : configuredOrigins(input.inspection),
+        codeBoxes: codeBoxes(step, input.values),
         alertsBefore: input.countNewAlerts === true,
       }),
     );
