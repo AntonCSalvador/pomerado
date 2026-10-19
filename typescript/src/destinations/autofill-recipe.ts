@@ -9,6 +9,7 @@ import {
   RejectedMarker,
   SecretSlots,
   SignInMethodChoice,
+  SubmitKey,
 } from "./autofill-contracts.js";
 import type { AutofillField } from "./autofill-step.js";
 export {
@@ -120,34 +121,92 @@ const pathOnlyPage = (page: string) => URL.parse(page, "https://h.invalid")?.pat
  * origin at use, never here. A host that does not know version 4 refuses it, and a version 4
  * recipe with a key this host does not know is refused, so no host drops what a writer adds.
  */
-export const WorkspaceAutofillRecipe = Schema.Struct({
-  ...LegacyAutofillRecipe.fields,
-  version: Schema.Literal(4),
-  workspace: Schema.optional(Schema.Struct({ parent: HostName })),
-  steps: Schema.Array(WorkspaceRecipeStep).pipe(Schema.minItems(1), Schema.maxItems(12)),
-})
-  .annotations({ parseOptions: { onExcessProperty: "error" } })
-  .pipe(
+/** Version 4's and 5's checks of their workspace steps' pages against the recipe's workspace. */
+const workspacePages = <
+  Recipe extends {
+    readonly workspace?: unknown;
+    readonly steps: readonly { readonly origin?: "workspace" | undefined; readonly page: string }[];
+  },
+>(
+  recipe: Schema.Schema<Recipe, Recipe>,
+) =>
+  recipe.pipe(
+    Schema.filter(
+      (recipe) =>
+        recipe.steps.every((step) =>
+          step.origin === "workspace" ? pathOnlyPage(step.page) : absolutePage(step.page),
+        ) || "a workspace step's page is a path, and any other step's an absolute URL",
+    ),
+    Schema.filter(
+      (recipe) =>
+        recipe.workspace !== undefined ||
+        recipe.steps.every((step) => step.origin !== "workspace") ||
+        "a workspace step needs the recipe's workspace",
+    ),
+  );
+export const WorkspaceAutofillRecipe = workspacePages(
+  Schema.Struct({
+    ...LegacyAutofillRecipe.fields,
+    version: Schema.Literal(4),
+    workspace: Schema.optional(Schema.Struct({ parent: HostName })),
+    steps: Schema.Array(WorkspaceRecipeStep).pipe(Schema.minItems(1), Schema.maxItems(12)),
+  }).annotations({ parseOptions: { onExcessProperty: "error" } }),
+);
+/** The secret a later screen may ask for again, beside a second factor: the password. */
+export const RefillSlot = Schema.Literal("password");
+/** A second factor: the one-time values a screen that asks for the password again also takes. */
+export const isSecondFactor = (slot: string) => slot === "code" || slot === "recovery_code";
+/**
+ * A version 5 step: a version 4 step that may submit with a key (`submitKey`): Enter pressed in
+ * its last field submits that field's form, on a screen whose form has no submit control. Such a
+ * step fills a field and names no submit or method choice. It may also list `refills`, the
+ * secrets an earlier screen of the sign-in took that this screen asks for again, as a site that
+ * wants the password re-entered with a one-time code does: only a screen that takes the refilled
+ * field and a second factor may list one.
+ */
+const KeyRecipeStep = Schema.Struct({
+  ...WorkspaceRecipeStep.fields,
+  submitKey: Schema.optional(SubmitKey),
+  refills: Schema.optional(Schema.Array(RefillSlot).pipe(Schema.minItems(1), Schema.maxItems(1))),
+}).pipe(
   Schema.filter(
-    (recipe) =>
-      recipe.steps.every((step) =>
-        step.origin === "workspace" ? pathOnlyPage(step.page) : absolutePage(step.page),
-      ) || "a workspace step's page is a path, and any other step's an absolute URL",
+    (step) =>
+      step.submitKey === undefined ||
+      (step.submit === undefined && step.methods === undefined && step.fields.length > 0) ||
+      "a submitKey step fills a field and names no submit or method choice",
   ),
   Schema.filter(
-    (recipe) =>
-      recipe.workspace !== undefined ||
-      recipe.steps.every((step) => step.origin !== "workspace") ||
-      "a workspace step needs the recipe's workspace",
+    (step) =>
+      step.refills === undefined ||
+      (step.fields.some((field) => "slot" in field && isSecondFactor(field.slot)) &&
+        step.refills.every((slot) =>
+          step.fields.some((field) => "slot" in field && field.slot === slot),
+        )) ||
+      "a step's refills name a field it takes, and it takes a code or recovery code",
   ),
+);
+/**
+ * Version 5: version 4 whose steps may submit with a key (`submitKey`) or refill a secret
+ * (`refills`). A host that does not know version 5 refuses it, so it never replays such a step
+ * without submitting it or without the refill; a version 5 recipe with a key this host does not
+ * know is refused too, as a version 5 host that predates `refills` refuses one that has it.
+ */
+export const KeySubmitAutofillRecipe = workspacePages(
+  Schema.Struct({
+    ...LegacyAutofillRecipe.fields,
+    version: Schema.Literal(5),
+    workspace: Schema.optional(Schema.Struct({ parent: HostName })),
+    steps: Schema.Array(KeyRecipeStep).pipe(Schema.minItems(1), Schema.maxItems(12)),
+  }).annotations({ parseOptions: { onExcessProperty: "error" } }),
 );
 export const AutofillRecipe = Schema.Union(
   LegacyAutofillRecipe,
   PopupAutofillRecipe,
   WorkspaceAutofillRecipe,
+  KeySubmitAutofillRecipe,
 );
 export type AutofillRecipe = typeof AutofillRecipe.Type;
-export type AutofillRecipeStep = typeof WorkspaceRecipeStep.Type;
+export type AutofillRecipeStep = typeof KeyRecipeStep.Type;
 /** Where a version 4 recipe's sign-in may go besides the site's own host. */
 export interface AutofillRecipeOrigins {
   readonly workspace?: { readonly parent: string } | undefined;
@@ -176,9 +235,13 @@ interface RecordedRecipeStep {
   /** With each identifier field's accepted kinds, never a value. */
   readonly fields: readonly AutofillField[];
   readonly submit?: string | undefined;
+  /** The key pressed in the last field to submit its form, on a form with no submit control. */
+  readonly submitKey?: SubmitKey | undefined;
   readonly submittedBy?: "host" | "minter" | undefined;
   /** A two-factor method choice's recorded methods. */
   readonly methods?: AutofillRecipeStep["methods"] | undefined;
+  /** The secrets an earlier screen took that this one asks for again with a second factor. */
+  readonly refills?: AutofillRecipeStep["refills"] | undefined;
   /** The page the step ran on, origin and path only. */
   readonly page: string;
 }
@@ -209,22 +272,34 @@ export const recipeStep = (step: RecordedRecipeStep): AutofillRecipeStep => ({
         }
       : { selector: field.selector, accepts: field.accepts ?? [field.slot] },
   ),
+  ...(step.refills === undefined ? {} : { refills: step.refills }),
   ...(step.submit === undefined ? {} : { submit: step.submit }),
+  ...(step.submitKey === undefined ? {} : { submitKey: step.submitKey }),
   ...(step.submittedBy === undefined ? {} : { submittedBy: step.submittedBy }),
   ...(step.methods === undefined ? {} : { methods: step.methods }),
 });
 
 /**
- * A verified sign-in's recipe: version 4 only when its sign-in may move to a workspace host
+ * A verified sign-in's recipe: version 5 only when a step submits with a key or refills a secret
+ * (`refills`), else version 4 only when its sign-in may move to a workspace host
  * (`origins.workspace`, or a workspace step), else version 2 only with a popup or an approval,
- * else version 1. A security answer's question selector rides in any of them. Version 4 writes
- * `workspace` before `steps`.
+ * else version 1. A security answer's question selector rides in any of them. Versions 4 and 5
+ * write `workspace` before `steps`.
  */
 export const autofillRecipe = <SignedIn>(
   steps: readonly RecordedRecipeStep[],
   signedIn: SignedIn,
   origins: AutofillRecipeOrigins = {},
 ) => {
+  if (steps.some((step) => step.submitKey !== undefined || step.refills !== undefined))
+    return {
+      version: 5 as const,
+      ...(origins.workspace === undefined
+        ? {}
+        : { workspace: { parent: origins.workspace.parent } }),
+      steps: steps.map(recipeStep),
+      signedIn,
+    };
   if (origins.workspace === undefined && steps.every((step) => step.origin === undefined))
     return {
       version: steps.some((step) => step.popup !== undefined || step.approval !== undefined)

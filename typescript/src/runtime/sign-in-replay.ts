@@ -328,7 +328,9 @@ const makeReplay = <E>(input: SignInReplayInput<E>) => {
     codeAgain?: "rejected",
     explicitCodeRejection = false,
     corrected: ReadonlySet<AutofillSlot> = new Set(),
-  ) => runReplayStep(session, asked, inspection, codeAgain, explicitCodeRejection, corrected);
+    planned: readonly SecretSlot[] = [],
+  ) =>
+    runReplayStep(session, asked, inspection, codeAgain, explicitCodeRejection, corrected, planned);
   const extras = (observed: readonly AutofillSlot[]) => correctReplayExtras(session, run, observed);
   const resolve = (request: AutofillStepRequest) => input.values.resolve(request, input.credentials);
   return {
@@ -376,6 +378,7 @@ const screenFor = <E>(
       fields: recorded.fields,
       ...(recorded.popup === undefined ? {} : { popup: recorded.popup }),
       ...(recorded.submit === undefined ? {} : { submit: recorded.submit }),
+      ...(recorded.submitKey === undefined ? {} : { submitKey: recorded.submitKey }),
     });
     if (recorded.methods === undefined) return step;
     // The choice screen shows before a method is picked; its first option finds it.
@@ -538,7 +541,14 @@ const runScreen = <E>(
       return "continue" as const;
     }
     for (;;) {
-      const failed = yield* replay.runStep(step, inspection);
+      const failed = yield* replay.runStep(
+        step,
+        inspection,
+        undefined,
+        false,
+        undefined,
+        recorded.refills,
+      );
       if (failed === undefined) break;
       // A fieldless step whose submit the page kept disabled typed and clicked nothing, so it
       // waits for its screen again within the screen's own wait. A step with fields ends: the
@@ -811,6 +821,7 @@ const retryCode = <E>(
       fields,
       ...(shown.popup === undefined ? {} : { popup: shown.popup }),
       ...(shown.submit === undefined ? {} : { submit: shown.submit }),
+      ...(shown.submitKey === undefined ? {} : { submitKey: shown.submitKey }),
     };
     const inspected = yield* input.browser.inspect(retryStep);
     if ("outcome" in inspected) return "none" as const;

@@ -28,6 +28,12 @@ export interface PublicationScope {
     readonly name: string;
     readonly description?: string;
   }[];
+  /**
+   * Files the review may read on demand that are not its evidence, such as the skills the minter
+   * followed, each with its byte length. None ships and none is in `files`, so no finding names
+   * one.
+   */
+  readonly references?: readonly { readonly path: string; readonly byteLength: number }[];
 }
 
 /**

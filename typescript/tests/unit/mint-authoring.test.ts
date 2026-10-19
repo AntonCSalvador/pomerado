@@ -14,6 +14,11 @@ import bookSeat from "../../authoring/examples/caller-choice.js";
 import dialogPicker from "../../authoring/examples/dialog-picker.js";
 import placeOrder from "../../authoring/examples/write-session.js";
 import { selectInvoiceLayout } from "../../authoring/examples/variants.js";
+import {
+  guardianPublicationPolicy,
+  publicationLiveTestsPolicy,
+  publicationOutputPolicy,
+} from "../../src/guardian/publication.js";
 import { inputFeedbackInstruction } from "../../src/mint/input-feedback.js";
 import { loadAuthoringSkills, loadWorkspaceGuide } from "../../src/mint/skills.js";
 import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
@@ -115,6 +120,32 @@ const contents = (skills: readonly SkillDescriptor[]) =>
     if (!(skill.content instanceof Uint8Array)) throw new Error(`${skill.name} is not bytes`);
     return new TextDecoder().decode(skill.content);
   });
+
+/*
+ * The minter reads the publication review's rules for live tests and output while it explores, so
+ * it gathers that evidence before its first publication instead of learning it from a denial. The
+ * file is the text the review reads, so a policy change reaches the minter in the same release.
+ */
+it("installs the publication review's test and output rules for the minter", async () => {
+  const rules = `${publicationLiveTestsPolicy}\n\n${publicationOutputPolicy}`;
+  for (const part of [publicationLiveTestsPolicy, publicationOutputPolicy])
+    expect(guardianPublicationPolicy).toContain(part);
+  const root = await authoringCopy((_path, text) => composeHostText(text));
+  try {
+    // Every host gets the same file, whether it loads standalone text or composes its own.
+    for (const guide of [
+      await Effect.runPromise(loadWorkspaceGuide("typescript/authoring")),
+      await Effect.runPromise(loadWorkspaceGuide(root, (text) => text)),
+    ]) {
+      expect(guide.files.get("reference/publication-review.md")).toBe(rules);
+      expect(guide.instructions).toContain(
+        "- `reference/publication-review.md` holds the rules Guardian's publication review applies",
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 it("loads standalone text by default", async () => {
   const skills = await Effect.runPromise(loadAuthoringSkills("typescript/authoring"));
@@ -752,11 +783,15 @@ it("renders the pinned standalone authoring", async () => {
   expect(guide.instructions).toBe(guide.files.get("AGENTS.md"));
   expect([
     ...skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name]),
-    ...[...guide.files].map(([path, text]) => [sha256(text), `workspace/${path}`]),
+    // The publication review's rules are Guardian's policy text, held equal to it above, so a
+    // policy change moves no digest here.
+    ...[...guide.files]
+      .filter(([path]) => path !== "reference/publication-review.md")
+      .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
     ["af346d56453d40246872599683f72c7c645c6c7fcbc5046ab62570dd3cd0ac96", "core"],
     ["cbf9d84d1cdc1a192ec07df90bf99192a72c7b03c0aefb89096f4f0b5bf6ef27", "search"],
-    ["4c82c607ae23ae85bcd723415cb7eda4bb062c02d3eee95e4591e640e88715ad", "auth"],
+    ["ac66bcd6e97b1126cd643bbaee17f1333decc5af5273748060a07b0b82f2b99c", "auth"],
     ["48ba91768a4c1cbb8d6d325bb6b3ef41182bcbdf8097db014391137e29fb7f7d", "testing"],
     ["fc4707b0cd5692efe8cc9b96be4ec88b1f8807451348056eb13dfc3d88486b0f", "pagination"],
     ["3c9a5f4e12e33f5d10758225f0a233f98f9504fce618108fc93a52b5933e0048", "records"],
@@ -765,7 +800,7 @@ it("renders the pinned standalone authoring", async () => {
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["5e3017df8368f31f52d925062ca0d7f24f2a8badffd8da1589ba9c7860e27b7a", "caller-input"],
     ["3c11e86df509740394a8913710175dbdb364a84afbd2cd755ea19f676be6e0db", "publication"],
-    ["680d940745558e1a573138b62a4d7799aa997c2ad2011ee3d6ef223891292612", "workspace/AGENTS.md"],
+    ["65366fa94b5d4203fa00724566b5f509fff2ebf8536bc388b62ad8ba0d8e2e0c", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });

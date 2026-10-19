@@ -27,6 +27,7 @@ import {
   type AutofillStep,
   type FillSlot,
   type AutofillStepReport,
+  hostSubmits,
   LocatedError,
   notingHostTrust,
   Targets,
@@ -344,9 +345,10 @@ const rejudge = (
 /**
  * A submit call that found the screen gone once every field was typed: `sent` when the page took
  * it away itself. On a step with no submit, a field gone or its popup closed, as a code widget does
- * when it sends what its last box completed. On a step with a submit, only a field gone because a
- * new document replaced the one the host typed the last field in (`typedIn`), as a form that
- * submits itself on its last input does: the host's click never ran, so nothing went out twice, and
+ * when it sends what its last box completed. On a step with a submit or a submit key, only a field
+ * gone because a new document replaced the one the host typed the last field in (`typedIn`), as a
+ * form that submits itself on its last input does: the host's click or key press never ran, so
+ * nothing went out twice, and
  * the sign-in's next check decides what the page sent. A field gone from that same document is
  * `left`: a form that takes its fields away or puts a new path in the address with pushState
  * loaded no new document, so it stays a refusal unless one loads within the host's wait.
@@ -358,7 +360,7 @@ const screenGone = (
 ): "sent" | "left" | undefined => {
   if (step.fields.length === 0) return undefined;
   const fieldGone = answer.error === "not_found" && typeof answer.target === "number";
-  if (step.submit === undefined)
+  if (!hostSubmits(step))
     return fieldGone || answer.error === "popup_missing" ? "sent" : undefined;
   if (!fieldGone) return undefined;
   return typedIn !== undefined && answer.document !== undefined && answer.document !== typedIn
@@ -504,7 +506,7 @@ const submitWhenEnabled = (input: FillInput, progress: FillProgress, call: Autof
   Effect.gen(function* () {
     const started = Date.now();
     const sendMs = input.step.fields.length > 0 ? Math.min(input.settleMs ?? 5_000, pageSendMs) : 0;
-    const readsOnly = input.step.submit === undefined && sendMs > 0;
+    const readsOnly = !hostSubmits(input.step) && sendMs > 0;
     let unsentSince: number | undefined;
     let lost: Either.Either<CallAnswer, Error> | undefined;
     let lastLost = false;
@@ -706,7 +708,7 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
       }),
     );
     if (clicked._tag === "Left")
-      return failedCall(progress, clicked.left, { mayMutate: step.submit !== undefined });
+      return failedCall(progress, clicked.left, { mayMutate: hostSubmits(step) });
     const answer = clicked.right;
     if ("pageSent" in answer) return filledReport(step, progress, "page", answer.url);
     if ("refusal" in answer || "checked" in answer)
