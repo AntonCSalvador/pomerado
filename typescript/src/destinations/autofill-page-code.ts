@@ -32,6 +32,7 @@ return {
   submit: submit === null ? null : { target: submit.target, described: submit.described },
   located,
   buttons,
+  ...(submitKey === null || submit === null ? {} : { keySubmit: { submitControls: submit.submitControls } }),
   ...(popupTargetId === undefined ? {} : { popupTargetId }),
   url: primary.url(),
 };`;
@@ -48,7 +49,9 @@ return {
  *   it guards the submission as it fires (`submissionGuardCode`, under the host's
  *   `guardKey` and armed for `guardCall`, with every form action and link destination as the
  *   step's inspection found them, which the page kept under `inspection`, the submission's method
- *   as judged, and how each field's secret is found by value, if it is one), clicks the submit,
+ *   as judged, and how each field's secret is found by value, if it is one), clicks the submit
+ *   (or, for a step with a submit key, presses that key in its last field, which stands as the
+ *   submit),
  *   waits for the page to settle and reads its controls (`pageControlsCode`). A disabled submit it
  *   never clicks: it says so and does nothing, and the host calls again while the page may still
  *   enable it.
@@ -83,6 +86,8 @@ export type AutofillFillCall =
       readonly submitGet: boolean;
       /** Whether each field's own form was judged to submit by GET. */
       readonly fieldGet: readonly boolean[];
+      /** Only look: a call that finds the step's fields clicks nothing and answers `none`. */
+      readonly look?: true;
     };
 
 /**
@@ -233,7 +238,7 @@ try {
     }, { key: ${JSON.stringify(call.bindingKey)}, text: question.text }, { timeout: ${elementReadMs} }, true);
   }
   return activeTag === null
-    ? { focused: true, located: fieldLocated, url: primary.url() }
+    ? { focused: true, located: fieldLocated, url: primary.url(), document: await documentStart() }
     : { focused: false, unfocused: { activeTag }, located: fieldLocated, url: primary.url() };
 } catch (error) {
   const focusError = error instanceof Error && /^[A-Za-z]{1,64}$/.test(error.name) ? error.name : "unknown";
@@ -247,11 +252,11 @@ try {
     return `try {
   // A date goes into whatever date control the page has, in the format the field takes.
   await fillDate(fields[${call.index}].locator, ${JSON.stringify(call.iso)}, ${JSON.stringify(call.format)}, { timeout: 5000 });
-  return { dated: true, url: primary.url() };
+  return { dated: true, url: primary.url(), document: await documentStart() };
 } catch {
   return { dated: false, url: primary.url() };
 }`;
-  return `if (submit === null) return { submit: "none", url: primary.url() };
+  return `${call.look === true ? "return { submit: \"none\", url: primary.url() };\n" : ""}if (submit === null) return { submit: "none", url: primary.url() };
 // Disabled as Playwright's own click judges it, read where page code cannot redefine the answer.
 if (await submit.locator.isDisabled({ timeout: 5000 })) return { submit: "disabled", url: primary.url() };
 const guardKey = ${JSON.stringify(call.guardKey)};
@@ -298,7 +303,9 @@ const navigated = primary
   .waitForEvent("framenavigated", { predicate: (frame) => frame === primary.mainFrame(), timeout: ${call.settleMs} })
   .then(() => true, () => false);
 try {
-  await submit.locator.click({ timeout: 5000 });
+  // A submit key goes to the last field, which stands as the submit and submits its own form.
+  if (submitKey === null) await submit.locator.click({ timeout: 5000 });
+  else await submit.locator.press(submitKey, { timeout: 5000 });
 } catch {
   return { submit: "failed", url: primary.url() };
 }
@@ -312,6 +319,63 @@ ${pageControlsCode}
 const controls = await pageControls().catch(() => null);
 return { submit: "clicked", url: primary.url(), ...(controls === null ? {} : { controls }) };`;
 };
+
+/**
+ * Page code: `keySubmit` stands a step's last field in as its submit when the step submits with a
+ * key: the field's own place and destinations (its form's action and method, every form action and
+ * method its controls could submit with), described for Guardian as that form, by its own name,
+ * id and label and its method, never a value; and how many submit controls the form shows. A
+ * field in no form submits nothing (`submitMethod` null), which the host refuses.
+ */
+const keySubmitCode = `const keySubmit = async (field) => {
+  const form = await field.locator.evaluate((element) => {
+    const associated =
+      "form" in element && element.form instanceof HTMLFormElement ? element.form : element.closest("form");
+    if (associated === null) return null;
+    const controls = Array.from(
+      Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, "elements").get.call(associated),
+    );
+    const submitter = (control) =>
+      (control instanceof HTMLButtonElement && control.type === "submit") ||
+      (control instanceof HTMLInputElement && ["submit", "image"].includes(control.type));
+    const shows = (control) => {
+      const box = control.getBoundingClientRect();
+      return box.width > 0 && box.height > 0 && control.checkVisibility({ visibilityProperty: true, opacityProperty: true });
+    };
+    return {
+      name: associated.getAttribute("name"),
+      id: associated.getAttribute("id"),
+      ariaLabel: associated.getAttribute("aria-label"),
+      submitControls: controls.filter((control) => submitter(control) && shows(control)).length,
+    };
+  }, undefined, { timeout: ${elementReadMs} });
+  return {
+    ...field,
+    submitControls: form?.submitControls ?? 0,
+    described: {
+      tag: "form",
+      role: null,
+      formMethod: field.target.submitMethod,
+      type: null,
+      name: clip(form?.name ?? null),
+      id: clip(form?.id ?? null),
+      autocomplete: null,
+      inputmode: null,
+      label: null,
+      placeholder: null,
+      ariaLabel: clip(form?.ariaLabel ?? null),
+      text: null,
+    },
+  };
+};`;
+
+/**
+ * Page code for a fill call: when the primary page's document began loading, which tells one
+ * document from the next. A new document changes it; a pushState, a redraw or a reload of a frame
+ * never does. Undefined when the page cannot say, as while it loads.
+ */
+const documentStartCode = `const documentStart = () =>
+  primary.mainFrame().evaluate(() => performance.timeOrigin).catch(() => undefined);`;
 
 /** Resolves only a real child of the stable primary opener, on the recorded origin. */
 export const autofillPageCode = (targetId: string, popup: AutofillPopup | undefined) =>
@@ -346,6 +410,7 @@ export const autofillStepCode = (
       readonly questionSelector?: string | undefined;
     }[];
     readonly submit?: string | undefined;
+    readonly submitKey?: string | undefined;
     readonly popup?: AutofillPopup | undefined;
   },
   observed: string,
@@ -369,17 +434,26 @@ ${fill === undefined ? "" : `if (popupTargetId !== ${JSON.stringify(fill.popupTa
 }
 ${formControlsCode}
 ${locateCode}
+${fill === undefined ? "" : documentStartCode}
 const observed = ${JSON.stringify(observed)};
 const selectors = ${JSON.stringify(step.fields.map((field) => field.selector))};
 const questionSelectors = ${JSON.stringify(step.fields.map((field) => field.slot === "private_answer" ? field.questionSelector ?? null : null))};
 const fields = [];
 for (let index = 0; index < selectors.length; index++) {
   const found = await locate(selectors[index], questionSelectors[index]);
-  if ("error" in found) return { ...found, target: index, url: primary.url() };
+  if ("error" in found)
+    return { ...found, target: index, url: primary.url()${fill?.call.kind === "submit" ? ", document: await documentStart()" : ""} };
   fields.push(found);
 }
 const submitSelector = ${JSON.stringify(step.submit ?? null)};
-const submit = submitSelector === null ? null : await locate(submitSelector);
+const submitKey = ${JSON.stringify(step.submitKey ?? null)};
+${keySubmitCode}
+const submit =
+  submitKey !== null && fields.length > 0
+    ? await keySubmit(fields[fields.length - 1])
+    : submitSelector === null
+      ? null
+      : await locate(submitSelector);
 if (submit !== null && "error" in submit) return { ...submit, target: "submit", url: primary.url() };
 // An inert submit takes no interaction at all, so nothing is typed for it. A disabled one may be
 // enabled once the fields hold input; the submit call never clicks it while it is disabled.

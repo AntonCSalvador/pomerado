@@ -36,6 +36,7 @@ import type {
   DateOfBirthFormat,
   SignInMethodChoice,
   RejectedMarker,
+  SubmitKey,
 } from "./autofill-contracts.js";
 
 /** A kind of sign-in identifier: what an identifier field may accept. */
@@ -102,6 +103,8 @@ export interface AutofillStepRequest {
       }
   )[];
   readonly submit?: string | undefined;
+  /** Enter, pressed in the last field to submit its form, on a form with no submit control. */
+  readonly submitKey?: SubmitKey | undefined;
   /** A two-factor method choice: every method offered, and `submit` the one picked. */
   readonly methods?:
     readonly { readonly method: SignInMethodChoice; readonly selector: string }[] | undefined;
@@ -109,17 +112,27 @@ export interface AutofillStepRequest {
 
 /**
  * One sign-in screen: the fields the host fills and the control it clicks. A screen that advances
- * by itself names no submit; a method choice or a "Next" names only one.
+ * by itself names no submit; a method choice or a "Next" names only one. A screen whose form has
+ * no submit control and submits on Enter names `submitKey` instead of a submit: the host presses
+ * Enter in its last field, which submits that field's form, judged as a clicked submit's would be.
  */
 export interface AutofillStep<Slot extends FillSlot = AutofillSlot> {
   readonly popup?: AutofillPopup | undefined;
   readonly rejectedMarkers?: readonly RejectedMarker[] | undefined;
   readonly fields: readonly AutofillField<Slot>[];
   readonly submit?: string | undefined;
+  /** Enter, pressed in the last field to submit its form; never with `submit`. */
+  readonly submitKey?: SubmitKey | undefined;
   /** A two-factor method choice: every method offered, and `submit` the one picked. */
   readonly methods?:
     readonly { readonly method: SignInMethodChoice; readonly selector: string }[] | undefined;
 }
+
+/** Whether the host submits the step itself: it clicks its submit or presses its submit key. */
+export const hostSubmits = (step: {
+  readonly submit?: string | undefined;
+  readonly submitKey?: SubmitKey | undefined;
+}) => step.submit !== undefined || step.submitKey !== undefined;
 
 /** What the minter says shows the site signed in, which the host checks on the live page. */
 export interface AutofillSignedIn {
@@ -196,6 +209,8 @@ export const LocatedError = Schema.Struct({
   question: Schema.optional(Schema.Literal("changed")),
   /** The primary page then, which a fill call reports once it typed. */
   url: Schema.optional(Schema.String),
+  /** A fill call's: when the primary page's document began loading (`performance.timeOrigin`). */
+  document: Schema.optional(Schema.Number),
   searched: Schema.optional(Searched),
   /** An inert submit: where it was found. */
   located: Schema.optional(FoundIn),
@@ -207,6 +222,8 @@ const Located = Schema.Union(
     submit: Schema.NullOr(Schema.Struct({ target: Target, described: Described })),
     located: Schema.optional(FoundAt),
     buttons: Schema.Array(Schema.String),
+    /** A step's submit key: how many submit controls its last field's form shows. */
+    keySubmit: Schema.optional(Schema.Struct({ submitControls: Schema.Number })),
     popupTargetId: Schema.optional(Schema.String),
     url: Schema.String,
   }),
@@ -286,7 +303,18 @@ export interface AutofillInspection {
       readonly accepts?: readonly IdentifierKind[] | undefined;
       readonly format?: DateOfBirthFormat | undefined;
     })[];
+    /**
+     * The submit control as found; for a step with a submit key, its last field's form (tag
+     * `form`), which the key submits, with that form's method.
+     */
     readonly submit: typeof Described.Type | null;
+    /**
+     * A step's submit key: the key, the field it is pressed in (the last), and how many visible
+     * submit controls that field's form has, which Guardian reads to judge the key as the submit.
+     */
+    readonly submitKey?:
+      | { readonly key: SubmitKey; readonly field: number; readonly submitControls: number }
+      | undefined;
     /** Visible native and ARIA actions, links included, for a step that names no submit. */
     readonly buttons: readonly string[];
   };
@@ -311,6 +339,7 @@ export type AutofillStepReport =
         readonly status: AutofillFieldStatus;
       }[];
       /**
+       * `clicked`: the host clicked the submit, or pressed the step's submit key in its last field.
        * `refused`: after the fill the host refused a control where it then sat or submitted.
        * `stayed_disabled`: the submit stayed disabled after the fields were filled, through the
        * host's wait for the page to enable it, so the host never clicked it.
@@ -610,6 +639,12 @@ export const inspectAutofillStep = (input: {
         untrusted,
         foundEvidence(found.url, foundFor(found.located, untrusted.target), named),
       );
+    // A submit key submits its last field's form, so a field in no form has nothing it submits.
+    if (step.submitKey !== undefined && (targets.submit?.submitMethod ?? null) === null)
+      return withCheck(refused("credential_target_refused", "submit"), "submit_key", {
+        part: "no_form",
+        ...foundEvidence(found.url, foundFor(found.located, "submit"), named),
+      });
     const at = URL.parse(found.url);
     const frame = (found.submit ?? found.fields[0])?.target.ownerUrl;
     return {
@@ -638,6 +673,15 @@ export const inspectAutofillStep = (input: {
           };
         }),
         submit: found.submit === null ? null : found.submit.described,
+        ...(step.submitKey === undefined || found.keySubmit === undefined
+          ? {}
+          : {
+              submitKey: {
+                key: step.submitKey,
+                field: step.fields.length - 1,
+                submitControls: found.keySubmit.submitControls,
+              },
+            }),
         buttons: found.buttons,
       },
     };

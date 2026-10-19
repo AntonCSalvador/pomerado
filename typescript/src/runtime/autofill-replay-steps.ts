@@ -3,10 +3,11 @@ import { Effect } from "effect";
 import type { YieldableError } from "effect/Cause";
 import type { SignInRecipe } from "../destinations/sign-in-recipe.js";
 import type { CheckedWorkspace, ReplayWorkspace } from "./autofill-replay-workspace.js";
-import type {
-  AutofillRecipeStep,
-  RejectedMarker,
-  SignInMethodChoice,
+import {
+  type AutofillRecipeStep,
+  isSecondFactor,
+  type RejectedMarker,
+  type SignInMethodChoice,
 } from "../destinations/autofill-recipe.js";
 import type {
   AutofillSlot,
@@ -403,9 +404,28 @@ export const shownAgain = <E>(
   });
 
 /**
+ * Whether a recorded screen's planned refill of `slot` holds now: the screen lists it
+ * (`planned`, its recipe step's `refills`), it went out once at most so far, and the screen also
+ * asks for a second factor this replay has not sent, as a site that wants the password entered
+ * again with a one-time code does. A screen asking for it again any other way is a rejection.
+ */
+const plannedRefill = (
+  step: AutofillStep,
+  slot: AutofillSecret,
+  planned: readonly AutofillSecret[],
+  maySent: ReadonlySet<AutofillSecret>,
+  refilled: ReadonlySet<AutofillSecret>,
+) =>
+  planned.includes(slot) &&
+  !refilled.has(slot) &&
+  step.fields.some(
+    (field) => isSecondFactor(field.slot) && isSecret(field.slot) && !maySent.has(field.slot),
+  );
+
+/**
  * Whether a step would fill a secret that may have gone out already beyond what a retry of a
- * refused code allows: a password or code once more each, so either goes out at most twice; a date
- * of birth, ZIP or recovery code never again.
+ * refused code, or the recorded screen's planned refill, allows: a password or code once more
+ * each, so either goes out at most twice; a date of birth, ZIP or recovery code never again.
  */
 export const refillRefused = (
   step: AutofillStep,
@@ -413,6 +433,7 @@ export const refillRefused = (
   refilled: ReadonlySet<AutofillSecret>,
   codeAgain: "rejected" | undefined,
   corrected: ReadonlySet<AutofillSlot>,
+  planned: readonly AutofillSecret[] = [],
 ) =>
   step.fields.some(
     (field) =>
@@ -422,7 +443,8 @@ export const refillRefused = (
       !(
         codeAgain === "rejected" &&
         (field.slot === "code" || (provesLogin(field.slot) && !refilled.has(field.slot)))
-      ),
+      ) &&
+      !plannedRefill(step, field.slot, planned, maySent, refilled),
   );
 
 /** Records each secret a step may have sent, and those it sent a second time. */

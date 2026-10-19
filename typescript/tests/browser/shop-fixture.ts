@@ -91,6 +91,11 @@ interface ShopState extends StoreState {
    */
   loginCode: boolean;
   /**
+   * Whether the code screen's form has no button, so it submits only when Enter is pressed in its
+   * one field, as the browser submits a form of one text field.
+   */
+  codeSubmitsOnEnter: boolean;
+  /**
    * What the one-screen sign-in shows a signed-in session: `form` its form, as any session sees
    * it, `account` a redirect to the account page, as many sites answer a signed-in visit (to the
    * workspace picker while `workspaceChooser` is on).
@@ -302,16 +307,17 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
   };
   // The code screen: a GET shows its form, and the form's post with the code signs in. A wrong
   // code shows the form again under the error.
-  const codeForm = `<form method="post" action="/two-factor"><label>Code<input name="code" autocomplete="one-time-code"></label><button>Verify</button></form>`;
+  const codeForm = () =>
+    `<form method="post" action="/two-factor"><label>Code<input name="code" autocomplete="one-time-code"></label>${state.codeSubmitsOnEnter ? "" : "<button>Verify</button>"}</form>`;
   const twoFactor: Route = async (request, response) => {
     if (request.method !== "POST") {
       state.codePageLoads += 1;
-      return html(response, `<title>Code</title>${codeForm}`);
+      return html(response, `<title>Code</title>${codeForm()}`);
     }
     state.codePosts += 1;
     const code = new URLSearchParams(await readBody(request)).get("code");
     if (code !== shopCode || cookieOf(request, "shop_pending") !== pending)
-      return html(response, `<title>Code</title><p id='wrong-code'>Wrong code</p>${codeForm}`);
+      return html(response, `<title>Code</title><p id='wrong-code'>Wrong code</p>${codeForm()}`);
     response.writeHead(303, {
       location: state.workspaceChooser ? "/choose-workspace" : "/account",
       "set-cookie": [`shop_session=${signedIn}; Path=/; Secure; HttpOnly; SameSite=Lax`],
@@ -636,6 +642,7 @@ export const startShop = async (directory: string): Promise<Shop> => {
     homeRenderMs: 300,
     accountRenderMs: 0,
     loginCode: false,
+    codeSubmitsOnEnter: false,
     signedInLogin: "form",
     workspaceChooser: false,
     signedOutShowsForm: true,

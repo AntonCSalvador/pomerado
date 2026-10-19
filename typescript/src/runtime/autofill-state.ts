@@ -139,6 +139,8 @@ interface AutofillRecordedStep {
    */
   readonly fields: readonly (AutofillField & { readonly identity?: ControlIdentity })[];
   readonly submit?: string;
+  /** The key pressed in the last field to submit its form, on a form with no submit control. */
+  readonly submitKey?: AutofillRecipeStep["submitKey"];
   readonly submittedBy?: "host" | "minter";
   /** A two-factor method choice's recorded methods. */
   readonly methods?: AutofillRecipeStep["methods"];
@@ -340,6 +342,7 @@ const armScreened = (
       ),
     ),
     ...(step.submit === undefined ? {} : { submit: step.submit }),
+    ...(step.submitKey === undefined ? {} : { submitKey: step.submitKey }),
     ...(step.methods === undefined ? {} : { methods: step.methods }),
     page: inspection.page,
   });

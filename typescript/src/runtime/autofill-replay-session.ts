@@ -404,7 +404,9 @@ export const makeReplay = <E extends YieldableError, V extends string, L extends
     codeAgain?: "rejected",
     explicitCodeRejection = false,
     corrected: ReadonlySet<AutofillSlot> = new Set(),
-  ) => runReplayStep(session, asked, inspection, codeAgain, explicitCodeRejection, corrected);
+    planned: readonly AutofillSecret[] = [],
+  ) =>
+    runReplayStep(session, asked, inspection, codeAgain, explicitCodeRejection, corrected, planned);
   const extras = (observed: readonly RejectedMarker["slot"][]) =>
     correctReplayExtras(session, run, observed);
   return {

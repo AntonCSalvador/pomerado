@@ -36,6 +36,7 @@ import {
   RejectedMarker,
   SecretSlots,
   SignInMethodChoice,
+  SubmitKey,
 } from "../destinations/autofill-contracts.js";
 import type { SandboxSession, SkillDescriptor } from "@openai/agents/sandbox";
 import type { AgentInputItem } from "@openai/agents";
@@ -484,8 +485,9 @@ export type SignedInMarkerCheckRequest = typeof SignedInMarkerCheckRequest.Type;
  * One sign-in screen for host autofill (autofill enabled): the
  * fields the host fills from the held login, each with the kind of value it takes, and the control
  * that submits them, which the host clicks. A screen without a button (a password field that
- * appears once the identifier is filled) names no submit; a method choice names only a submit.
- * `signedIn` names what shows the site signed in, which the host checks on the page itself.
+ * appears once the identifier is filled) names no submit; a method choice names only a submit. A
+ * screen whose form has no submit control and submits on Enter names `submitKey` instead, and the
+ * host presses Enter in its last field. `signedIn` names what shows the site signed in, which the host checks on the page itself.
  */
 export const SignInStep = Schema.Union(
   Schema.Struct({
@@ -521,6 +523,11 @@ export const SignInStep = Schema.Union(
     ).pipe(Schema.maxItems(maximumStepFields)),
     submit: Schema.optional(SignInSelector),
     /**
+     * Enter, pressed in the last field to submit that field's form, on a screen whose form has no
+     * submit control and submits on Enter. Never with `submit`.
+     */
+    submitKey: Schema.optional(SubmitKey),
+    /**
      * A two-factor method choice: every method the screen offers, each with the control that
      * picks it, and `submit` the one to pick now. Runs pick again from these.
      */
@@ -534,6 +541,15 @@ export const SignInStep = Schema.Union(
     Schema.filter((step) => step.fields.length > 0 || step.submit !== undefined, {
       message: () => "a sign-in step fills a field or clicks a control",
     }),
+    Schema.filter(
+      (step) =>
+        step.submitKey === undefined ||
+        (step.submit === undefined && step.methods === undefined && step.fields.length > 0),
+      {
+        message: () =>
+          "a submitKey step fills a field and names no submit: the key submits its last field's form",
+      },
+    ),
     Schema.filter(
       (step) =>
         step.methods === undefined ||

@@ -10,6 +10,7 @@ import type {
 import { maySend } from "../destinations/autofill-refusal.js";
 import {
   armStep,
+  type AutofillSecret,
   isSecret,
   recordStep,
   registeredSecretIn,
@@ -63,6 +64,7 @@ const retryRefusal = <E extends YieldableError, V extends string, L extends Auto
   codeAgain: "rejected" | undefined,
   explicitCodeRejection: boolean,
   corrected: ReadonlySet<AutofillSlot>,
+  planned: readonly AutofillSecret[],
 ) => {
   const { retryState, sent, progress } = session;
   if (
@@ -71,14 +73,17 @@ const retryRefusal = <E extends YieldableError, V extends string, L extends Auto
     retryState.codeAttempts.current >= 2
   )
     return "code_rejected" as const;
-  if (refillRefused(asked, sent.maySent, progress.refilled, codeAgain, corrected))
+  if (refillRefused(asked, sent.maySent, progress.refilled, codeAgain, corrected, planned))
     return codeAgain === "rejected" && explicitCodeRejection
       ? "code_rejected"
       : "credential_already_filled";
   return undefined;
 };
 
-/** One observed screen: admitted by the host, filled and submitted. Why it did not complete, or undefined. */
+/**
+ * One observed screen: admitted by the host, filled and submitted. Why it did not complete, or
+ * undefined. `planned` is the recorded screen's `refills`.
+ */
 export const runReplayStep = <E extends YieldableError, V extends string, L extends AutofillLogin>(
   session: ReplaySession<E, V, L>,
   asked: AutofillStep,
@@ -86,6 +91,7 @@ export const runReplayStep = <E extends YieldableError, V extends string, L exte
   codeAgain?: "rejected",
   explicitCodeRejection = false,
   corrected: ReadonlySet<AutofillSlot> = new Set(),
+  planned: readonly AutofillSecret[] = [],
 ) =>
   Effect.gen(function* () {
     const {
@@ -102,7 +108,14 @@ export const runReplayStep = <E extends YieldableError, V extends string, L exte
     codeAgain ??= retryState.rejectedValues.code?.size ? "rejected" : undefined;
     // The replay went on: a screen before that no click sent sent itself, before the bound counts.
     settleCarried(session);
-    const refused = retryRefusal(session, asked, codeAgain, explicitCodeRejection, corrected);
+    const refused = retryRefusal(
+      session,
+      asked,
+      codeAgain,
+      explicitCodeRejection,
+      corrected,
+      planned,
+    );
     if (refused !== undefined) return refused;
     const resolved = yield* valuesFor(
       input,
@@ -231,6 +244,7 @@ export const correctReplayExtras = <
       fields,
       ...(previous.popup === undefined ? {} : { popup: previous.popup }),
       ...(previous.submit === undefined ? {} : { submit: previous.submit }),
+      ...(previous.submitKey === undefined ? {} : { submitKey: previous.submitKey }),
     };
     const inspected = yield* hooks.inspect(retryStep);
     if ("outcome" in inspected) return "extra_rejected" as const;

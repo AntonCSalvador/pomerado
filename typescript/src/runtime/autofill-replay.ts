@@ -67,6 +67,7 @@ const screenFor = <E extends YieldableError, V extends string, L extends Autofil
       fields: recorded.fields,
       ...(recorded.popup === undefined ? {} : { popup: recorded.popup }),
       ...(recorded.submit === undefined ? {} : { submit: recorded.submit }),
+      ...(recorded.submitKey === undefined ? {} : { submitKey: recorded.submitKey }),
     });
     if (recorded.methods === undefined) return step;
     // The choice screen shows before a method is picked; its first option finds it.
@@ -194,7 +195,14 @@ const runScreen = <E extends YieldableError, V extends string, L extends Autofil
       return "continue" as const;
     }
     for (;;) {
-      const failed = yield* replay.runStep(step, inspection);
+      const failed = yield* replay.runStep(
+        step,
+        inspection,
+        undefined,
+        false,
+        undefined,
+        recorded.refills,
+      );
       if (failed === undefined) break;
       // A fieldless step whose submit the page kept disabled through the host's wait typed and
       // clicked nothing, so it waits for its screen again within the screen's own wait, as it
@@ -321,6 +329,7 @@ const retryCode = <E extends YieldableError, V extends string, L extends Autofil
       fields,
       ...(shown.popup === undefined ? {} : { popup: shown.popup }),
       ...(shown.submit === undefined ? {} : { submit: shown.submit }),
+      ...(shown.submitKey === undefined ? {} : { submitKey: shown.submitKey }),
     };
     const inspected = yield* input.hooks.inspect(retryStep);
     if ("outcome" in inspected) return "none" as const;

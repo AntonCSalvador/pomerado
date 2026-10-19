@@ -10,7 +10,12 @@ import {
   inspectAutofillStep,
 } from "./autofill-step.js";
 import type { CredentialKeyboard, CredentialTypingMode } from "./credential-keyboard.js";
-import { type CardSlot, paymentFrameOrigins as listedOrigins } from "./payment-frames.js";
+import {
+  type CardSlot,
+  isCardSlot,
+  paymentFrameOrigins as listedOrigins,
+} from "./payment-frames.js";
+import type { InputRequest, ValidAnswers } from "../runtime/input-request.js";
 import type { ScriptCardFillAnswer } from "../runtime/script-card-fill.js";
 
 /**
@@ -262,6 +267,29 @@ export const makeRunCardHandles = () => {
   } satisfies CardFillHandles & { readonly issue: (value: string, kind: CardSlot) => string };
 };
 export type RunCardHandles = ReturnType<typeof makeRunCardHandles>;
+
+/**
+ * A script's answers as the script receives them: each card answer replaced by a handle the run's
+ * `fillCard` names, so a card never enters the script.
+ */
+export const scriptAnswers = (
+  asked: InputRequest,
+  answers: ValidAnswers,
+  handles: RunCardHandles,
+): Readonly<Record<string, unknown>> =>
+  Object.fromEntries(
+    Object.entries(answers).map(([id, answer]) => {
+      const question = asked.questions.find((candidate) => candidate.id === id);
+      return [
+        id,
+        question?.type === "secret" &&
+        isCardSlot(question.secretKind) &&
+        typeof answer.value === "string"
+          ? handles.issue(answer.value, question.secretKind)
+          : answer.value,
+      ];
+    }),
+  );
 
 /** A result's own words: a refusal's message, else the result as the minter reads it. */
 const messageOf = (observations: string) => {
