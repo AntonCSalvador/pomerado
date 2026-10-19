@@ -4,6 +4,7 @@ import type { AutofillPopup, DateOfBirthFormat } from "./autofill-contracts.js";
 import { elementReadMs, locateCode, questionTextCode } from "./autofill-locate-code.js";
 import { clipCode, controlNamingCode } from "./control-naming-code.js";
 import { pageCode, primaryPageCode } from "../runtime/host-execute.js";
+import { hostOnSiteSource } from "../runtime/same-site.js";
 import { submissionGuardCode } from "./autofill-submission-guard.js";
 import { pageControlsCode } from "./page-controls.js";
 
@@ -526,7 +527,7 @@ const challengeOrigin = (frame) => {
   } catch {
     return false;
   }
-  return url.hostname === siteHost || url.hostname.endsWith("." + siteHost) || authenticationOrigins.includes(url.origin);
+  return onSiteHost(url.hostname) || authenticationOrigins.includes(url.origin);
 };
 // The frame and every frame above it show, as a question's frames are read.
 const frameShows = async (frame) => {
@@ -565,9 +566,10 @@ const recordedChallengeVisible = async (fields) => {
 
 /**
  * One host call: the page URL, whether the indicator is visible in a frame on the site (its host
- * `siteHost` or a subdomain of it), and whether a password field of the sign-in's own shows in any
- * frame: one of its fields (`signInFields`, by selector), or one in the form of a visible one.
- * Another form's password field, such as a change-password form or an inner service's login,
+ * `siteHost` or a subdomain of it on the same site, as `hostOnSiteSource` reads it), and whether a
+ * password field of the sign-in's own shows in any frame: one of its fields (`signInFields`, by
+ * selector), or one in the form of a visible one. Another form's password field, such as a
+ * change-password form or an inner service's login,
  * does not count unless one of those selectors matches in it. A hidden match, such as the username
  * a change-password form keeps for password managers, is no sign-in form showing. With no
  * `signInFields`, any visible password field counts. A recorded challenge field
@@ -596,7 +598,7 @@ for (const candidate of context.pages()) {
   try { origin = new URL(candidate.url()).origin; } catch { continue; }
   if (popupOrigins.includes(origin)) return { url: primary.url(), indicator: false, passwordVisible: false, challengeFormVisible: false };
 }
-const siteHost = ${JSON.stringify(siteHost)};
+const onSiteHost = ${hostOnSiteSource(siteHost)};
 const onSite = (frame) => {
   let host = "";
   try {
@@ -604,7 +606,7 @@ const onSite = (frame) => {
   } catch {
     return false;
   }
-  return host === siteHost || host.endsWith("." + siteHost);
+  return onSiteHost(host);
 };
 const authenticationOrigins = ${JSON.stringify(authenticationOrigins)};
 const visibleIn = async (selector, scopes) => {
