@@ -1076,7 +1076,9 @@ export const BuildBlocked = Schema.Struct({
  * asked for, cannot run without it. That one ends the attempt as the host's failure, never as a
  * block: nothing about the task is impossible, so the caller never reads it as one. Once sign-in
  * is unavailable in the build, any report, `policy` included, ends the build with the sign-in's
- * own result instead of the reason it names.
+ * own result instead of the reason it names. So does any report but `owner_declined` or
+ * `question_unanswered` while the build's latest sign-in never confirmed and no failed one is
+ * pending: the site never got as far as judging the task.
  */
 export const BlockedReport = Schema.Struct({
   reason: Schema.Literal(
@@ -2320,6 +2322,14 @@ export interface MintDependencies {
    * live tests and publication go on signed out. Absent, the minter is offered no such tool.
    */
   readonly abandonSignIn?: () => Effect.Effect<AbandonSignInResult, MintFailure>;
+  /**
+   * The host's own reading of the build's latest sign-in when nothing confirmed it:
+   * `session_not_kept` when the site accepted the login but the signed-in session did not survive
+   * the page load after it. A blocked report while that sign-in is unconfirmed, other than the
+   * owner's `owner_declined` or `question_unanswered`, ends the build as sign-in unavailable,
+   * worded by this answer. Absent, or undefined, the ending says the site could not be signed in.
+   */
+  readonly signInSessionLoss?: () => SessionLoss | undefined;
   /** The host's own descriptions of its optional tools, in place of the generic ones. */
   readonly hostToolDescriptions?: HostToolDescriptions;
   readonly projection: MintProjection;

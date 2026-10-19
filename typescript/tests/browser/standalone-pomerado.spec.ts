@@ -2722,6 +2722,39 @@ test("a label padded so a typed identifier crosses the text limit leaves the fie
     expect(piecesIn(text, longIdentifier)).toEqual([]);
 });
 
+const SavedAlerts = Schema.parseJson(
+  Schema.Struct({ alerts: Schema.optional(Schema.Array(Schema.String)) }),
+);
+
+// A screen's error can be gone by the time the agent looks, so the host keeps its visible alert
+// lines with the controls it saves after the submit, screened like control names: the typed
+// identifier the error names never reaches the file, and a hidden error is not kept. An error the
+// page marks only by its class and id counts too.
+for (const { alert, shown } of [
+  { alert: "1", shown: "an alert" },
+  { alert: "class", shown: "an error class" },
+])
+  test(`a submit's visible error text is saved with the next screen's controls, without the typed identifier: ${shown}`, async () => {
+    test.info().annotations.push({
+      type: "slow",
+      description: "Original SDKs, Chromium and a host autofill step through a real form navigation",
+    });
+    test.setTimeout(45_000);
+    const email = shopAccount.username;
+    const { saved, mintRequests } = await twoScreenSignIn({
+      identifier: email,
+      loginPath: `/sign-in?alert=${alert}`,
+      failNext: false,
+    });
+    expect(saved).toBeDefined();
+    const alerts = Schema.decodeUnknownSync(SavedAlerts)(saved).alerts ?? [];
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toContain("Check the password for");
+    expect(saved).not.toContain(email);
+    expect(saved).not.toContain("Hidden error");
+    expect(JSON.stringify(mintRequests)).not.toContain(email);
+  });
+
 test("a next screen whose first hundred controls are hidden still saves its visible sign-in field", async () => {
   test.info().annotations.push({
     type: "slow",

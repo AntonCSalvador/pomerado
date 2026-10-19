@@ -1055,6 +1055,32 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           }
         | undefined;
       /**
+       * The build's latest sign-in is unconfirmed: a sign-in step that may have sent the login, or
+       * a check that found the site not signed in, with no later check that confirmed it. A step
+       * that sent nothing leaves it as it was.
+       */
+      let signInUnconfirmed = false;
+      /** Updates `signInUnconfirmed` once an authenticate ends, by what it did. */
+      const noteSignIn = (
+        exit: Exit.Exit<ExecutionEvidence, MintFailure>,
+        crossedDispatch: boolean,
+      ) => {
+        if (Exit.isSuccess(exit)) {
+          const { authentication, effect } = exit.value;
+          if (authentication?.state === "authenticated") signInUnconfirmed = false;
+          else if (authentication?.state === "failed" || effect !== "not_sent")
+            signInUnconfirmed = true;
+          return;
+        }
+        // One that failed past its dispatch fence may have sent the login; a login the owner
+        // declined sent nothing.
+        if (
+          crossedDispatch &&
+          !(Cause.isFailType(exit.cause) && exit.cause.error.loginDeclined !== undefined)
+        )
+          signInUnconfirmed = true;
+      };
+      /**
        * The host's identical refusals in a row while typing into a sign-in screen: the latest
        * and how many. An authenticate that ends any other way clears it.
        */
@@ -4247,6 +4273,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               ).pipe(
                 Effect.onExit((result) =>
                   Effect.suspend(() => {
+                    if (submitted.purpose === "authenticate")
+                      noteSignIn(result, crossedDispatchBoundary);
                     if (
                       (!effectful && submitted.purpose !== "authenticate") ||
                       Exit.isSuccess(result)
@@ -5426,14 +5454,44 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     // Sign-in is unavailable in this build, and a retained receipt held its
                     // ending back: the minter stops, and the build ends with the sign-in's own
                     // result, which names the cause better than any blocked reason.
+                    const endedForSignIn = JSON.stringify({
+                      status: "sign_in_unavailable",
+                      notice:
+                        "Sign-in is unavailable in this build, so it ends with that result and its cause instead of a blocked reason; nothing more runs in this attempt.",
+                    });
                     if (signInUnavailable !== undefined) {
                       terminal ??= signInUnavailable.outcome;
                       yield* diagnose({ phase: "blocked", reason: "sign_in_unavailable" });
-                      return JSON.stringify({
-                        status: "sign_in_unavailable",
-                        notice:
-                          "Sign-in is unavailable in this build, so it ends with that result and its cause instead of a blocked reason; nothing more runs in this attempt.",
+                      return endedForSignIn;
+                    }
+                    // While the build's latest sign-in never confirmed, the site never got as far
+                    // as judging the task: it cannot have declined it or lacked it, and a policy
+                    // or host check that stopped it stopped a sign-in. With no failed sign-in
+                    // pending, whose own refusal below asks the agent to resolve it, the build
+                    // ends as sign-in unavailable, worded by what the host saw, and its caller is
+                    // never told to change the request. The owner's own no, and a question they
+                    // left unanswered, keep their endings.
+                    if (
+                      report.reason !== "owner_declined" &&
+                      report.reason !== "question_unanswered" &&
+                      signInUnconfirmed &&
+                      unresolvedSignIn === undefined &&
+                      loginDeclined === undefined &&
+                      !signInAbandoned
+                    ) {
+                      const sessionLoss = dependencies.signInSessionLoss?.();
+                      terminal ??= {
+                        build: "incomplete",
+                        recoveryReason: "sign_in_unavailable",
+                        summary: signInUnavailableSummary(undefined, undefined, sessionLoss),
+                      };
+                      yield* diagnose({
+                        phase: "blocked",
+                        reason: "sign_in_unavailable",
+                        reported: report.reason,
+                        ...(sessionLoss === undefined ? {} : { sessionLoss }),
                       });
+                      return endedForSignIn;
                     }
                     const explanation = redactCallerText(
                       yield* screenMintText(dependencies, report.explanation),

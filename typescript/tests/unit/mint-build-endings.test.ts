@@ -765,6 +765,179 @@ it("words a failed sign-in's summary without operator codes", async () => {
   expect(outcome.summary).not.toMatch(/AuthenticationFailed|credential_submit|receipts/u);
 });
 
+/** A sign-in screen the host filled and submitted: it may have sent the login, and proves nothing. */
+const submittedScreen = {
+  executionId: "sign_in_screen",
+  status: "completed" as const,
+  effect: "possible" as const,
+  resultRef: "screen_result",
+  observations: { step: { outcome: "filled", submit: "clicked" } },
+};
+/** The host's own check after the sign-in: signed in, or not. */
+const signInCheck = (state: "authenticated" | "failed") => ({
+  executionId: `sign_in_check_${state}`,
+  status: "completed" as const,
+  effect: "not_sent" as const,
+  resultRef: "check_result",
+  authentication: { state, effect: "verified" as const },
+  observations: { signedIn: state === "authenticated" },
+});
+const declinedExample = {
+  reason: "site_declined",
+  explanation: "The site kept showing its sign-in screen, so it declined this example.",
+};
+
+/**
+ * A build that signs in through `steps`, one authenticate each, then sends `report`. A step that is
+ * a failure fails its authenticate before anything is sent.
+ */
+const signInThenDecline = (
+  steps: readonly (object | MintFailure)[],
+  overrides: Parameters<typeof fixture>[1] = {},
+  report: { readonly reason: string; readonly explanation: string } = declinedExample,
+) => {
+  let executions = 0;
+  return fixture(
+    (_request, index) =>
+      [
+        ...steps.map((_, step) => call("execute", authenticate, `sign_in_${step}`)),
+        call("report_blocked", report),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: (_submitted, beforeDispatch = () => Effect.void) => {
+        const step = steps[executions++];
+        return step instanceof MintFailure
+          ? Effect.fail(step)
+          : beforeDispatch({ reviewId: "review_sign_in", action: "authentication" }).pipe(
+              Effect.as(step as typeof submittedScreen),
+            );
+      },
+      ...overrides,
+    },
+  );
+};
+
+// The site accepted the login, but the page load after it showed the sign-in form again: every
+// step reported filled and clicked, and nothing confirmed the sign-in. That is no site declining
+// the example, so the build ends as sign-in unavailable, in core's session_not_kept words, and
+// its caller is never told to change the request.
+it("ends a site_declined report as sign-in unavailable while the site did not keep the session", async () => {
+  const f = await signInThenDecline([submittedScreen, signInCheck("failed")], {
+    signInSessionLoss: () => "session_not_kept",
+  });
+  const outcome = await f.run();
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    recoveryReason: "sign_in_unavailable",
+    stopReason: "sign_in_failed",
+  });
+  expect(outcome.summary).toContain(
+    "accepted the login each time, but the signed-in session did not survive the page load",
+  );
+  // The report ended the build at once, with no further model call.
+  expect(f.requests).toHaveLength(3);
+});
+
+/** The minter's rejection report the host answered with no rejection marker it saw. */
+const rejectionUnconfirmed = {
+  executionId: "rejected_report",
+  status: "completed" as const,
+  effect: "not_sent" as const,
+  resultRef: "rejected_result",
+  authentication: { state: "failed" as const, effect: "verified" as const },
+  observations: { rejected: false, reason: "no_rejection_marker" },
+};
+
+// A login the site refused, whose message was gone before the host's rejection check: the host
+// reported no rejection marker and an unconfirmed sign-in. site_declined still ends as sign-in
+// unavailable, in the plain words a failed sign-in gets, since the host saw no accepted login.
+it("ends a site_declined report as sign-in unavailable after a sign-in that never confirmed", async () => {
+  const f = await signInThenDecline([submittedScreen, rejectionUnconfirmed]);
+  const outcome = await f.run();
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(outcome).toMatchObject({
+    recoveryReason: "sign_in_unavailable",
+    stopReason: "sign_in_failed",
+  });
+  expect(outcome.summary).toContain("could not be signed in");
+  expect(outcome.summary).not.toContain("did not survive");
+});
+
+// Every ending that tells the caller to change the request, or that the site or a check ruled it
+// out, is no truer than site_declined while the sign-in never confirmed. A Guardian refusal of an
+// earlier sign-in step, as of a field label, made a policy block possible, and a host check that
+// refused a sign-in form a host_refused one; each ended the build that way after a refused login
+// whose message had gone.
+const refusedLabel = new MintFailure({
+  code: "ReviewDenied",
+  review: { outcome: "deny", reviewId: "review_label", rationale: "Wrong field label." },
+});
+const refusedForm = autofillRefusalFailure(
+  { slot: "password", field: 1, check: "destination" },
+  { nothingSubmitted: true },
+);
+it.each([
+  { reason: "site_lacks_capability", first: [] },
+  { reason: "policy", first: [refusedLabel] },
+  { reason: "host_refused", first: [refusedForm] },
+] as const)(
+  "ends a $reason report as sign-in unavailable while the sign-in never confirmed",
+  async ({ reason, first }) => {
+    const f = await signInThenDecline([...first, submittedScreen, rejectionUnconfirmed], {}, {
+      reason,
+      explanation: "The site's sign-in kept refusing, so this build cannot go on.",
+    });
+    const outcome = await f.run();
+    expect(outcome).not.toHaveProperty("blocked");
+    expect(outcome).toMatchObject({
+      recoveryReason: "sign_in_unavailable",
+      stopReason: "sign_in_failed",
+    });
+  },
+);
+
+// A sign-in the host confirmed, or one that sent nothing, leaves site_declined as it was.
+it.each([
+  { name: "a confirmed sign-in", steps: [submittedScreen, signInCheck("authenticated")] },
+  {
+    name: "a screen that sent nothing",
+    steps: [{ ...submittedScreen, effect: "not_sent" as const }],
+  },
+])("keeps site_declined after $name", async ({ steps }) => {
+  const f = await signInThenDecline(steps, { signInSessionLoss: () => "session_not_kept" });
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "site_declined" },
+    stopReason: "site_declined",
+  });
+});
+
+// A login the site visibly rejected fails the sign-in: site_declined is refused until that is
+// resolved, as with any failed sign-in, so the owner is asked to fix the login.
+it("refuses site_declined while a rejected login is unresolved", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [call("execute", authenticate), call("report_blocked", declinedExample)][index] ??
+      prose("Stopping."),
+    {
+      reviewAndExecute: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "Unavailable",
+            authentication: {
+              phase: "credential_submit",
+              code: "CredentialsRejected",
+              afterSubmission: true,
+            },
+          }),
+        ),
+    },
+  );
+  const outcome = await f.run();
+  expect(JSON.stringify(f.requests[2]?.input)).toContain("sign_in_unresolved");
+  expect(outcome).not.toHaveProperty("blocked");
+});
+
 // The owner chose not to sign in: their answer comes back as a result, not a failed sign-in, the
 // host never signs in again, and the build may end as the owner's choice.
 it("hands a declined login back as a result and ends as owner_declined when the minter stops", async () => {
