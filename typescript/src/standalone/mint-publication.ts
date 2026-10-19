@@ -122,16 +122,17 @@ const position = (text: string, offset: number) => {
   return { line: before.split("\n").length, column: offset - before.lastIndexOf("\n") };
 };
 
+const providerKey = providerKeyPattern();
+const awsAccessKeyId = awsAccessKeyIdPattern();
+
 /**
  * A saved file's first hard-coded provider key or AWS access key ID, refused as a publication gate
  * refuses one: the refusal names the file and where, never the key.
  */
 export const providerKeyRefusal = (file: string, text: string): MintFailure | undefined => {
-  const provider = [...text.matchAll(providerKeyPattern())].find((match) =>
-    isProviderKey(match[0]),
-  )?.index;
-  const aws = awsAccessKeyIdPattern().exec(text)?.index;
-  const offsets = [provider, aws].filter((offset) => offset !== undefined);
+  const provider = [...text.matchAll(providerKey)].find((match) => isProviderKey(match[0]))?.index;
+  const aws = text.search(awsAccessKeyId);
+  const offsets = [provider, aws < 0 ? undefined : aws].filter((offset) => offset !== undefined);
   if (offsets.length === 0) return undefined;
   return new MintFailure({
     code: "PublicationUnavailable",
