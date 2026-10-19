@@ -1001,6 +1001,64 @@ it("asks a code screen of one-character boxes for its code once, types a charact
   expect(host.filled.at(-1)?.values).toEqual(["4", "8", "2", "9", "1", "3"]);
 });
 
+it.each([6, 7, 8])("asks a code screen of %i one-character boxes for its code once, types a character in each, and verifies once the host's click sent it", async (count) => {
+  const digits = "4829135706".slice(0, count);
+  const host = harness({ held: account, codeBoxes: count, answers: { code: [digits] } });
+  const boxes: SignInStep = {
+    fields: Array.from({ length: count }, (_, at) => ({ selector: `#otp-${at + 1}`, slot: "code" as const })),
+    submit: "#verify",
+  };
+  const published = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(identifierOnly, undefined, Effect.void);
+      yield* recorder.step(boxes, undefined, Effect.void);
+      const checked = yield* recorder.step(signedIn, undefined, Effect.void);
+      expect(checked).toMatchObject({ verified: true, result: { signedIn: true } });
+      return recorder.published();
+    }),
+  );
+  expect(host.asked.flatMap((r) => r.questions).filter((q) => q.id === "code")).toHaveLength(1);
+  expect(host.filled.at(-1)?.values).toEqual(Array.from(digits));
+  expect(published?.recipe.steps[1]).toEqual({
+    page: `${origin}/login`, fields: boxes.fields, submit: "#verify", submittedBy: "host",
+  });
+});
+
+it.each([7, 8])("keeps a %i-box code unsent when its last box did not fill, so the check does not verify", async (count) => {
+  const digits = "4829135706".slice(0, count);
+  const host = harness({
+    held: account,
+    codeBoxes: count,
+    answers: { code: [digits] },
+    report: (step) => {
+      const codes = step.fields.some((field) => field.slot === "code");
+      return {
+        outcome: "filled",
+        fields: step.fields.map((field, at) => ({
+          slot: field.slot,
+          status: codes && at === step.fields.length - 1 ? ("failed" as const) : ("filled" as const),
+        })),
+        submit: codes ? ("not_attempted" as const) : ("clicked" as const),
+        url: `${origin}/next`,
+      };
+    },
+  });
+  const boxes: SignInStep = {
+    fields: Array.from({ length: count }, (_, at) => ({ selector: `#otp-${at + 1}`, slot: "code" as const })),
+    submit: "#verify",
+  };
+  const checked = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(identifierOnly, undefined, Effect.void);
+      yield* Effect.either(recorder.step(boxes, undefined, Effect.void));
+      return yield* Effect.either(recorder.step(signedIn, undefined, Effect.void));
+    }),
+  );
+  expect(host.filled).toHaveLength(2);
+  expect(JSON.stringify(checked)).not.toContain('"verified":true');
+  expect(host.confirmed).toEqual([]);
+});
+
 it("records a private answer's question selector in version 1, never its question or answer", async () => {
   const host = harness({
     held: account,
