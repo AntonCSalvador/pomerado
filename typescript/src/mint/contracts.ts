@@ -32,10 +32,13 @@ import {
   AutofillApproval,
   DateOfBirthFormat,
   IdentifierKinds,
+  maximumCodeBoxes,
   maximumStepFields,
   RejectedMarker,
   SecretSlots,
   SignInMethodChoice,
+  stepFieldsFit,
+  stepFieldsMessage,
   SubmitKey,
 } from "../destinations/autofill-contracts.js";
 import type { SandboxSession, SkillDescriptor } from "@openai/agents/sandbox";
@@ -521,7 +524,10 @@ export const SignInStep = Schema.Union(
           ),
         ),
       ),
-    ).pipe(Schema.maxItems(maximumStepFields)),
+    ).pipe(
+      Schema.maxItems(maximumStepFields + maximumCodeBoxes),
+      Schema.filter(stepFieldsFit, { message: () => stepFieldsMessage }),
+    ),
     submit: Schema.optional(SignInSelector),
     /**
      * Enter, pressed in the last field to submit that field's form, on a screen whose form has no
