@@ -561,12 +561,10 @@ it. This value does not authorize other destinations or credential submission.
 For a tool whose sign-in moves each account to its own workspace host, `siteOrigin` is that
 account's workspace origin at run time, so a URL built from it, or from `siteDomain` for a
 fixed API host, reaches the right workspace, and one built from `page.url()` or a literal does not.
-The context's `siteDomain` is the site's registrable domain, which the host computed with
-the public suffix list: a page is on the site when it is `https:` and its hostname is
-`siteDomain` or ends with `"." + siteDomain`, and only `siteOrigin` itself is the site when
-`siteDomain` is undefined. Write it into the code as you do `siteOrigin`, and never derive it
-from the hostname: its last labels can be a public suffix (`co.uk`) or another tenant's
-(`github.io`). `references/native-page.ts` shows the check. Use `page.evaluate`,
+The context's `siteDomain` is the site's registrable domain: check that a page is on the site
+with it as `AGENTS.md` shows ("Check the page is on the site before exploring it"), writing it
+into the code as you do `siteOrigin`, never derived from the hostname.
+`references/native-page.ts` shows the check. Use `page.evaluate`,
 `locator.evaluate` or `locator.evaluateAll` when code needs browser globals such as
 `document`.
 Read each output value from the element or structured-data entry that holds the whole value,
@@ -893,9 +891,8 @@ element learns nothing a count would not. Return `waitReport()` from a probe tha
 
 Supported login challenges during `authenticate` belong to the host's sign-in
 (autofill or an explicit direct HTTP step) and its protected input requests. Generated `operation.run` and `explore` code
-never request or enter a sign-in code, or sign in themselves: an SMS, email or authenticator code
-that is part of signing in is a `code` field of the `authenticate` step (auth skill), never asked
-separately. A code the site sends later, to confirm a protected action after sign-in, is different:
+never request or enter a sign-in code, or sign in themselves: a code that is part of signing in
+belongs to the `authenticate` step (auth skill). A code the site sends later, to confirm a protected action after sign-in, is different:
 declare it as a `secret` question and ask it with `ask`, as the caller-input skill's
 `caller-code.ts` shows. A missing ordinary page
 control alone does not establish a human-verification challenge. Observe the

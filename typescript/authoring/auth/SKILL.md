@@ -60,7 +60,9 @@ query, fragment or path, since a host refuses such a link for a workspace site.
    member login from provider or employer login, registration and password reset by evidence.
    Read the chosen link's `href` before the click: it is usually the login route to record.
 3. Check that the page is on the site before one click that only opens the login page. A sign-in on
-   the site's own registrable domain needs no permission; another site's is checked by the host.
+   the site's own registrable domain, such as login.example.com for www.example.com, is the
+   site's own and needs no permission; only an origin on a different site needs host
+   configuration, which the host checks during `authenticate`.
 4. Read the first sign-in screen, the first step whose form signs in with a username, email,
    phone-number, account-number, password, code, date-of-birth, ZIP or recovery-code field,
    including an identifier-only first step. Its fields for the first `signInStep` come from a

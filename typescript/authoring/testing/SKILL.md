@@ -19,8 +19,7 @@ and a repair that rebuilds a signed-in tool or a write as a read signed out test
 Use execute with purpose=test, target, relative entrypoint/test file, fixtureRefs,
 caseFilter, maxWorkers and timeoutSeconds. Fixtures are host-authorized immutable
 inputs. Offline cases may use isolated workers; a live test is one read-only flow. It starts
-like the example: the site origin page, with the browser's cookies and site storage kept. So
-the tool sets every value its input controls itself, never relying on what the site remembers.
+like the example, from a reset page (`AGENTS.md`, "Reads, writes and examples").
 A read proves its operation with purpose=example and iterates from that start; running the
 example or a live test again after a fix is normal, but keep rounds few: fix everything a run
 shows before you run again (Run and fix the cases, below).

@@ -57,7 +57,7 @@ controls"), or through the data request the site itself uses for it when the con
 unreliable (testing skill), never by filtering the returned rows, then read it back from the site's committed state: the
 applied-filter chips, the selected sort, an option the site shows selected, or the results header.
 A URL naming the input does not show it applied. When a filter did not apply, the tool throws
-`OperationFailure` naming it, so the run fails and the tool gets repaired; it never returns
+`InputNotApplied` naming it (caller-input skill), so the run fails; it never returns
 unfiltered results as filtered.<!-- pomerado:section search.http-read-back -->
 
 When setting one control reloads the result list, order matters: set that control, commonly a
@@ -79,18 +79,9 @@ changed the results since the last one.
 
 When the results, prices or availability depend on a location or store, offer it as an optional
 input, a ZIP or postal code or a store as the site takes them, even when the request names
-neither: it tailors the answer (core skill, the input schema, "Inputs that tailor the answer").
-To apply the caller's location, try each way the site offers:
-the store picker, the ZIP or postal-code box, the delivery or pickup choice, and the manual entry
-beside "use current location". Decline the browser's location permission when the site asks;
-declining often reveals a manual ZIP field. Read the applied location back and always return
-it, as `applied_store` or `applied_zip`, the site's default included when the caller gave none.
-A store missing from the site's picker throws `InvalidInput` with `field` and `available`, the
-stores it offers, and so do a store and a ZIP that exclude each
-other. When the site still won't apply the caller's location, or says it does not serve it,
-return the results it did show with the applied location beside the caller's and the site's
-message, never as the caller's location's results. A filter or sort the page resets stays strict:
-the tool throws `InputNotApplied` with the requested and applied value (core skill).
+neither: it tailors the answer. Apply it, read it back and always return it, as `applied_store`
+or `applied_zip`, the site's default included when the caller gave none, as the core skill's
+input schema says ("Inputs that tailor the answer").
 
 ## Results
 
@@ -103,7 +94,7 @@ run: the page's own structured data for it when that holds the same fields, othe
 Lean toward more information (core skill, output fields): return the facts each card shows
 without a click that a caller
 could reasonably use to choose among results, with full displayed values, and a maker or provider
-line in its own field, each fact once. Return only the site's results for these inputs, with
+line in its own field. Return only the site's results for these inputs, with
 related or recommended items, the filters the site offers and each card's whole text only as
 `include` sections (core skill, optional sections). When only some cards show a fact, its field
 is nullable and null exactly on the cards that don't. A list of records whose fields are
@@ -112,20 +103,18 @@ instead: a small default keyed by field name, with every other field through its
 the results once the rows you return
 have their key fields, filled in and holding still (`waitForRows`). When the site marks results
 as suggestions rather than matches, such as "no exact matches, showing similar items", return
-that. Keep the matches apart from related items, recommendations and sponsored carousels, which
-go in their own list or are left out, never mixed into the results, and return each item once. A
-card that stands for a group of variants, such as "6 flavors" or "3 colors", says so in its own
-fields, such as a variant count, and that its link opens one member of the group. Check that the
-page's echo of the query, such as a results heading, matches it normalized, or for a proper noun
-fuzzily, never with exact case-sensitive equality, except a query the site says it corrected or
+that. Keep the matches apart from related items, recommendations and sponsored carousels, and
+mark a card that stands for a group of variants, such as "6 flavors" or "3 colors", as the core
+skill's "Results, related records and groups" says. Check that the
+page's echo of the query, such as a results heading, matches it as the core skill's Confirm step
+compares, except a query the site says it corrected or
 rewrote (below). A search
 that applied every input and got the site's no-results message returns an empty list, never an
 error.
 
 Retail and grocery grids often interleave sponsored copies of their organic results and put
-promoted carousels above or inside the grid. A carousel or banner with its own heading or
-scroller is not a result, even when its items are marked sponsored: leave it out. Return each
-item once, keyed by its own ID (pagination skill). Before the first example, list the grid's item
+promoted carousels above or inside the grid (core skill, "Results, related records and
+groups"). Return each item once, keyed by its own ID (pagination skill). Before the first example, list the grid's item
 IDs for a typical query, and check that no ID repeats and that the first rows match the query.
 Read the query the site applied from the page's embedded state, such as its search data, rather
 than from a selector scoped to one container, which another layout of the results page breaks.
@@ -153,15 +142,11 @@ answer. Drive the search form and read rendered rows only when they don't.
   or results where they show it; otherwise return it null with the reason in the description. A
   search never opens a control to read it. Always return
   `applied_filters`: the groups the tool set, as the page reads them back.
-- Return the site's offered filter groups only when the caller asks, through an optional
-  `include` list input holding `"filters"`. Their output field, such as `available_filters`, is
-  optional and absent unless asked, and its description starts
-  "Only with `include: ["filters"]`". When the page already shows the groups without a click,
+- Return the site's offered filter groups, in a field such as `available_filters`, only with
+  `include: ["filters"]` (core skill, optional sections). When the page already shows the groups without a click,
   the tool may return those, and says they are the visible ones.
 - Skip a step whose result the page already shows, such as a location, store or sort that is
   already the caller's, and the change wait that would follow it (core skill).
-- Never wait for the page's `load` event, for network idle, or for rows and content you will not
-  return.
 - Fetch a per-result extra the cards lack, such as availability, in one batched request when the
   site offers one, never one request per result.
 - Reach the results by the route the build proved (`AGENTS.md`, "Work through the page's own

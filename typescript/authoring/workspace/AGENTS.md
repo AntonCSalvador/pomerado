@@ -376,18 +376,10 @@ authentication. Follow these stages in order:
    Anonymous exploration may navigate to and click the actual public login controls and follow
    the site's own redirects, without entering any value. Observe the resulting page, exact final
    URL and origin, frames and username or login controls<!-- pomerado:section agents.login-evidence -->. Do not
-   infer a login route from a link label or guess an SSO origin. A sign-in page on the site's
-   own registrable domain, such as login.example.com for www.example.com, is the site's own
-   sign-in; only an origin on a different site needs host configuration, which the host checks
-   during `authenticate`. A sign-in screen is a step whose form signs in and asks for a
-   username, email, phone number, account number, password, code, date of birth, ZIP or recovery
-   code, including an identifier-only first step. Read it with a read-only probe: wait for its
-   controls and read its visible fields (label, type, placeholder, id and name, never a value),
-   buttons, frames, URL and form actions. Reopening the login route to read it again is fine,
-   after a failed sign-in too. Never type, fill or select into its fields, press keys in them, or
-   click its submit, Next, Continue or send-code control during exploration: that is signing in,
-   which only `authenticate` does. Other controls on the page, such as a site search or a cookie
-   banner, are not the sign-in. Record the site's own sign-in link, then call execute purpose
+   infer a login route from a link label or guess an SSO origin. Read each sign-in screen with a
+   read-only probe and never type into it or click its submit during exploration, which is
+   signing in: only `authenticate` does that (.agents/auth/SKILL.md, "Discover the entry before
+   authenticating"). Record the site's own sign-in link, then call execute purpose
    `authenticate`, with a `signInStep` built from what you read. An authenticated request already grants sign-in, so never use
    `request_input` to ask permission to log in.
 2. Use that evidence to pass `loginUrl` directly on `authenticate`: the site's own sign-in link
