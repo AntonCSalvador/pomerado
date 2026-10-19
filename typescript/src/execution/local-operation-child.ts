@@ -437,6 +437,21 @@ const extractCurrentContract = (
     });
   });
 
+/**
+ * What an operation returned when its output failed its schema, for a run that keeps drifted
+ * output: the output after a JSON round trip, or undefined when it has none or none in JSON. A
+ * write already happened when it returned, so its caller still gets what it returned.
+ */
+const driftedOutput = (error: unknown): { readonly output: unknown } | undefined => {
+  if (start.keepDriftedOutput !== true || !(error instanceof InvalidOutput)) return undefined;
+  try {
+    const text = JSON.stringify(error.output);
+    return text === undefined ? undefined : { output: JSON.parse(text) };
+  } catch {
+    return undefined;
+  }
+};
+
 await Effect.runPromise(
   Effect.gen(function* () {
     const imported: unknown = yield* Effect.tryPromise({
@@ -465,13 +480,22 @@ await Effect.runPromise(
       outputSchema: contractJsonSchema(operation.output),
     };
     if (start.mode === "contract") return yield* extractCurrentContract(operation, schemas);
-    const output = isKernelOperation(operation)
-      ? yield* executeLocally(operation)
-      : yield* executeHttpVersion(operation);
+    const { output, outputDrift } = yield* (
+      isKernelOperation(operation) ? executeLocally(operation) : executeHttpVersion(operation)
+    ).pipe(
+      Effect.map((value): { output: unknown; outputDrift?: true } => ({ output: value })),
+      Effect.catchAll((error) => {
+        const drifted = driftedOutput(error);
+        return drifted === undefined
+          ? Effect.fail(error)
+          : Effect.succeed({ output: drifted.output, outputDrift: true as const });
+      }),
+    );
     const confirmation = yield* journal.confirmation;
     yield* send({
       kind: "result",
       output,
+      ...(outputDrift === undefined ? {} : { outputDrift }),
       ...schemas,
       ...(operation.write === undefined ? {} : { write: operation.write }),
       inputDecodes: true,

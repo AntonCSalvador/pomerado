@@ -143,3 +143,24 @@ document.getElementById("code").addEventListener("keydown", (event) => {
   expect(requests).toEqual([]);
   expect(page.url()).toBe(`${site}/verify`);
 });
+
+test("a code form that submits itself once the code is typed, before the host presses Enter, is reported sent by the page and never submitted twice", async ({
+  page,
+}) => {
+  const requests = await serve(
+    page,
+    `${codeForm("/verify")}<script>
+document.getElementById("code").addEventListener("input", (event) => {
+  if (event.target.value.length === 6) event.target.form.requestSubmit();
+});
+</script>`,
+  );
+  const { report } = await inspectAndFill(page, codeStep, [code]);
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: [{ slot: "code", status: "filled" }],
+    submit: "page",
+  });
+  expect(requests).toEqual([{ method: "POST", url: `${site}/verify`, body: `code=${code}` }]);
+  await expect(page.locator("#account")).toBeVisible();
+});

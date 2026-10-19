@@ -209,6 +209,8 @@ export const LocatedError = Schema.Struct({
   question: Schema.optional(Schema.Literal("changed")),
   /** The primary page then, which a fill call reports once it typed. */
   url: Schema.optional(Schema.String),
+  /** A fill call's: when the primary page's document began loading (`performance.timeOrigin`). */
+  document: Schema.optional(Schema.Number),
   searched: Schema.optional(Searched),
   /** An inert submit: where it was found. */
   located: Schema.optional(FoundIn),
