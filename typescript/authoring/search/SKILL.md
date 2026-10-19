@@ -15,13 +15,13 @@ fails or reports a bad input; it never means ending the build.
 Before you settle the input schema, open the results for a typical query and read every control
 that narrows, orders or configures them: the filter panel, chips, the sort menu, range sliders
 and boxes, toggles, and every group that is collapsed, scrolled out of view or behind an "All
-filters", "More" or "Show all" button: a collapsed group is not an absent one. Make every
+filters", "More" or "Show all" button (core skill, the input schema). Make every
 control that narrows, orders or configures the results an optional input wired to its control,
 such as cabin class (economy or first) on a flight search, even one the request never names and
 whether or not you ask about it, since callers of the tool can set it; ask about one only as
 `AGENTS.md` ("Try hard, then ask") allows, and left unset it keeps the page's default. Leave out
 only controls unrelated to the purpose, which change neither which results come back nor their
-order, such as a layout or language switch or a newsletter opt-in. A safety default (writes skill, "Safety defaults") is not
+order, such as a layout or language switch. A safety default (core skill, "Safety defaults") is not
 an input either, and the tool turns it off. Nor is a filter, sort or location the request, the caller or
 the owner declined: it is never an input for any caller (core skill). This survey is build
 work. The published tool does not repeat it: on each run it opens only the groups the caller's
@@ -36,7 +36,7 @@ inputs use (see "Apply and read back").
   site gives, saying so in the description. Otherwise the tool throws `InvalidInput` with
   `field` and `available`, the choices the group it opened for that value offers on this
   search's page, only after reading them. A control the site has but the tool could not find,
-  open or apply makes it throw `OperationFailure`.
+  open or operate makes it throw `OperationFailure`.
 - A price or other numeric range is a number, never a label to match: a slider's labels and
   steps often change with the result set. Set the nearest step inside the caller's bound (down
   for a maximum, up for a minimum), the range's end for a value outside it, read the applied

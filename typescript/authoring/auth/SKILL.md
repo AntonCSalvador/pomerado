@@ -72,7 +72,7 @@ query, fragment or path, since a host refuses such a link for a workspace site.
    submit, Next, Continue or send-code control during exploration: that is signing in, which only
    `authenticate` does (the one exception, after the host's own submit click failed, is below).
    Other controls on the page, such as a site search or a cookie banner, are not the sign-in.
-   After a failed sign-in, reopening the login route in an `explore` to read it again is fine.
+   Reopening the login route in an `explore` to read it again is fine, after a failed sign-in too.
    `references/auth-entry.ts` shows a bounded second probe that reads a login form's controls.
 
 When the entry offers mutually exclusive account or plan types, decide before clicking one: take

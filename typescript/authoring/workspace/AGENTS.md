@@ -235,7 +235,9 @@ where the page landed.
 time, with no parallel live manipulation. The host chooses the private example input and
 account; never embed private literals or tokens in source.
 
-**Publication blocks on these.** Each skill named holds the full rule.
+**Publication blocks on these.** Each skill named holds the full rule. Separately, the execution
+review escalates a live step that enters a name, email or phone unless you asked the owner with
+`request_input` first (core skill, "Inputs that tailor the answer").
 
 - Never make an account-specific value an enum member, example or default; take it free-form
   or as a declared `ask` with `accountSpecific` options (core skill, the input schema).
@@ -245,8 +247,6 @@ account; never embed private literals or tokens in source.
   output field, never `Schema.Unknown` (core skill).
 - A secret answer is a handle, written only as the whole value it fills; published source never
   holds one (core skill, "Secret answers").
-- Before a live step enters a name, email or phone, ask the owner with `request_input` (core
-  skill, "Inputs that tailor the answer").
 - After a write, call `verified()` with no argument just before returning, once a call has read
   the result back (writes skill).
 - Publish only a flow its example ran: a changed read flow needs a fresh example (publication
@@ -318,23 +318,28 @@ a design question, not a request for permission.
 On a write, you never assume a missing business choice: ask about each costly choice actually
 observed on the site, one that changes what the caller buys or pays or whether the action can be
 cancelled or refunded, and about any other optional field only when the request's purpose
-clearly depends on its value, as .agents/writes/SKILL.md ("Before the session") says. A safety
-default, a preselected option whose only effect is to share the caller's data with another
-company, opt into tracking or sign the caller up for marketing, is neither: never an input or a
-question, and the tool turns it off (.agents/writes/SKILL.md, "Safety defaults"). Take a site
+clearly depends on its value, as .agents/writes/SKILL.md ("Before the session") says. Take a site
 default only for a choice that is not a credential, not a write and easy to reverse, and list it
 in `finish_build` `assumptions`. A code that is part of signing in is a `code` field of the
 `authenticate` step, never a `request_input` question (.agents/auth/SKILL.md). You may ask after live
 execution has closed or while a write's outcome is uncertain; after the answer, verify the
 current state before writing again.
 
+On every tool, read or write, a safety default, a preselected option whose only effect is to
+share the caller's data with another company, opt into tracking beyond what the site needs or
+sign the caller up for marketing, is never an input or a question: the tool turns it off
+(.agents/core/SKILL.md, "Safety defaults").
+
 Every mint is real: never make up a value or pick a business choice yourself. Each value an
 example or step enters comes from the request, the business input, an answer or the page. A
 choice the input leaves open is asked, or kept at the page's default where the paragraph above
 allows; a default kept unasked stays an optional input that keeps it. An answer that settles how
 the tool behaves, such as a sort order, a filter, which kind of record a write creates or whether
-a save runs the site's automation, is the tool's default (`defaultedInput`), never a required
-input or a question the tool asks when it runs (.agents/core/SKILL.md, the input schema). An
+a save runs the site's automation, is the tool's default, never a required input or a question
+the tool asks when it runs: when a caller could reasonably want another value, make it an
+optional input whose default is the answered value (`defaultedInput`), and keep it fixed, with
+no input, only where varying it would be unsafe or meaningless (.agents/core/SKILL.md, the input
+schema). An
 answer that gives only this run's value, such as which customer or date, is this run's input. A
 costly choice stays a required input or a declared question for every caller, and an answer may
 only make declining it its default (.agents/writes/SKILL.md). No request or answer authorizes made-up values:

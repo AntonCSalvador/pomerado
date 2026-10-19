@@ -204,8 +204,9 @@ exception: it is optional unless the task can't run without it (below).
   accents (Abaca for Abacá), a city alone or with its state and country, or a company with
   or without Ltd. or Inc. Never require an exact match.
   When more than one option matches, list them for the caller instead of picking one.
-- On a write, every choice the session met is an input, costly choices included, as the
-  writes skill says ("Compose and publish").
+- On a write, every choice the session met is an input, costly choices included, and any
+  other option, such as a seat, is an optional input, as the writes skill says ("Compose and
+  publish").
 - Never make an account-specific value (a passenger, loyalty number, saved card or
   address, account or member ID) an enum member, example or default in a public
   schema. Take it as a free-form input when the caller can name it, such as a loyalty
@@ -220,9 +221,11 @@ exception: it is optional unless the task can't run without it (below).
   in source, a schema default or the definition. Record every control the flow offers that
   narrows, orders or configures what the tool returns as an optional input wired to its
   control, even when the request never mentions it, except a choice that was declined
-  (below), as the search skill's "Find the filters" says.
-- Turn safety defaults off. They are never an input or a question (writes skill, "Safety
-  defaults").
+  (below). Open collapsed groups, drawers and "more" links before you decide what the page
+  offers: a collapsed group is not an absent one. Leave out controls unrelated to the purpose,
+  such as a language switch or a newsletter opt-in on a search. The search skill's "Find the
+  filters" says how a search records them.
+- Turn safety defaults off. They are never an input or a question ("Safety defaults", below).
 - Inputs that tailor the answer. Many sites tailor what they show to facts about the visitor,
   not just what they searched for: where they are (ZIP, address, store, delivery or pickup),
   what they have (a vehicle, a device), or who they are (a membership or rate type, an insurance
@@ -525,7 +528,8 @@ that depends on them:
    before the page updates belongs to the previous choice. A choice already in the requested
    state needs no step and no wait. Compare text read back with the caller's value normalized,
    or for a proper noun with
-   the option it matched: ignore case, accents, repeated whitespace and punctuation such as
+   the option it matched, or fuzzily where the page only echoes it, such as a query in a
+   results heading: ignore case, accents, repeated whitespace and punctuation such as
    curly quotes, periods and hyphens, never exact case-sensitive equality, since a page may
    echo a query or name in
    its own case. When the page kept another value after the tool's bounded retries, throw
@@ -842,6 +846,26 @@ Loading is not proof of a new version. An identity mismatch blocks every candida
 See the compiling `references/variants.ts` example.
 
 <!-- pomerado:section core.layout-captures -->
+
+## Safety defaults
+
+Turn safety defaults off, on every tool, a read or a write. A preselected option whose only effect is to
+share the caller's data with another company, such as a partner comparison that opens the search
+on another site, to opt into tracking beyond what the site needs, or to sign the caller up for
+marketing email, is never an input and never a question. The tool turns it off on every run
+before the submit it affects, and reads back that it is off. When the site won't submit with it
+off, leave it on and say so in the description. Name the ones the tool turns off in the
+description in general words, such as "turns off partner comparisons". A repair keeps each one
+the registered source turns off. Never turn one on yourself, in a form or a request body. For a
+consent flag the site sets for the user in a request body, send the value read at run time or
+leave the field out.
+
+Find these boxes where you fill the form, unlabeled ones included. List every checkbox, switch
+and toggle in and near the form by role and by `input[type=checkbox]`, never only by label, with
+its checked state, its nearest text, its group's heading and the alt text or title of any logo
+beside it. A preselected box whose group names another company or shows its logo is a partner
+box. After a probe's first submit, check whether a new tab opened or the page left the site. If
+one did, a box you missed sent it there.
 
 ## Authenticated operations
 

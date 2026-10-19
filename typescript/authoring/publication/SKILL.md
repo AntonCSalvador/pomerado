@@ -155,7 +155,7 @@ first:
   refuses them for the username or keys they carry, so never block, route around or suppress
   them to satisfy review. Your code, page code it runs included, must never send the caller's
   password, codes or answers off the site: Guardian refuses that.<!-- pomerado:section publication.recorded-requests -->
-- **Consent and privacy.** Turn safety defaults off (writes skill, "Safety defaults"): an
+- **Consent and privacy.** Turn safety defaults off (core skill, "Safety defaults"): an
   option that shares the caller's data with another company, opts into tracking or signs up for
   marketing ends off. Dismiss a covering consent banner as the forms skill says.
 - **Imports.** Import `effect`, the workspace's `runtime/` and `browser/` modules and your own

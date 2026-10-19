@@ -71,7 +71,7 @@ about it. An add-on toggle, a pre-selected checkbox or a lone saved payment meth
 is still a choice to ask about. Never keep, clear, accept or decline one of those unasked. A paid upsell
 outside the tool's purpose, such as a membership, subscription or trial offered during a
 checkout, is not a question: the script declines it, and never accepts one without an input
-the caller set for it. A safety default (below) is
+the caller set for it. A safety default (core skill, "Safety defaults") is
 neither: never ask about it, and the script turns it off. Credentials never go through a
 question; the host's protected form owns them.
 
@@ -118,26 +118,6 @@ During the session:
   that exists only on the page mid-flow, such as a seat on the flight just chosen, is
   a declared `ask` in the next `act` step's script (the caller-input skill). An
   answered question settles the option. Check the page again before continuing.
-
-## Safety defaults
-
-Turn safety defaults off, on a read or a write. A preselected option whose only effect is to
-share the caller's data with another company, such as a partner comparison that opens the search
-on another site, to opt into tracking beyond what the site needs, or to sign the caller up for
-marketing email, is never an input and never a question. The tool turns it off on every run
-before the submit it affects, and reads back that it is off. When the site won't submit with it
-off, leave it on and say so in the description. Name the ones the tool turns off in the
-description in general words, such as "turns off partner comparisons". A repair keeps each one
-the registered source turns off. Never turn one on yourself, in a form or a request body. For a
-consent flag the site sets for the user in a request body, send the value read at run time or
-leave the field out.
-
-Find these boxes where you fill the form, unlabeled ones included. List every checkbox, switch
-and toggle in and near the form by role and by `input[type=checkbox]`, never only by label, with
-its checked state, its nearest text, its group's heading and the alt text or title of any logo
-beside it. A preselected box whose group names another company or shows its logo is a partner
-box. After a probe's first submit, check whether a new tab opened or the page left the site. If
-one did, a box you missed sent it there.
 
 ## The session
 
@@ -360,7 +340,7 @@ other callers, so it takes the choice as an input or asks, never hard-codes the 
 and never leaves it to the page's default. A costly choice the request, the caller or the owner
 declined still stays an input or a declared question, whose default may only decline it.
 An out-of-scope paid upsell is declined, as above. A safety default
-(above) is neither: never ask about it, and the script turns it off. An
+(core skill) is neither: never ask about it, and the script turns it off. An
 account-specific value, such as a passenger, loyalty number, saved card, address or
 account ID, is a free-form input, never an enum member, example or default in the
 public schema (core's input schema rules).
@@ -386,7 +366,8 @@ schema; the host re-reads the corrected schema offline. `write_not_submitted` me
 session has not demonstrated the requested write: no step recorded a confirmation, and no
 `act` step Guardian labelled a write reached the site unless the outcome review found it
 did not happen. Continue the remaining authorized work. If a step may already have
-committed, read back first, in a new file, as "Never repeat a step blindly" says. The host runs
+committed, read back first, in a new file, as "Never repeat a step blindly" says. If the write
+happened, publish with `readback`. The host runs
 a step that may have committed only once, unless the outcome review finds it did not happen.
 Filling a form or an offline example
 is not the write. An unreadable step output never justifies a run either: the write
