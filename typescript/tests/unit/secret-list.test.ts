@@ -201,9 +201,9 @@ describe("a key whose body holds another key's shape", () => {
     expect(long / Math.max(short, 1)).toBeLessThan(10);
   });
 
-  it("stays linear when a pattern is built on its source with more after it", () => {
+  it("gives each run back whole when a pattern built on its source fails after a key", () => {
     const source = providerKeyPattern().source;
-    const run = "a".repeat(40);
+    const run = "a".repeat(28);
     const texts = [
       `${fake("sk-", run)}!`,
       `${fake("xoxb-", run)}!`,
@@ -215,7 +215,7 @@ describe("a key whose body holds another key's shape", () => {
       for (const text of texts) {
         const started = performance.now();
         composed.test(text);
-        // Trying every split of a run would take hours here; reading each run whole takes well
+        // Trying every split of a 28-letter run takes about 15 s; giving it back whole takes well
         // under a millisecond.
         expect(performance.now() - started).toBeLessThan(1000);
       }

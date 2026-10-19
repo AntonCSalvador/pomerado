@@ -344,7 +344,9 @@ const heldKey = new RegExp(
 /**
  * Provider API keys, by prefix and body, starting at a word boundary. Each match
  * must also pass `isProviderKey`, which checks a random body. Longer prefixes come first
- * (`sk-proj-` before `sk-`).
+ * (`sk-proj-` before `sk-`). Match with the pattern as returned. A pattern built on its source
+ * with an anchor or assertion after it can take exponential time on text with several keys
+ * written into one key.
  */
 export const providerKeyPattern = (): RegExp => new RegExp(providerKeySource, "gu");
 
