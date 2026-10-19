@@ -127,6 +127,8 @@
 
 ### Other changes
 
+- A read signed out is no longer sent to publication review while its live tests mostly fail. `finish_build` is refused before review, as `PublicationUnavailable` with reason `live_tests_below_threshold` and recovery `new_observation`, when fewer than 70% of the counted cases pass on the version it publishes, the entrypoint's. Counted cases are the cases in `test/cases.json` whose latest result on that version's published source is a pass or a fail: inconclusive results, stale and not-run cases and retired cases count neither way, and a version with no counted case passes. An HTTP version beside a published Playwright version is not held to the bar, since its host ships it only when its own check passes it. The minter is told how many passed and the bar, and to fix the failing cases, or the tests if they are wrong, then run them again. No Guardian call is made for the refused submission. A signed-in read and a write keep no test record, so they are unchanged.
+  - `pomerado/core/mint/live-tests` exports `reviewPassPercent` (70), `liveTestsShortfall` and its `LiveTestsShortfall` result.
 - Guardian's source reads and step context are shared by every host.
   - `pomerado/core/guardian/source` exports the SDK path mapping: `operationReviewSources`, `hostProvidedSource`, `sdkJavaScriptPath`, the `SdkFiles` type, `sdkReference`, which answers a guessed SDK path with where the SDK is, and `hostReference`, which wraps such an answer as one chunk.
   - `pomerado/core/guardian/review` exports `refusalsOnHostGapsFail`. A deny or escalate after a failed read of a file the host provides fails as that read's `SourceUnavailable`, an outage, instead of a refusal.

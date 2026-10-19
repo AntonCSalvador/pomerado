@@ -115,11 +115,13 @@ import {
   liveTestsEvidence,
   liveTestsEvidencePath,
   liveTestsEvidenceProblem,
+  liveTestsShortfall,
   liveTestVersion,
   LiveTestOutputChecks,
   maximumBatchCases,
   outputExcerpt,
   primaryListOf,
+  reviewPassPercent,
   type LiveTestCasesFile,
   type LiveTestRecord,
   type LiveTestVersion,
@@ -396,6 +398,8 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   "example_before_site_change",
   // Restored inputs change the code, which needs its own example.
   "input_contract_changed",
+  // Too few cases pass on the published source: fix, then run them again.
+  "live_tests_below_threshold",
 ]);
 /**
  * Publication refusals the host asks about only once in an attempt: finishing again, or passing
@@ -4595,11 +4599,33 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       ),
                     );
               // The host's own record of a read's live tests on this source goes to the review
-              // as evidence, and its line to coverage. It never refuses publication by itself.
+              // as evidence, and its line to coverage. It refuses publication by itself only
+              // when the published version's cases pass below the bar on its source: the review
+              // would hold it back on those failures anyway, so it is not started.
               const liveTests = yield* liveTestsForPublication(
                 proposed.entrypoint,
                 proposed.httpVersion?.outcome === "ruled_out",
               );
+              const shortfall =
+                liveTests === undefined
+                  ? undefined
+                  : liveTestsShortfall(
+                      liveTests.record.versions,
+                      liveTestVersion(proposed.entrypoint),
+                    );
+              if (shortfall !== undefined) {
+                const reason = "live_tests_below_threshold";
+                pendingDecision = hostRefusalDecision(reason, evidence.executionId, write);
+                yield* diagnose({ phase: "publication", code: "PublicationUnavailable", reason });
+                return JSON.stringify({
+                  status: "not_published",
+                  code: "PublicationUnavailable",
+                  reason,
+                  userInputRequired: false,
+                  instruction: `Not sent to publication review: the latest live tests${shortfall.entrypoint === undefined ? "" : ` on ${shortfall.entrypoint}`} passed ${shortfall.passed} of ${shortfall.counted} (${shortfall.percent}%), and review needs at least ${reviewPassPercent}%. Fix the failing cases, or the tests if they are wrong, run them again, then call finish_build.`,
+                  executionContext: yield* executionContext(),
+                });
+              }
               const coverage =
                 liveTests === undefined
                   ? minterCoverage
