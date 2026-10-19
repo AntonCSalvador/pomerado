@@ -57,19 +57,21 @@ the source files, never captures.
   (`rg -n 'text' captures/`). Omit `workdir` or use `/workspace` or `.`; other workdirs, PTYs
   and `runAs` are rejected. Node, `rg` and the standard Unix tools are available.
   `reference/offline-commands.md` has the details.
-- `execute` runs your code with the host-bound input, or on a live test of a read signed out
-  with your own `testInput`, on a supplied facility: `liveBrowser`,
+- `execute` runs your code with the host-bound input, or on a read's live test with your own
+  `testInput`, on a supplied facility: `liveBrowser`,
   `savedDOM`, `savedHTTP` or `pureFiles`. Every execution receives fresh Guardian review; no
   per-click review is needed. When the host-bound input is empty (`{}`), write the tool's
   input from the request and the owner's answers and pass it as `exampleInput` (JSON text) on
   a read's example, or on each write act step that needs it (the first act step that passes it
   fixes it, and later steps repeat it or omit it and run it); each of its keys must be a schema
   input, required where the request needs it, and publication decodes that input.
-- `live_tests` runs the live tests of a read signed out when the host offers it: the cases you
-  design in `test/cases.json` from what you saw on the site, and every result, run in parallel
-  batches on reset pages, at least one case cold where the host has several browsers, on `src/tool.mjs` and on `src/tool-http.mjs`, each version keeping
-  its own results. Design them as soon as you know the page and its inputs, and read
-  .agents/testing/SKILL.md first. A signed-in read and a write run no live tests.
+- `live_tests` runs a read's live tests when the host offers it: the few combined cases you
+  design in `test/cases.json` from what you saw on the site, and every result, run in batches on
+  reset pages, on `src/tool.mjs` and on `src/tool-http.mjs`, each version keeping its own
+  results. A read signed out's run in parallel, at least one case cold where the host has
+  several browsers; a signed-in read's run on its own signed-in browser, on two distinct inputs
+  at most. Design them as soon as you know the page and its inputs, and read
+  .agents/testing/SKILL.md first. A write runs no live tests.
 - `retain_capture`, `finish_build` and `request_input` are described below and in their
   tool descriptions.
 - `report_blocked` ends the build as blocked when its task is impossible as asked (below).
@@ -533,15 +535,17 @@ during exploration too, not only in the published tool. A filter the site does n
 part of the read.
 
 Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md). It designs
-its own cases at the start, from what it saw on the site: different real values unlike the
-example's, smart combinations and edge cases. It refines them once the example passes, and runs as
-many as it needs, in parallel batches, and runs the same cases as a batch on its HTTP version.
-Finish in this order: your last edit, every case again on each version you ship, then the example
-last, before `finish_build`. A signed-in read and a write do the original task: the read's
-example, or the write's act session, is the one run that proves the tool. They design no tests and
-run no live tests or offline test suites beyond it, and check their HTTP version once, against
-that run. The scope follows what the tool is now: a read that signs in or becomes a write keeps to
-the one run from then on, and a repair that rebuilds one as a read signed out tests it fully.
+its own cases at the start, from what it saw on the site: a handful, each covering as much as it
+can, led by one case that sets together every input the example left unset. It refines them once
+the example passes, runs them in parallel batches, and runs the same cases as a batch on its HTTP
+version. Finish in this order: your last edit, every case again on each version you ship, then
+the example last, before `finish_build`. A signed-in read runs that combined case, and a second
+only for inputs that cannot be set together: two distinct inputs at most, which the host
+enforces, on its own signed-in browser. A write does the original task: its act session is the
+one run that proves the tool. It designs no tests and runs no live tests or offline test suites
+beyond it, and checks its HTTP version once, against that run. The scope follows what the tool is
+now: a read that becomes a write keeps to the one run from then on, a read that signs in keeps to
+the signed-in bound, and a repair that rebuilds one as a read signed out tests it as one.
 Report skipped, unsupported or missing bodies honestly.
 
 <!-- pomerado:section agents.implementations -->
