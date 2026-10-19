@@ -633,6 +633,9 @@ describe("a finding in a file the host wrote into the bundle", () => {
     { reason: "privacy", category: "private_literal" },
     { reason: "authority", category: "schema_mismatch" },
     { reason: "host_owned", category: "credential" },
+    // A write that does not confirm or reconcile what it committed is a safety problem in any
+    // code that ships, a host's entry file included, never a preference to set aside.
+    { reason: "source_correction", category: "confirmation" },
   ])(
     "sends a $reason $category finding in the recipe to the host as its own failure",
     async ({ reason, category }) => {
@@ -645,6 +648,24 @@ describe("a finding in a file the host wrote into the bundle", () => {
       expect(decided).not.toHaveProperty("nonBlockingFindings");
     },
   );
+
+  // An unsupported-claim denial whose one unsupported_claim finding was in the recipe no longer
+  // has the finding its reason needs, so what is left is a source correction.
+  it("names a source correction when the unsupported claim it rested on was in the recipe", async () => {
+    const source = at(pending.entrypoint, "schema_mismatch");
+    expect(
+      await decide({
+        outcome: "deny",
+        reason: "unsupported_claim",
+        findings: [source, inRecipe("unsupported_claim")],
+      }),
+    ).toMatchObject({
+      outcome: "deny",
+      reason: "source_correction",
+      findings: [source],
+      nonBlockingFindings: [inRecipe("unsupported_claim")],
+    });
+  });
 
   // A denial for missing evidence names what to gather in its rationale, which a finding set
   // aside in the recipe does not answer.

@@ -233,17 +233,24 @@ const inHostBundleFile = (finding: PublicationFinding, files: ReadonlyMap<string
   return file?.owner === "host" && file.published && file.path.startsWith("operation/");
 };
 
-const isUnfixableFinding = (finding: PublicationFinding) =>
+/**
+ * A finding that blocks even in a file the host wrote: a privacy or credential one, since
+ * publishing would expose what the file holds, and a write's confirmation, since a write that does
+ * not confirm or reconcile what it committed is unsafe in any code that ships.
+ */
+const blocksInHostFile = (finding: PublicationFinding) =>
+  finding.category === "confirmation" ||
   unfixableFindingCategories.some((category) => category === finding.category);
 
 /**
  * A decision with every finding in a file the host wrote into the bundle taken out of what blocks,
- * since the minter cannot edit that file. A privacy, credential or authority finding there still
- * blocks, as the host's own failure (`host_owned`): publishing it would expose what it holds, so
- * it goes to the host, which wrote it. Any other finding there is kept beside the decision as
- * non-blocking. With nothing left that blocks, the decision allows, except a denial for missing
- * evidence, whose rationale names what to gather; with only input findings left, it is input
- * feedback.
+ * since the minter cannot edit that file. A privacy, credential, authority or write confirmation
+ * finding there still blocks, as the host's own failure (`host_owned`): publishing it would expose
+ * what the file holds or ship an unsafe write, so it goes to the host, which wrote it. Any other
+ * finding there is kept beside the decision as non-blocking. With nothing left that blocks, the
+ * decision allows, except a denial for missing evidence, whose rationale names what to gather;
+ * with only input findings left, it is input feedback, and an unsupported-claim denial left with
+ * no unsupported_claim finding is a source correction.
  */
 const withoutHostBundleBlocks = (
   decision: Decision,
@@ -252,7 +259,7 @@ const withoutHostBundleBlocks = (
   const unfixableReason = unfixablePublicationReasons.some((reason) => reason === decision.reason);
   const nonBlocking = decision.findings.filter(
     (finding) =>
-      inHostBundleFile(finding, files) && !unfixableReason && !isUnfixableFinding(finding),
+      inHostBundleFile(finding, files) && !unfixableReason && !blocksInHostFile(finding),
   );
   if (nonBlocking.length === 0) {
     const toHost =
@@ -267,7 +274,10 @@ const withoutHostBundleBlocks = (
       ? { ...kept, outcome: "deny", reason: "host_owned" }
       : blocking.every(isInputFinding)
         ? { ...kept, reason: "input_feedback" }
-        : kept;
+        : decision.reason === "unsupported_claim" &&
+            !blocking.some((finding) => finding.category === "unsupported_claim")
+          ? { ...kept, reason: "source_correction" }
+          : kept;
   if (decision.reason === "evidence") return kept;
   const { publicReason: _publicReason, ...allowed } = kept;
   return {
@@ -404,7 +414,7 @@ export const publicationReferencePolicy =
  * `publicationDecisionPolicy`, so every host's publication policy carries it.
  */
 export const publicationHostFilePolicy =
-  "Choices made on the site's sign-in pages, such as a location, workspace or portal the site asks for at sign-in, belong to the host's sign-in, which the host keeps in its sign-in recipe (operation/auth-fill.json): they are not options on a write's path or inputs the tool leaves out, so never an input_option, example_value or Unapplied input finding. A finding in a file the host wrote into the bundle, such as the sign-in recipe or an entry file the host adds, never blocks publication: the host reports it as non-blocking, except a privacy, credential or authority finding, which the host takes as its own failure.";
+  "Choices made on the site's sign-in pages, such as a location, workspace or portal the site asks for at sign-in, belong to the host's sign-in, which the host keeps in its sign-in recipe (operation/auth-fill.json): they are not options on a write's path or inputs the tool leaves out, so never an input_option, example_value or Unapplied input finding. A finding in a file the host wrote into the bundle, such as the sign-in recipe or an entry file the host adds, never blocks publication: the host reports it as non-blocking, except a privacy, credential, authority or confirmation finding, which the host takes as its own failure.";
 
 /**
  * What a publication decision returns, with the reason each kind of finding takes. A finding

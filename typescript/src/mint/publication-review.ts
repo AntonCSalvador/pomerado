@@ -319,7 +319,9 @@ export const exampleOutputEvidence = (
  * publication file. The bundle and the public definition ship; the other publication files are
  * evidence for the review only. A write session's act-step source is historical; everything
  * else is current. The minter wrote the bundle, except the bundle files a host adds itself
- * (`hostWritten`), and the host every publication file. `references` are the files the review
+ * (`hostWritten`), and the host every publication file. A bundle file the host derives or copies
+ * from the minter's source is not `hostWritten`: findings in a host-written file never block,
+ * except a privacy, credential, authority or confirmation one. `references` are the files the review
  * may read on demand beside its evidence, such as the minter's skills: listed apart, by byte
  * length, and never in `files`.
  */
