@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Duration, Effect, Either } from "effect";
 import { expect, it } from "vitest";
 import type {
   AutofillInspection,
@@ -21,7 +21,7 @@ import {
   type SignInReplayBrowser,
 } from "../../src/runtime/sign-in-replay.js";
 import { parseHtml } from "../../src/runtime/html.js";
-import { askingValueHooks } from "../../src/runtime/sign-in-values.js";
+import { makeAutofillRetryState } from "../../src/runtime/autofill-correction.js";
 import { localSignInLogin } from "../../src/standalone/authentication.js";
 
 // A run's sign-in against a synthetic site: a login screen, then an optional method choice, code
@@ -306,6 +306,18 @@ const recipeOf = (...later: SignInRecipe["steps"][number][]): SignInRecipe => ({
   steps: [loginStep, ...later],
   signedIn: { selector: "#account" },
 });
+/**
+ * The login screen with its recorded error marker: only a marker the site shows proves it
+ * rejected the password, so only then is a corrected login asked.
+ */
+const markedLoginStep = {
+  ...loginStep,
+  rejectedMarkers: [{ slot: "password" as const, selector: "#login-error" }],
+};
+const markedRecipeOf = (...later: SignInRecipe["steps"][number][]): SignInRecipe => ({
+  ...recipeOf(...later),
+  steps: [markedLoginStep, ...later],
+});
 
 /** The owner's answers: logins in order, then codes and security answers. */
 const owner = (answers: { readonly logins?: Login[]; readonly codes?: string[]; readonly answers?: string[]; readonly method?: string; readonly fail?: boolean } = {}) => {
@@ -350,8 +362,9 @@ const signIn = (
         entryUrl,
         browser: fake.browser,
         login: localSignInLogin({ ask, register: secrets.register, siteOrigin: origin }),
-        values: askingValueHooks({ ask, register: secrets.register, site, siteOrigin: origin }),
-        carries: secrets.carries,
+        ask,
+        secrets,
+        markerSettle: { within: Duration.millis(20), interval: Duration.millis(5) },
         site,
         siteOrigin: origin,
         timing: { stepWaitMs: 60, pollMs: 2 },
@@ -388,18 +401,32 @@ it("asks one login question once the check finds the sign-in screen, then replay
 });
 
 it("corrects a rejected password without sending it again, asking again for a correction that repeats it", async () => {
-  const fake = fakeSite();
+  const fake = fakeSite({ marker: true });
   const wrong = { ...account, password: "synthetic-wrong" };
   const { ask, asked } = owner({ logins: [wrong, wrong, account] });
-  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(await signIn(markedRecipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
   expect(kinds(asked)).toEqual([
     "credential:missing_credentials",
     "credential:invalid_credentials",
     "credential:invalid_credentials",
   ]);
-  // The correction names the username, and the repeated password is never filled.
+  // The correction names the username and the tries left, and the repeated password is never filled.
   expect(asked[1]?.questions[0]).toMatchObject({ username: account.username });
+  expect(asked[1]?.questions[0]?.prompt).toContain("You have 2 tries left.");
+  expect(asked[2]?.questions[0]?.prompt).toContain("This is your last try.");
   expect(fake.fills.map(({ values }) => values[1])).toEqual([wrong.password, account.password]);
+});
+
+it("fails RecipeFailed when the login screen shows again after its password with no recorded error marker", async () => {
+  const fake = fakeSite();
+  const wrong = { ...account, password: "synthetic-wrong" };
+  const { ask, asked } = owner({ logins: [wrong, account] });
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(
+    Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "credential_screen_returned" })),
+  );
+  // Nothing proves the site rejected the login, so no correction is asked.
+  expect(kinds(asked)).toEqual(["credential:missing_credentials"]);
+  expect(fake.fills).toHaveLength(1);
 });
 
 it("fails CredentialsRejected once both corrections of the password were rejected", async () => {
@@ -422,13 +449,64 @@ it("fails CredentialsRejected once both corrections of the password were rejecte
   expect(JSON.stringify(Either.isLeft(result) ? result.left : null)).not.toContain("synthetic-");
 });
 
+it("asks for a correction before it types when an earlier sign-in of the run had the login rejected", async () => {
+  const fake = fakeSite({ marker: true });
+  const wrong = { ...account, password: "synthetic-wrong" };
+  // The login, a correction left unanswered, then the right login.
+  const answers: (Login | undefined)[] = [wrong, undefined, account];
+  const asked: InputRequest[] = [];
+  const ask = makeInputAsker((request) =>
+    Effect.suspend(() => {
+      asked.push(request);
+      const login = answers.shift();
+      return login === undefined
+        ? Effect.fail(new InputRequestFailure({ code: "NoResponse" }))
+        : Effect.succeed({ login: { ...login, saveLogin: false } } as InputAnswers);
+    }),
+  );
+  const secrets = makeRunSecrets();
+  const login = localSignInLogin({ ask, register: secrets.register, siteOrigin: origin });
+  const retryState = makeAutofillRetryState();
+  const run = () =>
+    Effect.runPromise(
+      Effect.either(
+        signInForRun({
+          recipe: markedRecipeOf(),
+          entryUrl: `${origin}/login`,
+          browser: fake.browser,
+          login,
+          ask,
+          secrets,
+          markerSettle: { within: Duration.millis(20), interval: Duration.millis(5) },
+          site,
+          siteOrigin: origin,
+          timing: { stepWaitMs: 60, pollMs: 2 },
+          retryState,
+        }),
+      ),
+    );
+  expect(await run()).toEqual(Either.left(new SignInRunFailed({ code: "NeedsInput", reason: "login" })));
+  expect(await run()).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(kinds(asked)).toEqual([
+    "credential:missing_credentials",
+    "credential:invalid_credentials",
+    "credential:invalid_credentials",
+  ]);
+  // The second sign-in spends the last correction before it types, so the rejected password goes
+  // out once.
+  expect(asked[2]?.questions[0]?.prompt).toContain("This is your last try.");
+  expect(fake.fills.map(({ values }) => values[1])).toEqual([wrong.password, account.password]);
+});
+
 it("asks for the code a code screen needs, and a fresh one for a rejected code, never the rejected one", async () => {
   const fake = fakeSite({ code: true });
   const { ask, asked } = owner({ codes: ["111111", "111111", code] });
   const codeStep = { page: `${origin}/code`, fields: [{ selector: "#code", slot: "code" as const }], submit: "#verify", rejectedMarkers: [{ slot: "code" as const, selector: "#code-error" }] };
   expect(await signIn(recipeOf(codeStep), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
   expect(kinds(asked)).toEqual(["credential:missing_credentials", "code", "code", "code"]);
-  expect(asked[2]?.questions[0]?.prompt).toContain("did not accept the last code");
+  expect(asked[2]?.questions[0]?.prompt).toBe(
+    `The site refused the last code. Enter the newest sign-in code ${site} sent you.`,
+  );
   expect(fake.fills.filter(({ page }) => page === "code").map(({ values }) => values[0])).toEqual(["111111", code]);
 });
 
@@ -484,11 +562,11 @@ it("fails the sign-in check on a chooser unless the sign-in allows a page that c
   expect(fake.state.page).toBe("chooser");
 });
 
-it("asks for a corrected password when the login screen shows again, then signs in on the chooser", async () => {
-  const fake = fakeSite({ code: true, landing: "chooser" });
+it("asks for a corrected password when the login screen shows its error, then signs in on the chooser", async () => {
+  const fake = fakeSite({ code: true, landing: "chooser", marker: true });
   const wrong = { ...account, password: "synthetic-wrong" };
   const { ask, asked } = owner({ logins: [wrong, account] });
-  expect(await signIn(recipeOf(codeScreenAt()), fake, ask)).toEqual(
+  expect(await signIn(markedRecipeOf(codeScreenAt()), fake, ask)).toEqual(
     Either.right({ alreadySignedIn: false }),
   );
   expect(kinds(asked)).toEqual([
@@ -553,17 +631,17 @@ it.each([1, 3] as const)("asks a security answer on every run, from the question
     expect(fake.fills.at(-1)).toEqual({ page: "question", values: [answer] });
   }
   expect(prompts).toEqual([
-    `What was the name of your first pet? (${origin})`,
-    `Which city were you born in? (${origin})`,
+    `${site} asks this security question: What was the name of your first pet?`,
+    `${site} asks this security question: Which city were you born in?`,
   ]);
 });
 
-it("fails CredentialsRejected when the security question shows again after its answer", async () => {
+it("fails the sign-in check when the security question shows again after its answer", async () => {
   const fake = fakeSite({ question: true });
   const { ask } = owner({ answers: ["synthetic-wrong-pet"] });
   const recipe: SignInRecipe = { ...recipeOf(), version: 3, steps: [loginStep, questionStep] };
   expect(await signIn(recipe, fake, ask)).toEqual(
-    Either.left(new SignInRunFailed({ code: "CredentialsRejected", reason: "private_answer" })),
+    Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "sign_in_check_failed" })),
   );
   expect(fake.fills.filter(({ page }) => page === "question")).toHaveLength(1);
 });
@@ -579,7 +657,7 @@ it("fails RecipeFailed when a recorded screen shows on another origin than the r
 });
 
 it.each([
-  ["an unknown version", { ...recipeOf(), version: 4 }, "unknown_version"],
+  ["an unknown version", { ...recipeOf(), version: 6 }, "unknown_version"],
   ["a recipe without steps", { ...recipeOf(), steps: [] }, "invalid"],
 ])("refuses %s with MissingRecipe before opening anything", async (_case, recipe, reason) => {
   const fake = fakeSite();
@@ -646,13 +724,13 @@ const codeScreen = {
 const loginFills = (fake: ReturnType<typeof fakeSite>) =>
   fake.fills.filter(({ page }) => page === "login").map(({ values }) => values);
 
-it("never fills a password the login screen rejected by showing again before a later screen, even when a correction repeats it", async () => {
-  const fake = fakeSite({ code: true });
+it("never fills a password the login screen rejected before a later screen, even when a correction repeats it", async () => {
+  const fake = fakeSite({ code: true, marker: true });
   const wrong = { ...account, password: "synthetic-wrong" };
   const { ask, asked } = owner({ logins: [wrong, wrong, account] });
-  expect(await signIn(recipeOf(codeScreen), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
-  // The code screen never showed: the login screen came back, so the password it took was
-  // rejected, and the correction that repeated it was asked again instead of filled.
+  expect(await signIn(markedRecipeOf(codeScreen), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  // The code screen never showed: the login screen came back with its error, so the password it
+  // took was rejected, and the correction that repeated it was asked again instead of filled.
   expect(kinds(asked)).toEqual([
     "credential:missing_credentials",
     "credential:invalid_credentials",
@@ -662,13 +740,11 @@ it("never fills a password the login screen rejected by showing again before a l
   expect(loginFills(fake).map((values) => values[1])).toEqual([wrong.password, account.password]);
 });
 
-it("does not count a sign-in whose page sent no request carrying the values, even when the marker shows", async () => {
+it("counts a sign-in whose submit was clicked after its fill, though no request the page sent carried the values", async () => {
   const fake = fakeSite({ silent: true });
   const { ask, asked } = owner();
-  expect(await signIn(recipeOf(), fake, ask)).toEqual(
-    Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "sign_in_check_failed" })),
-  );
-  // The page showed the account, but no request it sent carried the login.
+  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  // The click sent the login: what the page's requests carried no longer decides.
   expect(fake.state.signedIn).toBe(true);
   expect(kinds(asked)).toEqual(["credential:missing_credentials"]);
 });
@@ -737,7 +813,7 @@ it("takes a promo code field for no sign-in code field", async () => {
   expect(fake.fills.map(({ page }) => page)).toEqual(["login", "unrecorded"]);
 });
 
-it("looks for an unrecorded code field only on a recorded screen's origin or a sign-in origin", async () => {
+it("looks for an unrecorded code field only on a recorded screen's origin", async () => {
   const screen = codeForm('autocomplete="one-time-code"');
   // Another origin of the site, where no recorded screen ran.
   const elsewhere = fakeSite({ unrecorded: [screen], unrecordedOrigin: `https://accounts.${site}` });
@@ -745,7 +821,7 @@ it("looks for an unrecorded code field only on a recorded screen's origin or a s
   expect(await signIn(recipeOf(), elsewhere, first.ask, undefined, false)).toEqual(checkFailed);
   expect(kinds(first.asked)).toEqual(["credential:missing_credentials"]);
   expect(elsewhere.fills.map(({ page }) => page)).toEqual(["login"]);
-  // A sign-in origin the run configured.
+  // A sign-in origin the run configured, where no recorded screen ran: the page can't tell.
   const provider = "https://id.example-sign-in.test";
   const configured = fakeSite({
     unrecorded: [screen],
@@ -756,7 +832,8 @@ it("looks for an unrecorded code field only on a recorded screen's origin or a s
   expect(await signIn(recipeOf(), configured, second.ask)).toEqual(
     Either.right({ alreadySignedIn: false }),
   );
-  expect(kinds(second.asked)).toEqual(["credential:missing_credentials", "code"]);
+  expect(kinds(second.asked)).toEqual(["credential:missing_credentials"]);
+  expect(configured.fills.map(({ page }) => page)).toEqual(["login"]);
 });
 
 it("looks for an unrecorded code field once, and fills no second code screen", async () => {
@@ -804,10 +881,10 @@ for (const [kind, attributes] of [
 
 it("types no code into a CAPTCHA's numeric box on a login screen shown again after a wrong password", async () => {
   const captcha = codeForm('name="verificationCode" inputmode="numeric" maxlength="4"');
-  const fake = fakeSite({ captcha });
+  const fake = fakeSite({ captcha, marker: true });
   const wrong = { ...account, password: "synthetic-wrong" };
   const { ask, asked } = owner({ logins: [wrong, account] });
-  expect(await signIn(recipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(await signIn(markedRecipeOf(), fake, ask)).toEqual(Either.right({ alreadySignedIn: false }));
   expect(kinds(asked)).toEqual([
     "credential:missing_credentials",
     "credential:invalid_credentials",

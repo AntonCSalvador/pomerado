@@ -251,6 +251,7 @@ export interface HostRefusal {
   readonly screen: {
     readonly fields: readonly string[];
     readonly submit?: string;
+    readonly submitKey?: string;
     readonly popup?: string;
   };
 }
@@ -265,6 +266,7 @@ export const sameHostRefusal = (one: HostRefusal, other: HostRefusal) => {
       refusal.slot,
       refusal.screen.fields,
       refusal.screen.submit ?? null,
+      refusal.screen.submitKey ?? null,
       refusal.screen.popup ?? null,
     ]);
   return key(one) === key(other);
@@ -279,6 +281,7 @@ interface NamedScreen {
     readonly accepts?: readonly string[] | undefined;
   }[];
   readonly submit?: string | undefined;
+  readonly submitKey?: string | undefined;
 }
 
 const isInsertionRefusal = Schema.is(InsertionRefusal);
@@ -316,6 +319,7 @@ export const typingRefusal = (
     screen: {
       fields: step.fields.map((each) => each.selector),
       ...(step.submit === undefined ? {} : { submit: step.submit }),
+      ...(step.submitKey === undefined ? {} : { submitKey: step.submitKey }),
       ...(step.popup === undefined ? {} : { popup: step.popup.origin }),
     },
   };

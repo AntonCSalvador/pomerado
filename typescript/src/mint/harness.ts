@@ -67,6 +67,7 @@ import {
   taskUpdateForReview,
   type PendingTaskUpdate,
   type TaskChange,
+  type TaskUpdateConfirmer,
 } from "../guardian/task-update.js";
 import { siteDomain } from "../runtime/same-site.js";
 import { validateSignedInMarker } from "../destinations/signed-in-marker.js";
@@ -90,6 +91,7 @@ import type {
   DecisionLedger,
   LedgerDenial,
   LedgerTestFailure,
+  LiveTestHost,
   PublicationDecision,
   PublicationRecovery,
   SpentSignIn,
@@ -103,6 +105,7 @@ import {
   minterHistory,
 } from "./outcome-review.js";
 import { readImportClosure } from "./operation-source.js";
+import { boundedResult, digestResult, resultDigestPath } from "./result-digest.js";
 import { contentDigest } from "./step-checks.js";
 import {
   caseDigest,
@@ -114,11 +117,16 @@ import {
   liveTestsEvidence,
   liveTestsEvidencePath,
   liveTestsEvidenceProblem,
+  liveTestsShortfall,
   liveTestVersion,
   LiveTestOutputChecks,
   maximumBatchCases,
   outputExcerpt,
   primaryListOf,
+  reviewPassPercent,
+  signedInTestInputLimit,
+  signedInTestInputRefusal,
+  uncountedTestInputs,
   type LiveTestCasesFile,
   type LiveTestRecord,
   type LiveTestVersion,
@@ -395,6 +403,17 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   "example_before_site_change",
   // Restored inputs change the code, which needs its own example.
   "input_contract_changed",
+  // Too few cases pass on the published source: fix, then run them again.
+  "live_tests_below_threshold",
+]);
+/**
+ * Publication refusals the host asks about only once in an attempt: finishing again, or passing
+ * `httpVersion` for an HTTP version, publishes. They are advice, not a host check refusing a step.
+ */
+const askedOnceReasons: ReadonlySet<string> = new Set([
+  "http_implementation_untested",
+  "http_implementation_stale",
+  "login_url_one_time",
 ]);
 /** How the minter goes on after a refusal that is neither an outage nor Guardian's. */
 const refusalRecovery = (reason: string | undefined, write: boolean): PublicationRecovery =>
@@ -418,6 +437,16 @@ const hostRefusalDecision = (
   failedChecks: [reason],
   recovery: refusalRecovery(reason, write),
 });
+/**
+ * Sign-ins the host itself refused: it typed nothing where the login would go somewhere
+ * credentials may not, or somewhere it could not verify. An autofill refusal of another check,
+ * such as a field the selector did not find or matched twice, is the minter's to correct.
+ */
+const hostSignInRefusal = (error: MintFailure) =>
+  error.authentication?.code === "CredentialTargetRefused" ||
+  error.authentication?.code === "CredentialTargetUnverified" ||
+  (error.authentication?.code === "AutofillRefused" &&
+    error.authentication.hostRefusal?.check === "destination");
 /**
  * A failure's code as diagnostics and publication evidence name it. A review whose outcome
  * Guardian kept refusing fails as `ReviewUnavailable`, but it is a verdict that did not form, not
@@ -1035,6 +1064,36 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           }
         | undefined;
       /**
+       * The build's latest sign-in is unconfirmed: a sign-in step that may have sent the login,
+       * with no later check that confirmed it, on the build's current site. A step that sent
+       * nothing, a check that found the site not signed in included, leaves it as it was; a
+       * takeover keeps it, and a move to another site clears it.
+       */
+      let signInUnconfirmed = recovered?.signInUnconfirmed === true;
+      /** Updates `signInUnconfirmed` once an authenticate ends, by what it did. */
+      const noteSignIn = (
+        exit: Exit.Exit<ExecutionEvidence, MintFailure>,
+        crossedDispatch: boolean,
+      ) => {
+        if (Exit.isSuccess(exit)) {
+          const { authentication, effect } = exit.value;
+          if (authentication?.state === "authenticated") signInUnconfirmed = false;
+          else if (effect !== "not_sent") signInUnconfirmed = true;
+          return;
+        }
+        // One that failed past its dispatch fence may have sent the login, unless it says it
+        // sent nothing: a login the owner declined, a screen the host refused before anything
+        // went out, or a stop before anything reached the site.
+        const failure = Cause.isFailType(exit.cause) ? exit.cause.error : undefined;
+        if (
+          crossedDispatch &&
+          failure?.loginDeclined === undefined &&
+          failure?.authentication?.nothingSubmitted !== true &&
+          failure?.execution?.dispatch !== "not_sent"
+        )
+          signInUnconfirmed = true;
+      };
+      /**
        * The host's identical refusals in a row while typing into a sign-in screen: the latest
        * and how many. An authenticate that ends any other way clears it.
        */
@@ -1082,10 +1141,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         error.review !== undefined ||
         error.execution !== undefined;
       /**
-       * Guardian denied or escalated an execution, or refused a publication for a reason no
-       * correction gets past, in this attempt. A publication denial that names a correction is not one.
+       * Guardian refused an execution with a refusal it did not mark `correctable`, or refused a
+       * publication for a reason no correction gets past, in this attempt. A publication denial
+       * that names a correction is not one, nor is a correctable execution refusal.
        */
       let guardianRefused = recovered?.guardianRefused === true;
+      /**
+       * A host check refused a step the build needs in this attempt: a publication its checks
+       * refused, a sign-in the host refused, or a task update the host refused. A `host_refused`
+       * block stands on it.
+       */
+      let hostRefused = recovered?.hostRefused === true;
       /**
        * This build's Guardian denials, the oldest first to go past the bound, for the blocked
        * explanation's review; a takeover restores them. A checkpoint from an older worker kept
@@ -1480,8 +1546,65 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             instruction: `The caller answered. Continue in this attempt with these answers; verify the current page before acting on them, and before any further write.${handles ? " A secret answer is a handle such as {{secret.s1}}, never the value, which you never see. Write the handle exactly as given, as the whole string literal passed as the value to fill, type or pressSequentially, or as a field of a request to this site, in the Playwright code of a kernel.browsers.playwright.execute call in explore, test or act source; the host fills in the value when it runs that source live, and masks it in what comes back. It refuses a handle anywhere else, such as in a variable, a concatenation, a transform, a return value or a navigation. Offline targets get the handle text unchanged. An example and published source never hold a handle: a value the finished tool needs at run time is a declared secret question it asks with ask." : ""}${card ? " A card answer (card_number, card_expiry, card_cvc, billing_postal_code) is never written in source: run an execution with purpose card_fill, target liveBrowser, entrypoint operation/card-fill-step.json and cardFillStep naming each card field's own selector, on the page or inside the payment provider's frame, with the card handle for it; the host types the values and clicks nothing." : ""}`,
           });
         });
+      /**
+       * A browser execution's screened result as the agent receives it: whole when it fits the
+       * threshold, else saved whole through the host's `saveResult` and digested. A command's
+       * output, a host without `saveResult` and a save that fails keep the whole result within
+       * the threshold and otherwise its first part, never more than the hard cap.
+       */
+      const deliveredObservations = (
+        evidence: ExecutionEvidence,
+        purpose: ExecutionRequest["purpose"] | "command",
+        observations: string,
+      ) =>
+        Effect.gen(function* () {
+          const save = dependencies.saveResult;
+          if (save === undefined || purpose === "command") return boundedResult(observations);
+          const path = resultDigestPath(evidence.executionId);
+          // A result the digest cannot be built for, such as one nested too deeply, comes back bounded.
+          const attempted = yield* Effect.try(() =>
+            digestResult(observations, { path, failed: evidence.status !== "completed" }),
+          ).pipe(Effect.either);
+          if (attempted._tag === "Left") {
+            yield* diagnose({
+              phase: "execution",
+              reason: "result_not_digested",
+              executionId: evidence.executionId,
+            });
+            return boundedResult(observations);
+          }
+          const digest = attempted.right;
+          if (!("file" in digest)) return digest.text;
+          const saved = yield* Effect.either(
+            Effect.suspend(() => save(path, digest.file)).pipe(
+              Effect.catchAllDefect((error) =>
+                Effect.fail(
+                  new MintFailure({
+                    code: "Unavailable",
+                    failureDetail: failureDetail("mint_host_dependency_failed", {
+                      operation: "saveResult",
+                      error,
+                    }),
+                  }),
+                ),
+              ),
+            ),
+          );
+          if (saved._tag === "Right") return digest.text;
+          yield* diagnose({
+            phase: "execution",
+            reason: "result_not_saved",
+            executionId: evidence.executionId,
+            code: saved.left.code,
+          });
+          return boundedResult(observations);
+        });
       /** `handedBack`: the execution's unanswered script question went back to the minter. */
-      const visible = (evidence: ExecutionEvidence, handedBack = false) =>
+      const visible = (
+        evidence: ExecutionEvidence,
+        purpose: ExecutionRequest["purpose"] | "command",
+        handedBack = false,
+      ) =>
         Effect.gen(function* () {
           const siteAccess = siteAccessDiagnostic(evidence);
           const withheld = safeExecutionEvidence(evidence).withheldConfirmation;
@@ -1522,6 +1645,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   ),
                 )
               : yield* screenMintText(dependencies, evidence.observations);
+          const delivered = yield* deliveredObservations(evidence, purpose, observations);
           // A script question left unanswered goes back to the agent, which decides how to go on.
           const scriptQuestion =
             evidence.scriptQuestion === undefined && handedBack
@@ -1553,7 +1677,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             repeatableRead,
             ...availabilityMetadata(),
             ...changedEntryNotice(),
-            observations,
+            observations: delivered,
           });
         });
       const record = (
@@ -1586,7 +1710,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           record(evidence, purpose);
           const handedBack = evidence.noResponse !== undefined && handsBackNoAnswer();
           if (handedBack) yield* questionHandedBack;
-          const receipt = yield* visible(evidence, handedBack);
+          const receipt = yield* visible(evidence, purpose, handedBack);
           if (evidence.terminalFailure === "ChallengeFailure" && !stopUnavailableHost())
             terminal ??= {
               build: "incomplete",
@@ -1885,6 +2009,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               reason: "offline_build",
               instruction: "An offline build has no website to move. Finish it offline.",
             };
+          // A host that can't move builds would refuse the move only after the caller confirmed
+          // it and Guardian allowed it, so it is refused here, before the host asks for the
+          // caller's confirmation or Guardian reviews it.
+          if (dependencies.siteMoveUnsupported === true)
+            return {
+              reason: "site_move_unsupported",
+              instruction:
+                "This host can't move this build to another site, so nothing changed. A new build is the way: call mint_update with recommend new_mint and a suggestedRequest for a build on the other site, or finish under the current site.",
+            };
           if (writeSession === "open")
             return {
               reason: "write_session_open",
@@ -2014,7 +2147,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         });
       const reviewFeedback = (error: MintFailure) =>
         Effect.gen(function* () {
-          guardianRefused = true;
+          // A refusal Guardian marked correctable names a fix, so no policy block stands on it.
+          // One without a kind, from an older reviewer, counts as final, as it did before.
+          if (error.review?.refusal !== "correctable") guardianRefused = true;
           const rationale = error.review
             ? yield* screenMintText(dependencies, error.review.rationale)
             : "Guardian rejected this submission; rationale unavailable.";
@@ -2037,7 +2172,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             repeatableRead,
             ...availabilityMetadata(),
             ...(error.review
-              ? { outcome: error.review.outcome, reviewId: error.review.reviewId }
+              ? {
+                  outcome: error.review.outcome,
+                  reviewId: error.review.reviewId,
+                  ...(error.review.refusal === undefined ? {} : { refusal: error.review.refusal }),
+                }
               : {}),
             rationale,
             notice:
@@ -2409,6 +2548,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       };
       const providerFeedback = (failed: MintFailure, now: number) => {
         const error = countHostRefusal(failed);
+        if (hostSignInRefusal(error)) hostRefused = true;
         const runnerFailure = screenedRunnerFailure(error);
         // A capture the host could not produce or screen is a gap: the result is withheld, the
         // effect possible, and the build goes on.
@@ -2837,7 +2977,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               command,
             });
             record(evidence, "command");
-            return yield* visible(evidence);
+            return yield* visible(evidence, "command");
           }).pipe(
             executionFailureFeedback(
               (error) => error.execution !== undefined || error.authentication !== undefined,
@@ -2913,10 +3053,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "explanation_too_long",
             "Private values in the explanation made it longer than 500 characters once screened. Shorten it, leave private values out, and call report_blocked again.",
           );
-        // Each ending stands on its basis on record. A policy block stands on Guardian's deny or
-        // escalation of an execution, or its publication refusal no correction gets past (an
+        // Each ending stands on its basis on record. A policy block stands on Guardian's final
+        // refusal of an execution, or its publication refusal no correction gets past (an
         // escalation for missing evidence is not one), unless the host's own guidance names the
-        // ending; the minter's reading of its own instructions is none. The owner's no to a
+        // ending; the minter's reading of its own instructions is none. A host_refused block
+        // stands on a host check's refusal the host recorded in this attempt. The owner's no to a
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
@@ -2938,6 +3079,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "no_question_unanswered",
             "No question went unanswered in this build, so the build has not ended. Use question_unanswered only after a question you asked came back as no answer and the build cannot go on without it.",
           );
+        if (reason === "host_refused" && !hostRefused)
+          return refused(
+            "host_not_refused",
+            "No host check refused a step in this attempt, so the build has not ended. host_refused needs a host check that refused a step the build needs, such as finish_build, a sign-in form or a site change.",
+          );
         if (
           reason === "policy" &&
           !guardianRefused &&
@@ -2947,7 +3093,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           if (unanswered) return { reason: "question_unanswered" };
           return refused(
             "policy_not_refused",
-            "Nothing in this attempt refused this: Guardian denied or escalated no execution, and refused no publication for privacy or authority or for a finding no correction gets past. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
+            "Nothing in this attempt refused this: Guardian made no final refusal of an execution, and refused no publication for privacy or authority or for a finding no correction gets past. Use host_refused when a host check refused a step the build needs and nothing left in this attempt can fix it. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
           );
         }
         return { reason };
@@ -3166,6 +3312,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const maintenanceConfirmer = (
         dependencies.taskUpdateConfirmer?.() ?? Effect.succeed("none" as const)
       ).pipe(
+        // A host outside the type, such as a script returning another word, names nobody.
+        Effect.map((confirmer): TaskUpdateConfirmer =>
+          confirmer === "owner" || confirmer === "owner_request" ? confirmer : "none",
+        ),
         Effect.catchAll((error) =>
           reportFailure(error, {
             component: "mint",
@@ -3176,8 +3326,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           }).pipe(Effect.as("none" as const)),
         ),
       );
+      /**
+       * The task revision at which Guardian's new_mint on a same-task update went back to the
+       * minter to ask the caller. A takeover forgets it, so the caller may be asked once more.
+       */
+      let newBuildAskedAt: number | undefined;
       /** Guardian's review of a confirmed update, then the host's application of an allowed one. */
-      const reviewAndApplyTaskUpdate = (submitted: TaskUpdateRequest) =>
+      const reviewAndApplyTaskUpdate = (
+        submitted: TaskUpdateRequest,
+        /** The confirmer the gate already asked the host about, so one update asks once. */
+        asked?: TaskUpdateConfirmer,
+      ) =>
         Effect.gen(function* () {
           const review = dependencies.reviewTaskUpdate;
           const apply = dependencies.applyTaskUpdate;
@@ -3201,14 +3360,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               confirmation,
               effect: buildEffect === "write" ? "write" : "read",
               ...(yield* publicationRefusals),
-              // The harness reviews a maintenance update only once the owner may confirm it,
-              // unless it only adds or tightens output fields, which nobody needs to confirm.
+              // Who can confirm, as the host says; a change that only adds or tightens output
+              // fields reaches review even when nobody can.
               ...(request.mode === "maintenance"
-                ? {
-                    maintenance: {
-                      confirmer: keepsContract(submitted) ? ("none" as const) : ("owner" as const),
-                    },
-                  }
+                ? { maintenance: { confirmer: asked ?? (yield* maintenanceConfirmer) } }
+                : {}),
+              // So Guardian knows a site change here can only be a new build.
+              ...(dependencies.siteMoveUnsupported === true
+                ? { siteMoveUnsupported: true as const }
                 : {}),
             },
             {
@@ -3216,6 +3375,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               json: (value) => dependencies.projection.json(value),
             },
           );
+          // Screening can lengthen the suggested request past what the ending keeps, which would
+          // end the build with nothing for the caller to send, so the minter shortens it first.
+          if (
+            submitted.recommend === "new_mint" &&
+            update.suggestedRequest !== undefined &&
+            update.suggestedRequest.length > blockedExplanationLimit
+          )
+            return taskUpdateAnswer("update_invalid", {
+              reason: "suggested_request_too_long",
+              instruction:
+                "Private values in suggestedRequest made it longer than 500 characters once screened. Shorten it, leave private values out, and call mint_update again.",
+            });
           const decision = yield* review({ update, current: taskState });
           yield* reviewCompleted;
           yield* active("publication");
@@ -3235,18 +3406,21 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               correlation: dependencies.reportCorrelation ?? "process",
             },
           );
-          if (decision.outcome === "reword")
+          // Guardian's new_mint on the minter's same-task update asks the caller first: they asked
+          // for this task, and only the minter's own recommendation writes a new build's request.
+          // Another one before an update applies is the same change, which the caller was already
+          // asked about, so the minter rewords it instead of asking them again.
+          const sameTaskNewBuild =
+            decision.outcome === "new_mint" && submitted.recommend === "update";
+          const askedBefore = sameTaskNewBuild && newBuildAskedAt === taskState.revision;
+          if (sameTaskNewBuild) newBuildAskedAt = taskState.revision;
+          if (decision.outcome === "reword" || askedBefore)
             return taskUpdateAnswer("reword", {
               rationale,
               instruction:
                 "Nothing changed, and the build continues under the current task. Revise the update using the rationale and call mint_update again, or continue without it.",
             });
-          // Guardian's new_mint on the minter's same-task update asks the caller first: they asked
-          // for this task, and only the minter's own recommendation writes a new build's request.
-          if (
-            decision.outcome === "clarify" ||
-            (decision.outcome === "new_mint" && submitted.recommend === "update")
-          )
+          if (decision.outcome === "clarify" || sameTaskNewBuild)
             return taskUpdateAnswer("clarification_required", {
               source: "guardian",
               rationale,
@@ -3304,16 +3478,23 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               instruction:
                 "Guardian allowed the update, but the host needs something only the caller can give before it applies, so nothing changed yet. Follow the notice, then call mint_update again.",
             });
-          if (result.outcome === "refused")
+          if (result.outcome === "refused") {
+            // The host refused to apply the update, such as a site change, by its own check. The
+            // harness's refusals before review, and one the host failed to apply, are no host
+            // check refusing a step.
+            hostRefused = true;
             return taskUpdateAnswer("update_refused", {
               reason: result.reason,
               notice: yield* screenMintText(dependencies, result.notice),
               instruction:
                 "The host cannot apply this update to this build, so nothing changed. Continue under the current task, or call mint_update with recommend new_mint if the caller's change needs a new build.",
             });
+          }
           const effectChanged = next.effect === "write" && buildEffect !== "write";
           const siteChanged = next.siteOrigin !== taskState.siteOrigin;
           taskState = next;
+          // The first site's unconfirmed sign-in says nothing of the next site.
+          if (siteChanged) signInUnconfirmed = false;
           // The task now runs signed out: a failed sign-in no longer holds anything back, and no
           // sign-in runs until a later update asks for one, which the owner then confirmed.
           for (const change of accepted.changes)
@@ -3450,6 +3631,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * counts, so the size of a batch cannot set it.
        */
       let liveTestsOutOfTime = recovered?.liveTestsOutOfTime === true;
+      /**
+       * The distinct inputs (`testInputKey`) this attempt's signed-in read ran live tests on,
+       * through live_tests or an execute testInput, bounded by `signedInTestInputLimit`.
+       */
+      const signedInTestInputs: string[] = [...(recovered?.signedInTestInputs ?? [])];
       /** Each case's latest screened output, by version and case id: this attempt's runs only. */
       const liveTestOutputs = new Map<string, unknown>();
       const outputKey = (entrypoint: string, id: string) => `${liveTestVersion(entrypoint)}\n${id}`;
@@ -3474,10 +3660,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       /** Whether a passing example's receipt already carried the test plan. */
       let testPlanSent = recoveredLiveTests.length > 0;
       /**
-       * Whether this read signed in. Only a read signed out designs and runs live tests; a
-       * signed-in read proves its tool with its example alone. Read at each use, with the build's
-       * current effect, so a read that signs in or becomes a write mid-build, a repair included,
-       * stops testing from then on. Only a sign-in on the current site counts, as on the host.
+       * Whether this read signed in. A read signed out runs as many live tests as it needs; a
+       * signed-in read runs them on at most `signedInTestInputLimit` distinct inputs, on its own
+       * signed-in browser, and its publication record holds only what ran signed in. Read at each
+       * use, so a read that signs in mid-build, a repair included, is held to that bound from then
+       * on. Only a sign-in on the current site counts, as on the host.
        */
       const signedIn = () =>
         executions.some(
@@ -3486,8 +3673,27 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             // A sign-in on the site an update moved the build away from is that site's.
             (revisions.get(entry.executionId) ?? 0) >= latestRevisionChanging("site"),
         );
+      /**
+       * Whether the host runs a signed-in read's batches on the build's own signed-in browser
+       * (`LiveTestHost.signedInBatches`). Without it a signed-in read runs no live tests, as before.
+       */
+      const signedInTestsSupported = dependencies.liveTests?.signedInBatches === true;
+      /**
+       * A write never runs live tests: its act session is the one run that proves it. A signed-in
+       * read runs them only on a host that supports signed-in batches.
+       */
       const liveTestsOffered = () =>
-        dependencies.liveTests !== undefined && buildEffect === "read" && !signedIn();
+        dependencies.liveTests !== undefined &&
+        buildEffect === "read" &&
+        (signedInTestsSupported || !signedIn());
+      /**
+       * A case's latest result on `entrypoint`'s version, as this read counts it now: once it
+       * signed in, only a result run signed in, since one from before tested another session.
+       */
+      const countedRecord = (entrypoint: string, id: string) => {
+        const record = recordsFor(entrypoint).get(id);
+        return record === undefined || !signedIn() || record.signedIn === true ? record : undefined;
+      };
       /** The agent's cases file as it stands, or why it cannot be used. */
       const readCasesFile = Effect.promise(async () => {
         try {
@@ -3526,6 +3732,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           };
         });
       const emptyCases: LiveTestCasesFile = { cases: [] };
+      /** What a signed-in read designs, in place of a read signed out's suite. */
+      const signedInPlanInstruction = `This read signed in, so it runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, as the testing skill says: one combined case in ${liveTestCasesPath} that sets every optional input and filter the example left unset, with values the site shows (a picker's options, or values in the example's own rows, never a person's or record's name, number or email). Choose each value so at least one example row fails it while some rows still pass every filter, since a value every example row already satisfies passes even when the tool ignores it, and name in purpose the row each value excludes. Set next_page true when the tool pages. Add a second case only for inputs that cannot be set with the others. Then run it with live_tests action run and check that every row it returns satisfies each input it set, that the excluded rows are gone, and that page two holds new rows. Running it again after a fix, or on src/tool-http.mjs, is free.`;
       /** What the agent reads about its tests: its cases and their results. */
       const liveTestPlanView = (
         entrypoint: string,
@@ -3536,7 +3744,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const file = Either.isRight(read) ? read.right : emptyCases;
           const digest = yield* stepDigest(entrypoint);
           const cases = file.cases.map((testCase) => ({
-            ...caseView(testCase, recordsFor(entrypoint).get(testCase.id), digest),
+            ...caseView(testCase, countedRecord(entrypoint, testCase.id), digest),
             ...(options.show?.includes(testCase.id) &&
             liveTestOutputs.has(outputKey(entrypoint, testCase.id))
               ? { output: liveTestOutputs.get(outputKey(entrypoint, testCase.id)) }
@@ -3561,10 +3769,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             ...(file.notTested === undefined ? {} : { notTested: file.notTested }),
             instruction:
               cases.length === 0
-                ? `Design the cases in ${liveTestCasesPath} from what you saw on the site, as the testing skill says: different real values unlike the example's, smart combinations, edge cases and one rerun of the example's input. Then call live_tests with action run.`
+                ? signedIn()
+                  ? signedInPlanInstruction
+                  : `Design a handful of cases in ${liveTestCasesPath} from what you saw on the site, as the testing skill says: one case that sets together every input the example left unset, the example's input once more, no results, the next page, and another case only where a different layout or real variant needs it. Then call live_tests with action run.`
                 : cases.every((testCase) => testCase.status === "pass")
-                  ? "Every case passes on the current source. Check what the outputs mean (filters applied to every item, the order, the applied location), add a case for anything the tool claims that no case tests yet, then make your last edit, run every case again, run the example last and call finish_build."
-                  : `Fix the code for each failing case at its frame. While a fix is in progress, prefer rerunning only the failing cases, together in one batch named in cases. Add a case for anything the tool claims that no case tests yet, then, after your last edit, run every case once with cases null. Publication review reads ${liveTestsEvidencePath}, the host's record of these results on the source you publish, against what the tool claims.`,
+                  ? "Every case passes on the current source. Check what the outputs mean (filters applied to every item, rows each filter excludes gone, page two holding new rows, the order, the applied location), add a case for anything the tool claims that no case tests yet, then make your last edit, run every case again, run the example last and call finish_build."
+                  : `Fix the code for each failing case at its frame. Fix everything this batch revealed before you run again, then rerun the failing cases and every case the fixes can touch, together in one batch named in cases, on each version you ship whose source the fixes changed. Add a case for anything the tool claims that no case tests yet, then, after your last edit, run every case once with cases null. Publication review reads ${liveTestsEvidencePath}, the host's record of these results on the source you publish, against what the tool claims.`,
           };
         });
       /**
@@ -3579,6 +3789,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           attemptBound: attemptLeft <= 10 * 60_000,
         };
       });
+      /**
+       * Whether a batch ending at `deadlineAt` has time for one case on `host`, as long as one case
+       * may take there (`LiveTestHost.caseTimeoutMs`). A host that caps its batches raises that
+       * limit past any deadline once its last batch ran, so no batch fits from then on.
+       */
+      const liveTestBatchFits = (host: LiveTestHost, deadlineAt: number) =>
+        Effect.map(
+          Clock.currentTimeMillis,
+          (now) => deadlineAt - now >= (host.caseTimeoutMs ?? defaultLiveTestCaseMs),
+        );
       const runLiveTests = (request: LiveTestsRequest) =>
         Effect.gen(function* () {
           const host = dependencies.liveTests;
@@ -3615,6 +3835,22 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   ? `${liveTestCasesPath} has no cases to run. Design them there first, as the testing skill says. Nothing was executed.`
                   : `A batch runs at most ${maximumBatchCases} cases; name the ones to run in cases. Nothing was executed.`,
             });
+          // Fixed for the batch: a sign-in cannot start while it holds the execution permit.
+          const signedInBatch = signedIn();
+          const overLimit = signedInBatch
+            ? signedInTestInputRefusal(
+                signedInTestInputs,
+                selected.map((testCase) => testCase.input),
+              )
+            : undefined;
+          if (overLimit !== undefined)
+            return JSON.stringify({
+              kind: "host_live_tests",
+              status: "limit",
+              limit: signedInTestInputLimit,
+              inputsRun: signedInTestInputs.length,
+              instruction: overLimit,
+            });
           const shape = yield* liveTestShape(request.entrypoint);
           const cursor = "cursor" in shape ? shape.cursor : undefined;
           if (selected.some((testCase) => testCase.next_page === true) && cursor === undefined)
@@ -3622,7 +3858,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               kind: "host_live_tests",
               status: "no_cursor",
               instruction:
-                "A next_page case needs an input field named cursor (or page_token) and an output field such as next_cursor, both strings or numbers, in the tool's schemas. Add them, or drop next_page. Nothing was executed.",
+                "A next_page case needs the list fields in the tool's schemas: the string input cursor and output next_cursor, which listInputFields and listOutputFields from pomerado/runtime give. Add them, or drop next_page. Nothing was executed.",
             });
           const digest = yield* stepDigest(request.entrypoint);
           if (digest === undefined)
@@ -3634,8 +3870,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const { deadlineAt, attemptBound } = yield* liveTestDeadline;
           // A batch with less time left than one case may take could only end every case
           // inconclusive, so it runs nothing.
-          const caseLimitMs = host.caseTimeoutMs ?? defaultLiveTestCaseMs;
-          if (deadlineAt - (yield* Clock.currentTimeMillis) < caseLimitMs) {
+          if (!(yield* liveTestBatchFits(host, deadlineAt))) {
             liveTestsOutOfTime = true;
             return JSON.stringify({
               kind: "host_live_tests",
@@ -3644,8 +3879,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 "Too little of this attempt is left to run a batch. Run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out. Nothing was executed.",
             });
           }
-          const workers = Math.max(1, Math.min(request.maxWorkers ?? host.maxWorkers, host.maxWorkers));
+          // A signed-in read's cases run on the build's own signed-in browser, one at a time.
+          const workers = signedInBatch
+            ? 1
+            : Math.max(1, Math.min(request.maxWorkers ?? host.maxWorkers, host.maxWorkers));
           const result = yield* host.run({
+            ...(signedInBatch ? { signedIn: true as const } : {}),
             entrypoint: request.entrypoint,
             sourceDigest: digest,
             cases: selected.map((testCase) => ({
@@ -3672,6 +3911,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 "Guardian denied this batch, so nothing ran. Fix what the rationale names (often an input that names or guesses a private value, or a case that would change the site), then run again.",
             });
           }
+          if (signedInBatch)
+            signedInTestInputs.push(
+              ...uncountedTestInputs(
+                signedInTestInputs,
+                selected.map((testCase) => testCase.input),
+              ),
+            );
           // The source the batch ran: a change while it ran leaves its results stale.
           const after = yield* stepDigest(request.entrypoint);
           const sourceDigest = after === digest ? digest : "changed_while_running";
@@ -3785,6 +4031,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               purpose: testCase.purpose,
               expect: testCase.expect,
               ...(testCase.next_page === true ? { nextPage: true } : {}),
+              ...(signedInBatch ? { signedIn: true as const } : {}),
             });
             verdicts[judged.verdict] = (verdicts[judged.verdict] ?? 0) + 1;
             if (attemptBound && judged.verdict === "inconclusive" && judged.got === "deadline")
@@ -3824,22 +4071,37 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * The publication review's record of a read's live tests, and its coverage line. It lists
        * only the versions that ship: the published entrypoint's, and the HTTP version beside a
        * published Playwright version while its file exists, unless finish_build ruled it out
-       * (`httpRuledOut`). A version that does not ship is neither recorded nor judged.
+       * (`httpRuledOut`). A version that does not ship is neither recorded nor judged. A
+       * signed-in read's record holds only results run signed in, and it has none until one ran.
        */
       const liveTestsForPublication = (entrypoint: string, httpRuledOut: boolean) =>
         Effect.gen(function* () {
-          if (dependencies.liveTests === undefined || buildEffect !== "read" || signedIn())
+          if (dependencies.liveTests === undefined || buildEffect !== "read") return undefined;
+          const signedInRead = signedIn();
+          const counted = (record: LiveTestRecord) => !signedInRead || record.signedIn === true;
+          if (
+            signedInRead &&
+            ![
+              ...liveTestRecords.playwright.values(),
+              ...liveTestRecords.http.values(),
+              ...liveTestReplaced,
+            ].some(counted)
+          )
             return undefined;
+          const recordsOf = (version: LiveTestVersion) =>
+            new Map([...liveTestRecords[version]].filter(([, record]) => counted(record)));
           const read = yield* readCasesFile;
           const published = liveTestVersion(entrypoint);
           const replacedOf = (version: LiveTestVersion) =>
-            liveTestReplaced.filter((record) => liveTestVersion(record.entrypoint) === version);
+            liveTestReplaced.filter(
+              (record) => liveTestVersion(record.entrypoint) === version && counted(record),
+            );
           const versions: LiveTestVersionResults[] = [
             {
               version: published,
               entrypoint,
               sourceDigest: yield* stepDigest(entrypoint),
-              records: liveTestRecords[published],
+              records: recordsOf(published),
               replaced: replacedOf(published),
             },
           ];
@@ -3847,7 +4109,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             // The conventional file while the workspace has it: a deleted HTTP version does not
             // ship, and a scratch `*-http.mjs` the latest results ran is not the version that
             // ships. A host that cannot tell keeps the file the latest results ran.
-            const ran = [...replacedOf("http"), ...liveTestRecords.http.values()]
+            const ran = [...replacedOf("http"), ...recordsOf("http").values()]
               .map((record) => record.entrypoint)
               .filter((path) => path !== undefined)
               .at(-1);
@@ -3865,7 +4127,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 version: "http",
                 entrypoint: httpEntrypoint,
                 sourceDigest: yield* stepDigest(httpEntrypoint),
-                records: liveTestRecords.http,
+                records: recordsOf("http"),
                 replaced: replacedOf("http"),
               });
           }
@@ -3874,6 +4136,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             ...(Either.isLeft(read) ? { fileProblem: read.left } : {}),
             versions,
             outOfTime: liveTestsOutOfTime,
+            ...(signedInRead ? { signedIn: true } : {}),
           });
         }).pipe(
           // A record the host could not build says so, rather than vanishing from the review.
@@ -4065,7 +4328,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               )
                 return yield* new MintFailure({ code: "AlreadyExecuted" });
               const repeated = yield* repeatedWriteRefusal(submitted);
-              const availability =
+              const preflighted =
                 repeated === undefined
                   ? yield* dependencies
                       .preflight(submitted)
@@ -4075,6 +4338,30 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         ),
                       )
                   : { supported: false as const, reason: repeated };
+              // A signed-in read's live test on an input it chose counts toward its bound, shared
+              // with live_tests; one the host already refused never reaches it.
+              const signedInTestInput =
+                preflighted.supported &&
+                submitted.testInput !== undefined &&
+                submitted.purpose === "test" &&
+                submitted.target === "liveBrowser" &&
+                buildEffect === "read" &&
+                signedInTestsSupported &&
+                signedIn()
+                  ? Option.getOrUndefined(
+                      Schema.decodeUnknownOption(Schema.parseJson())(submitted.testInput),
+                    )
+                  : undefined;
+              const overLimit =
+                signedInTestInput === undefined
+                  ? undefined
+                  : signedInTestInputRefusal(signedInTestInputs, [signedInTestInput]);
+              const availability =
+                overLimit === undefined
+                  ? preflighted
+                  : { supported: false as const, reason: overLimit };
+              // A refused preflight records no host refusal: it refuses the minter's own request,
+              // such as a wrong target or a missing sign-in step, which the minter can fix.
               if (!availability.supported) {
                 const evidence: ExecutionEvidence = {
                   executionId: randomUUID(),
@@ -4090,7 +4377,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   reason: availability.reason,
                 });
                 record(evidence, submitted.purpose);
-                return yield* visible(evidence);
+                return yield* visible(evidence, submitted.purpose);
               }
               if (submitted.purpose === "residual") yield* dependencies.authorizeResidual;
               if (submitted.purpose === "authenticate") {
@@ -4109,10 +4396,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 Effect.sync(() => {
                   crossedDispatchBoundary = true;
                   allowed = fenced;
+                  // Guardian allowed it and it is going out: the input counts from now on.
+                  if (signedInTestInput !== undefined)
+                    signedInTestInputs.push(
+                      ...uncountedTestInputs(signedInTestInputs, [signedInTestInput]),
+                    );
                 }),
               ).pipe(
                 Effect.onExit((result) =>
                   Effect.suspend(() => {
+                    if (submitted.purpose === "authenticate")
+                      noteSignIn(result, crossedDispatchBoundary);
                     if (
                       (!effectful && submitted.purpose !== "authenticate") ||
                       Exit.isSuccess(result)
@@ -4130,15 +4424,24 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       (result.cause.error.code === "ReviewDenied" ||
                         (result.cause.error.code === "ReviewUnavailable" &&
                           result.cause.error.reviewDispatch === "not_sent"));
+                    // The host stopped after the dispatch fence but before anything reached the
+                    // site, such as a sandbox copy of the source that did not match the review:
+                    // no write went out, so none is tracked, fenced or reconciled.
+                    const hostNotSent =
+                      Cause.isFailType(result.cause) &&
+                      result.cause.error.execution?.dispatch === "not_sent";
+                    const ran = crossedDispatchBoundary && !hostNotSent;
                     const lost: ExecutionEvidence = {
                       executionId: `unresolved_${randomUUID()}`,
                       status: "failed",
                       effect:
                         submitted.purpose === "example" || submitted.purpose === "act"
-                          ? crossedDispatchBoundary
+                          ? ran
                             ? "possible"
                             : "not_sent"
-                          : reviewPreventedExecution || submitted.purpose === "authenticate"
+                          : reviewPreventedExecution ||
+                              hostNotSent ||
+                              submitted.purpose === "authenticate"
                             ? "not_sent"
                             : "possible",
                       ...(submitted.purpose === "authenticate" && !reviewPreventedExecution
@@ -4161,9 +4464,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         "Execution did not produce a result. Reconcile using the host's durable execution journal.",
                     };
                     record(lost, submitted.purpose);
-                    // Only an execution that crossed its dispatch fence ran; a write whose result
-                    // was lost is exactly what the outcome reviewer settles.
-                    return crossedDispatchBoundary
+                    // Only an execution that crossed its dispatch fence and was sent ran; a write
+                    // whose result was lost is exactly what the outcome reviewer settles.
+                    return ran
                       ? observeExecution(submitted, lost, allowed, "result_lost")
                       : Effect.void;
                   }),
@@ -4192,7 +4495,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     ...parsed.value,
                     testPlan: {
                       plannedCases: planned,
-                      instruction: `Your example passed, so the tool's schemas are settled. Design the cases in ${liveTestCasesPath} as the testing skill says, from what you saw on the site: different real values unlike the example's (another record, retailer or store the site lists), smart combinations, edge cases and one rerun of the example's input. Run them with live_tests action run and fix every failing case, preferring to rerun only the failing ones while you fix. Then make your last edit, run every case again and run the example last.`,
+                      instruction: signedIn()
+                        ? `Your example passed, so the tool's schemas are settled. ${signedInPlanInstruction} Fix the code until it passes, then make your last edit, run it again and run the example last.`
+                        : `Your example passed, so the tool's schemas are settled. Design the cases in ${liveTestCasesPath} as the testing skill says, from what you saw on the site: one case that combines the inputs the example left unset, each set to a value at least one example row fails while some rows still pass, the example's input once more, a query with no results, the next page, and another case only where a different page layout or a real variant needs it. Run them with live_tests action run and fix every failing case, fixing everything a batch reveals before you run again. Then make your last edit, run every case again and run the example last.`,
                     },
                   });
             }).pipe(
@@ -4452,11 +4757,44 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       ),
                     );
               // The host's own record of a read's live tests on this source goes to the review
-              // as evidence, and its line to coverage. It never refuses publication by itself.
+              // as evidence, and its line to coverage. It refuses publication by itself only
+              // when the published version's cases pass below the bar on its source: the review
+              // would hold it back on those failures anyway, so it is not started. Once the
+              // attempt ran out of time for live tests, or no further batch fits, as after a
+              // host's batch cap, no case can run again, so the review decides on the record as
+              // it is.
               const liveTests = yield* liveTestsForPublication(
                 proposed.entrypoint,
                 proposed.httpVersion?.outcome === "ruled_out",
               );
+              const testsCanRunAgain =
+                liveTests !== undefined &&
+                dependencies.liveTests !== undefined &&
+                !liveTestsOutOfTime &&
+                (yield* liveTestBatchFits(
+                  dependencies.liveTests,
+                  (yield* liveTestDeadline).deadlineAt,
+                ));
+              const shortfall =
+                liveTests === undefined || !testsCanRunAgain
+                  ? undefined
+                  : liveTestsShortfall(
+                      liveTests.record.versions,
+                      liveTestVersion(proposed.entrypoint),
+                    );
+              if (shortfall !== undefined) {
+                const reason = "live_tests_below_threshold";
+                pendingDecision = hostRefusalDecision(reason, evidence.executionId, write);
+                yield* diagnose({ phase: "publication", code: "PublicationUnavailable", reason });
+                return JSON.stringify({
+                  status: "not_published",
+                  code: "PublicationUnavailable",
+                  reason,
+                  userInputRequired: false,
+                  instruction: `Publication review not started: only ${shortfall.passed} of ${shortfall.counted} live test cases${shortfall.entrypoint === undefined ? "" : ` on ${shortfall.entrypoint}`} pass on this source (${shortfall.percent}%), and review starts at ${reviewPassPercent}%. Fix the code where a case fails, or the case where it is wrong, run every case again, then call finish_build.`,
+                  executionContext: yield* executionContext(),
+                });
+              }
               const coverage =
                 liveTests === undefined
                   ? minterCoverage
@@ -4514,6 +4852,19 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                           ? "guardian_feedback"
                           : refusalRecovery(reason, buildEffect === "write"),
               };
+              // The host's own publication checks refused it, as a sign-in that fails on a new
+              // browser: neither Guardian's decision nor an outage. An output the example could not
+              // make available is an infrastructure gap, and a refusal the host asks only once,
+              // such as a one-time login URL or an untested HTTP version, is advice: finishing
+              // again publishes.
+              if (
+                publication._tag === "Left" &&
+                publication.left.code === "PublicationUnavailable" &&
+                !publicationOutage(publication.left) &&
+                publication.left.reason !== "example_output_unavailable" &&
+                !askedOnceReasons.has(publication.left.reason ?? "")
+              )
+                hostRefused = true;
               if (publication._tag === "Right" || reviewDecided(publication.left)) {
                 yield* reviewCompleted;
                 // A completed review replaces the input feedback an earlier one returned.
@@ -5270,14 +5621,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     // Sign-in is unavailable in this build, and a retained receipt held its
                     // ending back: the minter stops, and the build ends with the sign-in's own
                     // result, which names the cause better than any blocked reason.
+                    const endedForSignIn = JSON.stringify({
+                      status: "sign_in_unavailable",
+                      notice:
+                        "Sign-in is unavailable in this build, so it ends with that result and its cause instead of a blocked reason; nothing more runs in this attempt.",
+                    });
                     if (signInUnavailable !== undefined) {
                       terminal ??= signInUnavailable.outcome;
                       yield* diagnose({ phase: "blocked", reason: "sign_in_unavailable" });
-                      return JSON.stringify({
-                        status: "sign_in_unavailable",
-                        notice:
-                          "Sign-in is unavailable in this build, so it ends with that result and its cause instead of a blocked reason; nothing more runs in this attempt.",
-                      });
+                      return endedForSignIn;
                     }
                     const explanation = redactCallerText(
                       yield* screenMintText(dependencies, report.explanation),
@@ -5288,6 +5640,36 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       yield* Clock.currentTimeMillis,
                     );
                     if ("refusal" in ending) return ending.refusal;
+                    // An ending the checks above accepted, while the build's latest sign-in
+                    // never confirmed: the site never got as far as judging the task, so it
+                    // cannot have declined it or lacked it, and a policy or host check that
+                    // stopped it stopped a sign-in. With no failed sign-in pending, whose own
+                    // refusal above asks the agent to resolve it, the build ends as sign-in
+                    // unavailable, worded by what the host saw, and its caller is never told to
+                    // change the request. The owner's own no, and a question they left
+                    // unanswered, keep their endings, a policy report renamed to one included.
+                    if (
+                      ending.reason !== "owner_declined" &&
+                      ending.reason !== "question_unanswered" &&
+                      signInUnconfirmed &&
+                      unresolvedSignIn === undefined &&
+                      loginDeclined === undefined &&
+                      !signInAbandoned
+                    ) {
+                      const sessionLoss = dependencies.signInSessionLoss?.();
+                      terminal ??= {
+                        build: "incomplete",
+                        recoveryReason: "sign_in_unavailable",
+                        summary: signInUnavailableSummary(undefined, undefined, sessionLoss),
+                      };
+                      yield* diagnose({
+                        phase: "blocked",
+                        reason: "sign_in_unavailable",
+                        reported: report.reason,
+                        ...(sessionLoss === undefined ? {} : { sessionLoss }),
+                      });
+                      return endedForSignIn;
+                    }
                     const submitted = { ...report, reason: ending.reason };
                     const review = yield* reviewBlockedExplanation(explanation);
                     yield* active("publication");
@@ -5377,17 +5759,20 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       );
                     const refusal = taskUpdateRefusal(submitted);
                     if (refusal !== undefined) return taskUpdateAnswer("update_refused", refusal);
+                    let askedConfirmer: TaskUpdateConfirmer | undefined;
                     if (request.mode === "maintenance" && !keepsContract(submitted)) {
                       // Only the tool's owner confirms a change that takes from the registered
                       // contract; adding or tightening an output field takes nothing away.
                       const confirmer = yield* maintenanceConfirmer;
-                      if (confirmer !== "owner")
+                      askedConfirmer = confirmer;
+                      if (confirmer !== "owner" && confirmer !== "owner_request")
                         return taskUpdateAnswer("update_refused", {
                           reason: "owner_unavailable",
                           instruction:
                             "No one who owns this tool can confirm a change that loosens or removes an output, or changes a requirement or the purpose, now, so nothing changed. Keep the registered contract: publish a repair that still returns every required output field (adding or tightening a field needs no confirmation), or end with report_blocked, reason site_lacks_capability, naming the field the site no longer shows.",
                         });
-                      if (submitted.confirmedBy.length === 0)
+                      // The owner's own request may confirm what it names, which Guardian judges.
+                      if (confirmer === "owner" && submitted.confirmedBy.length === 0)
                         return taskUpdateAnswer("clarification_required", {
                           source: "host",
                           reason: "confirmation_required",
@@ -5421,7 +5806,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         instruction:
                           "confirmedBy names questions the caller has not answered in this build, so nothing confirms the update and nothing changed. Ask the caller with request_input, then call mint_update again naming the questions they answered.",
                       });
-                    return yield* reviewAndApplyTaskUpdate(submitted);
+                    return yield* reviewAndApplyTaskUpdate(submitted, askedConfirmer);
                   }).pipe(
                     Effect.catchIf(
                       (error) => error.code === "ReviewUnavailable",
@@ -5597,7 +5982,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         instruction:
                           buildEffect === "write"
                             ? "A write build runs no live tests: its act session is the one run that proves it. Compose the script from the session and publish."
-                            : "This read signed in, so it runs no live tests: its example alone proves the tool. Check src/tool-http.mjs once against the example's input, if you wrote one (execute purpose test, target liveBrowser, no testInput), run the example last, after your last edit, and publish.",
+                            : "This read signed in, and this host runs no signed-in live tests, so its example alone proves the tool. Check src/tool-http.mjs once against the example's input, if you wrote one (execute purpose test, target liveBrowser, no testInput), run the example last, after your last edit, and publish.",
                       });
                     if (request.action === "plan")
                       return JSON.stringify(
@@ -5833,6 +6218,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ...liveTestsCheckpoint("playwright", "liveTests"),
         ...liveTestsCheckpoint("http", "liveTestsHttp"),
         ...(liveTestsOutOfTime ? { liveTestsOutOfTime: true } : {}),
+        ...(signedInTestInputs.length === 0 ? {} : { signedInTestInputs: [...signedInTestInputs] }),
         ...(reviewer.tracked().length === 0 ? {} : { outcomeWrites: reviewer.tracked() }),
         purposes: [...purposes].map(([executionId, purpose]) => {
           const taskRevision = revisions.get(executionId);
@@ -5858,10 +6244,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         },
         ...(blockedReviewUnavailable ? { blockedReviewUnavailable: true as const } : {}),
         ...(guardianRefused ? { guardianRefused: true as const } : {}),
+        ...(hostRefused ? { hostRefused: true as const } : {}),
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),
         ...(loginHeld ? { loginHeld: true as const } : {}),
         ...(loginDeclined === undefined ? {} : { loginDeclined }),
         ...(signInAbandoned ? { signInAbandoned: true as const } : {}),
+        ...(signInUnconfirmed ? { signInUnconfirmed: true as const } : {}),
         destinationEvidenceRefusals,
         inputFeedbackRounds,
         inputFeedbackPublicTool,

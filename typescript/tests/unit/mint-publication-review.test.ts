@@ -1,12 +1,19 @@
 import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
+import { publicationDelta, publicationRound } from "../../src/guardian/publication-delta.js";
 import { MintFailure } from "../../src/mint/contracts.js";
 import {
   exampleInputFeedback,
   exampleOutputEvidence,
+  exampleOutputRecord,
+  missingRequestedNames,
+  outputDigest,
+  outputDigestNote,
+  outputDigestPath,
   publicationEvidenceNote,
   publicationScope,
   publicDefinition,
+  requestedOutputFields,
   reviewPublication,
   sessionEvidenceFiles,
   unlistedExampleInputKeys,
@@ -24,9 +31,15 @@ const Envelope = Schema.parseJson(
     state: Schema.String,
     reason: Schema.optional(Schema.String),
     screenedBytes: Schema.optional(Schema.Int),
-    output: Schema.optional(Schema.String),
+    truncation: Schema.optional(
+      Schema.Struct({ list: Schema.String, kept: Schema.Int, records: Schema.Int }),
+    ),
+    output: Schema.optional(Schema.Unknown),
   }),
 );
+/** A truncated record's output: a prefix of the screened output's text. */
+const prefixOf = (envelope: { readonly output?: unknown }) =>
+  typeof envelope.output === "string" ? envelope.output : "missing";
 /** A fake host's credential precheck: a record passes unless it holds one of `secrets`. */
 const precheck =
   (...secrets: string[]) =>
@@ -37,6 +50,17 @@ const source = {
   executedEntrypoint: "executed/src/tool.mjs",
   executedSourceDigest: "digest_a",
 };
+/** A small record of short fields, which indenting makes about twice as long. */
+const smallRecord = (index: number) => ({
+  id: index,
+  name: `Item ${index}`,
+  price: 9.99,
+  inStock: true,
+  rating: 4.5,
+  reviews: 120,
+  sale: false,
+  qty: 3,
+});
 const evidenceFor = async (value: unknown, credentialFree = precheck("private-canary")) => {
   const { state, text } = await Effect.runPromise(
     exampleOutputEvidence(
@@ -58,19 +82,18 @@ describe("the example's output evidence", () => {
       ...source,
       state: "available",
       screenedBytes: Buffer.byteLength('{"heading":"Public"}'),
-      output: '{"heading":"Public"}',
+      output: { heading: "Public" },
     });
-    // The record is indented JSON with its fields in this order.
-    expect(Object.keys(JSON.parse(text) as object)).toEqual([
-      "kind",
-      "executionId",
-      "executedEntrypoint",
-      "executedSourceDigest",
-      "state",
-      "screenedBytes",
-      "output",
+    // The record is compact JSON with each field on its own line, in this order.
+    expect(text.split("\n")).toEqual([
+      '{"kind":"verified_example_output",',
+      '"executionId":"execution_a",',
+      '"executedEntrypoint":"executed/src/tool.mjs",',
+      '"executedSourceDigest":"digest_a",',
+      '"state":"available",',
+      '"screenedBytes":20,',
+      '"output":{"heading":"Public"}}',
     ]);
-    expect(text).toContain('\n  "kind": "verified_example_output",\n');
   });
 
   it("names a write session's step instead of a source digest", async () => {
@@ -91,13 +114,78 @@ describe("the example's output evidence", () => {
       executedEntrypoint: "publication/session/1/src/save.mjs",
       state: "available",
       screenedBytes: 14,
-      output: '{"saved":true}',
+      output: { saved: true },
     });
   });
 
-  it("serializes a bare string result as JSON", async () => {
-    const { envelope } = await evidenceFor("plain result");
-    expect(envelope.output).toBe(JSON.stringify("plain result"));
+  it("embeds a bare string result as its JSON value, not a JSON string inside JSON", async () => {
+    const { text, envelope } = await evidenceFor("plain result");
+    expect(envelope.output).toBe("plain result");
+    expect(text).not.toContain(String.raw`\"plain result\"`);
+  });
+
+  it("returns the whole screened output, parsed, beside the record", async () => {
+    const value = { rows: Array.from({ length: 20_000 }, (_, index) => `row ${index}`) };
+    const evidence = await Effect.runPromise(
+      exampleOutputEvidence(source, JSON.stringify(value), precheck()),
+    );
+    expect(evidence.state).toBe("truncated");
+    expect(evidence.screened).toEqual(value);
+  });
+
+  it("cuts a large list of records to its first whole records", async () => {
+    const records = Array.from({ length: 4000 }, (_, index) => ({
+      id: index,
+      title: `Result ${index} ${"x".repeat(40)}`,
+    }));
+    const { text, envelope } = await evidenceFor({ total: 4000, results: records });
+    expect(envelope.state).toBe("truncated");
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(limit);
+    const kept = envelope.truncation?.kept ?? 0;
+    expect(envelope.truncation).toEqual({ list: "results", kept, records: 4000 });
+    expect(kept).toBeGreaterThan(100);
+    expect(envelope.output).toEqual({ total: 4000, results: records.slice(0, kept) });
+  });
+
+  it("keeps every record of an output that fits in 96 KiB as compact JSON", async () => {
+    const records = Array.from({ length: 600 }, (_, index) => smallRecord(index));
+    const value = { total: 600, results: records };
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThan(limit - 1024);
+    expect(Buffer.byteLength(JSON.stringify(value, null, 2))).toBeGreaterThan(limit);
+    const { text, envelope } = await evidenceFor(value);
+    expect(envelope.state).toBe("available");
+    expect(envelope.truncation).toBeUndefined();
+    expect(envelope.output).toEqual(value);
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(limit);
+  });
+
+  it("cuts an output past 96 KiB as compact JSON, and its digest covers every record", async () => {
+    const records = Array.from({ length: 1500 }, (_, index) => smallRecord(index));
+    const value = { total: 1500, results: records };
+    const evidence = await Effect.runPromise(
+      exampleOutputEvidence(source, JSON.stringify(value), precheck()),
+    );
+    const envelope = Schema.decodeUnknownSync(Envelope)(evidence.text);
+    expect(envelope.state).toBe("truncated");
+    expect(Buffer.byteLength(evidence.text)).toBeLessThanOrEqual(limit);
+    const kept = envelope.truncation?.kept ?? 0;
+    expect(envelope.truncation).toEqual({ list: "results", kept, records: 1500 });
+    expect(envelope.output).toEqual({ total: 1500, results: records.slice(0, kept) });
+    // The kept records fill the limit as compact JSON.
+    expect(Buffer.byteLength(JSON.stringify(records.slice(0, kept)))).toBeGreaterThan(limit * 0.95);
+    const digest = JSON.parse(outputDigest(evidence.screened) ?? "{}") as {
+      readonly lists: readonly { readonly path: string; readonly records: number }[];
+    };
+    expect(digest.lists).toContainEqual(expect.objectContaining({ path: "results", records: 1500 }));
+  });
+
+  it("writes the record of an output the host could not read", () => {
+    expect(JSON.parse(exampleOutputRecord(source, "unavailable", { reason: "result_read" }).text)).toEqual({
+      kind: "verified_example_output",
+      ...source,
+      state: "unavailable",
+      reason: "result_read",
+    });
   });
 
   it("marks an output the host kept none of as not_retained, without output", async () => {
@@ -113,8 +201,8 @@ describe("the example's output evidence", () => {
     expect(envelope.state).toBe("truncated");
     expect(envelope.screenedBytes).toBe(Buffer.byteLength(full));
     expect(Buffer.byteLength(text)).toBeLessThanOrEqual(limit);
-    expect(full.startsWith(envelope.output ?? "missing")).toBe(true);
-    expect((envelope.output ?? "").length).toBeGreaterThan(limit / 4);
+    expect(full.startsWith(prefixOf(envelope))).toBe(true);
+    expect(prefixOf(envelope).length).toBeGreaterThan(limit / 4);
   });
 
   it.each(["é", "😀"])("truncates on a code point boundary: %s", async (character) => {
@@ -122,9 +210,9 @@ describe("the example's output evidence", () => {
     const { text, envelope } = await evidenceFor(value);
     expect(envelope.state).toBe("truncated");
     expect(Buffer.byteLength(text)).toBeLessThanOrEqual(limit);
-    expect(envelope.output).not.toContain("�");
-    expect(JSON.stringify(value).startsWith(envelope.output ?? "missing")).toBe(true);
-    expect(Buffer.from(envelope.output ?? "").toString()).toBe(envelope.output);
+    expect(prefixOf(envelope)).not.toContain("�");
+    expect(JSON.stringify(value).startsWith(prefixOf(envelope))).toBe(true);
+    expect(Buffer.from(prefixOf(envelope)).toString()).toBe(envelope.output);
   });
 
   it("withholds an output whose URL carries a secret the truncation point would split", async () => {
@@ -157,6 +245,169 @@ describe("the example's output evidence", () => {
     );
     expect(checked).toEqual(["available", "truncated"]);
     expect(envelope).toMatchObject({ state: "withheld", reason: "credential_precheck" });
+  });
+
+  it("keeps a deeply nested output, writing the levels below the record's lists whole", async () => {
+    let value: unknown = "leaf";
+    for (let level = 0; level < 3000; level += 1) value = { next: value };
+    const checked: string[] = [];
+    const evidence = await Effect.runPromise(
+      exampleOutputEvidence(source, JSON.stringify(value), (text) =>
+        Effect.sync(() => (checked.push(text), true)),
+      ),
+    );
+    expect(evidence.state).toBe("available");
+    expect(checked).toEqual([evidence.text]);
+    // Compared as text: a recursive deep equality would run out of stack itself.
+    const record = JSON.parse(evidence.text) as { readonly output: unknown };
+    expect(JSON.stringify(record.output)).toBe(JSON.stringify(value));
+    expect(evidence.text.replaceAll("\n", "")).toBe(JSON.stringify(JSON.parse(evidence.text)));
+    expect(evidence.text.split("\n").length).toBeLessThan(15);
+  });
+
+  it("writes a field the way JSON.stringify does when it holds what JSON never parses to", () => {
+    const sparse = [1];
+    sparse[2] = 3;
+    const fields = {
+      list: [1, undefined, () => 1, 2],
+      sparse,
+      at: new Date(0),
+      custom: { toJSON: () => "custom" },
+      nested: { at: new Date(0), skipped: () => 1, missing: undefined, kept: 1 },
+      skipped: () => 1,
+      missing: undefined,
+    };
+    const { text } = exampleOutputRecord(source, "available", fields);
+    expect(text.replaceAll("\n", "")).toBe(
+      JSON.stringify({ kind: "verified_example_output", ...source, state: "available", ...fields }),
+    );
+  });
+});
+
+describe("the example output record across publication rounds", () => {
+  const path = "publication/example-output.json";
+  const decision = { outcome: "deny", reason: "source_correction", rationale: "Fix", findings: [] };
+  const products = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: `id-${index}`,
+      name: `Product ${index}`,
+      price: index,
+    }));
+  const recordOf = async (executionId: string, results: readonly unknown[]) =>
+    (
+      await Effect.runPromise(
+        exampleOutputEvidence(
+          { ...source, executionId, executedSourceDigest: `digest_${executionId}` },
+          JSON.stringify({ results }),
+          precheck(),
+        ),
+      )
+    ).text;
+  /** What the next round's request carries for the record, after a round that read `before`. */
+  const nextRound = (before: string, after: string) => {
+    const file = (text: string) => ({
+      path,
+      published: false,
+      current: true,
+      owner: "host" as const,
+      text,
+    });
+    const prior = publicationRound([file(before)], {}, decision, new Set([path]), undefined);
+    if (prior === undefined) throw new Error("No round");
+    return publicationDelta(prior, [file(after)], {}).files[0];
+  };
+  const added = (diff: string) =>
+    diff.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++"));
+
+  it.each([150, 400, 900])(
+    "a rerun with the same output diffs as a few lines on the next round: %i records",
+    async (count) => {
+      const entry = nextRound(
+        await recordOf("run_a", products(count)),
+        await recordOf("run_b", products(count)),
+      );
+      expect(entry).toMatchObject({ status: "changed" });
+      const diff = entry !== undefined && "diff" in entry ? (entry.diff ?? "") : "";
+      expect(Buffer.byteLength(diff)).toBeGreaterThan(0);
+      expect(Buffer.byteLength(diff)).toBeLessThan(1024);
+      expect(added(diff)).toEqual([
+        '+"executionId":"run_b",',
+        '+"executedSourceDigest":"digest_run_b",',
+      ]);
+    },
+  );
+
+  it("one changed record diffs as about that one line", async () => {
+    const changed = products(900).map((product, index) =>
+      index === 450 ? { ...product, name: "Renamed" } : product,
+    );
+    const entry = nextRound(
+      await recordOf("run_a", products(900)),
+      await recordOf("run_a", changed),
+    );
+    const diff = entry !== undefined && "diff" in entry ? (entry.diff ?? "") : "";
+    expect(Buffer.byteLength(diff)).toBeGreaterThan(0);
+    expect(Buffer.byteLength(diff)).toBeLessThan(1024);
+    expect(added(diff)).toEqual([
+      expect.stringMatching(/^\+"screenedBytes":\d+,$/),
+      '+{"id":"id-450","name":"Renamed","price":450},',
+    ]);
+  });
+});
+
+describe("the example output's digest", () => {
+  it("digests a nested list across every parent record, not only the first", () => {
+    const Digest = Schema.parseJson(
+      Schema.Struct({
+        lists: Schema.Array(
+          Schema.Struct({
+            path: Schema.String,
+            records: Schema.Number,
+            parents: Schema.optional(Schema.Number),
+            fields: Schema.Record({
+              key: Schema.String,
+              value: Schema.Struct({ withValue: Schema.Number }),
+            }),
+          }),
+        ),
+      }),
+    );
+    const digest = Schema.decodeUnknownSync(Digest, { onExcessProperty: "ignore" })(
+      outputDigest({
+        results: [
+          {
+            id: "a",
+            offers: [
+              { seller: "one", price: 1 },
+              { seller: "two", price: 2 },
+            ],
+          },
+          {
+            id: "b",
+            offers: [
+              { seller: "three", price: 3 },
+              { seller: null, price: 4 },
+              { seller: "five", price: 5 },
+            ],
+          },
+          { id: "c" },
+        ],
+      }),
+    );
+    const offers = digest.lists.find((list) => list.path === "results[].offers");
+    expect(offers).toMatchObject({ records: 5, parents: 2 });
+    expect(offers?.fields.seller?.withValue).toBe(4);
+    expect(offers?.fields.price?.withValue).toBe(5);
+  });
+
+  it("has none for an output without a list of records", () => {
+    expect(outputDigest({ heading: "Public", tags: ["a", "b"] })).toBeUndefined();
+  });
+
+  it("tells the review where the digest is and what it covers", () => {
+    expect(outputDigestNote).toBe(
+      `${outputDigestPath} summarizes every field of each list in the example output across all its records, including records past what publication/example-output.json keeps.`,
+    );
   });
 });
 
@@ -237,6 +488,32 @@ describe("the evidence index", () => {
         owner: "host",
       },
     ]);
+  });
+
+  it("marks bundle files the host wrote as the host's, and lists the review's references", () => {
+    const scope = publicationScope(
+      new Map([
+        ["src/tool.mjs", "export {};"],
+        ["operation.mjs", "export * from './src/tool.mjs';"],
+      ]),
+      new Map([["publication/definition.json", "{}"]]),
+      {
+        hostWritten: new Set(["operation.mjs"]),
+        references: new Map([[".agents/write-tools/SKILL.md", "# Skill é"]]),
+      },
+    );
+    expect(Object.keys(scope)).toEqual(["references", "files"]);
+    expect(scope.references).toEqual([
+      { path: ".agents/write-tools/SKILL.md", byteLength: Buffer.byteLength("# Skill é") },
+    ]);
+    expect(scope.files.map(({ path, owner }) => [path, owner])).toEqual([
+      ["operation/src/tool.mjs", "minter"],
+      ["operation/operation.mjs", "host"],
+      ["publication/definition.json", "host"],
+    ]);
+    expect(publicationScope(new Map(), new Map(), { references: new Map() })).not.toHaveProperty(
+      "references",
+    );
   });
 
   it("keeps each act step's entrypoint and its imports, in order, and drops what it never ran", () => {
@@ -485,6 +762,181 @@ describe("reviewPublication", () => {
         },
       ],
     });
+  });
+
+  // A name the caller's request declares, an input it supplied or an output field a task update
+  // added, is one the tool supports or the build ends blocked: never dropped from the schema.
+  it("returns an input the caller's request names and the schema lacks as input feedback", async () => {
+    const { requests, review } = recordingReview();
+    const failure = await Effect.runPromise(
+      Effect.flip(
+        reviewPublication(review, {
+          ...candidate,
+          requested: { input: { date: "2026-03-14", notes: "Window seat", partySize: 2 } },
+        }),
+      ),
+    );
+    expect(requests).toHaveLength(1);
+    const start = Buffer.byteLength(definition.slice(0, definition.indexOf('"inputSchema"')));
+    expect(failure.review).toMatchObject({
+      outcome: "deny",
+      reason: "input_feedback",
+      reviewId: "review_1",
+      findings: [
+        {
+          path: "publication/definition.json",
+          byteStart: start,
+          byteEnd: start + '"inputSchema"'.length,
+          category: "example_input",
+        },
+      ],
+    });
+    expect(failure.review?.rationale).toContain('"notes"');
+    expect(failure.review?.rationale).not.toContain('"date"');
+  });
+
+  it("returns an output field a task update declared and the schema lacks as a source correction", async () => {
+    const withOutput = publicDefinition(
+      { name: "book_table", description: "Book a table" },
+      {
+        input: JSON.parse(definition).inputSchema as unknown,
+        output: {
+          type: "object",
+          properties: {
+            items: { type: "array", items: { type: "object", properties: { name: {} } } },
+          },
+        },
+      },
+    );
+    const failure = await Effect.runPromise(
+      Effect.flip(
+        reviewPublication(recordingReview().review, {
+          ...candidate,
+          definition: withOutput,
+          outputSchema: JSON.parse(withOutput).outputSchema as unknown,
+          requested: { input: { notes: "Window seat" }, outputs: ["items[].name", "items[].currency"] },
+        }),
+      ),
+    );
+    const outputAt = Buffer.byteLength(withOutput.slice(0, withOutput.indexOf('"outputSchema"')));
+    expect(failure.review).toMatchObject({
+      outcome: "deny",
+      reason: "source_correction",
+      findings: [
+        { category: "example_input" },
+        {
+          path: "publication/definition.json",
+          byteStart: outputAt,
+          byteEnd: outputAt + '"outputSchema"'.length,
+          category: "schema_mismatch",
+        },
+      ],
+    });
+    expect(failure.review?.findings?.[1]?.explanation).toContain('"items[].currency"');
+    expect(failure.review?.findings?.[1]?.explanation).not.toContain('"items[].name"');
+  });
+
+  it("publishes when every requested name is in the schemas", async () => {
+    expect(
+      await Effect.runPromise(
+        reviewPublication(recordingReview().review, {
+          ...candidate,
+          outputSchema: { type: "object", properties: { status: { type: "string" } } },
+          requested: { input: { date: "2026-03-14", partySize: 2 }, outputs: ["status"] },
+        }),
+      ),
+    ).toBe("review_1");
+  });
+
+  it("finds each requested name across references, unions and nested lists", () => {
+    const inputSchema = {
+      $ref: "#/$defs/Entry",
+      $defs: { Entry: { type: "object", properties: { amount: {}, memo: {} } } },
+    };
+    const outputSchema = {
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            entry: {
+              type: "object",
+              properties: {
+                lines: {
+                  type: "array",
+                  items: { $ref: "#/$defs/Line" },
+                },
+              },
+            },
+          },
+        },
+        { type: "object", properties: { status: { type: "string" } } },
+      ],
+      $defs: { Line: { type: "object", properties: { account: {}, amount: {} } } },
+    };
+    expect(
+      missingRequestedNames(
+        { input: inputSchema, output: outputSchema },
+        {
+          input: { amount: "12.50", memo: "Rent", notes: "Paid early" },
+          outputs: ["status", "entry.lines[].amount", "entry.lines[].direction", "entry.total"],
+        },
+      ),
+    ).toEqual({ inputs: ["notes"], outputs: ["entry.lines[].direction", "entry.total"] });
+  });
+
+  it("checks no name a schema cannot answer for", () => {
+    // A free-form object, an unresolvable reference or a caller input that is not an object
+    // lists nothing to check against.
+    expect(
+      missingRequestedNames(
+        { input: { $ref: "#/$defs/Missing" }, output: { type: "object" } },
+        { input: { notes: "Paid early" }, outputs: ["status", "entry.total"] },
+      ),
+    ).toEqual({ inputs: [], outputs: [] });
+    expect(
+      missingRequestedNames(
+        { input: { type: "object", properties: {} }, output: undefined },
+        { input: ["notes"], outputs: ["status"] },
+      ),
+    ).toEqual({ inputs: [], outputs: [] });
+    // A map keyed by the site's own field names takes any key.
+    expect(
+      missingRequestedNames(
+        {
+          input: { type: "object", properties: {}, additionalProperties: { type: "string" } },
+          output: {
+            type: "object",
+            properties: { fields: { type: "object", properties: {}, additionalProperties: true } },
+          },
+        },
+        { input: { Company: "Acme" }, outputs: ["fields.Close date"] },
+      ),
+    ).toEqual({ inputs: [], outputs: [] });
+  });
+
+  it("reads the output fields each task update declares, a later removal dropping one", () => {
+    const update = (...changes: Parameters<typeof requestedOutputFields>[0][number]["changes"]) => ({
+      changes,
+    });
+    expect(
+      requestedOutputFields([
+        update(
+          { setting: "output", field: "price.amount", change: "add", text: "Add the amount" },
+          { setting: "output", field: "status", change: "tighten", text: "Always return it" },
+          { setting: "purpose", text: "Read one order" },
+        ),
+        update(
+          { setting: "output", field: "rating", change: "nullable", text: "May be missing" },
+          {
+            setting: "output",
+            field: "status",
+            change: "remove",
+            text: "Drop the status",
+            reason: "The page no longer shows it",
+          },
+        ),
+      ]),
+    ).toEqual(["price.amount", "rating"]);
   });
 
   it("checks nothing for an example that ran the caller's own input", async () => {

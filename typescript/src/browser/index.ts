@@ -10,7 +10,12 @@ export type {
   WriteConfirmation,
 } from "../runtime/context.js";
 export { Deadline, timeoutDefaults } from "../runtime/deadline.js";
-export { contractJsonSchema, defineOperation, executeOperation } from "../runtime/operation.js";
+export {
+  contractJsonSchema,
+  defaultedInput,
+  defineOperation,
+  executeOperation,
+} from "../runtime/operation.js";
 export { OperationFailure, operationErrors } from "../runtime/kernel-operation.js";
 export type {
   KernelOperationContext,

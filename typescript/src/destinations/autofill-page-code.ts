@@ -4,8 +4,39 @@ import type { AutofillPopup, DateOfBirthFormat } from "./autofill-contracts.js";
 import { elementReadMs, locateCode, questionTextCode } from "./autofill-locate-code.js";
 import { clipCode, controlNamingCode } from "./control-naming-code.js";
 import { pageCode, primaryPageCode } from "../runtime/host-execute.js";
+import { hostOnSiteSource } from "../runtime/same-site.js";
 import { submissionGuardCode } from "./autofill-submission-guard.js";
 import { pageControlsCode } from "./page-controls.js";
+
+/**
+ * Page code: where each code field sits among its screen's one-character boxes, as
+ * `Described.codeBox` says, else null. A box is a visible, enabled, editable text input whose
+ * `maxlength` is 1; the screen is the field's form, or its document or shadow root outside one. A
+ * field that is no box, or a screen with fewer than two, has none. Attributes only, never a value.
+ */
+const codeBoxesCode = `const codeBoxes = [];
+for (const [index, field] of fields.entries()) {
+  if (!codeSlots[index]) {
+    codeBoxes.push(null);
+    continue;
+  }
+  const codeBox = await field.locator.evaluate((element) => {
+    const textTypes = ["", "text", "tel", "number", "password", "search"];
+    const box = (control) => {
+      if (control.tagName !== "INPUT" || control.maxLength !== 1) return false;
+      if (!textTypes.includes((control.getAttribute("type") ?? "").toLowerCase())) return false;
+      if (control.disabled || control.readOnly) return false;
+      const rect = control.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && control.checkVisibility({ visibilityProperty: true });
+    };
+    if (!box(element)) return null;
+    const screen = element.form ?? element.getRootNode();
+    const boxes = Array.from(screen.querySelectorAll("input")).filter(box);
+    const at = boxes.indexOf(element);
+    return boxes.length < 2 || at < 0 ? null : { box: at + 1, of: boxes.length };
+  }, undefined, { timeout: ${elementReadMs} }).catch(() => null);
+  codeBoxes.push(codeBox);
+}`;
 
 /**
  * Page code: the step's controls and visible native and ARIA actions, for the host and Guardian.
@@ -27,11 +58,16 @@ for (const frame of primary.frames()) {
     buttons.push(words ?? "(unlabelled button)");
   }
 }
+${codeBoxesCode}
 return {
-  fields: fields.map(({ target, described }) => ({ target, described })),
+  fields: fields.map(({ target, described }, index) => ({
+    target,
+    described: codeBoxes[index] === null ? described : { ...described, codeBox: codeBoxes[index] },
+  })),
   submit: submit === null ? null : { target: submit.target, described: submit.described },
   located,
   buttons,
+  ...(submitKey === null || submit === null ? {} : { keySubmit: { submitControls: submit.submitControls } }),
   ...(popupTargetId === undefined ? {} : { popupTargetId }),
   url: primary.url(),
 };`;
@@ -48,8 +84,11 @@ return {
  *   it guards the submission as it fires (`submissionGuardCode`, under the host's
  *   `guardKey` and armed for `guardCall`, with every form action and link destination as the
  *   step's inspection found them, which the page kept under `inspection`, the submission's method
- *   as judged, and how each field's secret is found by value, if it is one), clicks the submit,
- *   waits for the page to settle and reads its controls (`pageControlsCode`). A disabled submit it
+ *   as judged, and how each field's secret is found by value, if it is one), reads the page's
+ *   alert text when the host counts new alerts (`alertsBefore`), clicks the submit (or, for a step
+ *   with a submit key, presses that key in its last field, which stands as the submit),
+ *   waits for the page to settle and reads its controls (`pageControlsCode`), with how many of
+ *   their alerts did not show before the click (`newAlerts`) when it read them. A disabled submit it
  *   never clicks: it says so and does nothing, and the host calls again while the page may still
  *   enable it.
  */
@@ -83,7 +122,22 @@ export type AutofillFillCall =
       readonly submitGet: boolean;
       /** Whether each field's own form was judged to submit by GET. */
       readonly fieldGet: readonly boolean[];
+      /** Only look: a call that finds the step's fields clicks nothing and answers `none`. */
+      readonly look?: true;
+      /**
+       * The step's code boxes, by field index: its code fields the host typed one character each,
+       * when it typed two or more. Each must still hold exactly one character before the click.
+       */
+      readonly codeBoxes?: readonly number[];
+      /**
+       * Read the page's alerts just before the click, waiting at most `alertsBeforeMs`, so the
+       * answer counts the new ones after it (`newAlerts`); a read that runs out counts nothing.
+       */
+      readonly alertsBefore?: true;
     };
+
+/** How long the read of the page's alerts before a submit's click may hold the click back. */
+const alertsBeforeMs = 500;
 
 /**
  * Page code: when any control differs from the one the host last judged (the submit's `editable`
@@ -153,7 +207,33 @@ if (check !== null) {
     return { checked: false, url: primary.url() };
   }
 }
+${call.kind === "submit" && call.look !== true ? codeBoxesHoldCode(call.codeBoxes ?? []) : ""}
 ${fillCallBody(call)}`;
+
+/**
+ * Page code for the submit call of a step the host submits, whose code the host typed across
+ * several one-character boxes (`boxes`, by field index): before the host clicks, each holds
+ * exactly one character, so a box a widget emptied or filled twice as the host typed the next never
+ * goes out as part of a code. Lengths only, never a value; a box it cannot read counts as wrong.
+ * The first that does not fails the check, with its index (`field`).
+ */
+const codeBoxesHoldCode = (boxes: readonly number[]) =>
+  boxes.length === 0
+    ? ""
+    : `if (!readsOnly) {
+  for (const index of ${JSON.stringify(boxes)}) {
+    const field = fields[index];
+    if (field === undefined) continue;
+    const holdsOne = await field.locator
+      .evaluate(
+        (element) => typeof element.value === "string" && Array.from(element.value).length === 1,
+        undefined,
+        { timeout: ${elementReadMs} },
+      )
+      .catch(() => false);
+    if (!holdsOne) return { checked: false, field: index, url: primary.url() };
+  }
+}`;
 
 /**
  * Page code for the submit call of a step with fields and no submit, once every field is typed and
@@ -233,7 +313,7 @@ try {
     }, { key: ${JSON.stringify(call.bindingKey)}, text: question.text }, { timeout: ${elementReadMs} }, true);
   }
   return activeTag === null
-    ? { focused: true, located: fieldLocated, url: primary.url() }
+    ? { focused: true, located: fieldLocated, url: primary.url(), document: await documentStart() }
     : { focused: false, unfocused: { activeTag }, located: fieldLocated, url: primary.url() };
 } catch (error) {
   const focusError = error instanceof Error && /^[A-Za-z]{1,64}$/.test(error.name) ? error.name : "unknown";
@@ -247,11 +327,11 @@ try {
     return `try {
   // A date goes into whatever date control the page has, in the format the field takes.
   await fillDate(fields[${call.index}].locator, ${JSON.stringify(call.iso)}, ${JSON.stringify(call.format)}, { timeout: 5000 });
-  return { dated: true, url: primary.url() };
+  return { dated: true, url: primary.url(), document: await documentStart() };
 } catch {
   return { dated: false, url: primary.url() };
 }`;
-  return `if (submit === null) return { submit: "none", url: primary.url() };
+  return `${call.look === true ? "return { submit: \"none\", url: primary.url() };\n" : ""}if (submit === null) return { submit: "none", url: primary.url() };
 // Disabled as Playwright's own click judges it, read where page code cannot redefine the answer.
 if (await submit.locator.isDisabled({ timeout: 5000 })) return { submit: "disabled", url: primary.url() };
 const guardKey = ${JSON.stringify(call.guardKey)};
@@ -294,11 +374,24 @@ const refusedSubmission = async () => {
   }
   return null;
 };
+${pageControlsCode}
+// The alert text the page shows before the click, so the host counts only what the submit brought:
+// read only for a host that counts, and never past a short bound, so no frame holds the click back.
+const alertsBefore = ${
+    call.alertsBefore === true
+      ? `await Promise.race([
+  pageControls(true).then((found) => found.alerts, () => null),
+  new Promise((resolve) => setTimeout(() => resolve(null), ${alertsBeforeMs})),
+])`
+      : "null"
+  };
 const navigated = primary
   .waitForEvent("framenavigated", { predicate: (frame) => frame === primary.mainFrame(), timeout: ${call.settleMs} })
   .then(() => true, () => false);
 try {
-  await submit.locator.click({ timeout: 5000 });
+  // A submit key goes to the last field, which stands as the submit and submits its own form.
+  if (submitKey === null) await submit.locator.click({ timeout: 5000 });
+  else await submit.locator.press(submitKey, { timeout: 5000 });
 } catch {
   return { submit: "failed", url: primary.url() };
 }
@@ -307,11 +400,73 @@ if (submission === null && (await navigated))
   await primary.waitForLoadState("domcontentloaded", { timeout: ${call.settleMs} }).catch(() => undefined);
 submission ??= await refusedSubmission();
 if (submission !== null) return { submission, url: primary.url() };
-${pageControlsCode}
 // What the page shows once the submit settled, never a value, for the minter's next step.
 const controls = await pageControls().catch(() => null);
-return { submit: "clicked", url: primary.url(), ...(controls === null ? {} : { controls }) };`;
+const newAlerts =
+  controls === null || alertsBefore === null ? null : controls.alerts.filter((text) => !alertsBefore.includes(text)).length;
+return {
+  submit: "clicked",
+  url: primary.url(),
+  ...(controls === null ? {} : { controls: newAlerts === null ? controls : { ...controls, newAlerts } }),
+};`;
 };
+
+/**
+ * Page code: `keySubmit` stands a step's last field in as its submit when the step submits with a
+ * key: the field's own place and destinations (its form's action and method, every form action and
+ * method its controls could submit with), described for Guardian as that form, by its own name,
+ * id and label and its method, never a value; and how many submit controls the form shows. A
+ * field in no form submits nothing (`submitMethod` null), which the host refuses.
+ */
+const keySubmitCode = `const keySubmit = async (field) => {
+  const form = await field.locator.evaluate((element) => {
+    const associated =
+      "form" in element && element.form instanceof HTMLFormElement ? element.form : element.closest("form");
+    if (associated === null) return null;
+    const controls = Array.from(
+      Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, "elements").get.call(associated),
+    );
+    const submitter = (control) =>
+      (control instanceof HTMLButtonElement && control.type === "submit") ||
+      (control instanceof HTMLInputElement && ["submit", "image"].includes(control.type));
+    const shows = (control) => {
+      const box = control.getBoundingClientRect();
+      return box.width > 0 && box.height > 0 && control.checkVisibility({ visibilityProperty: true, opacityProperty: true });
+    };
+    return {
+      name: associated.getAttribute("name"),
+      id: associated.getAttribute("id"),
+      ariaLabel: associated.getAttribute("aria-label"),
+      submitControls: controls.filter((control) => submitter(control) && shows(control)).length,
+    };
+  }, undefined, { timeout: ${elementReadMs} });
+  return {
+    ...field,
+    submitControls: form?.submitControls ?? 0,
+    described: {
+      tag: "form",
+      role: null,
+      formMethod: field.target.submitMethod,
+      type: null,
+      name: clip(form?.name ?? null),
+      id: clip(form?.id ?? null),
+      autocomplete: null,
+      inputmode: null,
+      label: null,
+      placeholder: null,
+      ariaLabel: clip(form?.ariaLabel ?? null),
+      text: null,
+    },
+  };
+};`;
+
+/**
+ * Page code for a fill call: when the primary page's document began loading, which tells one
+ * document from the next. A new document changes it; a pushState, a redraw or a reload of a frame
+ * never does. Undefined when the page cannot say, as while it loads.
+ */
+const documentStartCode = `const documentStart = () =>
+  primary.mainFrame().evaluate(() => performance.timeOrigin).catch(() => undefined);`;
 
 /** Resolves only a real child of the stable primary opener, on the recorded origin. */
 export const autofillPageCode = (targetId: string, popup: AutofillPopup | undefined) =>
@@ -346,6 +501,7 @@ export const autofillStepCode = (
       readonly questionSelector?: string | undefined;
     }[];
     readonly submit?: string | undefined;
+    readonly submitKey?: string | undefined;
     readonly popup?: AutofillPopup | undefined;
   },
   observed: string,
@@ -369,17 +525,27 @@ ${fill === undefined ? "" : `if (popupTargetId !== ${JSON.stringify(fill.popupTa
 }
 ${formControlsCode}
 ${locateCode}
+${fill === undefined ? "" : documentStartCode}
 const observed = ${JSON.stringify(observed)};
 const selectors = ${JSON.stringify(step.fields.map((field) => field.selector))};
 const questionSelectors = ${JSON.stringify(step.fields.map((field) => field.slot === "private_answer" ? field.questionSelector ?? null : null))};
+const codeSlots = ${JSON.stringify(step.fields.map((field) => field.slot === "code"))};
 const fields = [];
 for (let index = 0; index < selectors.length; index++) {
   const found = await locate(selectors[index], questionSelectors[index]);
-  if ("error" in found) return { ...found, target: index, url: primary.url() };
+  if ("error" in found)
+    return { ...found, target: index, url: primary.url()${fill?.call.kind === "submit" ? ", document: await documentStart()" : ""} };
   fields.push(found);
 }
 const submitSelector = ${JSON.stringify(step.submit ?? null)};
-const submit = submitSelector === null ? null : await locate(submitSelector);
+const submitKey = ${JSON.stringify(step.submitKey ?? null)};
+${keySubmitCode}
+const submit =
+  submitKey !== null && fields.length > 0
+    ? await keySubmit(fields[fields.length - 1])
+    : submitSelector === null
+      ? null
+      : await locate(submitSelector);
 if (submit !== null && "error" in submit) return { ...submit, target: "submit", url: primary.url() };
 // An inert submit takes no interaction at all, so nothing is typed for it. A disabled one may be
 // enabled once the fields hold input; the submit call never clicks it while it is disabled.
@@ -452,7 +618,7 @@ const challengeOrigin = (frame) => {
   } catch {
     return false;
   }
-  return url.hostname === siteHost || url.hostname.endsWith("." + siteHost) || authenticationOrigins.includes(url.origin);
+  return onSiteHost(url.hostname) || authenticationOrigins.includes(url.origin);
 };
 // The frame and every frame above it show, as a question's frames are read.
 const frameShows = async (frame) => {
@@ -491,9 +657,10 @@ const recordedChallengeVisible = async (fields) => {
 
 /**
  * One host call: the page URL, whether the indicator is visible in a frame on the site (its host
- * `siteHost` or a subdomain of it), and whether a password field of the sign-in's own shows in any
- * frame: one of its fields (`signInFields`, by selector), or one in the form of a visible one.
- * Another form's password field, such as a change-password form or an inner service's login,
+ * `siteHost` or a subdomain of it on the same site, as `hostOnSiteSource` reads it), and whether a
+ * password field of the sign-in's own shows in any frame: one of its fields (`signInFields`, by
+ * selector), or one in the form of a visible one. Another form's password field, such as a
+ * change-password form or an inner service's login,
  * does not count unless one of those selectors matches in it. A hidden match, such as the username
  * a change-password form keeps for password managers, is no sign-in form showing. With no
  * `signInFields`, any visible password field counts. A recorded challenge field
@@ -522,7 +689,7 @@ for (const candidate of context.pages()) {
   try { origin = new URL(candidate.url()).origin; } catch { continue; }
   if (popupOrigins.includes(origin)) return { url: primary.url(), indicator: false, passwordVisible: false, challengeFormVisible: false };
 }
-const siteHost = ${JSON.stringify(siteHost)};
+const onSiteHost = ${hostOnSiteSource(siteHost)};
 const onSite = (frame) => {
   let host = "";
   try {
@@ -530,7 +697,7 @@ const onSite = (frame) => {
   } catch {
     return false;
   }
-  return host === siteHost || host.endsWith("." + siteHost);
+  return onSiteHost(host);
 };
 const authenticationOrigins = ${JSON.stringify(authenticationOrigins)};
 const visibleIn = async (selector, scopes) => {

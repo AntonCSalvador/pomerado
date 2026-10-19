@@ -1,4 +1,4 @@
-import { Effect, JSONSchema, Schema } from "effect";
+import { Effect, JSONSchema, Option, Schema } from "effect";
 import type { Scope } from "effect";
 import { ExecutionContext, finishCaptureAsEvidence } from "./context.js";
 import type { EffectJournal } from "./context.js";
@@ -10,6 +10,7 @@ import {
   WriteConfirmationRefused,
 } from "./errors.js";
 import type { CaptureUnavailable, EventUnavailable } from "./errors.js";
+import type { operationErrors } from "./operation-failure.js";
 import type { WebsiteAuthenticationFailed } from "./authentication.js";
 import type { ScriptQuestionDeclarations } from "./script-input.js";
 import type { KernelOperation, KernelOperationContext } from "./kernel-operation.js";
@@ -109,6 +110,21 @@ export function defineOperation<Input, EncodedInput, Output, EncodedOutput, Erro
   };
 }
 
+/** The caller's input refusal a script throws, `errors.InvalidInput` from `pomerado/runtime`. */
+type InputRefusal = InstanceType<typeof operationErrors.InvalidInput>;
+
+/**
+ * Whether a thrown value is the input refusal. It is matched by shape, not by class, so a refusal
+ * from another copy of the runtime, such as one a tool bundles, matches too: an `Error` tagged
+ * `InvalidInput` without the `operation` and `issues` that the runner's own schema `InvalidInput`
+ * carries.
+ */
+const isInputRefusal = (value: unknown): value is InputRefusal =>
+  value instanceof Error &&
+  Reflect.get(value, "_tag") === "InvalidInput" &&
+  !("operation" in value) &&
+  !("issues" in value);
+
 /** The `$id` Effect gives an empty struct, which it writes as TypeScript's `{}` type. */
 const emptyStructId = "/schemas/%7B%7D";
 
@@ -145,6 +161,18 @@ const withEmptyObjectsIn = (
  * schema. A no-input operation takes the empty object, written the way Effect writes every other
  * struct; annotations such as a description are kept.
  */
+/**
+ * An optional input field that defaults to `value`: a caller may leave it out, and the run then
+ * gets `value`. Its published schema shows `value` as its `default`, which `Schema.optionalWith`'s
+ * own default does not. Use it for a choice the build's request or the owner's answer settled as
+ * how the tool behaves, such as a sort order, so callers may vary it and need not send it.
+ */
+export const defaultedInput = <A, I, R>(schema: Schema.Schema<A, I, R>, value: NoInfer<A>) =>
+  Schema.optionalWith(schema.annotations({ default: value }), {
+    default: () => value,
+    exact: true,
+  });
+
 export const contractJsonSchema = <A, I, R>(schema: Schema.Schema<A, I, R>) =>
   withEmptyObjectsIn({ ...JSONSchema.make(schema) });
 
@@ -157,6 +185,7 @@ export const executeOperation = <Input, EncodedInput, Output, EncodedOutput, Err
   Output,
   | Error
   | InvalidInput
+  | InputRefusal
   | InvalidOutput
   | DeadlineExceeded
   | CaptureUnavailable
@@ -203,6 +232,15 @@ export const executeOperation = <Input, EncodedInput, Output, EncodedOutput, Err
           : context.journal;
       const runInput = options.list === undefined ? input : withListHost(input, options.list);
       const output = yield* Effect.suspend(() => operation.run(runInput)).pipe(
+        // A runtime helper the run calls outside an Effect, such as `startList` refusing its
+        // cursor, throws the caller's input refusal: the run fails with it, as a Kernel script's
+        // does, rather than dying. Only a cause that is that one defect alone becomes the failure,
+        // so a finalizer's or a concurrent fiber's error is never dropped.
+        Effect.catchSomeCause((cause) =>
+          cause._tag === "Die" && isInputRefusal(cause.defect)
+            ? Option.some(Effect.fail(cause.defect))
+            : Option.none(),
+        ),
         Effect.provideService(ExecutionContext, { ...context, journal }),
       );
       const validated = yield* Schema.validate(operation.output)(output).pipe(

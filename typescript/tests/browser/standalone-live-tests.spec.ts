@@ -122,7 +122,8 @@ test("runs a read's planned cases on reset pages after one review, and hands pub
       cases: cases.cases.map((entry) => ({ id: entry.id, input: entry.input })),
     });
 
-    // A failing case does not refuse publication by itself; the review reads the host's record.
+    // One failing case of four does not refuse publication by itself: 75% clears the 70% bar,
+    // and the review reads the host's record.
     expect(built.build).toBe("published");
     const review = guardian.reviews.find((entry) => entry.kind === "publication");
     expect(publicationOf(review ?? guardian.reviews[0]!)).toEqual(

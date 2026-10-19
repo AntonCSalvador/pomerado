@@ -149,6 +149,17 @@ describe("asksAsDeclared", () => {
   });
 });
 
+// One invalid declaration would leave the run with none, so the draft check names it before a step runs.
+it("refuses a declaration that does not decode instead of dropping every question", () => {
+  const source = operation(
+    `{name:"book",input:Schema.Unknown,output:Schema.Unknown,questions:{slot:{type:"choice",prompt:"Which slot?",allowOther:"yes"},note:{type:"text",prompt:"Which note should I keep?"}}}`,
+  );
+  expect(draftQuestionDeclarations("src/tool.mjs", source)).toEqual({});
+  expect(draftQuestionDeclarationFailure("src/tool.mjs", source)).toMatch(
+    /^Invalid script questions: the run would declare none of them\./,
+  );
+});
+
 describe("a local operation's questions", () => {
   const asking = operation(
     `{name:"ask_note",input:Schema.Unknown,output:Schema.Unknown,questions:{note:{type:"text",prompt:"Which note should I keep?"}}}`,
@@ -199,6 +210,50 @@ describe("a local operation's questions", () => {
     if (Either.isLeft(result)) {
       expect(result.left).toBeInstanceOf(LocalOperationFailure);
       expect(result.left).toMatchObject({ tag: "ScriptInputFailure", code: "Undeclared" });
+    }
+  });
+
+  it("reports which option of a question could not be asked, and never its value or label", async () => {
+    const seat = { seat: { type: "choice", prompt: "Which seat?" } } as const;
+    const source = operation(
+      `{name:"ask_seat",input:Schema.Unknown,output:Schema.Unknown,questions:${JSON.stringify(seat)}}`,
+      `async ({ ask }) => ask({ seat: { options: [{ value: "seat-4a", label: "Window 4A" }, { value: "seat-4a", label: "Aisle 4C" }] } })`,
+    );
+    const asked: InputRequest[] = [];
+    const ask = makeInputAsker((request) =>
+      Effect.sync(() => {
+        asked.push(request);
+        return {};
+      }),
+    );
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const workspace = yield* createLocalWorkspace();
+          return yield* Effect.either(
+            runLocalOperation({
+              workspace,
+              entrypoint: "src/tool.mjs",
+              sources: [["src/tool.mjs", source]],
+              input: {},
+              target: "pureFiles",
+              ask,
+              declaredQuestions: seat,
+            }),
+          );
+        }),
+      ),
+    );
+    expect(asked).toEqual([]);
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left).toBeInstanceOf(LocalOperationFailure);
+      expect(result.left).toMatchObject({ tag: "ScriptInputFailure", code: "InvalidOptions" });
+      expect(result.left.message).toBe(
+        "Script question seat could not be asked because option 2 repeats another option's value.",
+      );
+      for (const said of ["seat-4a", "Window 4A", "Aisle 4C"])
+        expect(result.left.message).not.toContain(said);
     }
   });
 });

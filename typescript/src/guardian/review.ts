@@ -42,10 +42,16 @@ import type { GuardianReasoningEffort } from "./model.js";
 import {
   cutToLimit,
   GuardianAction,
+  GuardianRefusal,
+  guardianRefusals,
   PublicationFinding,
   PublicationReason,
 } from "./review-contracts.js";
-import type { PublicationScope, PublicationFileBlock } from "./review-contracts.js";
+import type {
+  GuardianRefusalGround,
+  PublicationScope,
+  PublicationFileBlock,
+} from "./review-contracts.js";
 import {
   decisionForKind,
   outcomeAccepted,
@@ -130,6 +136,12 @@ export const GuardianDecision = Schema.Struct({
   reason: Schema.optional(Schema.suspend(() => PublicationReason)),
   findings: Schema.optional(Schema.Array(Schema.suspend(() => PublicationFinding))),
   /**
+   * A publication review's input design findings about choices on the site's sign-in pages, in
+   * the host's sign-in recipe, which a temporary exception sets aside until such choices become
+   * declared sign-in inputs (`decodePublicationDecision`). Reported, never blocking.
+   */
+  excusedSignInChoices: Schema.optional(Schema.Array(Schema.suspend(() => PublicationFinding))),
+  /**
    * A publication denial's one short sentence its caller may read: why the tool was not
    * published, in plain words, apart from the private rationale. Other kinds have none.
    */
@@ -139,6 +151,11 @@ export const GuardianDecision = Schema.Struct({
    * carries one; a deny or escalate may. Other kinds have none.
    */
   action: Schema.optional(Schema.suspend(() => GuardianAction)),
+  /**
+   * An execution deny or escalate's refusal kind: `final` or `correctable`. Absent, from a
+   * reviewer that predates it, the host counts the refusal as `final`. Other kinds have none.
+   */
+  refusal: Schema.optional(Schema.suspend(() => GuardianRefusal)),
 });
 export type GuardianDecision = typeof GuardianDecision.Type;
 export class ReviewFailure extends Data.TaggedError("ReviewFailure")<{
@@ -240,6 +257,12 @@ export interface HostReview {
    * returns no label.
    */
   readonly labels?: readonly [string, ...string[]];
+  /**
+   * The labels each listed outcome may carry, from `labels`, as the policy ties them; an outcome
+   * it does not list carries any of them. A decision whose label its outcome does not carry is
+   * invalid: a kind that is not private is told so once in the same review, as for an outcome.
+   */
+  readonly outcomeLabels?: Partial<Record<GuardianOutcome, readonly [string, ...string[]]>>;
   /**
    * Private review context: no readable diagnostic keeps the evidence, the transcript or the
    * rationale, and later reviews' readable records show the exchange only as a placeholder.
@@ -406,7 +429,7 @@ export interface PendingExecution {
       /** True only after the host confirms cleanup of this execution's sandbox. */
       readonly executorStopped?: boolean;
       /**
-       * agent_chosen: the live test of a read signed out ran an input the minting agent chose.
+       * agent_chosen: a read's live test ran an input the minting agent chose.
        * agent_chosen_batch: a batch of such live tests on inputs it chose.
        */
       readonly input?: "agent_chosen" | "agent_chosen_batch";
@@ -567,6 +590,49 @@ export interface Reviewer {
 }
 
 /**
+ * A failed read of a file the host provides: its source reader names the file's kind
+ * `host_sdk` (see `hostProvidedSource`).
+ */
+const hostSourceGap = (failure: ReviewFailure) =>
+  failure.code === "SourceUnavailable" &&
+  failure.failureDetail?.context?.["pathCategory"] === "host_sdk";
+
+/**
+ * A deny or escalate after Guardian could not read a file the host provides rests on the host's
+ * gap, which the minter cannot fix: the review fails with that read's `SourceUnavailable`, an
+ * outage the host retries and that ends a build as a host failure, never as a policy refusal. An
+ * allow stands, and a missing authored file stays Guardian's to judge.
+ */
+export const refusalsOnHostGapsFail = (reviewer: Reviewer): Reviewer => ({
+  ...reviewer,
+  run: (turn) =>
+    Effect.suspend(() => {
+      let gap: ReviewFailure | undefined;
+      return reviewer
+        .run({
+          ...turn,
+          readSource: (path, offset) =>
+            turn.readSource(path, offset).pipe(
+              Effect.tapError((error) =>
+                Effect.sync(() => {
+                  if (hostSourceGap(error)) gap ??= error;
+                }),
+              ),
+            ),
+        })
+        .pipe(
+          Effect.flatMap((raw) => {
+            const outcome: unknown =
+              typeof raw === "object" && raw !== null ? Reflect.get(raw, "outcome") : undefined;
+            return gap !== undefined && (outcome === "deny" || outcome === "escalate")
+              ? Effect.fail(gap)
+              : Effect.succeed(raw);
+          }),
+        );
+    }),
+});
+
+/**
  * One run of a review inside the outage retry loop. Offsets are `performance.now()` readings.
  * Each attempt is a fresh review with its own ID and its own `guardian.started` record, closed
  * by one `guardian.completed` or `guardian.failed`. The follow-up rounds an execution review
@@ -605,10 +671,10 @@ const completeSession = (session?: GuardianSession) =>
 const requiredReadRounds = 2;
 
 /**
- * The most follow-up rounds one review gets: one outcome correction, one decode correction and
- * the required reads.
+ * The most follow-up rounds one review gets: one outcome correction, one decode correction, one
+ * settled-ground correction and the required reads.
  */
-export const reviewFollowUpRounds = requiredReadRounds + 2;
+export const reviewFollowUpRounds = requiredReadRounds + 3;
 
 /** The longest decode error a follow-up quotes. */
 const decodeErrorLimit = 2000;
@@ -655,12 +721,76 @@ export const writeOutOfAuthority =
   "Out of authority: this review labelled the execution a write, and this step has no write authority. A read build, and every step outside a write build's write session, may only read. Change the source so it makes no persistent change on the website, or end the build if the task needs one.";
 
 /**
+ * An execution decision with its refusal kept only on a deny or escalate, and only when it is one
+ * Guardian may return. Any other value, as an older or confused reviewer may send, counts as none:
+ * the decision still decodes, and the host reads the refusal as `final`, as before the field.
+ */
+const knownRefusal = (raw: unknown): unknown => {
+  if (typeof raw !== "object" || raw === null || !("refusal" in raw)) return raw;
+  const { refusal, ...rest } = raw as Record<string, unknown>;
+  return Reflect.get(raw, "outcome") !== "allow" &&
+    guardianRefusals.some((known) => known === refusal)
+    ? raw
+    : rest;
+};
+
+/**
+ * The ground an execution deny or escalate rests on (`refusalGround`) when the host's own record
+ * settles it the other way: retry permission when trusted_execution_context.repeatableRead is
+ * true, since the host itself refuses before review any run it does not permit, or committing a
+ * listed write again for a step the review labels a read, which changes nothing. Undefined for
+ * any other decision.
+ */
+const settledGroundOf = (
+  pending: PendingExecution,
+  raw: unknown,
+): GuardianRefusalGround | undefined => {
+  if (reviewKindOf(pending) !== "execution" || typeof raw !== "object" || raw === null)
+    return undefined;
+  const outcome: unknown = Reflect.get(raw, "outcome");
+  if (outcome !== "deny" && outcome !== "escalate") return undefined;
+  const ground: unknown = Reflect.get(raw, "refusalGround");
+  if (ground === "retry_permission" && pending.mintContext?.repeatableRead === true) return ground;
+  if (ground === "committed_write" && Reflect.get(raw, "action") === "read") return ground;
+  return undefined;
+};
+
+/** What the host tells Guardian, once in the same review, about a refusal on a settled ground. */
+const settledGroundCorrection: Record<GuardianRefusalGround, string> = {
+  retry_permission:
+    "The host did not accept this refusal: it rests on retry permission, and trusted_execution_context.repeatableRead is true. Whether a step may run again is the host's to decide: it refuses before review any run it does not permit, and it permits this one, a corrected example included. Judge this step's own source and effects under the policy and decide again, without retry permission as a ground.",
+  committed_write:
+    "The host did not accept this refusal as given: it rests on committing a listed write again, yet this review labels the step a read. If the submitted code changes the site, label it write and keep the refusal. If it changes nothing, it commits nothing again: reading back a write's result, the record it created or changed included, on any page of the authorized site, and the request's other remaining steps toward the same task stay allowed, so judge the step under the policy's other rules and decide again without the earlier write as a ground.",
+};
+
+/**
+ * The decision a review ends with after the host sent back a refusal on a settled ground. A
+ * refusal that still rests on it is correctable, never final, so a misread host fact never ends
+ * the build as a policy block. After a committed-write refusal went back, only an allow labelled
+ * read stands; any other allow keeps the original refusal, as correctable, so the pushback never
+ * lets a second write through.
+ */
+const afterGroundPushback = (
+  pending: PendingExecution,
+  pushback: { readonly ground: GuardianRefusalGround; readonly refused: object },
+  raw: unknown,
+): unknown => {
+  if (typeof raw !== "object" || raw === null) return raw;
+  if (settledGroundOf(pending, raw) !== undefined) return { ...raw, refusal: "correctable" };
+  return pushback.ground === "committed_write" &&
+    Reflect.get(raw, "outcome") === "allow" &&
+    Reflect.get(raw, "action") !== "read"
+    ? { ...pushback.refused, refusal: "correctable" }
+    : raw;
+};
+
+/**
  * An execution review's decision. An allow without an action label is malformed, so the review
  * runs again under the outage retry; a `write` allow on a step without write authority becomes a
  * denial.
  */
 const decodeExecution = (pending: PendingExecution) => (raw: unknown) =>
-  decodeDecision(raw).pipe(
+  decodeDecision(knownRefusal(raw)).pipe(
     Effect.flatMap((decision) =>
       decision.outcome !== "allow"
         ? Effect.succeed(decision)
@@ -676,6 +806,24 @@ const decodeExecution = (pending: PendingExecution) => (raw: unknown) =>
     ),
   );
 
+/**
+ * A host kind's decision whose label its outcome does not carry (`outcomeLabels`): the outcome
+ * and the labels it carries. Undefined for any other decision.
+ */
+const labelRefusedBy = (
+  request: HostReview,
+  raw: unknown,
+): { readonly outcome: string; readonly labels: readonly string[] } | undefined => {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const outcome: unknown = Reflect.get(raw, "outcome");
+  const label: unknown = Reflect.get(raw, "label");
+  const labels =
+    typeof outcome === "string" ? request.outcomeLabels?.[outcome as GuardianOutcome] : undefined;
+  return labels !== undefined && !labels.some((carried) => carried === label)
+    ? { outcome: outcome as string, labels }
+    : undefined;
+};
+
 const decodeHost = (request: HostReview) => {
   const shape = Schema.Struct({
     outcome: Schema.Literal(...request.outcomes),
@@ -686,6 +834,18 @@ const decodeHost = (request: HostReview) => {
     Schema.decodeUnknown(shape)(boundedRationale(raw), { onExcessProperty: "error" }).pipe(
       Effect.mapError((error) =>
         decisionFailure(request.private === true ? privateDecisionError(request, raw) : error),
+      ),
+      Effect.flatMap(
+        (decision: HostReviewDecision): Effect.Effect<HostReviewDecision, ReviewFailure> =>
+          labelRefusedBy(request, decision) === undefined
+            ? Effect.succeed(decision)
+            : decisionFailure(
+                new Error(
+                  request.private === true
+                    ? "The label is not one the decision's outcome carries"
+                    : `The label ${String(decision.label)} is not one a ${decision.outcome} carries`,
+                ),
+              ),
       ),
     );
 };
@@ -936,7 +1096,8 @@ export const makeGuardian = (
           }),
         );
       const observeModelTrace = diagnostics?.observeModelTrace;
-      // Follow-up rounds for a refused outcome or a skipped entrypoint read, within this attempt.
+      // Follow-up rounds for a refused outcome or label or a skipped entrypoint read, within this
+      // attempt.
       let followUpRounds = 0;
       const startOffsetMs = performance.now();
       const timing = {
@@ -1165,6 +1326,10 @@ export const makeGuardian = (
           !outcomeAccepted(pending, raw);
         let outcomeCorrected = false;
         let decodeCorrected = false;
+        /** The refusal on a settled ground the host sent back in this review, if any. */
+        let groundPushback:
+          | { readonly ground: GuardianRefusalGround; readonly refused: object }
+          | undefined;
         let readRounds = 0;
         // A publication finding names one of these paths exactly.
         const indexedPaths =
@@ -1175,7 +1340,7 @@ export const makeGuardian = (
           raw !== null &&
           Reflect.get(raw, "outcome") === "allow" &&
           entrypointReadAt !== epoch();
-        const raw = yield* reviewer.run({
+        const output = yield* reviewer.run({
           reviewId,
           ...(session ? { session } : {}),
           pending,
@@ -1219,6 +1384,16 @@ export const makeGuardian = (
               followUpRounds++;
               return `The host did not accept this decision: a ${kindName} review returns only the outcome ${outcomes.join(", ")}, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them.`;
             }
+            // A label its outcome does not carry fails to decode; this names the labels it carries.
+            const carried =
+              pending.hostReview === undefined || privateKind || decodeCorrected
+                ? undefined
+                : labelRefusedBy(pending.hostReview, output);
+            if (carried !== undefined) {
+              decodeCorrected = true;
+              followUpRounds++;
+              return `The host did not accept this decision: a ${kindName} review's ${carried.outcome} carries only the label ${carried.labels.join(", ")}, as its policy says. Decide this review again under its policy and return a label its outcome carries.`;
+            }
             const invalid =
               decodeCorrected || privateKind || outcomeRefused(output)
                 ? undefined
@@ -1231,6 +1406,14 @@ export const makeGuardian = (
                   ? ""
                   : ` Each finding's path is one of these indexed paths exactly, with nothing added: ${indexedPaths.join(", ")}.`;
               return `The host could not decode this decision: ${invalid} Return this review's decision again in the output format, corrected.${paths}`;
+            }
+            // A refusal on a ground the host's own record settles goes back once, naming it.
+            const settled =
+              groundPushback === undefined ? settledGroundOf(pending, output) : undefined;
+            if (settled !== undefined) {
+              groundPushback = { ground: settled, refused: output as object };
+              followUpRounds++;
+              return settledGroundCorrection[settled];
             }
             if (!unread(output) || readRounds >= requiredReadRounds) return undefined;
             readRounds++;
@@ -1247,6 +1430,12 @@ export const makeGuardian = (
         });
         const unavailableSource = unavailableSources.values().next().value;
         if (unavailableSource !== undefined) return yield* unavailableSource;
+        // The closure above may have set it; the cast keeps the compiler from narrowing it away.
+        const pushback = groundPushback as
+          | { readonly ground: GuardianRefusalGround; readonly refused: object }
+          | undefined;
+        const raw =
+          pushback === undefined ? output : afterGroundPushback(pending, pushback, output);
         if (outcomeRefused(raw))
           return yield* decisionFailure(
             new Error(`The outcome is not one a ${kind} review returns`),

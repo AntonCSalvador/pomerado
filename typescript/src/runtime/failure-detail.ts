@@ -220,7 +220,7 @@ export const failureDetailBounds = bounds;
 /** A route at the start of the text (`/v1/items?page=2`) is kept like a URL, ending as one does. */
 const diagnosticUrlSpans = (text: string) => {
   const spans = urlSpans(text);
-  if (!text.startsWith("/")) return spans;
+  if (!text.startsWith("/") || text.startsWith("//")) return spans;
   const route = urlSpanAt(text, 0);
   return [route, ...spans.filter((span) => span.start >= route.end)];
 };
@@ -366,6 +366,9 @@ const authorizationHeader =
   /\b((?:proxy-)?authorization)(\s*[:=]\s*["']?)((?:[^\r\n"'\\]|(?<==[ \t]*)"[^"\r\n]*")*)/gi;
 const quotedRedaction = (value: string) =>
   value.startsWith("\\") ? '\\"[redacted]\\"' : '"[redacted]"';
+/** AWS access key IDs and provider API keys, by shape (`privacy/credential-policy.ts`). */
+const awsAccessKeyId = awsAccessKeyIdPattern();
+const providerKey = providerKeyPattern();
 
 /**
  * Deterministic credential redaction before the archive's own screening. It removes only
@@ -494,8 +497,8 @@ const redactBounded = (text: string, max: number, inputLimit: number): string =>
     )
     .replace(/\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/g, "[redacted_jwt]")
     .replace(/\beyJ[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]*){0,2}(?=\s*$)/g, "[redacted_jwt]")
-    .replace(awsAccessKeyIdPattern(), "[redacted_aws_key]")
-    .replace(providerKeyPattern(), (match: string) =>
+    .replace(awsAccessKeyId, "[redacted_aws_key]")
+    .replace(providerKey, (match: string) =>
       isProviderKey(match) ? "[redacted_token]" : match,
     )
     .replace(

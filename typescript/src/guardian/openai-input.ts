@@ -2,7 +2,7 @@ import type { Agent, AgentInputItem, AgentOutputType } from "@openai/agents";
 import { RunContext, RunState } from "@openai/agents";
 import { Effect, Schema } from "effect";
 import type { ReviewTurn } from "./review.js";
-import { siteDomain } from "../runtime/same-site.js";
+import { separateSuffixes, siteDomain } from "../runtime/same-site.js";
 import { paymentFrameOrigins } from "../destinations/payment-frames.js";
 import { ownerNamedOrigins } from "./owner-named-origins.js";
 import { guardianModel } from "./model.js";
@@ -36,13 +36,24 @@ export const guardianReviewInput = (
         ? {}
         : { unchangedSources: turn.sources.unchangedSources }),
     },
+    // The intent is in the instructions (trusted_request), the same for every review of a build.
     trusted_authority: {
-      intent: turn.pending.screenedIntent,
       allowedOrigins: turn.pending.allowedOrigins,
       // Derived from the screened origins, so no new text reaches the model.
       allowedSites: turn.pending.allowedOrigins.flatMap((origin) => {
         const registrableDomain = siteDomain(origin);
-        return registrableDomain === undefined ? [] : [{ scheme: "https", registrableDomain }];
+        if (registrableDomain === undefined) return [];
+        // The host's own private suffixes below the site: the policy's "a host the list gives a
+        // registrable domain of its own" covers each host under one. Named only when there is
+        // one, so the input is unchanged without.
+        const addedPrivateSuffixes = separateSuffixes(registrableDomain);
+        return [
+          {
+            scheme: "https",
+            registrableDomain,
+            ...(addedPrivateSuffixes.length === 0 ? {} : { addedPrivateSuffixes }),
+          },
+        ];
       }),
       allowedEffects: turn.pending.allowedEffects,
       answeredQuestions: absentWhenEmpty(

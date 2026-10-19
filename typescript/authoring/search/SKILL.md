@@ -48,15 +48,14 @@ inputs use (see "Apply and read back").
 
 ## Apply and read back
 
-On every run, set each input the site has a control for through that control, or through the URL
-or data request the site itself uses for it when the control is unreliable (testing skill), never
-by filtering the returned rows, then read it back from the site's committed state: the
+On every run, set each input the site has a control for through that control, through the
+results URL when the site's URL reliably carries it (`AGENTS.md`, "Work through the page's own
+controls"), or through the data request the site itself uses for it when the control is
+unreliable (testing skill), never by filtering the returned rows, then read it back from the site's committed state: the
 applied-filter chips, the selected sort, an option the site shows selected, or the results header.
 A URL naming the input does not show it applied. When a filter did not apply, the tool throws
 `OperationFailure` naming it, so the run fails and the tool gets repaired; it never returns
-unfiltered results as filtered.
-An HTTP version reads each input back from the answer instead: the echoed query, sort, filters
-and store or location in its own state.
+unfiltered results as filtered.<!-- pomerado:section search.http-read-back -->
 
 When setting one control reloads the result list, order matters: set that control, commonly a
 location or store, before the filters and sorts its reload would drop. Open only the groups the
@@ -68,18 +67,23 @@ them), never every card's value holding still, since values that load lazily may
 Then read the choice back where the page shows it: an applied chip, the selected sort, the results
 header, or the reopened panel when nothing else shows it. A follow-up choice that will reload the
 results anyway can wait for that reload instead. Close a drawer or panel you opened with its own
-close control or Escape, and check it closed. After the last change, wait for the rows you return
-with `waitForChange`, as the core skill says.
+close control or Escape, and check it closed. After the last step that changed the results, wait
+for that change with `waitForChange`, then read the rows you return with `waitForRows`, which
+passes at once on a settled page (core skill). Skip another `waitForChange` or settle when no step
+changed the results since the last one.
 
 ## Location
 
-A location or store is an input that tailors the answer: follow the core skill's input schema,
-"Inputs that tailor the answer". To apply the caller's location, try each way the site offers:
+When the results, prices or availability depend on a location or store, offer it as an optional
+input, a ZIP or postal code or a store as the site takes them, even when the request names
+neither: it tailors the answer (core skill, the input schema, "Inputs that tailor the answer").
+To apply the caller's location, try each way the site offers:
 the store picker, the ZIP or postal-code box, the delivery or pickup choice, and the manual entry
 beside "use current location". Decline the browser's location permission when the site asks;
-declining often reveals a manual ZIP field. Read the applied location back and return it, such as
-`applied_store` or `applied_zip`. A store missing from the site's picker throws `InvalidInput`
-with `field` and `available`, the stores it offers, and so do a store and a ZIP that exclude each
+declining often reveals a manual ZIP field. Read the applied location back and always return
+it, as `applied_store` or `applied_zip`, the site's default included when the caller gave none.
+A store missing from the site's picker throws `InvalidInput` with `field` and `available`, the
+stores it offers, and so do a store and a ZIP that exclude each
 other. When the site still won't apply the caller's location, or says it does not serve it,
 return the results it did show with the applied location beside the caller's and the site's
 message, never as the caller's location's results. A filter or sort the page resets stays strict:
@@ -90,7 +94,9 @@ the tool throws `InputNotApplied` with the requested and applied value (core ski
 Wait for the search's answer with `waitForOutcome` (core skill). Prefer naming its error, its
 no-results message and its results over waiting for the results alone, and name results by the
 page's most stable sign, such as the result count or heading for the query, over one layout's
-classes. Read every field of every result you return from that result's own card on every run.
+classes. Read every field of every result you return from that result's own record on every
+run: the page's own structured data for it when that holds the same fields, otherwise its card
+(core skill).
 Lean toward more information (core skill, output fields): return the facts each card shows
 without a click that a caller
 could reasonably use to choose among results, with full displayed values, and a maker or provider
@@ -108,7 +114,8 @@ go in their own list or are left out, never mixed into the results, and return e
 card that stands for a group of variants, such as "6 flavors" or "3 colors", says so in its own
 fields, such as a variant count, and that its link opens one member of the group. Check that the
 page's echo of the query, such as a results heading, matches it normalized, or for a proper noun
-fuzzily, never with exact case-sensitive equality. A search
+fuzzily, never with exact case-sensitive equality, except a query the site says it corrected or
+rewrote (below). A search
 that applied every input and got the site's no-results message returns an empty list, never an
 error.
 
@@ -119,12 +126,29 @@ item once, keyed by its own ID (pagination skill). Before the first example, lis
 IDs for a typical query, and check that no ID repeats and that the first rows match the query.
 Read the query the site applied from the page's embedded state, such as its search data, rather
 than from a selector scoped to one container, which another layout of the results page breaks.
+When the site corrected or rewrote the caller's query, such as fixing its spelling, its echo
+shows the query it searched: return the site's results and say so, never silently, with that
+query as `applied_query` and a `query_corrected` boolean. The same holds for the query an HTTP
+version's answer echoes.
 
 ## Answer quickly
 
 A search should answer in seconds. Every click and wait runs on every call, so a run does only
-what its inputs need:
-- Open, set and read back only the groups the caller's inputs use. Always return
+what its inputs need.
+
+Try the fast path first. While exploring, check whether the results page loads directly by URL
+with the inputs encoded (`AGENTS.md`, "Work through the page's own controls"), and whether the
+page's own data request or embedded data carries the result fields. When both hold, the default
+design is: set a location or store through the page's controls first if the URL cannot carry it,
+load the results URL, then read that data in the same session (`page.evaluate(() => fetch(...))`
+for a data request, core skill), reading the applied location back from the page or that
+answer. Drive the search form and read rendered rows only when they don't.
+
+- The main path visits only the controls an input sets: a filter, sort, quick switch or other
+  optional control the caller left unset is never opened, clicked or waited on, so a run with
+  every optional input unset touches none of them. Read its applied state from the page's data
+  or results where they show it; otherwise return it null with the reason in the description. A
+  search never opens a control to read it. Always return
   `applied_filters`: the groups the tool set, as the page reads them back.
 - Return the site's offered filter groups only when the caller asks, through an optional
   `include` list input holding `"filters"`. Their output field, such as `available_filters`, is
@@ -132,7 +156,7 @@ what its inputs need:
   "Only with `include: ["filters"]`". When the page already shows the groups without a click,
   the tool may return those, and says they are the visible ones.
 - Skip a step whose result the page already shows, such as a location, store or sort that is
-  already the caller's.
+  already the caller's, and the change wait that would follow it (core skill).
 - Never wait for the page's `load` event, for network idle, or for rows and content you will not
   return.
 - Fetch a per-result extra the cards lack, such as availability, in one batched request when the
@@ -151,8 +175,10 @@ order, sponsored ones in place.
 
 The description briefly states the design decisions, limits and interpretations a caller needs,
 such as the site's default location, how many results one call returns and how the site pages. A
-search signed out sets every input you expose in at least one live run before publishing, as the
-testing skill says; a signed-in one proves the tool with its example. Its cases include at least
-one broad query and one query the site answers with a fallback or "no exact matches" view, whose
-expectation you write only after seeing what the site shows for it. Give each input an
+search sets every input you expose in at least one live run before publishing, as the testing
+skill says, most of them together in one combined case, and also runs the path with every
+optional input unset, which its example often already is; a signed-in one runs that combined case
+and at most one more. A search signed out's cases also include one query the site answers with a
+fallback or "no exact matches" view, whose expectation you write only after seeing what the site
+shows for it. Give each input an
 `examples` value the site offers for a typical query.

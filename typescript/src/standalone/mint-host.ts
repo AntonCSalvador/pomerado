@@ -10,6 +10,7 @@ import {
   type PublicationDecisionLog,
 } from "../mint/contracts.js";
 import { runMint } from "../mint/harness.js";
+import { mintSourceSyntaxFailure } from "../mint/operation-source.js";
 import { makeOpenAIMinter } from "../mint/openai.js";
 import { makeOpenAIOutcomeReviewer } from "../mint/outcome-review-openai.js";
 import {
@@ -60,6 +61,8 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
   const { projection, options } = state.session;
   const dependencies: MintDependencies = {
     workspace: workspace.session,
+    // Read-only, like the host's other captures, and never staged as source.
+    saveResult: (path, text) => workspace.install(path, text).pipe(Effect.mapError(mintError)),
     instructions: authoring.instructions,
     skills: authoring.skills,
     projection,
@@ -131,7 +134,17 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
     ),
     authorizeResidual: Effect.fail(new MintFailure({ code: "ScopeDenied" })),
     preflight: (execution) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        // An entrypoint that does not parse is refused before review, as it could never load. A
+        // sign-in step runs the host's own code, and a missing entrypoint fails when it runs.
+        if (execution.purpose !== "authenticate") {
+          const source = new Map(yield* workspace.snapshot).get(execution.entrypoint);
+          const syntax =
+            source === undefined
+              ? undefined
+              : mintSourceSyntaxFailure(source, execution.entrypoint);
+          if (syntax !== undefined) return { supported: false as const, reason: syntax };
+        }
         if (execution.target !== "pureFiles" && execution.target !== "liveBrowser")
           return {
             supported: false as const,
@@ -140,7 +153,11 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
         const { buildEffect } = context;
         const refusal =
           localStepRefusal(execution, state.writeSession.started) ??
-          preflightTestInput(execution, { buildEffect, signedIn: context.signedIn }) ??
+          preflightTestInput(execution, {
+            buildEffect,
+            signedIn: context.signedIn,
+            signedInTests: true,
+          }) ??
           exampleInputRefusal(execution, {
             buildEffect,
             callerInput: context.input,
@@ -154,7 +171,7 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
         return boundary === undefined
           ? { supported: true as const }
           : { supported: false as const, reason: boundary };
-      }),
+      }).pipe(Effect.mapError(mintError)),
     reviewAndExecute: mintExecution(state),
     checkSignedInMarker: (marker) => state.markers.check(marker),
     liveTests: localLiveTests(state),

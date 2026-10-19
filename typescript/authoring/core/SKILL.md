@@ -10,13 +10,17 @@ inputs, desired result and permitted effects. A read build explores, then iterat
 script from a reset start by running its example until it works (re-running a read's
 example is normal); resolve its missing choices with reads when possible. A write build
 does the caller's requested task once, live (in as many write steps as it takes), then
-composes its script from what happened (the `writes` skill). Only a read signed out designs
-and runs tests beyond its example, live test cases included (the `testing` skill). A signed-in
-read proves its tool with its example and a write with its act session; neither reads the
-`testing` skill or designs further tests, and each checks its HTTP version once, against that
-run. The scope follows what the tool is now, not what the build started as: a read that signs in
-or becomes a write, in a new build or a repair, keeps to the one run from then on, and a repair
-that rebuilds a signed-in tool or a write as a read signed out tests it fully. Credentials and
+composes its script from what happened (the `writes` skill). A read tests what its example
+did not exercise with a few combined live cases (the `testing` skill): a read signed out runs a
+handful, and a signed-in read one combined case that sets the optional inputs its example left
+unset, two distinct inputs at most. A write proves its tool with its act session; it never reads
+the `testing` skill or designs further tests<!-- pomerado:section core.write-http-check -->.
+That forbids running the write again or testing it live, not writing checks: a write's script
+checks its own result, and its read-back and comparison are checked offline over what the session
+read (the `writes` skill). The scope follows what the tool is now, not what the build started as: a read that becomes a
+write, in a new build or a repair, keeps to the one run from then on, a read that signs in keeps
+to the signed-in bound from then on, and a repair that rebuilds a signed-in tool or a write as a
+read signed out tests it as one. Credentials and
 sign-in codes
 belong to the host; never request a password, cookie or TOTP seed in model-visible text.
 
@@ -83,7 +87,12 @@ answers `{ success, result, error, stderr }`. Throw
   can also answer with a removed or not-found page: name it, and throw `InvalidInput` with the
   page's own words and `field`, never a readiness timeout. The waits paragraph below shows how to
   paste `waitCode` and call it. Prefer no fixed pauses unless necessary.
-- Prefer no result wait after a step that changed nothing, such as closing a panel without picking anything.
+- Wait for a change (`waitForChange`, or a settle of your own) only after a step that changed the
+  page or should have, such as a click, fill or navigation that loads new results. Skip it when no
+  step changed the page since the last wait, such as after closing a panel without picking
+  anything or skipping a control already in the requested state. The values you return still get
+  their one `waitForRows` or `waitForValues` after the last change, which passes at once on a
+  settled page.
 - `waitForOutcome` already waited for its answer, so prefer no extra wait for that same answer after it.
 - Check the null case if possible. Make sure the tool handles a lookup or filter that matches
   nothing.
@@ -96,6 +105,10 @@ pomerado:section core.execute-calls:end -->
 - Console logs do not work. Return what you need to see.
 - When a challenge appears, call `await waitPastChallenge({ ready })`. `ready` is code that
   returns true once the page is usable. It throws `ChallengeFailure` if the page stays blocked.
+  Naming a challenge the build saw as one answer of the same `waitForOutcome` that waits for the
+  expected content, as `references/navigation.ts` does, is right and costs nothing extra. Avoid a
+  separate challenge probe or call on every pass of a polling loop of your own, and never wait out
+  a timeout and swallow it to probe for a challenge.
 - Never repeat a call that may have run.
 - When the site itself refuses a caller's value, such as a past date, an unknown airport code
   or a party size over its limit, throw `new errors.InvalidInput(message, { field })` saying why,
@@ -163,8 +176,21 @@ use even when the caller's structured input is empty: pass the request's values 
 it), never as a build-time question. Decide from the request and the site which inputs are
 required. An optional input plus a declared question the tool asks before any effect is only for
 a value the request genuinely leaves open; never make a required field optional with nothing
-that asks. An input that tailors the answer on a read is the exception: it is optional unless
-the task can't run without it (below).
+that asks. A choice the request or the owner's answer settled as how the tool behaves, such as
+sorting by price or which kind of record it creates, is the tool's default, never a required
+input or a question at run time. When a caller could reasonably want another value, declare it
+with `defaultedInput(schema, answeredValue)` from the runtime, an optional input whose published
+schema shows that default and whose run gets it when the caller leaves it out, and say in its
+description that it defaults to what the owner chose; keep it fixed with no input only where
+varying it would be unsafe or meaningless. A choice that changes what the caller buys or pays,
+or whether the action can be cancelled or refunded, such as a paid add-on, a rate, fare or plan
+tier, a refundable option, shipping speed, how much of a balance to pay, the payment method or
+the delivery address, never takes one owner's answer as its default: it stays a required input
+or a declared question, and only declining it, turning it off or the option that adds no cost
+and keeps the action cancellable may be its optional input's default. A write asks
+its questions before its first save wherever the page lets it, so an unanswered question never
+leaves a partial save on the site (caller-input skill). An input that tailors the answer on a read is the
+exception: it is optional unless the task can't run without it (below).
 
 - The code works for every value the schema accepts. Never let the schema promise what
   the code rejects or ignores, such as a string the code throws on unless it is the example's
@@ -216,10 +242,16 @@ the task can't run without it (below).
   or without Ltd. or Inc. Never require an exact match.
   When more than one option matches, list them for the caller instead of picking one.
 - On a write, every choice the session met is an input: each option on the path,
-  add-ons and pre-selected defaults included. Make it required when the site requires
-  a choice (a fare class) and optional when it does not (a seat). An unset optional input
-  keeps the page's default; an add-on, a pre-selected paid option or a saved payment is
-  never left to a default, so ask about it (`AGENTS.md`, "Try hard, then ask").
+  add-ons and pre-selected defaults included, except one the request or an answer settled,
+  which is the tool's default (above). A costly choice, one that changes what the caller
+  buys or pays or whether the action can be cancelled or refunded (a paid add-on or
+  pre-selected paid option, a rate, fare or plan tier, a refundable or non-refundable option,
+  shipping speed, a saved payment or the delivery address), is never left to the page's
+  default: make it a required input or ask about it (`AGENTS.md`, "Try hard, then ask"), and
+  an optional input for it may default only to declining it, turning it off or the option
+  that adds no cost. Any other option is an optional input (a seat), required only when the
+  site requires a choice and nothing settled it; an unset optional input keeps the page's
+  default.
 - Never make an account-specific value (a passenger, loyalty number, saved card or
   address, account or member ID) an enum member, example or default in a public
   schema. Take it as a free-form input when the caller can name it, such as a loyalty
@@ -312,9 +344,11 @@ the task can't run without it (below).
 - A choice the request, the caller or the owner declined, or a step they said not to take (no
   location, no store, skip a filter, don't sign in), is not part of the tool for any caller:
   never offer it as an input, never set it in the example or a test, and never put it in
-  `exampleInput`. Note it in coverage. That covers a step the tool then never takes. A paid
-  add-on, payment method or address a write still meets on its path is never settled this way:
-  it stays an input or a run-time question (writes skill).
+  `exampleInput`. Note it in coverage. That covers a step the tool then never takes. A costly
+  choice a write still meets on its path, one that changes what the caller buys or pays or
+  whether the action can be cancelled or refunded (a paid add-on, a rate, fare or plan tier, a
+  refundable option, shipping speed, the payment method or the address), is never settled this
+  way: it stays an input or a run-time question (writes skill), whose default may only decline it.
 - When the caller input is empty (`{}`), write the tool's input from the request and the
   owner's answers, with dates normalized (10/4 is the next October 4, as `2026-10-04`), and
   pass it as `exampleInput`: on a read's example, or on each write act step that needs it. The
@@ -330,7 +364,9 @@ the task can't run without it (below).
   example.
 - Make each input as strict as the site's field: required text is non-empty and not whitespace
   alone (`Schema.NonEmptyString.pipe(Schema.pattern(/\S/u))`, which still takes a caller's stray
-  space); a date, time or code keeps its `pattern`; a fixed set is a `Literal` enum. Make an input
+  space); free text takes a `maxLength` no longer than the site's own field takes, so a blank or
+  over-long value is refused before the site is touched; a date, time or code keeps its
+  `pattern`; a fixed set is a `Literal` enum. Make an input
   optional only when the site accepts the field blank and the tool works without it.
 - Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear. A description that starts "By design:" keeps that marker first and puts the number of values after it, such as "By design: one postal code, …", never before it.
 - When a field takes one value and a caller might send several, say "one per call" and prefer a
@@ -343,13 +379,21 @@ the task can't run without it (below).
   guest rating out of 5, not a count of reviews". Effect's stock text, such as "a non empty
   string", is no description. Annotate the field's own schema, inside `Schema.optional(...)`
   for an optional one. Callers see each beside its name.
-- Shape inputs and outputs like Pomerado's own API, so every tool reads alike: field names in
-  snake_case; dates as `YYYY-MM-DD` and timestamps as ISO 8601 with an offset; money as an
-  integer in minor units with the ISO 4217 `currency` the page shows beside it, such as
-  `total_minor` 12999 and `currency` `"EUR"` read from "€129.99"; enum values in lowercase
-  snake_case (`"premium_economy"`); booleans named as statements (`refundable`, not
-  `is_refundable_flag`); lists named in the plural; and the unit in the field name or its
-  description (`duration_minutes`). Convert between these and the site's own formats in code.
+- Shape inputs and outputs like Pomerado's own API, so every tool reads alike. A notation the
+  request states, such as amounts as decimal strings or signed amounts, always wins; follow it
+  and say so in the field's description. Otherwise: field names in snake_case; dates as
+  `YYYY-MM-DD` and timestamps as ISO 8601 with an offset; money as an integer in minor units
+  with the ISO 4217 `currency` the page shows beside it, such as `total_minor` 12999 and
+  `currency` `"EUR"` read from "€129.99", and an amount that can go either way, such as a
+  ledger entry, unsigned with a field that says its direction, such as `direction` `"debit"`
+  or `"credit"`; enum values, statuses included, in lowercase
+  snake_case (`"premium_economy"`, `"partially_paid"`), with the site's own wording, where a
+  caller may want it, in a separate `*_label` field (`status_label` `"Partially Paid"`);
+  booleans named as statements (`refundable`, not `is_refundable_flag`); lists named in the
+  plural; and the unit in the field name or its description (`duration_minutes`). Convert
+  between these and the site's own formats in code. The output check flags a date or timestamp
+  not in the form its field declares (`format_mismatch`) and one value in two letter cases
+  across a list (`case_variant`).
 - When `reference/site-tools.json` exists, you can view the site's other tools. Read
   `reference/site-tools/README.md` first: it indexes them, one folder each, with each tool's
   effect, sign-in and a short description. Then read the folders you need: each holds a
@@ -403,8 +447,13 @@ stop. When they need it, end with `report_blocked` reason `site_lacks_capability
 names, the record's identifier as the site shows it, and the context those depend on as the page
 shows it, such as dates, a party size or a location. Make each one required and non-null, typed
 so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for
-text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the
-request's wording or a description says. A run whose output fails its schema goes to repair.
+text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever a
+description says. A run whose output fails its schema goes to repair.
+- The owner may settle a different form for every run: in the request's own explicit words, in
+  an answer to your design question or in a task update, such as blank fields returned as empty
+  strings. Publication review honours that decision as stated. Build it that way, and say in
+  the field's description what the owner chose. It never covers a value the page shows that
+  the code failed to read, or anything personal or account-specific.
 - Type each output field as strictly as its value: required text is non-empty and trimmed
   (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports
   an input's value reuses that input's enum or pattern. Make one optional or nullable only where
@@ -539,10 +588,12 @@ that depends on them:
      10 applies 40, never 50; use the control's end when the value is outside its range. Read the
      applied value back and return it, such as `applied_max_price`, beside the results. The rule above for a value
      the page does not offer covers choice lists only.
-3. Confirm. Read each choice back from the page's selected state, then wait for the values
-   that depend on it with `waitForChange`: changed, or confirmed unchanged once the page's
-   loading sign came and went; a value read before the page updates belongs to the previous
-   choice. Compare text read back with the caller's value normalized, or for a proper noun with
+3. Confirm. After a step that changed a choice, read it back from the page's selected state and
+   wait for the values that depend on it with `waitForChange`, passing that step as `action`:
+   changed, or confirmed unchanged once the page's loading sign came and went; a value read
+   before the page updates belongs to the previous choice. A choice already in the requested
+   state needs no step and no wait. Compare text read back with the caller's value normalized,
+   or for a proper noun with
    the option it matched: ignore case, accents, repeated whitespace and punctuation such as
    curly quotes, periods and hyphens, never exact case-sensitive equality, since a page may
    echo a query or name in
@@ -557,8 +608,11 @@ that depends on them:
    them. Return a group's offered options as a list when the page shows them without extra
    clicks, as a record page shows its variants, or when the caller asks (search skill).
 
-An optional choice the caller leaves unset keeps the page's default: read it back and return
-it as applied. A control you could not find, open or read throws `OperationFailure`, never
+An optional choice the caller leaves unset keeps the page's default: never set its control.
+Read the default from the page's state or data where it shows, with no wait; otherwise, outside
+a search (search skill), one open, read and close of its control is allowed; otherwise return
+null and say why in the description.
+Return it as applied. A control you could not find, open or read throws `OperationFailure`, never
 `InvalidInput`.
 
 <!-- pomerado:section core.host-ownership:start
@@ -577,6 +631,9 @@ caller's value may go in a URL), and write them into the code. Never embed the s
 or account-specific origin as a literal in authored source, schema examples, or logs, and never replace it with `page.url()`
 after a redirect. The host supplies the primary origin even when the model cannot see
 it. This value does not authorize other destinations or credential submission.
+For a tool whose sign-in moves each account to its own workspace host, `siteOrigin` is that
+account's workspace origin at run time, so a URL built from it, or from `siteDomain` for a
+fixed API host, reaches the right workspace, and one built from `page.url()` or a literal does not.
 The context's `siteDomain` is the site's registrable domain, which the host computed with
 the public suffix list: a page is on the site when it is `https:` and its hostname is
 `siteDomain` or ends with `"." + siteDomain`, and only `siteOrigin` itself is the site when
@@ -594,9 +651,13 @@ instead of returning hidden text; `as: "accessible"` reads what a screen reader 
 `textContent` always includes hidden text, scripts and styles, and so does `innerText` of an
 element that is not rendered, such as a hidden duplicate of the block you meant. `readRows`
 reads a window of rows in one call, each field relative to its row. Read a list's rows in one
-call: `readRows` and `waitForRows` read every returned row at once. Never select by a generated
-CSS class, a hashed or build-numbered name such as `.e-1a2b3c` or `.css-1x2y3z`: it changes on
-the site's next deploy.
+call: `readRows` and `waitForRows` read every returned row at once. A list of texts read from a
+page, such as bullets, highlights or option names, can hold blank entries the site renders
+invisibly: trim each entry and drop the empty ones, so one blank entry does not fail the result.
+A single text field that can be blank on some records is nullable, and its description says when
+(a needed value also takes a field that says why, as "Never loosen a value" says). Never select
+by a generated CSS class, a hashed or build-numbered name such as `.e-1a2b3c` or `.css-1x2y3z`:
+it changes on the site's next deploy.
 Never read it from a broad container, whole-page text, tag-stripped HTML, a regex over page-wide
 text or a page-wide setting such as a currency or language picker: a heading, label or
 placeholder is not the value beside it. Read embedded data separately when it is relevant to
@@ -605,10 +666,17 @@ On a hosted browser each Playwright call is a remote round trip, and each awaite
 its own, so a read costs its number of calls, not its navigations. Read every field a page needs in
 one `evaluate`, `readRows` or snapshot per page, never one locator call per field or a probe per
 element. Prefer values the list page already holds, in its rows or its embedded data, or the
-site's own data request (http-mcp skill), to opening each record's page. When the tool must open
+site's own data request<!-- pomerado:section core.data-request-reference -->, to opening each record's page. When the tool must open
 each record's detail page, keep each to a few calls (open, wait, one read), and consider whether
 the request is better served as two tools, a search and a details read by identifier; say so in
 `coverage`.
+Prefer the page's own structured data, its embedded JSON or the data response it renders from,
+to its rendered cards when it holds the same fields for the same records, and check on the
+example that it matches what the page shows. Embedded JSON holds the page as first rendered:
+after an in-page change, such as a filter that reloads the list without a navigation, read that
+change's data response or the rendered rows, never the initial JSON. Read the rendered page for
+a value that exists only after client-side rendering, or that the page computes where you see
+it, such as a total.
 Budgets: navigation 30 s for the document to commit; a click, fill or other action 5 s, taken
 only on an element a wait has shown ready. After a navigation commits or an action returns, the
 page gets 8 s without progress to show one of the answers you named, and up to 30 s while it
@@ -628,7 +696,8 @@ that readiness condition from the intended page, not from having seen a particul
 challenge. Wait for a unique operation control or page state before testing absence
 or choosing a fallback. Use `locator.waitFor` for one expected state, `waitForOutcome`
 (below) when the page can answer more than one way, `waitForRows`, `waitForValues` or
-`waitForChange` (below) for the values you return, or a bounded polling loop;
+`waitForChange` (below) for the values you return, or, only where none fits, a bounded loop of
+your own that reads every condition in one `evaluate` per pass;
 `count()` and `isVisible()` only observe the current instant. A ready page should
 pass immediately; do not add a fixed sleep. Share one bounded navigation deadline across navigation
 and first-page readiness, as in `references/navigation.ts`. Readiness polling
@@ -636,7 +705,9 @@ only observes: do not repeat `goto`, reload, login, submission or another action
 inside it. Preserve site/path and account guards while waiting.
 Wait for the values you will return, not for their containers or the rest of the page. A record
 is ready when each value you return is filled in and reads the same on two looks
-(`waitForValues`). A list is ready when the rows you return, the first `limit` from the page's
+(`waitForValues`): two consecutive identical reads, the first included. Call it after a step
+that changed the page, and never again on a page nothing changed since. A list is ready when
+the rows you return, the first `limit` from the page's
 position (pagination skill), have their identifier and the values the request needs, filled in
 and reading the same twice (`waitForRows`); keeping every result row means every row up to that
 page size. A slot that is present but empty, a skeleton, `aria-busy` or reading "Loading…" is
@@ -723,6 +794,11 @@ return, such as `{ ids: { locator: rowIds, all: true } }`, with the site's own l
 `loading` when it has one.
 After a step that reloads the page, such as choosing a city, prefer typing into the search box
 again when its suggestions don't appear.
+Typing or choosing can reload part of the page once per key or choice, such as suggestions or a
+dependent list. The answers can land out of order, and the page may replace the element it
+updates. Prefer waiting until every answer has landed, then look that element up again rather
+than reading a node or handle found earlier, and check it shows the answer to the whole value.
+When it doesn't, prefer entering the value once more over waiting longer.
 <!-- pomerado:section core.site-origin -->After a probe reveals a challenge, inspect the retained Page in follow-up probes
 and wait for the intended page/control within the existing deadline and job budget;
 do not click the challenge, reload, or navigate to another route merely because
@@ -813,7 +889,7 @@ Never recreate a write or login to recover an observation. See
 
 The tools and the files you may edit are in `AGENTS.md`. The host binds the caller's actual input/account; no tool
 argument selects another account or private reference. A live test's `testInput`, on a
-read signed out only, is an input you choose, with public values only
+read only, is an input you choose, with values the site shows and never a private identifier
 (.agents/testing/SKILL.md). Every new command/probe/execution gets Guardian review<!-- pomerado:section core.tools-and-files -->.
 Nested Playwright actions do not each trigger review. A probe operation still receives the host-bound business
 input. Its declared schema must accept that input even when the bounded observation

@@ -563,6 +563,140 @@ it("continues from provider compaction after takeover without replaying the olde
   });
 });
 
+it("compacts a conversation at the threshold with the previous request plus a trigger, so it reads the cache", async () => {
+  const requests: ModelRequest[] = [];
+  const compact: ModelResponse["output"][number] = {
+    type: "compaction",
+    id: "cmp_explicit",
+    encrypted_content: "opaque-explicitly-compacted-context",
+  };
+  // The first review's request is near the threshold; the second's new request would cross it.
+  const scripted = [
+    { output: [reason, message()], inputTokens: 236_000, cachedTokens: 0 },
+    { output: [compact], inputTokens: 236_010, cachedTokens: 236_000 },
+    // The compaction counts as one during the review, so the entrypoint is read again.
+    { output: [call("entrypoint_after_compaction")], inputTokens: 30_000, cachedTokens: 0 },
+    { output: [message()], inputTokens: 31_000, cachedTokens: 30_000 },
+  ];
+  setDefaultModelProvider({
+    getModel: () => ({
+      getResponse: async (request) => {
+        requests.push(request);
+        const next = scripted[requests.length - 1];
+        if (!next) throw new Error("Synthetic provider has no more responses");
+        return {
+          usage: new Usage({
+            input_tokens: next.inputTokens,
+            output_tokens: 1_000,
+            total_tokens: next.inputTokens + 1_000,
+            input_tokens_details: { cached_tokens: next.cachedTokens },
+          }),
+          output: next.output,
+        };
+      },
+      getStreamedResponse: () => {
+        throw new Error("Unused stream");
+      },
+    }),
+  });
+  const usage: unknown[] = [];
+  const guardian = makeGuardian(
+    makeOpenAIReviewer("Synthetic policy {{ tenant_policy_config }}", false, native),
+    {
+      emit: (name, details) =>
+        Effect.sync(() => {
+          if (name === "guardian.usage") usage.push(details);
+        }),
+      retainModelTranscript: () => Effect.void,
+      retainScreenedSource: () => Effect.void,
+    },
+    {},
+  );
+  await Effect.runPromise(
+    guardian.review({ ...pending, screenedObservations: "first-review-observation" }, readCurrent),
+  );
+  await Effect.runPromise(
+    guardian.review(
+      { ...pending, screenedObservations: `second-review-observation ${"x".repeat(48_000)}` },
+      readCurrent,
+    ),
+  );
+  expect(requests).toHaveLength(4);
+  const [previous, compaction, continued, afterRead] = requests;
+  const inputOf = (request: ModelRequest | undefined) =>
+    Array.isArray(request?.input) ? request.input : [];
+  const withoutInput = (request: ModelRequest | undefined) =>
+    JSON.stringify({ ...request, input: undefined, signal: undefined });
+  // The compaction request is the previous request byte for byte, with the trigger appended.
+  expect(withoutInput(compaction)).toBe(withoutInput(previous));
+  expect(JSON.stringify(inputOf(compaction).slice(0, -1))).toBe(JSON.stringify(inputOf(previous)));
+  expect(inputOf(compaction).at(-1)).toMatchObject({
+    providerData: { type: "compaction_trigger" },
+  });
+  // The review then continues from the compacted window, followed by the previous review's
+  // output and the new request, without replaying what the window replaced.
+  expect(inputOf(continued)[0]).toMatchObject({ type: "compaction", id: "cmp_explicit" });
+  expect(JSON.stringify(inputOf(continued))).toContain("opaque-first-review-reasoning");
+  expect(JSON.stringify(inputOf(continued))).toContain("second-review-observation");
+  expect(JSON.stringify(inputOf(continued))).not.toContain("first-review-observation");
+  expect(inputOf(afterRead)[0]).toMatchObject({ type: "compaction", id: "cmp_explicit" });
+  expect(JSON.stringify(inputOf(afterRead))).not.toContain("first-review-observation");
+  expect(guardian.session?.compactions()).toBe(1);
+  expect(guardian.session?.snapshot().history[0]).toMatchObject({ type: "compaction" });
+  expect(usage.at(-1)).toMatchObject({
+    details: { modelCalls: 3, inputTokens: 297_010, cachedTokens: 266_000 },
+  });
+});
+
+it("sends the request unchanged when compaction fails, and does not try compacting again", async () => {
+  const requests: ModelRequest[] = [];
+  const isTrigger = (request: ModelRequest) =>
+    Array.isArray(request.input) &&
+    JSON.stringify(request.input.at(-1)).includes("compaction_trigger");
+  setDefaultModelProvider({
+    getModel: () => ({
+      getResponse: async (request) => {
+        requests.push(request);
+        if (isTrigger(request)) throw new Error("Synthetic provider rejected the request");
+        return {
+          usage: new Usage({
+            input_tokens: 236_000,
+            output_tokens: 1_000,
+            total_tokens: 237_000,
+            input_tokens_details: { cached_tokens: 0 },
+          }),
+          output: [message()],
+        };
+      },
+      getStreamedResponse: () => {
+        throw new Error("Unused stream");
+      },
+    }),
+  });
+  const guardian = makeGuardian(
+    makeOpenAIReviewer("Synthetic policy {{ tenant_policy_config }}", false, native),
+    undefined,
+    {},
+  );
+  const big = "x".repeat(48_000);
+  for (const [index, observations] of ["first", `second ${big}`, `third ${big}`].entries()) {
+    const reviewed = await Effect.runPromise(
+      guardian.review(
+        { ...pending, attemptId: `attempt-${index}`, screenedObservations: observations },
+        readCurrent,
+      ),
+    );
+    expect(reviewed.decision.outcome).toBe("allow");
+  }
+  // One failed compaction attempt, then each review's own request goes out unchanged.
+  expect(requests.filter(isTrigger)).toHaveLength(1);
+  expect(requests.filter((request) => !isTrigger(request))).toHaveLength(3);
+  expect(guardian.session?.compactions()).toBe(0);
+  const third = requests.at(-1)?.input;
+  expect(JSON.stringify(third)).toContain("third");
+  expect(JSON.stringify(third)).toContain("first");
+});
+
 it("serializes concurrent reviews without forking the conversation", async () => {
   const requests: ModelRequest[] = [];
   provide([[call("first")], [reason, message()], [call("second")], [message()]], requests);

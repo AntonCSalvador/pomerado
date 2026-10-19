@@ -42,6 +42,13 @@ Such a URL was made for one sign-in; a run that replays it starts from spent val
 A login link often redirects through an identity provider and lands on an authorize URL with
 one-time parameters: record the link you clicked, not the page you landed on.
 
+On a site that signs each account in to its own workspace host (sign in at `app.example.com`,
+work at `acme.example.com`), record `loginUrl` on the shared sign-in host. Never type or hard-code
+a workspace or tenant host or slug in a page address, selector or source: the host records a
+workspace screen itself, and each run's sign-in goes to that account's own workspace. Its
+`loginUrl` carries no return address: no other URL, host or path to go to after sign-in in its
+query, fragment or path, since a host refuses such a link for a workspace site.
+
 # Discover the entry before authenticating
 
 1. Submit a bounded, anonymous, read-only `explore` with target `liveBrowser` on the authorized site
@@ -144,7 +151,14 @@ attribute.
     the step again to ask again.
   - `slot: "password"` for the password.
   - `slot: "code"` for a one-time or authenticator code. A saved authenticator seed answers it;
-    otherwise the host asks the caller for the code. Never ask for a code yourself.
+    otherwise the host asks the caller for the code. Never ask for a code yourself. A code split
+    into one-character boxes is one `code` field per box, every box from the first to the last, in
+    order, as a split date is one field per part (below), even when the page moves the focus to
+    the next box or takes a pasted code in the first. Count the boxes on the screen before you
+    send the step. The host asks once, types one character into each and submits only once each
+    box holds one. A step that names only some of the boxes, or names them out of order, comes
+    back refused as `code_boxes_incomplete`, typing nothing: its `codeBoxes` says how many boxes
+    the screen shows and which ones the step named; send the step again with all of them.
   - `slot: "date_of_birth"` for a date of birth, with `format`, how the field takes it, read from
     its placeholder, label, input mask or hint: `MM/DD/YYYY`, `DD/MM/YYYY`, `M/D/YYYY`,
     `D/M/YYYY`, `MM-DD-YYYY`, `DD-MM-YYYY`, `DD.MM.YYYY`, `YYYY-MM-DD`, `YYYY/MM/DD`, `MMDDYYYY`,
@@ -176,6 +190,8 @@ attribute.
   method order above. The tool's runs pick again from that list. A method's selector
   publishes with the tool, so it never names the masked phone number or address the option shows
   (such as `***-1234`): use the method's own words or a stable attribute.
+- `submitKey: "Enter"`, in place of `submit`: a code or password screen whose form has no submit
+  control and submits on Enter. The host presses Enter in the step's last field.
 - Every selector and submit you send publishes with the tool, as does each screen's page address.
   None may name this account's username, email or phone: not a "Continue as …" button's text, a
   data attribute holding it, or a placeholder for it. Name a control by its role, label or a stable
@@ -278,6 +294,11 @@ Flows vary. A login may be passwordless (identifier, then a code or a link), ask
 password, offer several code methods, or ask you to approve on another device. Record every screen
 the sign-in shows, a code screen included: the tool's runs replay only the screens you recorded and
 never look for another, so a run that meets a screen you did not record requests sign-in repair.
+Some sites answer the password with a screen that asks for it again together with a one-time
+code, the password field empty beside the code field: map that screen as one `signInStep` with
+both fields. The host fills the password there once more, records that the screen asks for it
+again, and each run enters it with the code on that screen alone. A screen that asks for the
+password again without a code is no such screen: treat it as a possible rejection.
 When an observed screen asks the caller to follow an email link or approve on another device,
 submit `signInStep: { approval: "email_link" }` or `{ approval: "device" }`, with the same popup
 relation if that screen is in the popup. The host asks the caller through a protected confirmation

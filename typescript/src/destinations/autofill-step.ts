@@ -36,6 +36,7 @@ import type {
   DateOfBirthFormat,
   SignInMethodChoice,
   RejectedMarker,
+  SubmitKey,
 } from "./autofill-contracts.js";
 
 /** A kind of sign-in identifier: what an identifier field may accept. */
@@ -102,6 +103,8 @@ export interface AutofillStepRequest {
       }
   )[];
   readonly submit?: string | undefined;
+  /** Enter, pressed in the last field to submit its form, on a form with no submit control. */
+  readonly submitKey?: SubmitKey | undefined;
   /** A two-factor method choice: every method offered, and `submit` the one picked. */
   readonly methods?:
     readonly { readonly method: SignInMethodChoice; readonly selector: string }[] | undefined;
@@ -109,17 +112,27 @@ export interface AutofillStepRequest {
 
 /**
  * One sign-in screen: the fields the host fills and the control it clicks. A screen that advances
- * by itself names no submit; a method choice or a "Next" names only one.
+ * by itself names no submit; a method choice or a "Next" names only one. A screen whose form has
+ * no submit control and submits on Enter names `submitKey` instead of a submit: the host presses
+ * Enter in its last field, which submits that field's form, judged as a clicked submit's would be.
  */
 export interface AutofillStep<Slot extends FillSlot = AutofillSlot> {
   readonly popup?: AutofillPopup | undefined;
   readonly rejectedMarkers?: readonly RejectedMarker[] | undefined;
   readonly fields: readonly AutofillField<Slot>[];
   readonly submit?: string | undefined;
+  /** Enter, pressed in the last field to submit its form; never with `submit`. */
+  readonly submitKey?: SubmitKey | undefined;
   /** A two-factor method choice: every method offered, and `submit` the one picked. */
   readonly methods?:
     readonly { readonly method: SignInMethodChoice; readonly selector: string }[] | undefined;
 }
+
+/** Whether the host submits the step itself: it clicks its submit or presses its submit key. */
+export const hostSubmits = (step: {
+  readonly submit?: string | undefined;
+  readonly submitKey?: SubmitKey | undefined;
+}) => step.submit !== undefined || step.submitKey !== undefined;
 
 /** What the minter says shows the site signed in, which the host checks on the live page. */
 export interface AutofillSignedIn {
@@ -179,6 +192,12 @@ const Described = Schema.Struct({
    * with no text it reads. Inspection-only.
    */
   questionUnread: Schema.optional(Schema.Literal(true)),
+  /**
+   * A code field that is one of the screen's one-character boxes (an input whose `maxlength` is 1),
+   * when the screen shows two or more: its place among them (`box`, from 1) and how many it shows
+   * (`of`). Inspection-only, never a recipe value; see `codeBoxesRefusal`.
+   */
+  codeBox: Schema.optional(Schema.Struct({ box: Schema.Number, of: Schema.Number })),
 });
 
 /** A control a step call could not find, or found moved to where the host refuses it. */
@@ -196,6 +215,8 @@ export const LocatedError = Schema.Struct({
   question: Schema.optional(Schema.Literal("changed")),
   /** The primary page then, which a fill call reports once it typed. */
   url: Schema.optional(Schema.String),
+  /** A fill call's: when the primary page's document began loading (`performance.timeOrigin`). */
+  document: Schema.optional(Schema.Number),
   searched: Schema.optional(Searched),
   /** An inert submit: where it was found. */
   located: Schema.optional(FoundIn),
@@ -207,6 +228,8 @@ const Located = Schema.Union(
     submit: Schema.NullOr(Schema.Struct({ target: Target, described: Described })),
     located: Schema.optional(FoundAt),
     buttons: Schema.Array(Schema.String),
+    /** A step's submit key: how many submit controls its last field's form shows. */
+    keySubmit: Schema.optional(Schema.Struct({ submitControls: Schema.Number })),
     popupTargetId: Schema.optional(Schema.String),
     url: Schema.String,
   }),
@@ -223,9 +246,15 @@ export type AutofillRefusal = {
     | "page_unavailable"
     | "typing_unavailable"
     | "popup_missing"
-    | "popup_ambiguous";
+    | "popup_ambiguous"
+    | "code_boxes_incomplete";
   /** The field (by its index in the step) or the submit control the refusal is about. */
   readonly target?: number | "submit" | "popup";
+  /**
+   * `code_boxes_incomplete`: how many one-character code boxes the screen shows, and the place of
+   * each box the step's code fields named, in the step's order. Counts only, never a value.
+   */
+  readonly codeBoxes?: { readonly boxes: number; readonly named: readonly number[] };
   /**
    * Host diagnostics only, never a value: the failed call's own error, or which check refused
    * (its `phase`) with origins and counts as evidence (`withCheck`).
@@ -265,6 +294,13 @@ export interface AutofillInspection {
    * each fill call asks again.
    */
   readonly trustSignInUrl?: ((url: URL) => boolean) | undefined;
+  /**
+   * Host-only: the origin, scheme, host and port alone, of each address `trustSignInUrl` trusted
+   * for this inspection, sorted, each once; absent when it trusted none. Each is within core's
+   * floor (`trustableSignInUrl`), since the predicate is asked about nothing else, and none is on
+   * the site or an `authenticationOrigins` entry, which it is never asked about.
+   */
+  readonly trustedSignInOrigins?: readonly string[] | undefined;
   /** The payment frame origins a card field may also sit in, for a card-fill step only. */
   readonly paymentFrameOrigins?: readonly string[] | undefined;
   readonly screen: {
@@ -279,7 +315,18 @@ export interface AutofillInspection {
       readonly accepts?: readonly IdentifierKind[] | undefined;
       readonly format?: DateOfBirthFormat | undefined;
     })[];
+    /**
+     * The submit control as found; for a step with a submit key, its last field's form (tag
+     * `form`), which the key submits, with that form's method.
+     */
     readonly submit: typeof Described.Type | null;
+    /**
+     * A step's submit key: the key, the field it is pressed in (the last), and how many visible
+     * submit controls that field's form has, which Guardian reads to judge the key as the submit.
+     */
+    readonly submitKey?:
+      | { readonly key: SubmitKey; readonly field: number; readonly submitControls: number }
+      | undefined;
     /** Visible native and ARIA actions, links included, for a step that names no submit. */
     readonly buttons: readonly string[];
   };
@@ -304,6 +351,7 @@ export type AutofillStepReport =
         readonly status: AutofillFieldStatus;
       }[];
       /**
+       * `clicked`: the host clicked the submit, or pressed the step's submit key in its last field.
        * `refused`: after the fill the host refused a control where it then sat or submitted.
        * `stayed_disabled`: the submit stayed disabled after the fields were filled, through the
        * host's wait for the page to enable it, so the host never clicked it.
@@ -333,6 +381,11 @@ export type AutofillStepReport =
       /** Host-only: a value reached the page, even one a field no longer holds. */
       readonly typed?: true;
       /**
+       * Host-only: the origins `trustSignInUrl` trusted when the fill judged again a control the
+       * page moved, as `AutofillInspection.trustedSignInOrigins` names them.
+       */
+      readonly trustedSignInOrigins?: readonly string[];
+      /**
        * Host-only: the page's controls once a clicked submit settled, never a value, with names as
        * the page has them. The host screens them, shortens them (`presentControls`) and saves them
        * to a workspace file for the minter (`afterSubmitPath`) rather than showing them inline.
@@ -344,6 +397,8 @@ export type AutofillStepReport =
       readonly reason: "fill_call_failed";
       /** Host-only: a value may have reached the page. */
       readonly typed?: true;
+      /** Host-only: as a filled report's. */
+      readonly trustedSignInOrigins?: readonly string[];
       /**
        * Host diagnostics only; finite facts alone when the failed call held a value, a date's or a
        * typing call's. A typing call's has the phase `typing` (`lostTyping`): the host never
@@ -404,6 +459,22 @@ const hostTrusts = (predicate: ((url: URL) => boolean) | undefined, value: strin
     return false;
   }
 };
+
+/**
+ * `predicate`, which also adds to `trusted` the origin of each address it trusts; undefined
+ * without one. An address it does not trust, or throws on, adds nothing.
+ */
+export const notingHostTrust = (
+  predicate: ((url: URL) => boolean) | undefined,
+  trusted: Set<string>,
+) =>
+  predicate === undefined
+    ? undefined
+    : (url: URL) => {
+        const trusts = predicate(url) === true;
+        if (trusts) trusted.add(url.origin);
+        return trusts;
+      };
 
 /**
  * The first control that sits or submits off the site and its configured sign-in origins, or a
@@ -497,7 +568,8 @@ export const untrustedTarget = (
  * document is on the site, and its card fields may sit in a frame on `paymentFrameOrigins`.
  * `trustSignInUrl` lets a sign-in step's controls and popup also sit on an address the host's own
  * predicate trusts, asked only about one core's own floor allows; the inspection keeps it, so each
- * fill call judges again by the same rule. Evidence names origins as before.
+ * fill call judges again by the same rule, and names the origin of each address it trusted
+ * (`trustedSignInOrigins`). Evidence names origins as before.
  */
 export const inspectAutofillStep = (input: {
   readonly step: AutofillStep<FillSlot>;
@@ -517,16 +589,25 @@ export const inspectAutofillStep = (input: {
    * about addresses the page shaped, which may hold what was typed: the host must never log, keep
    * or forward a URL it is asked about, and answers from the URL alone. A predicate that throws
    * trusts nothing. Unset, only the site and `authenticationOrigins`.
+   *
+   * An inspection that passes names the origin of each address the predicate trusted
+   * (`trustedSignInOrigins`), scheme, host and port alone, on a screen first reached after typing
+   * too, where refusal evidence still names an origin no inspection judged `other`. The host chose
+   * to trust that host with the sign-in, so it may keep the origin as the record of where the
+   * sign-in went. Like any address the page shaped after typing, it may hold part of what was
+   * typed, so the host screens it as it would the page's own text before it shows or forwards it.
    */
   readonly trustSignInUrl?: ((url: URL) => boolean) | undefined;
 }): Effect.Effect<AutofillRefusal | AutofillInspection> =>
   Effect.gen(function* () {
     const { step, page, siteOrigin, authenticationOrigins } = input;
     const predicate = signInUrlTrust(input, step);
+    const trustedByHost = new Set<string>();
+    const asking = notingHostTrust(predicate, trustedByHost);
     if (
       step.popup !== undefined &&
       !trustedUrl(siteOrigin, authenticationOrigins, step.popup.origin) &&
-      !hostTrusts(predicate, step.popup.origin)
+      !hostTrusts(asking, step.popup.origin)
     )
       return withCheck(refused("credential_target_refused"), "destination", {
         part: "popup",
@@ -564,12 +645,18 @@ export const inspectAutofillStep = (input: {
       fields: found.fields.map(({ target }) => target),
       submit: found.submit === null ? null : found.submit.target,
     };
-    const untrusted = untrustedTarget(targets, step, input, 0, named);
+    const untrusted = untrustedTarget(targets, step, { ...input, trustSignInUrl: asking }, 0, named);
     if (untrusted)
       return withEvidence(
         untrusted,
         foundEvidence(found.url, foundFor(found.located, untrusted.target), named),
       );
+    // A submit key submits its last field's form, so a field in no form has nothing it submits.
+    if (step.submitKey !== undefined && (targets.submit?.submitMethod ?? null) === null)
+      return withCheck(refused("credential_target_refused", "submit"), "submit_key", {
+        part: "no_form",
+        ...foundEvidence(found.url, foundFor(found.located, "submit"), named),
+      });
     const at = URL.parse(found.url);
     const frame = (found.submit ?? found.fields[0])?.target.ownerUrl;
     return {
@@ -582,6 +669,7 @@ export const inspectAutofillStep = (input: {
       siteOrigin,
       authenticationOrigins,
       ...(predicate === undefined ? {} : { trustSignInUrl: predicate }),
+      ...(trustedByHost.size === 0 ? {} : { trustedSignInOrigins: [...trustedByHost].sort() }),
       ...(input.paymentFrameOrigins === undefined
         ? {}
         : { paymentFrameOrigins: input.paymentFrameOrigins }),
@@ -597,10 +685,48 @@ export const inspectAutofillStep = (input: {
           };
         }),
         submit: found.submit === null ? null : found.submit.described,
+        ...(step.submitKey === undefined || found.keySubmit === undefined
+          ? {}
+          : {
+              submitKey: {
+                key: step.submitKey,
+                field: step.fields.length - 1,
+                submitControls: found.keySubmit.submitControls,
+              },
+            }),
         buttons: found.buttons,
       },
     };
   });
+
+/**
+ * A code step that names only part of its screen's one-character code boxes, or names them out of
+ * order: a refusal before anything is typed or reviewed, which says how many boxes the screen shows
+ * and which ones the step named (`codeBoxes`), so the step can be sent again with every box. A code
+ * split across boxes takes one character in each, so a step that leaves a box out can never send
+ * the whole code. Undefined when the step's code fields that are boxes (`codeBox`, from the
+ * inspection) are every box, first to last, or when none of its code fields is one.
+ */
+export const codeBoxesRefusal = (
+  step: Pick<AutofillStep, "fields">,
+  inspection: Pick<AutofillInspection, "screen">,
+): AutofillRefusal | undefined => {
+  const named = step.fields.flatMap((field, index) => {
+    const box = field.slot === "code" ? inspection.screen.fields[index]?.codeBox : undefined;
+    return box === undefined ? [] : [{ index, ...box }];
+  });
+  const first = named[0];
+  if (first === undefined) return undefined;
+  const boxes = Math.max(...named.map(({ of }) => of));
+  if (named.length === boxes && named.every(({ box }, at) => box === at + 1)) return undefined;
+  return {
+    ...withCheck(refused("code_boxes_incomplete", first.index), "code_boxes", {
+      boxes,
+      named: named.length,
+    }),
+    codeBoxes: { boxes, named: named.map(({ box }) => box) },
+  };
+};
 
 /** The site's registrable domain, or its host where it has none, for the marker's frames. */
 const siteHost = (siteOrigin: string) =>

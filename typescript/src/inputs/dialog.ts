@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
 import type { ExpectedConfirm } from "../browser/dialogs/contracts.js";
 import {
+  askDialogCaller,
   keepAcceptedConfirm,
   makeRunDialogDecision,
   type ObservedConfirm,
@@ -91,11 +92,32 @@ export const keepingAcceptedConfirms =
     );
 
 /**
+ * `ask`, watched for a question its caller left unanswered, the owner's cancel aside. A run hands
+ * it to `makeRunDialogDecider`, which dismisses that dialog and goes on. This host keeps no log of
+ * what the page sent, so `unanswered()` tells the run's report that a failure after it can't show
+ * the write changed nothing.
+ */
+export const watchingUnanswered = (ask: InputAsker) => {
+  let seen = false;
+  const watched: InputAsker = (request, bounds) =>
+    ask(request, bounds).pipe(
+      Effect.tapError((cause) =>
+        Effect.sync(() => {
+          if (unanswered(cause)) seen = true;
+        }),
+      ),
+    );
+  return { ask: watched, unanswered: () => seen };
+};
+
+/**
  * A run's native dialogs. A write's confirm that its build accepted, with the same message on the
- * same page origin at the same step, is accepted without asking, once per record. Every other
- * dialog asks the caller, as a build does. A dialog whose question's window ends unanswered is
- * dismissed, never accepted, and the run goes on. The owner's cancel, or a question that cannot be
- * asked or answered, fails the step as before.
+ * same page origin at the same step, is accepted without asking, once per record. Any other
+ * confirm in a write's run asks the caller one yes or no question (`askDialogCaller`), showing
+ * the message as `project` leaves it. Every other dialog, a read run's confirms included, gets the
+ * safe default without a question. A confirm whose question's window ends unanswered is
+ * dismissed, never accepted, and the run goes on. The owner's cancel at the terminal, or a
+ * question that cannot be asked or answered, fails the step as before.
  */
 export const makeRunDialogDecider = (input: {
   readonly ask: InputAsker;
@@ -105,12 +127,22 @@ export const makeRunDialogDecider = (input: {
   readonly expectedConfirms?: readonly ExpectedConfirm[] | undefined;
   readonly incidents: IncidentStore;
 }): DialogDecider => {
-  const askCaller = makeDialogDecider(input.ask, input.project);
+  // The owner's cancel is a choice to stop, never a question left unanswered.
+  const ask: InputAsker = (request, bounds) =>
+    input
+      .ask(request, bounds)
+      .pipe(
+        Effect.mapError((cause) =>
+          cause instanceof OwnerCancelled
+            ? new InputRequestFailure({ code: "Unavailable", cause })
+            : cause,
+        ),
+      );
   const decide = makeRunDialogDecision({
     readOnly: input.readOnly,
     expectedConfirms: input.expectedConfirms,
     askCaller: (report: Parameters<DialogDecider>[0] & { readonly candidateActionId: string }) =>
-      askCaller(report).pipe(
+      askDialogCaller(ask, { type: report.type, message: input.project(report.message) }).pipe(
         Effect.catchIf(
           (failure) => failure.reason === "expired",
           () =>
@@ -127,7 +159,6 @@ export const makeRunDialogDecider = (input: {
         ),
       ),
     incidents: input.incidents,
-    askEveryDialog: true,
   });
   return (report) => decide({ ...report, ...eventOf(report) }, factsOf(report));
 };

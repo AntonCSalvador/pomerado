@@ -80,6 +80,15 @@ export const TaskUpdateDecision = Schema.Struct({
 });
 export type TaskUpdateDecision = typeof TaskUpdateDecision.Type;
 
+/**
+ * Who can confirm a maintenance change to a published tool's registered contract. `owner`: the
+ * host checked that the person who answers the build's questions is the tool's owner.
+ * `owner_request`: the same, and the maintenance is the owner's own request to change the tool,
+ * which trusted intent states, so an output change that request plainly names is confirmed by it.
+ * `none`: nobody can confirm, so only an update that adds or tightens output fields applies.
+ */
+export type TaskUpdateConfirmer = "owner" | "owner_request" | "none";
+
 /** A task update as Guardian reviews it: every string screened, as the caller would read it. */
 export interface PendingTaskUpdate {
   readonly summary: string;
@@ -102,11 +111,12 @@ export interface PendingTaskUpdate {
    */
   readonly publicationDecisions?: readonly PublicationDecision[];
   /**
-   * Host fact, in maintenance only: the update changes a published tool's registered contract.
-   * `owner`: the host checked that the person who answers the build's questions is the tool's
-   * owner. `none`: nobody was asked, as only an update that adds or tightens output fields allows.
+   * Host fact, in maintenance only: the update changes a published tool's registered contract,
+   * and `confirmer` says who can confirm it.
    */
-  readonly maintenance?: { readonly confirmer: "owner" | "none" };
+  readonly maintenance?: { readonly confirmer: TaskUpdateConfirmer };
+  /** Host fact: the host can't move this build to another site, so a site change needs a new build. */
+  readonly siteMoveUnsupported?: true;
 }
 
 /**
@@ -123,10 +133,13 @@ export interface ReviewedTaskUpdate {
 
 /** Projects a proposed update for review, screening every string and input value. */
 export const taskUpdateForReview = <E>(
-  update: Omit<PendingTaskUpdate, "confirmation" | "effect" | "maintenance">,
+  update: Omit<
+    PendingTaskUpdate,
+    "confirmation" | "effect" | "maintenance" | "siteMoveUnsupported"
+  >,
   facts: Pick<
     PendingTaskUpdate,
-    "confirmation" | "effect" | "publicationDecisions" | "maintenance"
+    "confirmation" | "effect" | "publicationDecisions" | "maintenance" | "siteMoveUnsupported"
   >,
   screen: {
     readonly text: (value: string) => Effect.Effect<string, E>;
@@ -170,5 +183,6 @@ export const taskUpdateForReview = <E>(
         ? {}
         : { publicationDecisions: facts.publicationDecisions }),
       ...(facts.maintenance === undefined ? {} : { maintenance: facts.maintenance }),
+      ...(facts.siteMoveUnsupported === true ? { siteMoveUnsupported: true as const } : {}),
     };
   });

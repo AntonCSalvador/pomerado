@@ -121,6 +121,14 @@ export const currentOf = (review: RecordedReview) =>
   contextOf(review)?.["currentExecution"] as Readonly<Record<string, unknown>> | undefined;
 export const authorityOf = (review: RecordedReview) =>
   review.input["trusted_authority"] as Readonly<Record<string, unknown>>;
+/** The build's request, which ends the instructions every review of the build shares. */
+export const intentOf = (review: RecordedReview) => {
+  const marker = "\ntrusted_request: ";
+  const at = review.instructions.lastIndexOf(marker);
+  return at < 0
+    ? undefined
+    : (JSON.parse(review.instructions.slice(at + marker.length)) as { intent?: unknown }).intent;
+};
 
 /**
  * A scripted Guardian that records each review's input. An execution review reads its entrypoint

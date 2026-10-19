@@ -6,6 +6,9 @@ import {
   decodeCasesFile,
   judgeCase,
   primaryListOf,
+  signedInTestInputRefusal,
+  testInputKey,
+  uncountedTestInputs,
 } from "../../src/mint/live-tests.js";
 
 // What the runner reads from a tool's schemas, and the verdicts, are pure and full of edge cases:
@@ -27,6 +30,19 @@ describe("cursorPairOf", () => {
       "query",
     ]);
     expect(cursorPairOf(input, output)).toEqual({ inputField: "cursor", outputField: "next_cursor" });
+  });
+
+  it("reads only the runtime's string cursor and next_cursor, never a continuation of the tool's own", () => {
+    const results = { results: { type: "array" } };
+    for (const [input, output] of [
+      [{ page_token: { type: "string" } }, { next_page_token: { type: "string" } }],
+      [{ continuation: { type: "string" } }, { continuation_token: { type: "string" } }],
+      [{ cursor: { type: "string" } }, { cursor: { type: "string" } }],
+      [{ next_cursor: { type: "string" } }, { next_cursor: { type: "string" } }],
+      [{ cursor: { type: "integer" } }, { next_cursor: { type: "integer" } }],
+      [{ cursor: { type: "string" } }, { next_cursor: { type: "number" } }],
+    ] as const)
+      expect(cursorPairOf(object(input), object({ ...results, ...output }))).toBeUndefined();
   });
 
   it("finds no cursor when only a boolean says there is a next page", () => {
@@ -76,6 +92,32 @@ describe("judgeCase", () => {
     expect(judge("result", { results: [], facets: [{}] }).verdict).toBe("fail");
     expect(judge("empty", { results: [], facets: [{}] }).verdict).toBe("pass");
     expect(judge("empty", { results: [{}] })).toMatchObject({ verdict: "fail", got: "results (1)" });
+  });
+
+  // A cursor the tool ignores reloads page one: page two then repeats its rows.
+  it("fails a page two that only repeats page one's rows, and passes one that moves on", () => {
+    const results = { field: "results" };
+    const paged = (first: unknown, second: unknown) => ({
+      ...completed(first),
+      followUp: { status: "completed" as const, output: second },
+    });
+    const page = (...names: string[]) => ({ results: names.map((name) => ({ name, price: 1 })) });
+    const reordered = { results: [{ price: 1, name: "b" }, { price: 1, name: "a" }] };
+    expect(judgeCase({ expect: "result" }, paged(page("a", "b"), reordered), results)).toMatchObject({
+      verdict: "fail",
+      got: "results (2)",
+    });
+    // A subset of page one's rows is a repeat too.
+    expect(judgeCase({ expect: "result" }, paged(page("a", "b"), page("b")), results).verdict).toBe("fail");
+    // A page two that holds one new row moves on, though the list shifted by a row.
+    expect(judgeCase({ expect: "result" }, paged(page("a", "b"), page("b", "c")), results).verdict).toBe(
+      "pass",
+    );
+    // An empty page two is judged as before, and a details read has no list to compare.
+    expect(judgeCase({ expect: "result" }, paged(page("a"), page()), results).verdict).toBe("fail");
+    expect(
+      judgeCase({ expect: "result" }, paged({ title: "a" }, { title: "a" }), undefined).verdict,
+    ).toBe("pass");
   });
 
   it("judges a details record by its values, never by its empty lists", () => {
@@ -161,5 +203,44 @@ describe("decodeCasesFile", () => {
     expect(
       Either.isLeft(decodeCasesFile(JSON.stringify({ cases: [], notTested: [{ what: "Sort" }] }))),
     ).toBe(true);
+  });
+});
+
+// A signed-in read runs live tests on a few distinct inputs. What counts as one input is pure and
+// easy to get wrong: key order, nesting, repeats in one batch, and reruns of a counted input.
+describe("the signed-in test input bound", () => {
+  const combined = { query: "lamp", filters: { status: "open", tags: ["a", "b"] }, in_stock: true };
+  const reordered = { in_stock: true, filters: { tags: ["a", "b"], status: "open" }, query: "lamp" };
+
+  it("treats the same input written in another key order as one input, at every depth", () => {
+    expect(testInputKey(reordered)).toBe(testInputKey(combined));
+    expect(uncountedTestInputs([testInputKey(combined)], [reordered])).toEqual([]);
+  });
+
+  it("tells inputs apart by a value, a list's order or a missing key", () => {
+    const keys = [
+      combined,
+      { ...combined, in_stock: false },
+      { ...combined, filters: { status: "open", tags: ["b", "a"] } },
+      { query: "lamp", filters: combined.filters },
+    ].map(testInputKey);
+    expect(new Set(keys).size).toBe(4);
+  });
+
+  it("counts an input named by several cases of one batch once", () => {
+    expect(uncountedTestInputs([], [combined, reordered, { query: "desk" }])).toHaveLength(2);
+    expect(signedInTestInputRefusal([], [combined, reordered, { query: "desk" }])).toBeUndefined();
+  });
+
+  it("allows up to the limit, then refuses only a new input", () => {
+    const first = testInputKey(combined);
+    const second = testInputKey({ query: "desk" });
+    expect(signedInTestInputRefusal([first], [{ query: "desk" }])).toBeUndefined();
+    // Both counted: a rerun of either is free, a third input is refused.
+    expect(signedInTestInputRefusal([first, second], [reordered, { query: "desk" }])).toBeUndefined();
+    expect(signedInTestInputRefusal([first, second], [{ query: "chair" }])).toBeDefined();
+    // A batch that would add two inputs when one is left runs nothing.
+    expect(signedInTestInputRefusal([first], [{ query: "desk" }, { query: "chair" }])).toBeDefined();
+    expect(signedInTestInputRefusal([], [combined, { query: "desk" }, { query: "chair" }])).toBeDefined();
   });
 });

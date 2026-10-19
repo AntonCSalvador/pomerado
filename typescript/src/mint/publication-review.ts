@@ -1,8 +1,9 @@
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { publicDefinitionPath } from "../guardian/publication.js";
 import type { PublicationScope } from "../guardian/review-contracts.js";
 import { inlineLocalRefs, UnresolvedSchemaReference } from "../registry/schema-references.js";
 import type { ScriptQuestionDeclarations } from "../runtime/script-input.js";
+import type { TaskChange } from "../guardian/task-update.js";
 import { MintFailure } from "./contracts.js";
 import { entrypointImportClosure } from "./operation-source.js";
 
@@ -29,7 +30,13 @@ export const sessionStepPath = (index: number, path: string) =>
 // explicitly truncated prefix rather than exhausting the review's bounded turns.
 const maximumEvidenceBytes = 96 * 1024;
 
-type ExampleOutputState = "available" | "truncated" | "withheld" | "not_retained";
+/** The state of the host's record of an example's output. */
+export type ExampleOutputState =
+  | "available"
+  | "truncated"
+  | "unavailable"
+  | "withheld"
+  | "not_retained";
 /** Which execution produced the output, and the source it ran. */
 export interface ExampleOutputSource {
   readonly kind?: "verified_example_output" | "write_session_output";
@@ -41,6 +48,8 @@ export interface ExampleOutputSource {
 interface ExampleOutputEvidence {
   readonly state: ExampleOutputState;
   readonly text: string;
+  /** The whole screened output, parsed, when it was JSON; never truncated. */
+  readonly screened?: unknown;
 }
 
 const byteLength = (text: string) => new TextEncoder().encode(text).byteLength;
@@ -51,92 +60,340 @@ const codePointPrefix = (text: string, length: number) => {
   return text.slice(0, last >= 0xd800 && last <= 0xdbff ? length - 1 : length);
 };
 
-const outputRecord = (
+/** Where the host's per-field digest of the example output's lists goes. */
+export const outputDigestPath = "publication/output-digest.json";
+
+const decodeJson = Schema.decodeUnknownOption(Schema.parseJson());
+const parsedJson = (text: string): unknown => Option.getOrUndefined(decodeJson(text));
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+interface RecordList {
+  readonly path: string;
+  readonly records: readonly unknown[];
+  /** For a nested list, how many parent records hold one; its records are all of theirs. */
+  readonly parents?: number;
+}
+
+/** The list `value` itself when most of it is records, then the lists nested in its records. */
+const arrayRecordLists = (
+  value: readonly unknown[],
+  path: string,
+  depth: number,
+  parents?: number,
+): RecordList[] => {
+  const records = value.filter(isRecord);
+  const here =
+    records.length >= 2 && records.length * 2 >= value.length
+      ? [
+          {
+            path: path === "" ? "[]" : path,
+            records: value,
+            ...(parents === undefined ? {} : { parents }),
+          },
+        ]
+      : [];
+  return [...here, ...nestedLists(records, `${path}[]`, depth + 1)];
+};
+
+/**
+ * The lists under each field of `records`, every parent's combined: `results[].offers` holds the
+ * offers of every result, never only the first result's.
+ */
+const nestedLists = (
+  records: readonly Readonly<Record<string, unknown>>[],
+  prefix: string,
+  depth: number,
+): RecordList[] => {
+  if (depth > 4) return [];
+  const keys = [...new Set(records.flatMap((record) => Object.keys(record)))];
+  return keys.flatMap((key) => {
+    const values = records.map((record) => record[key]);
+    const lists = values.filter((field) => Array.isArray(field));
+    const objects = values.filter(isRecord);
+    return [
+      ...(lists.length === 0
+        ? []
+        : arrayRecordLists(lists.flat(), `${prefix}.${key}`, depth, lists.length)),
+      ...(objects.length === 0 ? [] : nestedLists(objects, `${prefix}.${key}`, depth + 1)),
+    ];
+  });
+};
+
+/** Each list of two or more records in `value`, by its path (`results`, `results[].offers`). */
+const recordLists = (value: unknown, path = "", depth = 0): RecordList[] => {
+  if (depth > 4) return [];
+  if (Array.isArray(value)) return arrayRecordLists(value, path, depth);
+  if (!isRecord(value)) return [];
+  return Object.entries(value).flatMap(([key, field]) =>
+    recordLists(field, path === "" ? key : `${path}.${key}`, depth + 1),
+  );
+};
+
+const sampleLimit = 3;
+const sampleLength = 120;
+const sampleOf = (field: unknown) =>
+  typeof field === "string" && field.length > sampleLength
+    ? `${field.slice(0, sampleLength)}…`
+    : field;
+
+const hasValue = (field: unknown) =>
+  field !== null &&
+  field !== undefined &&
+  field !== "" &&
+  !(Array.isArray(field) && field.length === 0);
+
+/** One field's values across a list's records, summarized. */
+const fieldDigest = (values: readonly unknown[]) => {
+  const present = values.filter(hasValue);
+  const distinct = new Map(present.map((field) => [JSON.stringify(field), field]));
+  const lengths = present.flatMap((field) =>
+    typeof field === "string" || Array.isArray(field) ? [field.length] : [],
+  );
+  return {
+    withValue: present.length,
+    distinct: distinct.size,
+    ...(lengths.length === 0 ? {} : { length: [Math.min(...lengths), Math.max(...lengths)] }),
+    samples: [...distinct.values()].slice(0, sampleLimit).map(sampleOf),
+  };
+};
+
+
+/**
+ * A per-field digest of every list of records in the screened example output: for each field,
+ * how many records hold a value (not null, absent or empty), how many distinct values there are,
+ * the range of string lengths or list sizes, and a few samples. It covers every record, past the
+ * part of a large output the review's envelope keeps, so publication review can judge each field
+ * across the whole list without querying the output record by record.
+ */
+export const outputDigest = (output: unknown): string | undefined => {
+  const lists = recordLists(output);
+  if (lists.length === 0) return undefined;
+  return JSON.stringify(
+    {
+      note: "Host-built from the screened example output: every record of each list, including any past the part example-output.json keeps. A nested list's path has [] (results[].offers): its records are those lists of every parent record combined, and parents counts the parent records that hold one. withValue counts records whose field is not null, absent or empty; length is the range of string lengths or list sizes.",
+      lists: lists.map(({ path, records, parents }) => {
+        const keys = [
+          ...new Set(records.filter(isRecord).flatMap((record) => Object.keys(record))),
+        ];
+        return {
+          path,
+          records: records.length,
+          ...(parents === undefined ? {} : { parents }),
+          fields: Object.fromEntries(
+            keys.map((key) => [
+              key,
+              fieldDigest(records.map((record) => (isRecord(record) ? record[key] : undefined))),
+            ]),
+          ),
+        };
+      }),
+    },
+    null,
+    2,
+  );
+};
+
+/** What the review is told about the digest, when the host writes one. */
+export const outputDigestNote = `${outputDigestPath} summarizes every field of each list in the example output across all its records, including records past what ${exampleOutputPath} keeps.`;
+
+/** The largest count below `exceeds` that `fits`, or 0, for a `fits` that holds up to a point. */
+const largestFitting = (exceeds: number, fits: (count: number) => boolean) => {
+  let fitting = 0;
+  let over = exceeds;
+  while (over - fitting > 1) {
+    const middle = Math.floor((fitting + over) / 2);
+    if (fits(middle)) fitting = middle;
+    else over = middle;
+  }
+  return fitting;
+};
+
+/** The top-level list of records whose JSON is largest, which a large output cuts first. */
+const largestTopLevelList = (value: unknown) => {
+  const largest = recordLists(value).toSorted(
+    (one, other) =>
+      byteLength(JSON.stringify(other.records)) - byteLength(JSON.stringify(one.records)),
+  )[0];
+  return largest === undefined || largest.path.includes("[].") ? undefined : largest;
+};
+
+/** `value` with the list at `path` (as `recordLists` names it) cut to its first `kept` items. */
+const withListPrefix = (value: unknown, path: string, kept: number): unknown => {
+  if (path === "[]") return Array.isArray(value) ? value.slice(0, kept) : value;
+  const [head, ...rest] = path.split(".");
+  if (head === undefined || !isRecord(value)) return value;
+  return rest.length === 0
+    ? { ...value, [head]: Array.isArray(value[head]) ? value[head].slice(0, kept) : value[head] }
+    : { ...value, [head]: withListPrefix(value[head], rest.join("."), kept) };
+};
+/** A plain array or object, which `lineJson` splits; JSON.stringify writes anything else. */
+const isPlainContainer = (value: unknown): value is object => {
+  if (typeof value !== "object" || value === null) return false;
+  if (typeof (value as { readonly toJSON?: unknown }).toJSON === "function") return false;
+  if (Array.isArray(value)) return true;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+/** JSON.stringify's text, or undefined for undefined, a function or a symbol. */
+const wholeJson = (value: unknown) => JSON.stringify(value) as string | undefined;
+
+/**
+ * `value` as compact JSON, with each object key outside a list item and each item of such a list
+ * on its own line, down to the record's output and the levels `recordLists` finds lists at. An
+ * item, and anything deeper, stays whole on one line as JSON.stringify writes it, so the text
+ * without its newlines is JSON.stringify's. A later publication round then diffs a rerun of the
+ * same output as the few lines that changed.
+ */
+const lineJson = (value: unknown, depth: number): string | undefined => {
+  if (depth > 5 || !isPlainContainer(value)) return wholeJson(value);
+  if (!Array.isArray(value)) return lineObject(value, depth);
+  if (value.length === 0) return "[]";
+  return `[\n${Array.from(value, (item: unknown) => wholeJson(item) ?? "null").join(",\n")}\n]`;
+};
+const lineObject = (value: object, depth = 0): string =>
+  `{${Object.entries(value)
+    .flatMap(([key, field]) => {
+      const text = lineJson(field, depth + 1);
+      return text === undefined ? [] : [`${JSON.stringify(key)}:${text}`];
+    })
+    .join(",\n")}}`;
+
+/**
+ * The host's record of an example's output in `state`, with `fields` after it, such as the
+ * `reason` a host gives for an output it could not read (`unavailable`). The record is compact
+ * JSON, so the 96 KiB limit keeps as many of the output's records as it can, with each field and
+ * each record of a top-level list on its own line (`lineJson`).
+ */
+export const exampleOutputRecord = (
   source: ExampleOutputSource,
   state: ExampleOutputState,
   fields: Json = {},
 ): ExampleOutputEvidence => ({
   state,
-  text: JSON.stringify(
-    {
-      kind: source.kind ?? "verified_example_output",
-      executionId: source.executionId,
-      executedEntrypoint: source.executedEntrypoint,
-      ...(source.executedSourceDigest === undefined
-        ? {}
-        : { executedSourceDigest: source.executedSourceDigest }),
-      state,
-      ...fields,
-    },
-    null,
-    2,
-  ),
+  text: lineObject({
+    kind: source.kind ?? "verified_example_output",
+    executionId: source.executionId,
+    executedEntrypoint: source.executedEntrypoint,
+    ...(source.executedSourceDigest === undefined
+      ? {}
+      : { executedSourceDigest: source.executedSourceDigest }),
+    state,
+    ...fields,
+  }),
 });
 
 /**
  * The actual validated output the example or the named act step returned, bound to the source
- * that ran. `screened` is that output as the host's screening leaves it, as JSON text, and
- * undefined when the host kept none. `credentialFree` is the host's credential precheck: it sees
- * the whole record first, since a cut inside a URL-embedded credential would leave an unmatched
- * prefix, and the cut record again. A record that fails it is withheld; one past 96 KiB keeps a
- * prefix of the output that ends on a code point.
+ * that ran. `output` is that output as the host's screening leaves it, as JSON text, and
+ * undefined when the host kept none. The record holds it as JSON, never a JSON string inside
+ * JSON, so the review reads its values as the caller will. `credentialFree` is the host's
+ * credential precheck: it sees the whole record first, since a cut inside a URL-embedded
+ * credential would leave an unmatched prefix, and the cut record again. A record that fails it is
+ * withheld. One past 96 KiB keeps the first whole records of its largest top-level list, with
+ * `truncation` saying how many, or else a prefix of the output text that ends on a code point.
+ * The result's `screened` is the whole output, parsed, for `outputDigest`.
  */
 export const exampleOutputEvidence = (
   source: ExampleOutputSource,
-  screened: string | undefined,
+  output: string | undefined,
   credentialFree: (text: string) => Effect.Effect<boolean>,
 ): Effect.Effect<ExampleOutputEvidence> =>
   Effect.gen(function* () {
-    if (screened === undefined) return outputRecord(source, "not_retained");
-    const withheld = outputRecord(source, "withheld", { reason: "credential_precheck" });
-    const screenedBytes = byteLength(screened);
-    const complete = outputRecord(source, "available", { screenedBytes, output: screened });
+    if (output === undefined) return exampleOutputRecord(source, "not_retained");
+    const withheld = exampleOutputRecord(source, "withheld", { reason: "credential_precheck" });
+    const screenedBytes = byteLength(output);
+    // The output as JSON inside its envelope, never a JSON string inside JSON, so the review
+    // reads its values as the caller will.
+    const parsed = parsedJson(output);
+    const readable = parsed ?? output;
+    const complete = exampleOutputRecord(source, "available", { screenedBytes, output: readable });
+    // Readable screening keeps URLs byte-exact, so the precheck must see the complete output:
+    // a truncation point inside a URL-embedded credential would leave an unmatched prefix.
     if (!(yield* credentialFree(complete.text))) return withheld;
-    if (byteLength(complete.text) <= maximumEvidenceBytes) return complete;
+    const withScreened = <A extends object>(result: A) =>
+      parsed === undefined ? result : { ...result, screened: parsed };
+    if (byteLength(complete.text) <= maximumEvidenceBytes) return withScreened(complete);
+    // A large list keeps its first records whole; the digest covers the rest.
+    const largest = largestTopLevelList(parsed);
+    if (largest !== undefined) {
+      const cutAt = (kept: number) =>
+        exampleOutputRecord(source, "truncated", {
+          screenedBytes,
+          truncation: { list: largest.path, kept, records: largest.records.length },
+          output: withListPrefix(parsed, largest.path, kept),
+        });
+      const fitting = largestFitting(
+        largest.records.length,
+        (kept) => byteLength(cutAt(kept).text) <= maximumEvidenceBytes,
+      );
+      if (fitting > 0) {
+        const cut = cutAt(fitting);
+        return (yield* credentialFree(cut.text)) ? withScreened(cut) : withheld;
+      }
+    }
     const truncatedAt = (length: number) =>
-      outputRecord(source, "truncated", {
+      exampleOutputRecord(source, "truncated", {
         screenedBytes,
-        output: codePointPrefix(screened, length),
+        output: codePointPrefix(output, length),
       });
     // Every UTF-16 unit serializes to at least one byte, so the prefix is shorter than the bound.
-    let fits = 0;
-    let exceeds = Math.min(screened.length, maximumEvidenceBytes) + 1;
-    while (exceeds - fits > 1) {
-      const middle = Math.floor((fits + exceeds) / 2);
-      if (byteLength(truncatedAt(middle).text) <= maximumEvidenceBytes) fits = middle;
-      else exceeds = middle;
-    }
-    const truncated = truncatedAt(fits);
-    return (yield* credentialFree(truncated.text)) ? truncated : withheld;
+    const truncated = truncatedAt(
+      largestFitting(
+        Math.min(output.length, maximumEvidenceBytes) + 1,
+        (length) => byteLength(truncatedAt(length).text) <= maximumEvidenceBytes,
+      ),
+    );
+    return (yield* credentialFree(truncated.text)) ? withScreened(truncated) : withheld;
   });
 
 /**
  * The index of a publication review's evidence: every bundle file under `operation/`, then each
  * publication file. The bundle and the public definition ship; the other publication files are
  * evidence for the review only. A write session's act-step source is historical; everything
- * else is current. The minter wrote the bundle and the host every publication file.
+ * else is current. The minter wrote the bundle, except the bundle files a host adds itself
+ * (`hostWritten`), and the host every publication file. `references` are the files the review
+ * may read on demand beside its evidence, such as the minter's skills: listed apart, by byte
+ * length, and never in `files`.
  */
 export const publicationScope = (
   files: ReadonlyMap<string, string>,
   publicationFiles: ReadonlyMap<string, string>,
-): PublicationScope => ({
-  files: [
-    ...[...files].map(([path, source]) => ({
-      path: `operation/${path}`,
-      byteLength: byteLength(source),
-      published: true,
-      current: true,
-      owner: "minter" as const,
-    })),
-    ...[...publicationFiles].map(([path, source]) => ({
-      path,
-      byteLength: byteLength(source),
-      published: path === publicDefinitionPath,
-      current: !path.startsWith(sessionStepsDirectory),
-      owner: "host" as const,
-    })),
-  ],
-});
+  options: {
+    readonly hostWritten?: ReadonlySet<string>;
+    readonly references?: ReadonlyMap<string, string>;
+  } = {},
+): PublicationScope => {
+  const references = options.references ?? new Map<string, string>();
+  return {
+    ...(references.size === 0
+      ? {}
+      : {
+          references: [...references].map(([path, text]) => ({
+            path,
+            byteLength: byteLength(text),
+          })),
+        }),
+    files: [
+      ...[...files].map(([path, source]) => ({
+        path: `operation/${path}`,
+        byteLength: byteLength(source),
+        published: true,
+        current: true,
+        owner: options.hostWritten?.has(path) === true ? ("host" as const) : ("minter" as const),
+      })),
+      ...[...publicationFiles].map(([path, source]) => ({
+        path,
+        byteLength: byteLength(source),
+        published: path === publicDefinitionPath,
+        current: !path.startsWith(sessionStepsDirectory),
+        owner: "host" as const,
+      })),
+    ],
+  };
+};
 
 /**
  * A write session's evidence files: each act step's entrypoint and the modules it imports, in
@@ -238,6 +495,10 @@ export interface PublicationCandidate {
   readonly notes: string;
   /** The published input schema, as JSON Schema. */
   readonly inputSchema: unknown;
+  /** The published output schema, as JSON Schema, which `requested` output fields are checked against. */
+  readonly outputSchema?: unknown;
+  /** The names the build's request declares in structure (`RequestedNames`). */
+  readonly requested?: RequestedNames;
   /** The agent's exampleInput the example or the write session ran because the caller sent none. */
   readonly intentDerivedInput?: Json;
   readonly write: boolean;
@@ -303,26 +564,183 @@ export const exampleInputFeedback = (
   candidate: { readonly definition: string; readonly write: boolean },
   unlisted: readonly string[],
   reviewId: string,
+) => requestedNamesFeedback(candidate, { unlisted, inputs: [], outputs: [] }, reviewId);
+
+/**
+ * The names a build's request declares in structure, which the published schemas must hold. The
+ * request's own words are prose and declare nothing here; the publication review judges them.
+ */
+export interface RequestedNames {
+  /** The caller's own input as the effective task holds it: each top-level key names an input. */
+  readonly input?: unknown;
+  /** Output fields the task's updates declared, as paths such as `price.amount` or `items[].currency`. */
+  readonly outputs?: readonly string[];
+}
+
+/**
+ * The output fields a task's accepted updates declare, in order: each one an update added,
+ * tightened or loosened but kept, less any a later update removed.
+ */
+export const requestedOutputFields = (
+  updates: readonly { readonly changes: readonly TaskChange[] }[],
+): readonly string[] => {
+  const fields: string[] = [];
+  for (const { changes } of updates)
+    for (const change of changes) {
+      if (change.setting !== "output") continue;
+      const at = fields.indexOf(change.field);
+      if (change.change === "remove") {
+        if (at >= 0) fields.splice(at, 1);
+      } else if (at < 0) fields.push(change.field);
+    }
+  return fields;
+};
+
+const isJson = (value: unknown): value is Json =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Whether a schema declares the field at `path`, its parts split on `.`, a part ending in `[]`
+ * naming a list whose items hold the rest. Each union branch counts. Undefined when the schema
+ * cannot answer: a node on the way declares no properties at all, such as a free-form object, or
+ * takes keys it does not list, as a map does, or a reference does not resolve.
+ */
+const declaresPath = (schema: unknown, path: string): boolean | undefined => {
+  if (!isJson(schema)) return undefined;
+  let root: Json;
+  try {
+    root = inlineLocalRefs({ ...schema });
+  } catch (error) {
+    if (error instanceof UnresolvedSchemaReference) return undefined;
+    throw error;
+  }
+  const branches = (node: unknown): Json[] => {
+    if (!isJson(node)) return [];
+    const union = ["anyOf", "oneOf", "allOf"].flatMap((key) => {
+      const listed = node[key];
+      return Array.isArray(listed) ? listed : [];
+    });
+    return [node, ...union.flatMap(branches)];
+  };
+  const visit = (node: unknown, parts: readonly string[]): boolean | undefined => {
+    const [part, ...rest] = parts;
+    if (part === undefined) return true;
+    const list = part.endsWith("[]");
+    const key = list ? part.slice(0, -2) : part;
+    const listings = branches(node).flatMap((branch) =>
+      isJson(branch["properties"]) ? [branch["properties"]] : [],
+    );
+    if (listings.length === 0) return undefined;
+    const children = listings.flatMap((properties) =>
+      Object.hasOwn(properties, key) ? [properties[key]] : [],
+    );
+    // A map, such as a record keyed by the site's own field names, may hold any key.
+    if (children.length === 0)
+      return branches(node).some(
+        (branch) =>
+          (branch["additionalProperties"] !== undefined &&
+            branch["additionalProperties"] !== false) ||
+          branch["patternProperties"] !== undefined,
+      )
+        ? undefined
+        : false;
+    const next = list
+      ? children.flatMap((child) => branches(child).map((branch) => branch["items"]))
+      : children;
+    const found = next.map((child) => visit(child, rest));
+    return found.includes(true) ? true : found.includes(undefined) ? undefined : false;
+  };
+  return visit(root, path.split(".").filter((part) => part !== ""));
+};
+
+/**
+ * The names the request declares that the published schemas lack: each top-level key of the
+ * caller's own input the input schema does not list, and each requested output field the output
+ * schema does not declare. A name a schema cannot answer for is never reported.
+ */
+export const missingRequestedNames = (
+  schemas: { readonly input: unknown; readonly output: unknown },
+  requested: RequestedNames,
+): { readonly inputs: readonly string[]; readonly outputs: readonly string[] } => ({
+  inputs: isJson(requested.input)
+    ? Object.keys(requested.input).filter((key) => declaresPath(schemas.input, key) === false)
+    : [],
+  outputs: (requested.outputs ?? []).filter(
+    (field) => declaresPath(schemas.output, field) === false,
+  ),
+});
+
+/** The byte range of a top-level key of the public definition, such as `"inputSchema"`. */
+const definitionKey = (definition: string, key: string) => {
+  const quoted = JSON.stringify(key);
+  const byteStart = byteLength(definition.slice(0, Math.max(0, definition.indexOf(quoted))));
+  return { byteStart, byteEnd: byteStart + byteLength(quoted) };
+};
+
+const quotedList = (names: readonly string[]) => names.map((name) => JSON.stringify(name)).join(", ");
+
+/**
+ * The host's feedback on an allowed candidate whose schemas miss what the build ran or its request
+ * declares: `unlisted` example keys and `inputs` the caller's request named, as `example_input`
+ * findings at the input schema, input feedback alone; and requested `outputs`, a `schema_mismatch`
+ * at the output schema that makes the whole a source correction. Each says to support the name or
+ * end the build blocked, never to drop it.
+ */
+export const requestedNamesFeedback = (
+  candidate: { readonly definition: string; readonly write: boolean },
+  missing: {
+    readonly unlisted: readonly string[];
+    readonly inputs: readonly string[];
+    readonly outputs: readonly string[];
+  },
+  reviewId: string,
 ) => {
-  const inputSchemaAt = byteLength(
-    candidate.definition.slice(0, candidate.definition.indexOf('"inputSchema"')),
-  );
-  const rationale = `The ${candidate.write ? "write session" : "example"} ran with ${unlisted.map((key) => JSON.stringify(key)).join(", ")} in its exampleInput, which the input schema does not list, so the tool fixes that value itself. Make each an input property.`;
+  const ran = candidate.write ? "write session" : "example";
+  const inputText = [
+    ...(missing.unlisted.length === 0
+      ? []
+      : [
+          `The ${ran} ran with ${quotedList(missing.unlisted)} in its exampleInput, which the input schema does not list, so the tool fixes that value itself. Make each an input property.`,
+        ]),
+    ...(missing.inputs.length === 0
+      ? []
+      : [
+          `The caller's request names the input ${quotedList(missing.inputs)}, which the input schema does not list, so the tool drops what the caller supplies there. Make each an input property the tool applies, or end the build with report_blocked saying why the site cannot take it; never leave it out.`,
+        ]),
+  ].join(" ");
+  const outputText =
+    missing.outputs.length === 0
+      ? ""
+      : `The task's updates declare the output ${quotedList(missing.outputs)}, which the output schema does not declare. Return each as the update says, or end the build with report_blocked saying why the site does not show it; never leave it out.`;
+  const rationale = [inputText, outputText].filter((text) => text !== "").join(" ");
   return new MintFailure({
     code: "ReviewDenied",
     review: {
       outcome: "deny",
-      reason: "input_feedback",
+      reason: outputText === "" ? "input_feedback" : "source_correction",
       reviewId,
       rationale,
       findings: [
-        {
-          path: publicDefinitionPath,
-          byteStart: inputSchemaAt,
-          byteEnd: inputSchemaAt + '"inputSchema"'.length,
-          category: "example_input",
-          explanation: rationale,
-        },
+        ...(inputText === ""
+          ? []
+          : [
+              {
+                path: publicDefinitionPath,
+                ...definitionKey(candidate.definition, "inputSchema"),
+                category: "example_input" as const,
+                explanation: inputText,
+              },
+            ]),
+        ...(outputText === ""
+          ? []
+          : [
+              {
+                path: publicDefinitionPath,
+                ...definitionKey(candidate.definition, "outputSchema"),
+                category: "schema_mismatch" as const,
+                explanation: outputText,
+              },
+            ]),
       ],
     },
   });
@@ -330,13 +748,19 @@ export const exampleInputFeedback = (
 
 /**
  * Runs the publication review and returns the allowing review's ID. An intent-derived example
- * input key the published schema does not list is a value the tool fixes itself: once Guardian
- * allows, it comes back as the host's own input feedback on the reviewed candidate, so, like
- * Guardian's, the minter gets rounds to fix it.
+ * input key the published schema does not list is a value the tool fixes itself, and an input the
+ * caller's request named that it does not list is one the tool drops: once Guardian allows, each
+ * comes back as the host's own input feedback on the reviewed candidate, so, like Guardian's, the
+ * minter gets rounds to fix it. A requested output field the output schema lacks comes back the
+ * same way as a source correction.
  */
 export const reviewPublication = (review: PublicationReview, candidate: PublicationCandidate) =>
   Effect.gen(function* () {
     const unlisted = unlistedExampleInputKeys(candidate.inputSchema, candidate.intentDerivedInput);
+    const missing = missingRequestedNames(
+      { input: candidate.inputSchema, output: candidate.outputSchema },
+      candidate.requested ?? {},
+    );
     const reviewId = yield* review({
       entrypoint: candidate.entrypoint,
       files: candidate.files,
@@ -346,6 +770,7 @@ export const reviewPublication = (review: PublicationReview, candidate: Publicat
       evidence: new Map([[publicDefinitionPath, candidate.definition], ...candidate.evidence]),
       ...(candidate.references === undefined ? {} : { references: candidate.references }),
     });
-    if (unlisted.length === 0) return reviewId;
-    return yield* exampleInputFeedback(candidate, unlisted, reviewId);
+    if (unlisted.length === 0 && missing.inputs.length === 0 && missing.outputs.length === 0)
+      return reviewId;
+    return yield* requestedNamesFeedback(candidate, { unlisted, ...missing }, reviewId);
   });

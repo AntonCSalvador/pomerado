@@ -93,9 +93,11 @@ first:
   that narrows, orders or configures what the tool returns, a location included, is an optional
   input, even one the request never mentioned and one you never asked about (core skill, the
   input schema). The one exception is a choice the request, the caller or the owner declined,
-  which is never an input for any caller (core skill), unless it is a paid add-on within the
-  tool's purpose, the payment method or the delivery address a write still meets on its path,
-  which stays an input or a declared question (writes skill). Guardian counts such an input as
+  which is never an input for any caller (core skill), unless it is a costly choice a write still
+  meets on its path, one that changes what the caller buys or pays or whether the action can be
+  cancelled or refunded (a paid add-on within the tool's purpose, a rate, fare or plan tier, a
+  refundable option, shipping speed, the payment method or the delivery address), which stays an
+  input or a declared question (writes skill). Guardian counts such an input as
   part of the tool, never as scope drift or an unsupported claim. Each input you accept is
   applied and read back (core skill, the input schema, and `AGENTS.md`; the search skill for a search). An input
   that tailors the answer, such as a location, store or vehicle, that the site won't apply
@@ -110,17 +112,19 @@ first:
   record lacked that fact. A field the code never reads is a defect, not a limit to disclose,
   and a fact the page shows is never listed as unsupported instead of being returned.
 - **Coverage.** `coverage` says what exercised each behavior: live (the example or the act
-  session, and a read signed out's live tests, with the input each ran, such as page 1 of one
+  session, and a read's live tests, with the input each ran, such as page 1 of one
   query), offline only where a read signed out ran such checks (fixture<!-- pomerado:section publication.saved-http --> and parser tests, synthetic cases such as page boundaries included) and untested (such as
-  a later page, a query with no results or another layout, live). Name each exposed input under
+  a later page or another layout, live). Name each exposed input under
   the run that set it, or under untested (testing skill). An offline or synthetic check never
   stands in for a live one. For a read signed out, the host adds its own line from its record of
   your live test cases and gives the review that record (`publication/tests.json`): each case's
   purpose, input, expectation and result on the source you publish, and what you listed under
   `notTested` with why. Guardian judges the tool's claims no passing case tests, and failing and
   stale cases, and checks every `notTested` reason against the captures and the request. A
-  signed-in read or a write reports its one run, the example or the act session, and lists what
-  that run did not exercise as untested without testing it; the review judges that run alone.
+  signed-in read reports its example and its combined case, and gets the same host record of the
+  cases it ran signed in; the review judges a failing case but never a gap. A write reports its
+  one run, the act session, and lists what that run did not exercise as untested without testing
+  it; the review judges that run alone.
 - **Errors.** A thrown message states the cause the code observed, such as a status or a missing
   element, never a guessed one.
 - **Edge cases.** Review misses these most often, so check each before every `finish_build`; the
@@ -130,7 +134,9 @@ first:
   - every applied filter or option is read back from the page as the value the site applied,
     such as the chosen option's label, never `true` ("Applied without readback");
   - a requested value the site does not offer throws `InvalidInput` with the site's choices, and
-    one the page ignored throws `InputNotApplied` unless it tailors the answer (core skill); with
+    one the page ignored throws `InputNotApplied` unless it tailors the answer (core skill) or is
+    a search query the site corrected, returned with `applied_query` and `query_corrected` (search
+    skill); with
     no results a sort has nothing to apply, so return the empty result ("Unapplied supplied
     input");
   - a free-text place, name or venue that matches several of the site's options lists them for
@@ -194,10 +200,11 @@ pomerado:section publication.saved-files:end -->.
    - the input schema: no account-specific value (a passenger, loyalty or member number, saved
      card or address, account ID) as an enum member, example or default; every input as general
      as the site's field, never narrowed to the example's value; on a write, every option the
-     session met on the path is an input, and a paid add-on or pre-selected paid option within
-     the tool's purpose, the payment method and the delivery address are inputs or run-time
-     questions, never left to the page's default or hard-coded from the build's request or
-     answers, which spoke for one caller; a paid upsell outside the tool's purpose is declined;
+     session met on the path is an input or a settled default, and a costly choice, one that
+     changes what the caller buys or pays or whether the action can be cancelled or refunded
+     (core skill), is an input or a run-time question whose default may only decline it, never
+     left to the page's default or hard-coded from the build's request or answers, which spoke
+     for one caller; a paid upsell outside the tool's purpose is declined;
    - a pop-up that shows only for some accounts, states or visits is handled when present and
      never required;
    - declared questions ask only what the page or the caller uniquely knows, never a login;
@@ -205,7 +212,13 @@ pomerado:section publication.saved-files:end -->.
      the commit it guards, and refuses with `InvalidInput`, or returns a refusal its output
      schema declares before its first mark, never in an undeclared output shape;
    - a composed write reproduces the session's flow and returns the confirmation or read-back it
-     declares, without committing twice.
+     declares, without committing twice, and its checks reject no correct write: a
+     before-and-after comparison that compares whole objects or serialized text, reads through
+     another query after the commit than before it, or counts a field the site maintains as a
+     change, a branch the session did not run that confirms through its own code (its own commit
+     call is fine), and a throw after a confirmed commit whose requested fields read back as asked,
+     are findings too, as is a coverage claim that a check passed offline over a body that was not
+     saved whole.
 
 ## Never put these in published files
 
