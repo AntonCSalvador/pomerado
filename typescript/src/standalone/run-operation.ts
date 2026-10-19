@@ -5,7 +5,7 @@ import { runLocalOperation } from "../execution/local-operation.js";
 import { localFileReferences, makeLocalFileHook } from "../execution/local-files.js";
 import { localDownloads } from "../execution/local-downloads.js";
 import { makeRunFiles } from "../runtime/file-transfer.js";
-import { makeRunDialogDecider } from "../inputs/dialog.js";
+import { makeRunDialogDecider, watchingUnanswered } from "../inputs/dialog.js";
 import { draftQuestionDeclarations } from "../mint/draft-questions.js";
 import { noIncidents } from "../runtime/incidents.js";
 import { siteDomain } from "../runtime/same-site.js";
@@ -83,6 +83,9 @@ export const runOperation = (
       resolve: (reference) => (references.has(reference) ? reference : undefined),
       ...(options.files?.limits === undefined ? {} : { limits: options.files.limits }),
     });
+    // A pop-up's question the caller leaves unanswered is dismissed and the run goes on, but a
+    // failure after it can't show the write changed nothing.
+    const dialogs = watchingUnanswered(ask);
     const result = yield* runLocalOperation({
       workspace,
       entrypoint: artifact.entrypoint,
@@ -93,6 +96,8 @@ export const runOperation = (
       siteOrigin: operationOrigin,
       ...(siteDomain(siteOrigin) === undefined ? {} : { siteDomain: siteDomain(siteOrigin) ?? "" }),
       timeoutMs: options.timeoutMs ?? 1_200_000,
+      // A write's output that failed its schema was produced after the write, so it comes back.
+      keepDriftedOutput: request.effect !== "read",
       ask,
       // Only the questions publication reviewed; an artifact saved before builds recorded them
       // asks only what its entrypoint declares as a plain literal.
@@ -103,7 +108,7 @@ export const runOperation = (
           sources.find(([path]) => path === artifact.entrypoint)?.[1] ?? "",
         ),
       decideDialog: makeRunDialogDecider({
-        ask,
+        ask: dialogs.ask,
         project: secrets.redact,
         // The request's effect is enough here: only a write's build publishes acceptedConfirms,
         // so a read tool has no record to accept from even when the request names no effect.
@@ -115,9 +120,14 @@ export const runOperation = (
       // A card the script asked for is typed by the host; the script holds only its handles.
       cardFill: sessionCardFill(session, siteOrigin),
       files,
-    }).pipe(Effect.mapError(runOutcomeFailure(request.effect, "operation")));
+    }).pipe(
+      Effect.mapError((error) =>
+        runOutcomeFailure(request.effect, "operation", dialogs.unanswered())(error),
+      ),
+    );
     return yield* returnedRun(
       request.effect,
       sealArtifactOutput(session, artifact, siteOrigin, request, result),
+      dialogs.unanswered(),
     );
   }).pipe(Effect.mapError(beforeOperationFailure(request.effect)));
