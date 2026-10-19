@@ -32,12 +32,17 @@ const holds = (text: string, value: string) => {
   );
 };
 
-/** A script without its random keys and call ids, inside which a short code could turn up. */
+/**
+ * A script without its random keys, call ids and the target ids of the pages it binds (32
+ * uppercase hex digits), inside which a short code could turn up.
+ */
 const withoutIds = (script: string) =>
-  script.replace(
-    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g,
-    "",
-  );
+  script
+    .replace(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g,
+      "",
+    )
+    .replace(/\b[0-9A-F]{32}\b/g, "");
 
 /** No call's script or answer holds `value` in any form a page could copy it into a URL. */
 export const expectNotCarried = (calls: readonly HostCall[], value: string) => {
