@@ -5,9 +5,7 @@ import { Schema } from "effect";
  * the tool; the rest are host evidence for this review only. `current` files are the publication
  * as it stands; the others are historical source an earlier execution ran, such as a write
  * session's act steps. `owner` says who wrote a file: the minter edits its own, and nothing it
- * edits changes a host-written one. A host marks a bundle file it derives or copies from the
- * minter's source as the minter's: a finding in a host-written bundle file never blocks,
- * except a privacy, credential, authority or confirmation one (`decodePublicationDecision`). Guardian reads what the review needs; nothing must be read in
+ * edits changes a host-written one. Guardian reads what the review needs; nothing must be read in
  * full.
  */
 export interface PublicationScope {

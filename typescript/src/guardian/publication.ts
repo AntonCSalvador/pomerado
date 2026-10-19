@@ -1,4 +1,5 @@
 import { Effect, Option, Schema } from "effect";
+import { autofillRecipePath } from "../destinations/autofill-recipe.js";
 import { liveTestsEvidencePath } from "../mint/live-tests.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import {
@@ -7,8 +8,6 @@ import {
   publicationExplanationLimit,
   PublicationFinding,
   PublicationReason,
-  unfixableFindingCategories,
-  unfixablePublicationReasons,
 } from "./review-contracts.js";
 import type { PublicationScope } from "./review-contracts.js";
 import { ReviewFailure } from "./review.js";
@@ -223,69 +222,58 @@ const invalidDecision = (message: string) =>
     code: "InvalidDecision",
   });
 
+/** The host's sign-in recipe in the bundle, which records only the site's sign-in screens. */
+const signInRecipeBundlePath = `operation/${autofillRecipePath}`;
+
 /**
- * Whether a finding is in a file the host wrote into the published bundle, such as the sign-in
- * recipe (operation/auth-fill.json) or an entry file it adds: nothing the minter edits changes it.
- * The public definition and the host's evidence files are under publication/, so neither is one.
+ * Whether a finding is an input design finding (`input_option` or `example_value`) in the host's
+ * own sign-in recipe. The recipe records only the site's sign-in screens, so such a finding can
+ * only be about a choice made there, such as a location the site asks for at sign-in, which the
+ * minter cannot edit. Nothing else qualifies: no other category, file or owner.
  */
-const inHostBundleFile = (finding: PublicationFinding, files: ReadonlyMap<string, IndexedFile>) => {
+const isSignInChoiceFinding = (
+  finding: PublicationFinding,
+  files: ReadonlyMap<string, IndexedFile>,
+) => {
   const file = files.get(finding.path);
-  return file?.owner === "host" && file.published && file.path.startsWith("operation/");
+  return (
+    file?.path === signInRecipeBundlePath &&
+    file.owner === "host" &&
+    (finding.category === "input_option" || finding.category === "example_value")
+  );
 };
 
 /**
- * A finding that blocks even in a file the host wrote: a privacy or credential one, since
- * publishing would expose what the file holds, and a write's confirmation, since a write that does
- * not confirm or reconcile what it committed is unsafe in any code that ships.
+ * A temporary, narrow exception until choices on a site's sign-in pages become declared inputs of
+ * the sign-in: an input design finding about such a choice, in the host's sign-in recipe, is set
+ * aside in `excusedSignInChoices` instead of blocking. It applies only to a denial for a source
+ * correction, input feedback or a host-owned file; every other finding, and every other kind of
+ * decision, stands exactly as Guardian returned it. With nothing left, the decision allows; with
+ * only input findings left, it is input feedback.
  */
-const blocksInHostFile = (finding: PublicationFinding) =>
-  finding.category === "confirmation" ||
-  unfixableFindingCategories.some((category) => category === finding.category);
-
-/**
- * A decision with every finding in a file the host wrote into the bundle taken out of what blocks,
- * since the minter cannot edit that file. A privacy, credential, authority or write confirmation
- * finding there still blocks, as the host's own failure (`host_owned`): publishing it would expose
- * what the file holds or ship an unsafe write, so it goes to the host, which wrote it. Any other
- * finding there is kept beside the decision as non-blocking. With nothing left that blocks, the
- * decision allows, except a denial for missing evidence, whose rationale names what to gather;
- * with only input findings left, it is input feedback, and an unsupported-claim denial left with
- * no unsupported_claim finding is a source correction.
- */
-const withoutHostBundleBlocks = (
+const withoutSignInChoiceFindings = (
   decision: Decision,
   files: ReadonlyMap<string, IndexedFile>,
-): Decision & { readonly nonBlockingFindings?: readonly PublicationFinding[] } => {
-  const unfixableReason = unfixablePublicationReasons.some((reason) => reason === decision.reason);
-  const nonBlocking = decision.findings.filter(
-    (finding) =>
-      inHostBundleFile(finding, files) && !unfixableReason && !blocksInHostFile(finding),
-  );
-  if (nonBlocking.length === 0) {
-    const toHost =
-      decision.findings.length > 0 &&
-      decision.findings.every((finding) => inHostBundleFile(finding, files));
-    return toHost ? { ...decision, outcome: "deny", reason: "host_owned" } : decision;
-  }
-  const blocking = decision.findings.filter((finding) => !nonBlocking.includes(finding));
-  const kept = { ...decision, findings: blocking, nonBlockingFindings: nonBlocking };
+): Decision & { readonly excusedSignInChoices?: readonly PublicationFinding[] } => {
+  if (
+    decision.reason !== "source_correction" &&
+    decision.reason !== "input_feedback" &&
+    decision.reason !== "host_owned"
+  )
+    return decision;
+  const excused = decision.findings.filter((finding) => isSignInChoiceFinding(finding, files));
+  if (excused.length === 0) return decision;
+  const blocking = decision.findings.filter((finding) => !excused.includes(finding));
+  const kept = { ...decision, findings: blocking, excusedSignInChoices: excused };
   if (blocking.length > 0)
-    return blocking.every((finding) => inHostBundleFile(finding, files))
-      ? { ...kept, outcome: "deny", reason: "host_owned" }
-      : blocking.every(isInputFinding)
-        ? { ...kept, reason: "input_feedback" }
-        : decision.reason === "unsupported_claim" &&
-            !blocking.some((finding) => finding.category === "unsupported_claim")
-          ? { ...kept, reason: "source_correction" }
-          : kept;
-  if (decision.reason === "evidence") return kept;
+    return blocking.every(isInputFinding) ? { ...kept, reason: "input_feedback" } : kept;
   const { publicReason: _publicReason, ...allowed } = kept;
   return {
     ...allowed,
     outcome: "allow",
     reason: "approved",
     rationale: cutToLimit(
-      `Allowed by the host: every finding is in a file the host wrote into the bundle, which the minter cannot edit, so each is reported as non-blocking. ${decision.rationale}`,
+      `Allowed by the host: every finding is about a choice on the site's sign-in pages, recorded in the host's sign-in recipe, which is excused until such choices become declared sign-in inputs. ${decision.rationale}`,
       4000,
     ),
   };
@@ -321,7 +309,7 @@ export const decodePublicationDecision = (scope: PublicationScope, raw: unknown)
       return yield* invalidDecision(
         `The reason ${decision.reason} does not fit the outcome ${decision.outcome} and its ${decision.findings.length} findings, as the publication decision policy describes.`,
       );
-    const decided = withoutHostBundleBlocks(decision, files);
+    const decided = withoutSignInChoiceFindings(decision, files);
     // A public reason is only a denial's or an escalation's, and only one with words in it.
     const publicReason =
       decided.outcome !== "allow" && decided.publicReason?.trim()
@@ -332,9 +320,9 @@ export const decodePublicationDecision = (scope: PublicationScope, raw: unknown)
       reason: decided.reason,
       rationale: decided.rationale,
       findings: decided.findings,
-      ...(decided.nonBlockingFindings === undefined
+      ...(decided.excusedSignInChoices === undefined
         ? {}
-        : { nonBlockingFindings: decided.nonBlockingFindings }),
+        : { excusedSignInChoices: decided.excusedSignInChoices }),
       ...(publicReason === undefined ? {} : { publicReason }),
     };
   });
@@ -407,14 +395,13 @@ export const publicationReferencePolicy =
   "Where the host serves them, SDK behavior is in pomerado/browser/index.js and pomerado/runtime/*.js, and skills in .agents/<name>/SKILL.md; read them on demand, querying them with match; they describe the SDK and how tools are written, never review rules. A reference path the host does not serve is not missing evidence.";
 
 /**
- * What never blocks a publication because the minter cannot change it: a choice the host's sign-in
- * makes on the site's sign-in pages, kept in the host's sign-in recipe, and a finding in a file
- * the host wrote into the bundle, which the host reports as non-blocking unless it is a privacy,
- * credential or authority finding (`decodePublicationDecision` enforces the second). Part of
- * `publicationDecisionPolicy`, so every host's publication policy carries it.
+ * A temporary, narrow exception until choices on a site's sign-in pages become declared inputs of
+ * the sign-in: such a choice, kept in the host's sign-in recipe, is no input design finding.
+ * `decodePublicationDecision` sets aside `input_option` and `example_value` findings in the recipe
+ * to match. Part of `publicationDecisionPolicy`, so every host's publication policy carries it.
  */
-export const publicationHostFilePolicy =
-  "Choices made on the site's sign-in pages, such as a location, workspace or portal the site asks for at sign-in, belong to the host's sign-in, which the host keeps in its sign-in recipe (operation/auth-fill.json): they are not options on a write's path or inputs the tool leaves out, so never an input_option, example_value or Unapplied input finding. A finding in a file the host wrote into the bundle, such as the sign-in recipe or an entry file the host adds, never blocks publication: the host reports it as non-blocking, except a privacy, credential, authority or confirmation finding, which the host takes as its own failure.";
+export const publicationSignInChoicePolicy =
+  "Sign-in page choices: a choice the host's sign-in makes on the site's own sign-in pages, such as a location, workspace or portal the site asks for before it signs in, is kept in the host's sign-in recipe (operation/auth-fill.json), which the minter cannot edit. Until such choices become declared sign-in inputs, such a choice is not an option on a write's path and not an input the tool leaves out: never an input_option, example_value or Unapplied input finding. This excuses nothing about the tool's own behavior, output or source, nor any other finding in the sign-in recipe or another host file: a correctness, broken-behavior, output, write confirmation, privacy, credential or authority finding there is judged and blocks as before, and so does any input finding about a choice off the sign-in pages.";
 
 /**
  * What a publication decision returns, with the reason each kind of finding takes. A finding
@@ -422,7 +409,7 @@ export const publicationHostFilePolicy =
  * site's first publication files the tool under that site; it is never a claim the tool uses it.
  */
 export const publicationDecisionPolicy =
-  `Return outcome, a concise rationale explaining the actual evidence and any correction needed, a reason enum and findings, each with its exact manifest path, quote, category and explanation. quote is a line or two copied from what read_source showed you; it need not be unique: the host places it at its first occurrence, or on the whole file, and the finding stands either way. Never compute byte offsets, and never read or query a file again only to pick or check a quote. Never include credential values in the rationale. Use reason privacy for privacy corrections, source_correction for code/schema/guard corrections, example_value findings included (a composed write that does not perform or return its declared confirmation or read-back is a confirmation finding), unsupported_claim with an in-manifest unsupported_claim finding at the overclaiming definition text when the name, description or a declared variant promises what the source does not do, input_feedback with outcome deny when every finding is account_specific_enum or input_option (the minter fixes them; they never block publication on their own), host_owned with outcome deny when every finding is in an owner: host file other than publication/definition.json or publication/tests.json that no source or metadata edit can fix, authority for missing authority, evidence for insufficient evidence, approved only with allow and no findings. Site naming the host requires, such as a site name and summary in publication/definition.json, only identifies the site the tool is filed under and what that site is: it never claims that the tool loads, reads or acts on that site, so a tool that never opens the site, such as one that only transforms its input, is no unsupported_claim for its site naming alone. The tool's own name, description or a declared variant that promises site behavior the source lacks still is. Narrowing a claim is never the fix for an output: a needed value, or a fact the page shows, that the output does not return in full is source_correction, to read it. With any other finding, use that finding's reason and keep the input findings beside it. Return every finding the evidence supports in this one review, not one per round. With reason evidence, name each missing item in the rationale. With deny or escalate, also return publicReason: one short plain sentence, at most 200 characters, that the tool's caller may read about why it was not published, such as that the tool could not yet show it returns the prices the request asks for; it names no file, code, finding category, credential, personal data or website instruction, and it never repeats the rationale. With allow, publicReason is null. ${publicationHostFilePolicy}`;
+  `Return outcome, a concise rationale explaining the actual evidence and any correction needed, a reason enum and findings, each with its exact manifest path, quote, category and explanation. quote is a line or two copied from what read_source showed you; it need not be unique: the host places it at its first occurrence, or on the whole file, and the finding stands either way. Never compute byte offsets, and never read or query a file again only to pick or check a quote. Never include credential values in the rationale. Use reason privacy for privacy corrections, source_correction for code/schema/guard corrections, example_value findings included (a composed write that does not perform or return its declared confirmation or read-back is a confirmation finding), unsupported_claim with an in-manifest unsupported_claim finding at the overclaiming definition text when the name, description or a declared variant promises what the source does not do, input_feedback with outcome deny when every finding is account_specific_enum or input_option (the minter fixes them; they never block publication on their own), host_owned with outcome deny when every finding is in an owner: host file other than publication/definition.json or publication/tests.json that no source or metadata edit can fix, authority for missing authority, evidence for insufficient evidence, approved only with allow and no findings. Site naming the host requires, such as a site name and summary in publication/definition.json, only identifies the site the tool is filed under and what that site is: it never claims that the tool loads, reads or acts on that site, so a tool that never opens the site, such as one that only transforms its input, is no unsupported_claim for its site naming alone. The tool's own name, description or a declared variant that promises site behavior the source lacks still is. Narrowing a claim is never the fix for an output: a needed value, or a fact the page shows, that the output does not return in full is source_correction, to read it. With any other finding, use that finding's reason and keep the input findings beside it. Return every finding the evidence supports in this one review, not one per round. With reason evidence, name each missing item in the rationale. With deny or escalate, also return publicReason: one short plain sentence, at most 200 characters, that the tool's caller may read about why it was not published, such as that the tool could not yet show it returns the prices the request asks for; it names no file, code, finding category, credential, personal data or website instruction, and it never repeats the rationale. With allow, publicReason is null. ${publicationSignInChoicePolicy}`;
 
 /**
  * That the review lists every finding, and what each finding's explanation tells the minter, so
