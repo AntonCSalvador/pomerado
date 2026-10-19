@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Ajv } from "@modelcontextprotocol/server/validators/ajv";
 import { Clock, Effect, Either, Schema } from "effect";
 import { outputCheckMeaning, outputChecks, type OutputCheck } from "../runtime/output-lint.js";
 
@@ -787,39 +788,160 @@ export const caseView = (
 };
 
 /**
+ * Where a published input schema rejects an input, and by which rule: `path` is a JSON pointer into
+ * the input, such as `/query`, and `keyword` the JSON Schema keyword it breaks, such as
+ * `maxLength`. A missing required input or an input the schema does not declare points at that
+ * input's own name.
+ */
+export interface OutsideSchema {
+  readonly path: string;
+  readonly keyword: string;
+}
+
+/** A JSON pointer segment for a property name. */
+const pointerSegment = (name: string) => name.replaceAll("~", "~0").replaceAll("/", "~1");
+
+/**
+ * A check of inputs against a tool's published input schema (`outsideSchema`), or undefined when
+ * the schema cannot be compiled, which leaves every input inside it. Validated with the same Ajv
+ * the MCP server uses; formats are not checked, since a tool's own decoding does not check them.
+ */
+const publishedInputCheck = (
+  inputSchema: unknown,
+): ((input: unknown) => OutsideSchema | undefined) | undefined => {
+  if (!isRecord(inputSchema)) return undefined;
+  const compile = () => {
+    try {
+      return new Ajv({
+        strict: false,
+        allErrors: false,
+        validateSchema: false,
+        validateFormats: false,
+        logger: false,
+      }).compile(inputSchema);
+    } catch {
+      return undefined;
+    }
+  };
+  const validate = compile();
+  if (validate === undefined) return undefined;
+  return (input) => {
+    if (validate(input)) return undefined;
+    const error = validate.errors?.[0];
+    if (error === undefined) return undefined;
+    const params: Readonly<Record<string, unknown>> = error.params;
+    const named =
+      error.keyword === "required"
+        ? params["missingProperty"]
+        : error.keyword === "additionalProperties"
+          ? params["additionalProperty"]
+          : undefined;
+    return {
+      path:
+        typeof named === "string"
+          ? `${error.instancePath}/${pointerSegment(named)}`
+          : error.instancePath,
+      keyword: error.keyword,
+    };
+  };
+};
+
+/**
+ * What a passing record's run returned, when the record alone fixes it: a refusal, by the error
+ * class its verdict kept. A completed run's output is not kept, so it is undefined; a completed
+ * run passes another expectation under `judgeCase` only when the two expectations are the same.
+ */
+const refusalOutcome = (record: LiveTestRecord): LiveTestOutcome | undefined => {
+  if (record.errorClass === undefined) return undefined;
+  // A failed run's InvalidInput throw never passes, so a passing record's InvalidInput is a refusal.
+  return record.errorClass === "InvalidInput"
+    ? { status: "invalid_input" }
+    : { status: "failed", errorClass: record.errorClass };
+};
+
+/** Whether a passing record's recorded refusal would pass a case that expects `expectation`. */
+const refusalSatisfies = (expectation: LiveTestExpectation, record: LiveTestRecord) => {
+  const outcome = refusalOutcome(record);
+  return (
+    outcome !== undefined &&
+    judgeCase({ expect: expectation }, { id: record.id, outcome, durationMs: 0 }, undefined)
+      .verdict === "pass"
+  );
+};
+
+const refusalExpectation = (expectation: LiveTestExpectation) =>
+  expectation === "invalid_input" || expectation === "error";
+
+/**
+ * How a retired failure that still counts can stop counting, for the record's `clearedBy`: the
+ * evidence a `changedExpectationBy` lead needs, or that no lead applies yet.
+ */
+const clearedByNote = (
+  record: LiveTestRecord,
+  lead: { readonly id: string; readonly expect: LiveTestExpectation } | undefined,
+) => {
+  const fix =
+    record.expect === undefined
+      ? "a case that passes this input after a source change with the expectation this case had (excusedBy)"
+      : `a case that passes this input after a source change with a result that expect ${record.expect} accepts (excusedBy)`;
+  if (lead !== undefined && refusalExpectation(lead.expect))
+    return `changedExpectationBy ${lead.id}, with a capture of the site itself refusing this exact input: a 4xx client-error response, or the site's own validation message, for the request this run made, named in ${lead.id}'s purpose or the coverage text; never a challenge, block, 5xx, timeout or loading page. Otherwise a schema bound (outsideSchema) or ${fix}.`;
+  if (lead !== undefined && lead.expect === "empty")
+    return `changedExpectationBy ${lead.id}, with a capture of the site's own no-results state for this exact input, named in ${lead.id}'s purpose or the coverage text. Otherwise a schema bound (outsideSchema) or ${fix}.`;
+  return `none: only a schema bound (outsideSchema), site-refusal evidence for a passing case of this input that expects invalid_input or error (changedExpectationBy), or ${fix} clears it.`;
+};
+
+/**
  * Results the cases file no longer shows: a case the minter deleted, with its last result, and
- * a failing result the minter replaced by changing the case.
+ * a failing result the minter replaced by changing the case. `inputSchema` is the version's
+ * published input schema, when the host could read it.
  */
 const retiredViews = (
   file: LiveTestCasesFile,
   records: ReadonlyMap<string, LiveTestRecord>,
   replaced: readonly LiveTestRecord[],
   sourceDigest: string | undefined,
+  inputSchema: unknown,
 ) => {
   const current = new Map(file.cases.map((testCase) => [testCase.id, caseDigest(testCase)]));
   const deleted = [...records.values()].filter((record) => !current.has(record.id));
   const changed = replaced.filter(
     (record) => record.flaky === true || current.get(record.id) !== record.caseDigest,
   );
+  const outside = publishedInputCheck(inputSchema);
   // What a current case runs and expects, for the cases that pass on the published source.
   const runs = (input: unknown, expect: unknown, nextPage: boolean) =>
     canonical([input, expect, nextPage]);
-  const passing = file.cases
-    .filter((testCase) => caseStatus(testCase, records.get(testCase.id), sourceDigest) === "pass")
-    .map((testCase) => ({
-      id: testCase.id,
-      runs: runs(testCase.input, testCase.expect, testCase.next_page === true),
-      input: canonical([testCase.input, testCase.next_page === true]),
-      expect: testCase.expect,
-    }));
+  const passing = file.cases.flatMap((testCase) => {
+    const record = records.get(testCase.id);
+    return record !== undefined && caseStatus(testCase, record, sourceDigest) === "pass"
+      ? [
+          {
+            id: testCase.id,
+            runs: runs(testCase.input, testCase.expect, testCase.next_page === true),
+            input: canonical([testCase.input, testCase.next_page === true]),
+            expect: testCase.expect,
+            record,
+          },
+        ]
+      : [];
+  });
   /**
    * A failure on earlier source that a case passing on the published source runs again with the
-   * same input and expectation. Never one on the published source, which is flaky or unfixed.
+   * same input, and either the same expectation or a refusal that the failure's own expectation
+   * accepts under `judgeCase`, such as an InvalidInput for a case that expected error. Never one
+   * on the published source, which is flaky or unfixed.
    */
   const excusedBy = (record: LiveTestRecord) => {
     if (record.sourceDigest === sourceDigest || record.input === undefined) return undefined;
     const ran = runs(record.input, record.expect, record.nextPage === true);
-    return passing.find((entry) => entry.runs === ran)?.id;
+    const same = passing.find((entry) => entry.runs === ran);
+    if (same !== undefined || record.expect === undefined) return same?.id;
+    const { expect: expectation } = record;
+    const input = canonical([record.input, record.nextPage === true]);
+    return passing.find(
+      (entry) => entry.input === input && refusalSatisfies(expectation, entry.record),
+    )?.id;
   };
   /**
    * A failure on any source that a case passing on the published source runs again with the same
@@ -830,7 +952,7 @@ const retiredViews = (
   const changedExpectationBy = (record: LiveTestRecord) => {
     if (record.input === undefined || record.expect === undefined) return undefined;
     const input = canonical([record.input, record.nextPage === true]);
-    return passing.find((entry) => entry.input === input && entry.expect !== record.expect)?.id;
+    return passing.find((entry) => entry.input === input && entry.expect !== record.expect);
   };
   return [
     ...deleted.map((record) => [record, "deleted from the cases file"] as const),
@@ -846,15 +968,22 @@ const retiredViews = (
         ] as const,
     ),
   ].map(([record, because]) => {
-    const excuse = record.verdict === "fail" ? excusedBy(record) : undefined;
-    const changed =
-      record.verdict === "fail" && excuse === undefined ? changedExpectationBy(record) : undefined;
+    const failed = record.verdict === "fail";
+    const bound =
+      failed && record.input !== undefined && outside !== undefined
+        ? outside(record.input)
+        : undefined;
+    const excuse = failed && bound === undefined ? excusedBy(record) : undefined;
+    const counts = failed && bound === undefined && excuse === undefined;
+    const lead = counts ? changedExpectationBy(record) : undefined;
     return {
       id: record.id,
       retiredBecause: because,
       ...(record.flaky === true ? { flaky: true } : {}),
+      ...(bound === undefined ? {} : { outsideSchema: bound }),
       ...(excuse === undefined ? {} : { excusedBy: excuse }),
-      ...(changed === undefined ? {} : { changedExpectationBy: changed }),
+      ...(lead === undefined ? {} : { changedExpectationBy: lead.id }),
+      ...(counts ? { clearedBy: clearedByNote(record, lead) } : {}),
       ...(record.purpose === undefined ? {} : { purpose: record.purpose }),
       ...(record.expect === undefined ? {} : { expect: record.expect }),
       ...(record.input === undefined ? {} : { input: record.input }),
@@ -895,6 +1024,11 @@ export interface LiveTestVersionResults {
   readonly records: ReadonlyMap<string, LiveTestRecord>;
   /** This version's failing results the minter replaced by changing their case. */
   readonly replaced?: readonly LiveTestRecord[];
+  /**
+   * The input schema this version publishes, as the host read it from that source; absent when
+   * it could not, which marks no retired input `outsideSchema`.
+   */
+  readonly inputSchema?: unknown;
 }
 
 const versionName = (version: LiveTestVersion) =>
@@ -959,7 +1093,13 @@ export const liveTestsEvidence = (options: {
   }));
   const notTested = file.notTested ?? [];
   const retired = versions.flatMap((entry) =>
-    retiredViews(file, entry.records, entry.replaced ?? [], entry.sourceDigest).map((view) => ({
+    retiredViews(
+      file,
+      entry.records,
+      entry.replaced ?? [],
+      entry.sourceDigest,
+      entry.inputSchema,
+    ).map((view) => ({
       version: entry.version,
       ...view,
     })),
@@ -986,6 +1126,7 @@ export const liveTestsEvidence = (options: {
     ).length,
   }));
   const retiredFailures = retired.filter((entry) => entry.lastVerdict === "fail").length;
+  const stillCounting = retired.filter((entry) => "clearedBy" in entry).length;
   const summary = nothing
     ? "Host live tests on the published source: none designed or run; beyond the example, nothing was tested live."
     : `Host live tests on the published source${signedIn ? `, signed in (at most ${signedInTestInputLimit} inputs)` : ""}: ${cases.length} case${cases.length === 1 ? "" : "s"}.${versionViews
@@ -1000,14 +1141,18 @@ export const liveTestsEvidence = (options: {
         .join("")}${
         retired.length === 0
           ? ""
-          : ` ${retired.length} retired case${retired.length === 1 ? "" : "s"} (${retiredFailures} last failed).`
+          : ` ${retired.length} retired case${retired.length === 1 ? "" : "s"} (${retiredFailures} last failed).${
+              retiredFailures === 0
+                ? ""
+                : ` ${stillCounting} of those failures still count${stillCounting === 1 ? "s" : ""}.`
+            }`
       }`;
   return {
     record: {
       kind: "host_live_tests",
       note: nothing
         ? "Written by the host, never by the minter. The minter designed and ran no live test case, so beyond the example nothing was tested live."
-        : "Written by the host from its own runs, never by the minter. The same cases run on each version of the tool: playwright, the Kernel script, and http, the HTTP version, for each version that ships: a version that does not ship, such as an HTTP version the minter ruled out, is not listed. versions names each version's entrypoint, the source digest its results are judged against, and its counts. Each case's results hold its result on each version, from that version's own batches: one version's run never counts for the other. Each case ran in a fresh script process on a page reset to the site's origin, after one Guardian review of its batch; purpose is the minter's account of what the case establishes. A result's start says how its browser started: cold, first on a new browser with an empty profile, as a caller the site remembers nothing about meets it; warm, on a browser that kept the site data earlier steps left. versions counts each version's coldPasses, the cases that passed cold; a host with one browser runs no case cold. status is against that version's source being published: stale means the source or the case changed after the case ran, and not_run means no batch ran it on that version. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists, by version, cases the minter deleted, failures it replaced by changing the case, and failures that did not repeat when the unchanged case ran again on the same source (flaky), with their last result; excusedBy names a case that passes the same input with the same expectation on that version's published source after the source changed; changedExpectationBy names a case that passes the same input with another expectation on that version's published source, for a failure on any source; it excuses nothing by itself.",
+        : "Written by the host from its own runs, never by the minter. The same cases run on each version of the tool: playwright, the Kernel script, and http, the HTTP version, for each version that ships: a version that does not ship, such as an HTTP version the minter ruled out, is not listed. versions names each version's entrypoint, the source digest its results are judged against, and its counts. Each case's results hold its result on each version, from that version's own batches: one version's run never counts for the other. Each case ran in a fresh script process on a page reset to the site's origin, after one Guardian review of its batch; purpose is the minter's account of what the case establishes. A result's start says how its browser started: cold, first on a new browser with an empty profile, as a caller the site remembers nothing about meets it; warm, on a browser that kept the site data earlier steps left. versions counts each version's coldPasses, the cases that passed cold; a host with one browser runs no case cold. status is against that version's source being published: stale means the source or the case changed after the case ran, and not_run means no batch ran it on that version. outputChecks lists the host's output check findings on a case's output. notTested lists what the minter chose not to test, and why. retired lists, by version, cases the minter deleted, failures it replaced by changing the case, and failures that did not repeat when the unchanged case ran again on the same source (flaky), with their last result. A retired failure stops counting when the host marks it outsideSchema or names its excusedBy. outsideSchema means that version's published input schema rejects the failure's input, at path (a JSON pointer into the input) by keyword (the JSON Schema rule it breaks), so the tool no longer claims that input. excusedBy names a case that passes the same input on that version's published source after the source changed, with the same expectation or with a refusal the failure's own expectation accepts, such as InvalidInput for a case that expected error. changedExpectationBy names a case that passes the same input with another expectation on that version's published source, for a failure on any source; it excuses nothing by itself. clearedBy, on each retired failure that still counts, says what can clear it: the evidence its changedExpectationBy needs, or none yet.",
       ...(signedIn
         ? {
             signedIn: true,

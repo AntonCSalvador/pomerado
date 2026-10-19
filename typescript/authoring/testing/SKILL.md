@@ -143,9 +143,10 @@ Write them in `test/cases.json`:
 `purpose` says in a sentence what the case establishes. `expect` is `result`, `empty`,
 `invalid_input` or `error`: a loud refusal the tool throws on purpose, `InputNotApplied`; any
 other throw is a bug and fails the case. Expect `empty`, `invalid_input` or `error` only for an
-input the site really has no results for, does not offer or cannot apply, or a blank or over-long
-value the input schema refuses; an input that tailors the answer and that the site won't apply
-expects `result`, labeled with the applied value. Apart from a made-up value in the no-results
+input the site really has no results for, does not offer or cannot apply; a value the input schema
+refuses, such as a blank or over-long one, needs no case, since the schema bound is its test. An
+input that tailors the answer and that the site won't apply expects `result`, labeled with the
+applied value. Apart from a made-up value in the no-results
 case, use real values the site offers, which you saw while
 exploring: listed options, places, dates, counts, records and retailers the site lists. Never use
 a person's, account's or record's name, number or code, and never the caller's own values beyond
@@ -218,7 +219,16 @@ case tests while time remained, holds publication back.
 Publication review starts only when at least 70% of the cases you ran on the code you publish pass. Inconclusive results count neither way.
 Deleting or changing a case after it failed does not hide the
 failure: the record keeps its last result as retired, and so does a failure that passes when run again on the same code, as
-flaky. When `live_tests` answers `no_time`, run the example last and publish; the record says time
+flaky. A retired failure stops counting only on what the host can check: a case that passes the
+same input after you change the code, with a result the old case's own expectation accepts
+(`excusedBy`; an `InvalidInput` refusal satisfies `error`), or an input schema bound that rejects
+the input (`outsideSchema`), which publication checks against the site's own field. A case that
+now expects another answer for that input (`changedExpectationBy`) clears it only with a capture
+of the site's own answer for that exact input, named in its `purpose`: the site's no-results
+state for `empty`, or the site itself refusing the input, a 4xx response or its own validation
+message, for `invalid_input` or `error`. Relabelling a case, or rebuilding it under new ids,
+clears nothing and adds another retired failure each time. The record's `clearedBy` says what can
+clear each failure that still counts. When `live_tests` answers `no_time`, run the example last and publish; the record says time
 ran out.
 
 When the host offers no `live_tests`, a read runs its cases one input at a time instead: execute

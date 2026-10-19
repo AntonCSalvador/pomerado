@@ -92,6 +92,11 @@ const finish = {
 const plan = { action: "plan", entrypoint: "src/tool.ts", cases: null, maxWorkers: null };
 const runAll = { action: "run", entrypoint: "src/tool.ts", cases: null, maxWorkers: 3 };
 
+interface ToolSchemas {
+  readonly input: unknown;
+  readonly output: unknown;
+}
+
 /** A search tool's declared schemas, as the host reads them offline. */
 const schemas = {
   input: {
@@ -159,17 +164,23 @@ type Outcomes =
   | Readonly<Record<string, LiveTestOutcome>>
   | ((batch: number) => Readonly<Record<string, LiveTestOutcome>>);
 
-/** A host that supports signed-in batches unless `signedInBatches` is false. */
+/**
+ * A host that supports signed-in batches unless `signedInBatches` is false, and reads the tool's
+ * schemas from `schemasNow` each time it reads them, `schemas` unless given.
+ */
 const liveTestHost = (
   outcomes: Outcomes,
   result?: LiveTestBatchResult,
-  { signedInBatches = true }: { readonly signedInBatches?: boolean } = {},
+  {
+    signedInBatches = true,
+    schemasNow = () => schemas,
+  }: { readonly signedInBatches?: boolean; readonly schemasNow?: () => ToolSchemas } = {},
 ) => {
   const batches: LiveTestBatch[] = [];
   const host: LiveTestHost = {
     maxWorkers: 3,
     ...(signedInBatches ? { signedInBatches: true as const } : {}),
-    schemas: () => Effect.succeed(schemas),
+    schemas: () => Effect.sync(schemasNow),
     run: (batch) =>
       Effect.sync(() => {
         batches.push(batch);
@@ -633,17 +644,25 @@ it("keeps a failing case in the publication record after the minter deletes or c
   expect(published.seen[0]?.coverage).toContain("2 retired cases (2 last failed)");
 });
 
-/** Runs `turns` of live_tests batches, editing the workspace before each, then publishes. */
+/**
+ * Runs `turns` of live_tests batches, editing the workspace before each, then publishes. Each
+ * batch reads the tool's schemas from `schemasAt` for its index, `schemas` unless given.
+ */
 const batchesThenPublish = async (
   outcomes: Outcomes,
   edits: readonly Readonly<Record<string, string>>[],
+  schemasAt?: (batch: number) => ToolSchemas,
 ) => {
-  const { host, batches } = liveTestHost(outcomes);
+  let turn = 0;
+  const { host, batches } = liveTestHost(outcomes, undefined, {
+    schemasNow: () => schemasAt?.(Math.min(turn, edits.length - 1)) ?? schemas,
+  });
   const published = publications();
   let root = "";
   const runs = edits.map((_edit, index) => call("live_tests", runAll, `run_${index}`));
   const f = await fixture(
     async (_request, index) => {
+      turn = index;
       const edit = edits[index];
       if (edit !== undefined) await writeWorkspace(root, edit);
       return (
@@ -663,7 +682,10 @@ const batchesThenPublish = async (
   root = (f.workspace as unknown as { root: string }).root;
   await f.run();
   expect(batches).toHaveLength(edits.length);
-  return published.seen[0]?.liveTests as { retired: Record<string, unknown>[] };
+  return {
+    ...(published.seen[0]?.liveTests as { retired: Record<string, unknown>[] }),
+    coverage: published.seen[0]?.coverage ?? "",
+  };
 };
 const otherStore = (expectation: string) =>
   JSON.stringify({
@@ -745,6 +767,158 @@ it("keeps a failure that passed when run again on the same code as flaky", async
     }),
   ]);
   expect(record.retired[0]).not.toHaveProperty("excusedBy");
+});
+
+const oneCase = (id: string, expectation: string, input: object) =>
+  JSON.stringify(
+    withPassing(
+      { cases: [{ id, purpose: "One synthetic input the site answers.", input, expect: expectation }] },
+      3,
+    ),
+  );
+const longQuery = { query: "lamp ".repeat(60) };
+/** The search schemas with the query bounded as the site's own search field is. */
+const boundedQuery = {
+  ...schemas,
+  input: {
+    ...schemas.input,
+    properties: { ...schemas.input.properties, query: { type: "string", minLength: 1, maxLength: 100 } },
+  },
+};
+type Retired = Record<string, unknown> & { readonly clearedBy?: string };
+
+// A failure whose input the published schema now refuses tests an input the tool no longer
+// claims. The host reads that from the schema itself, so no relabelled case is involved.
+it("stops counting a retired failure once the published schema rejects its input", async () => {
+  const siteRefused = { status: "failed" as const, errorClass: "HttpError", frame: "src/tool.ts:9" };
+  const record = await batchesThenPublish(
+    { "long-query": siteRefused },
+    [
+      { "src/tool.ts": toolSource, "test/cases.json": oneCase("long-query", "result", longQuery) },
+      {
+        "src/tool.ts": `${toolSource}// bounded\n`,
+        "test/cases.json": JSON.stringify(withPassing({ cases: [] }, 3)),
+      },
+    ],
+    (batch) => (batch === 0 ? schemas : boundedQuery),
+  );
+  expect(record.retired).toEqual([
+    expect.objectContaining({
+      id: "long-query",
+      lastVerdict: "fail",
+      outsideSchema: { path: "/query", keyword: "maxLength" },
+    }),
+  ]);
+  expect(record.retired[0]).not.toHaveProperty("clearedBy");
+  expect(record.coverage).toContain("0 of those failures still count.");
+});
+
+// A refusal satisfies an expectation of error as judgeCase judges it, so a case that now refuses
+// the input with InvalidInput after a fix shows the earlier failure fixed.
+it("excuses a failure that expected error by a later InvalidInput for the same input", async () => {
+  const input = { query: "lamp", store: "Nowhere Street" };
+  const record = await batchesThenPublish(
+    (batch) =>
+      batch === 0
+        ? { "store-refused": { status: "failed", errorClass: "TimeoutError", frame: "src/tool.ts:14" } }
+        : { "store-not-listed": { status: "invalid_input", field: "store", available: ["Mill Street"] } },
+    [
+      { "src/tool.ts": toolSource, "test/cases.json": oneCase("store-refused", "error", input) },
+      {
+        "src/tool.ts": `${toolSource}// refuses an unlisted store\n`,
+        "test/cases.json": oneCase("store-not-listed", "invalid_input", input),
+      },
+    ],
+  );
+  expect(record.retired).toEqual([
+    expect.objectContaining({ id: "store-refused", lastVerdict: "fail", excusedBy: "store-not-listed" }),
+  ]);
+  expect(record.retired[0]).not.toHaveProperty("clearedBy");
+  expect(record.coverage).toContain("0 of those failures still count.");
+});
+
+it("says how a retired failure that still counts can be cleared", async () => {
+  const record = await batchesThenPublish(
+    (batch) =>
+      batch === 0
+        ? {
+            "other-store": emptyList,
+            "sort-price": { status: "failed", errorClass: "TimeoutError", frame: "src/tool.ts:12" },
+          }
+        : { "other-store": emptyList },
+    [
+      {
+        "src/tool.ts": toolSource,
+        "test/cases.json": JSON.stringify({
+          cases: [
+            ...JSON.parse(otherStore("result")).cases,
+            { id: "sort-price", purpose: "Sort by price.", input: { query: "lamp", sort: "price_low" }, expect: "result" },
+          ],
+        }),
+      },
+      { "src/tool.ts": `${toolSource}// edited\n`, "test/cases.json": otherStore("empty") },
+    ],
+  );
+  const retired = record.retired as Retired[];
+  const relabelled = retired.find((entry) => entry.id === "other-store");
+  const deleted = retired.find((entry) => entry.id === "sort-price");
+  expect(relabelled).toMatchObject({ lastVerdict: "fail", changedExpectationBy: "other-store" });
+  expect(relabelled).not.toHaveProperty("excusedBy");
+  expect(relabelled?.clearedBy).toContain("changedExpectationBy other-store");
+  expect(relabelled?.clearedBy).toContain("no-results state");
+  expect(deleted).toMatchObject({ lastVerdict: "fail" });
+  expect(deleted?.clearedBy).toMatch(/^none: /u);
+  expect(record.coverage).toContain("2 of those failures still count.");
+});
+
+// Changing a case to expect what a regression now returns is the minter's own account. It
+// excuses nothing: the old expectation still rejects the new result.
+it("never lets a case relabelled to a regression's result excuse the failure", async () => {
+  const input = { query: "lamp", store: "Mill Street" };
+  const refused = { status: "invalid_input" as const, field: "store", available: ["Elm Road"] };
+  const record = await batchesThenPublish(
+    { "listed-store": refused },
+    [
+      { "src/tool.ts": toolSource, "test/cases.json": oneCase("listed-store", "result", input) },
+      {
+        "src/tool.ts": `${toolSource}// edited\n`,
+        "test/cases.json": oneCase("listed-store", "invalid_input", input),
+      },
+    ],
+  );
+  const [retired] = record.retired as Retired[];
+  expect(retired).toMatchObject({
+    id: "listed-store",
+    lastVerdict: "fail",
+    expect: "result",
+    changedExpectationBy: "listed-store",
+  });
+  expect(retired).not.toHaveProperty("excusedBy");
+  expect(retired).not.toHaveProperty("outsideSchema");
+  expect(retired?.clearedBy).toContain("changedExpectationBy listed-store");
+  expect(record.coverage).toContain("1 of those failures still counts.");
+});
+
+// The review accepts the site's own refusal of the input as evidence for a case that now expects
+// a refusal; the record tells it, and the minter, which capture that has to be.
+it("names the site-refusal capture a refusal lead needs, and never a 5xx or a challenge", async () => {
+  const record = await batchesThenPublish(
+    (batch) =>
+      batch === 0
+        ? { "long-query": { status: "failed", errorClass: "HttpError", frame: "src/tool.ts:9" } }
+        : { "long-query": { status: "failed", errorClass: "InputNotApplied", frame: "src/tool.ts:9" } },
+    [
+      { "src/tool.ts": toolSource, "test/cases.json": oneCase("long-query", "result", longQuery) },
+      {
+        "src/tool.ts": `${toolSource}// refuses what the site refuses\n`,
+        "test/cases.json": oneCase("long-query", "error", longQuery),
+      },
+    ],
+  );
+  const [retired] = record.retired as Retired[];
+  expect(retired).toMatchObject({ id: "long-query", changedExpectationBy: "long-query" });
+  expect(retired?.clearedBy).toContain("4xx");
+  expect(retired?.clearedBy).toContain("never a challenge, block, 5xx");
 });
 
 it("publishes with the gaps when too little time is left for a batch, and the record says so", async () => {

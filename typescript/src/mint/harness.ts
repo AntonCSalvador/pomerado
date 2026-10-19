@@ -3719,6 +3719,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           return {
             cursor: cursorPairOf(input, output),
             list: primaryListOf(input, output),
+            inputSchema: input,
             outputSchema: output,
           };
         });
@@ -4083,6 +4084,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             new Map([...liveTestRecords[version]].filter(([, record]) => counted(record)));
           const read = yield* readCasesFile;
           const published = liveTestVersion(entrypoint);
+          // The input schema each version publishes, which marks a retired input it rejects.
+          const inputSchemaOf = (path: string) =>
+            Effect.map(liveTestShape(path), (shape) =>
+              "inputSchema" in shape ? { inputSchema: shape.inputSchema } : {},
+            );
           const replacedOf = (version: LiveTestVersion) =>
             liveTestReplaced.filter(
               (record) => liveTestVersion(record.entrypoint) === version && counted(record),
@@ -4094,6 +4100,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               sourceDigest: yield* stepDigest(entrypoint),
               records: recordsOf(published),
               replaced: replacedOf(published),
+              ...(yield* inputSchemaOf(entrypoint)),
             },
           ];
           if (published === "playwright" && !httpRuledOut) {
@@ -4120,6 +4127,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 sourceDigest: yield* stepDigest(httpEntrypoint),
                 records: recordsOf("http"),
                 replaced: replacedOf("http"),
+                ...(yield* inputSchemaOf(httpEntrypoint)),
               });
           }
           return liveTestsEvidence({
