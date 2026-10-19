@@ -90,6 +90,7 @@ import type {
   DecisionLedger,
   LedgerDenial,
   LedgerTestFailure,
+  LiveTestHost,
   PublicationDecision,
   PublicationRecovery,
   SpentSignIn,
@@ -115,11 +116,13 @@ import {
   liveTestsEvidence,
   liveTestsEvidencePath,
   liveTestsEvidenceProblem,
+  liveTestsShortfall,
   liveTestVersion,
   LiveTestOutputChecks,
   maximumBatchCases,
   outputExcerpt,
   primaryListOf,
+  reviewPassPercent,
   signedInTestInputLimit,
   signedInTestInputRefusal,
   uncountedTestInputs,
@@ -399,6 +402,8 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   "example_before_site_change",
   // Restored inputs change the code, which needs its own example.
   "input_contract_changed",
+  // Too few cases pass on the published source: fix, then run them again.
+  "live_tests_below_threshold",
 ]);
 /**
  * Publication refusals the host asks about only once in an attempt: finishing again, or passing
@@ -3775,6 +3780,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           attemptBound: attemptLeft <= 10 * 60_000,
         };
       });
+      /**
+       * Whether a batch ending at `deadlineAt` has time for one case on `host`, as long as one case
+       * may take there (`LiveTestHost.caseTimeoutMs`). A host that caps its batches raises that
+       * limit past any deadline once its last batch ran, so no batch fits from then on.
+       */
+      const liveTestBatchFits = (host: LiveTestHost, deadlineAt: number) =>
+        Effect.map(
+          Clock.currentTimeMillis,
+          (now) => deadlineAt - now >= (host.caseTimeoutMs ?? defaultLiveTestCaseMs),
+        );
       const runLiveTests = (request: LiveTestsRequest) =>
         Effect.gen(function* () {
           const host = dependencies.liveTests;
@@ -3846,8 +3861,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const { deadlineAt, attemptBound } = yield* liveTestDeadline;
           // A batch with less time left than one case may take could only end every case
           // inconclusive, so it runs nothing.
-          const caseLimitMs = host.caseTimeoutMs ?? defaultLiveTestCaseMs;
-          if (deadlineAt - (yield* Clock.currentTimeMillis) < caseLimitMs) {
+          if (!(yield* liveTestBatchFits(host, deadlineAt))) {
             liveTestsOutOfTime = true;
             return JSON.stringify({
               kind: "host_live_tests",
@@ -4734,11 +4748,44 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       ),
                     );
               // The host's own record of a read's live tests on this source goes to the review
-              // as evidence, and its line to coverage. It never refuses publication by itself.
+              // as evidence, and its line to coverage. It refuses publication by itself only
+              // when the published version's cases pass below the bar on its source: the review
+              // would hold it back on those failures anyway, so it is not started. Once the
+              // attempt ran out of time for live tests, or no further batch fits, as after a
+              // host's batch cap, no case can run again, so the review decides on the record as
+              // it is.
               const liveTests = yield* liveTestsForPublication(
                 proposed.entrypoint,
                 proposed.httpVersion?.outcome === "ruled_out",
               );
+              const testsCanRunAgain =
+                liveTests !== undefined &&
+                dependencies.liveTests !== undefined &&
+                !liveTestsOutOfTime &&
+                (yield* liveTestBatchFits(
+                  dependencies.liveTests,
+                  (yield* liveTestDeadline).deadlineAt,
+                ));
+              const shortfall =
+                liveTests === undefined || !testsCanRunAgain
+                  ? undefined
+                  : liveTestsShortfall(
+                      liveTests.record.versions,
+                      liveTestVersion(proposed.entrypoint),
+                    );
+              if (shortfall !== undefined) {
+                const reason = "live_tests_below_threshold";
+                pendingDecision = hostRefusalDecision(reason, evidence.executionId, write);
+                yield* diagnose({ phase: "publication", code: "PublicationUnavailable", reason });
+                return JSON.stringify({
+                  status: "not_published",
+                  code: "PublicationUnavailable",
+                  reason,
+                  userInputRequired: false,
+                  instruction: `Publication review not started: only ${shortfall.passed} of ${shortfall.counted} live test cases${shortfall.entrypoint === undefined ? "" : ` on ${shortfall.entrypoint}`} pass on this source (${shortfall.percent}%), and review starts at ${reviewPassPercent}%. Fix the code where a case fails, or the case where it is wrong, run every case again, then call finish_build.`,
+                  executionContext: yield* executionContext(),
+                });
+              }
               const coverage =
                 liveTests === undefined
                   ? minterCoverage

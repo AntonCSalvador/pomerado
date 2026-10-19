@@ -11,6 +11,7 @@ import {
   type LiveTestHost,
   type MintDependencies,
   MintHarnessSnapshot,
+  type PublicationDecision,
 } from "../../src/mint/contracts.js";
 import type { LiveTestOutcome } from "../../src/mint/live-tests.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
@@ -134,6 +135,23 @@ const cases = {
   ],
   notTested: [{ what: "A sort the site does not offer", reason: "Every sort is offered." }],
 };
+
+/**
+ * `file` with `count` more cases that pass on the host's default results, so that a test about
+ * failing cases still has at least 70% of its cases passing and its publication goes to review.
+ */
+const withPassing = <F extends { readonly cases: readonly object[] }>(file: F, count: number) => ({
+  ...file,
+  cases: [
+    ...file.cases,
+    ...Array.from({ length: count }, (_unused, index) => ({
+      id: `also-${index + 1}`,
+      purpose: "Another query returns its results.",
+      input: { query: `also ${index + 1}` },
+      expect: "result",
+    })),
+  ],
+});
 
 /** A host that runs each case through `outcomes`, recording each batch it was asked to run. */
 /** Each case's outcome, the same for every batch or by the batch's index. */
@@ -288,7 +306,8 @@ it("runs the cases a read designed as one batch and hands publication the host's
     ]),
   );
 
-  // A failing case never refuses publication by itself: the review reads the host's record.
+  // One failing case of four never refuses publication by itself: 75% clears the 70% bar, and
+  // the review reads the host's record.
   expect(outcome.build).toBe("published");
   expect(published.seen).toHaveLength(1);
   // The record lists each case with its purpose, input and verdict, and what was not tested.
@@ -565,7 +584,8 @@ it("keeps a failing case in the publication record after the minter deletes or c
   };
   const f = await fixture(
     async (_request, index) => {
-      if (index === 1) await writeWorkspace(root, { "test/cases.json": JSON.stringify(trimmed) });
+      if (index === 1)
+        await writeWorkspace(root, { "test/cases.json": JSON.stringify(withPassing(trimmed, 1)) });
       return (
         [
           call("live_tests", runAll, "first"),
@@ -683,7 +703,7 @@ it("never excuses a failure by a case that changed its expectation, and names th
 it("names no case for a changed expectation that does not pass", async () => {
   const record = await batchesThenPublish({ "other-store": emptyList }, [
     { "src/tool.ts": toolSource, "test/cases.json": otherStore("result") },
-    { "test/cases.json": otherStore("invalid_input") },
+    { "test/cases.json": JSON.stringify(withPassing(JSON.parse(otherStore("invalid_input")), 3)) },
   ]);
   expect(record.retired).toEqual([
     expect.objectContaining({ id: "other-store", lastVerdict: "fail", expect: "result" }),
@@ -789,7 +809,7 @@ it("refuses a batch as no_time when less than the host's case limit is left, and
 it("says time ran out only when the attempt's end, not the batch's own cap, stopped a case", async () => {
   const stopped = { status: "inconclusive" as const, reason: "deadline" as const };
   const record = async (attemptMs: number) => {
-    const { host, batches } = liveTestHost({ "sort-price": stopped });
+    const { host, batches } = liveTestHost({ "sort-price": stopped, nothing: emptyResults });
     const published = publications();
     const f = await fixture(
       (_request, index) =>
@@ -820,6 +840,7 @@ it("says time ran out only when the attempt's end, not the batch's own cap, stop
 
 it("never counts a case the site blocked on the browser's egress against the tool", async () => {
   const { host, batches } = liveTestHost({ "sort-price": { status: "inconclusive", reason: "site_block" } });
+  const file = withPassing(cases, 1);
   const published = publications();
   const f = await fixture(
     (_request, index) =>
@@ -837,7 +858,7 @@ it("never counts a case the site blocked on the browser's egress against the too
     read,
   );
   const root = (f.workspace as unknown as { root: string }).root;
-  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
   await f.run();
 
   expect(batches).toHaveLength(1);
@@ -845,7 +866,7 @@ it("never counts a case the site blocked on the browser's egress against the too
     (testCase) => testCase.id === "sort-price",
   );
   expect(blocked).toMatchObject({ status: "inconclusive", got: "site_block" });
-  expect(published.seen[0]?.coverage).toContain("2 pass, 1 fail, 1 inconclusive;");
+  expect(published.seen[0]?.coverage).toContain("3 pass, 1 fail, 1 inconclusive;");
 });
 
 it("runs nothing when Guardian denies the batch, and says why", async () => {
@@ -1807,7 +1828,10 @@ it("shows the blocked-explanation review the build's denials and failing cases",
     read,
   );
   root = (f.workspace as unknown as { root: string }).root;
-  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "test/cases.json": JSON.stringify(withPassing(cases, 3)),
+  });
   const outcome = await f.run();
   expect(outcome.blocked).toMatchObject({ reason: "policy" });
   expect(reviewed).toHaveLength(1);
@@ -1831,7 +1855,7 @@ it("shows the blocked-explanation review the build's denials and failing cases",
           omittedFindings: 1,
         },
       ],
-      testCounts: { pass: 2, fail: 2, inconclusive: 0 },
+      testCounts: { pass: 5, fail: 2, inconclusive: 0 },
     },
   });
   const failures = reviewed[0]?.decisionLedger?.testFailures ?? [];
@@ -1843,4 +1867,380 @@ it("shows the blocked-explanation review the build's denials and failing cases",
     toolReported: { errorClass: "SiteRequiresHumanVerification", message: toolMessage },
   });
   expect(failures[1]?.toolReported?.errorClass?.length).toBeLessThanOrEqual(120);
+});
+
+// A read whose cases mostly fail on the source it publishes is not sent to publication review:
+// the review would hold it back on those failures anyway, after minutes of review time. The bar
+// is 70% of the cases with a pass or a fail on that source, not all of them, so that a case that
+// is itself wrong does not hold back a working tool while it is corrected.
+
+/**
+ * `pass + fail + inconclusive` cases that each expect results, as one batch's outcomes: the first
+ * `pass` return results, the next `inconclusive` meet a site block or a challenge, and the rest
+ * fail with a timeout.
+ */
+const scoredBatch = (counts: { pass: number; fail: number; inconclusive?: number }) => {
+  const inconclusive = counts.inconclusive ?? 0;
+  const total = counts.pass + inconclusive + counts.fail;
+  const ids = Array.from({ length: total }, (_unused, index) => `case-${index + 1}`);
+  const outcomes: Record<string, LiveTestOutcome> = {};
+  ids.forEach((id, index) => {
+    if (index < counts.pass) return;
+    outcomes[id] =
+      index < counts.pass + inconclusive
+        ? { status: "inconclusive", reason: index % 2 === 0 ? "site_block" : "challenge" }
+        : {
+            status: "failed",
+            errorClass: "TimeoutError",
+            message: "locator.click: Timeout 5000ms exceeded",
+            frame: "src/tool.ts:12",
+          };
+  });
+  const file = {
+    cases: ids.map((id, index) => ({
+      id,
+      purpose: `Query ${index + 1} returns its results.`,
+      input: { query: `query ${index + 1}` },
+      expect: "result",
+    })),
+  };
+  return { file, outcomes };
+};
+
+/** Runs one batch with `counts`, the example, then `finish_build`; what publication received. */
+const finishAfterScoredBatch = async (counts: Parameters<typeof scoredBatch>[0]) => {
+  const { file, outcomes } = scoredBatch(counts);
+  const { host, batches } = liveTestHost(outcomes);
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("live_tests", runAll, "run"),
+        call("execute", example, "example"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  const outcome = await f.run();
+  expect(batches).toHaveLength(1);
+  return {
+    outcome,
+    reviews: published.seen,
+    finished: () => resultOf(f.requests[3], "finish"),
+  };
+};
+
+it("does not send a read to publication review while 8 of its 23 cases pass on that source", async () => {
+  const { outcome, reviews, finished } = await finishAfterScoredBatch({ pass: 8, fail: 15 });
+
+  // No review started: publish, which runs the review, was never called.
+  expect(reviews).toHaveLength(0);
+  expect(outcome.build).not.toBe("published");
+  expect(finished()).toMatchObject({
+    status: "not_published",
+    code: "PublicationUnavailable",
+    reason: "live_tests_below_threshold",
+    userInputRequired: false,
+    instruction:
+      "Publication review not started: only 8 of 23 live test cases on src/tool.ts pass on this source (34%), and review starts at 70%. Fix the code where a case fails, or the case where it is wrong, run every case again, then call finish_build.",
+  });
+});
+
+it.each([
+  { label: "17 of 23 (73%)", counts: { pass: 17, fail: 6 } },
+  { label: "exactly 70%, 7 of 10", counts: { pass: 7, fail: 3 } },
+  { label: "exactly 70%, 14 of 20", counts: { pass: 14, fail: 6 } },
+  // Thirteen inconclusive cases tested nothing about the tool: 7 of the 10 counted pass.
+  { label: "7 of 10 counted, beside 13 inconclusive", counts: { pass: 7, fail: 3, inconclusive: 13 } },
+  // Every case inconclusive: none counts, so the review judges coverage as before.
+  { label: "no counted case, 5 inconclusive", counts: { pass: 0, fail: 0, inconclusive: 5 } },
+])("sends a read to publication review once its cases pass at least 70%: $label", async ({ counts }) => {
+  const { outcome, reviews } = await finishAfterScoredBatch(counts);
+  expect(reviews).toHaveLength(1);
+  expect(outcome.build).toBe("published");
+});
+
+it.each([
+  // 69.6% is below 70%, and reads 69%, never rounded up to the bar it misses.
+  { label: "16 of 23 (69%)", counts: { pass: 16, fail: 7 }, passed: "16 of 23", percent: 69 },
+  // Inconclusive cases leave the counted ones: 6 of 10 is 60%, never 6 of 15.
+  {
+    label: "6 of 10 counted, beside 5 inconclusive",
+    counts: { pass: 6, fail: 4, inconclusive: 5 },
+    passed: "6 of 10",
+    percent: 60,
+  },
+])("does not send a read to publication review below 70%: $label", async ({ counts, passed, percent }) => {
+  const { reviews, finished } = await finishAfterScoredBatch(counts);
+  expect(reviews).toHaveLength(0);
+  expect(finished()).toMatchObject({ reason: "live_tests_below_threshold" });
+  expect(finished()["instruction"]).toContain(
+    `only ${passed} live test cases on src/tool.ts pass on this source (${percent}%), and review starts at 70%.`,
+  );
+});
+
+// A refusal for the bar is the minter's to fix through its code or its cases. It is no host check
+// refusing a step the build needs, so it grants no host_refused ending, and the host's record says
+// a new live observation follows it.
+it("records a refusal for the bar as needing new live tests, and grants no host_refused ending", async () => {
+  const { file, outcomes } = scoredBatch({ pass: 8, fail: 15 });
+  const { host } = liveTestHost(outcomes);
+  const published = publications();
+  const recorded: PublicationDecision[] = [];
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("live_tests", runAll, "run"),
+        call("execute", example, "example"),
+        call("finish_build", finish, "finish"),
+        call(
+          "report_blocked",
+          { reason: "host_refused", explanation: "A Pomerado check refused publication." },
+          "blocked",
+        ),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+      publicationDecisions: {
+        record: (decision) =>
+          Effect.sync(() => {
+            recorded.push(decision);
+          }),
+        list: Effect.sync(() => recorded),
+      },
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  const outcome = await f.run();
+  expect(published.seen).toHaveLength(0);
+  expect(resultOf(f.requests[3], "finish")).toMatchObject({ reason: "live_tests_below_threshold" });
+  expect(recorded).toEqual([
+    expect.objectContaining({
+      outcome: "refused",
+      code: "PublicationUnavailable",
+      reason: "live_tests_below_threshold",
+      executionId: "execution_one",
+      failedChecks: ["live_tests_below_threshold"],
+      recovery: "new_observation",
+    }),
+  ]);
+  expect(JSON.stringify(resultOf(f.requests[4], "blocked"))).toContain("host_not_refused");
+  expect(outcome.blocked?.reason).not.toBe("host_refused");
+});
+
+/** `host` as a host that caps its batches leaves it once one ran: no case fits in what is left. */
+const cappedAfterOneBatch = (host: LiveTestHost, batches: readonly LiveTestBatch[]): LiveTestHost => ({
+  ...host,
+  get caseTimeoutMs() {
+    return batches.length === 0 ? 60_000 : Number.POSITIVE_INFINITY;
+  },
+});
+
+// Once the attempt ran out of time for live tests, no case can run again, so a refusal that asks
+// for that could never be met: the review decides on the record as it is, as before the bar.
+it.each([
+  { label: "a later batch the host refused as no_time", way: "no_time" },
+  { label: "a case the attempt's deadline stopped", way: "deadline" },
+] as const)("sends a read below the bar to review once time ran out for tests: $label", async ({ way }) => {
+  const { file, outcomes } = scoredBatch({ pass: 2, fail: 5 });
+  // Stopped by the attempt's end: inconclusive, so 2 of the 6 counted pass.
+  const scored =
+    way === "deadline"
+      ? { ...outcomes, "case-3": { status: "inconclusive" as const, reason: "deadline" as const } }
+      : outcomes;
+  const { host, batches } = liveTestHost(scored);
+  const capped = way === "no_time" ? cappedAfterOneBatch(host, batches) : host;
+  const steps =
+    way === "no_time"
+      ? [call("live_tests", runAll, "run"), call("live_tests", runAll, "again")]
+      : [call("live_tests", runAll, "run")];
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [...steps, call("execute", example, "example"), call("finish_build", finish, "finish")][index] ??
+      prose(),
+    {
+      liveTests: capped,
+      deadline: Deadline.after(way === "deadline" ? 5 * 60_000 : 30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  const outcome = await f.run();
+  expect(batches).toHaveLength(1);
+  if (way === "no_time") expect(resultOf(f.requests[2], "again")).toMatchObject({ status: "no_time" });
+  expect(published.seen).toHaveLength(1);
+  expect(published.seen[0]?.liveTests).toMatchObject({ outOfTime: true });
+  expect(published.seen[0]?.coverage).toContain(way === "deadline" ? "2 pass, 4 fail" : "2 pass, 5 fail");
+  expect(outcome.build).toBe("published");
+});
+
+// A host that caps its batches says nothing as its last batch ends: no further batch fits from
+// then on. A finish_build right after it cannot be asked to run the cases again either, or a fix
+// it asks for would reach the review untested.
+it("sends a read below the bar to review when no further batch fits after its last one", async () => {
+  const { file, outcomes } = scoredBatch({ pass: 8, fail: 15 });
+  const { host, batches } = liveTestHost(outcomes);
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("live_tests", runAll, "run"),
+        call("execute", example, "example"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: cappedAfterOneBatch(host, batches),
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  const outcome = await f.run();
+  expect(batches).toHaveLength(1);
+  expect(published.seen).toHaveLength(1);
+  expect(published.seen[0]?.coverage).toContain("8 pass, 15 fail");
+  expect(outcome.build).toBe("published");
+});
+
+// A signed-in read is held to the bar on the cases it ran signed in, the only ones its record
+// holds: its combined case failing beside the one other case it ran is 1 of 2.
+it("holds a signed-in read to the bar on the cases it ran signed in", async () => {
+  const { host, batches } = liveTestHost({ "every-filter": filterIgnored });
+  const published = publications();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", signInStep, "sign_in"),
+        call("execute", example, "example"),
+        call("live_tests", runAll, "run"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: signingIn,
+      publish: published.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/sign-in.ts": toolSource,
+    "test/cases.json": JSON.stringify(combined),
+  });
+  await f.run();
+  expect(batches).toHaveLength(1);
+  expect(batches[0]?.signedIn).toBe(true);
+  expect(published.seen).toHaveLength(0);
+  expect(resultOf(f.requests[4], "finish")).toMatchObject({
+    reason: "live_tests_below_threshold",
+    instruction:
+      "Publication review not started: only 1 of 2 live test cases on src/tool.ts pass on this source (50%), and review starts at 70%. Fix the code where a case fails, or the case where it is wrong, run every case again, then call finish_build.",
+  });
+});
+
+// Only the version finish_build publishes is held to the bar. An HTTP version beside a published
+// Playwright version is judged by the publication review from its own results, as before, so its
+// failures never keep the Playwright version from review.
+it.each([
+  { published: "src/tool.ts", reviewed: true },
+  { published: "src/tool-http.mjs", reviewed: false },
+])(
+  "holds the version it publishes to the bar, never an HTTP version beside it: $published",
+  async ({ published: entrypoint, reviewed }) => {
+    const { host, batches } = liveTestHost((batch) =>
+      batch === 0
+        ? { nothing: emptyResults }
+        : { "repeat-1": httpFailure, "sort-price": httpFailure, nothing: httpFailure, "page-2": httpFailure },
+    );
+    const published = publications();
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("live_tests", runAll, "run_playwright"),
+          call("live_tests", runHttp, "run_http"),
+          call("execute", { ...example, entrypoint }, "example"),
+          call("finish_build", { ...finish, entrypoint }, "finish"),
+        ][index] ?? prose(),
+      {
+        liveTests: host,
+        deadline: Deadline.after(30 * 60_000),
+        reviewAndExecute: completedExample,
+        publish: published.publish,
+      },
+      read,
+    );
+    const root = (f.workspace as unknown as { root: string }).root;
+    await writeWorkspace(root, {
+      "src/tool.ts": toolSource,
+      "src/tool-http.mjs": httpSource,
+      "test/cases.json": JSON.stringify(cases),
+    });
+    await f.run();
+    expect(batches).toHaveLength(2);
+    if (reviewed) {
+      expect(published.seen).toHaveLength(1);
+      expect(published.seen[0]?.coverage).toContain("HTTP version (src/tool-http.mjs): 0 pass, 4 fail");
+    } else {
+      expect(published.seen).toHaveLength(0);
+      expect(resultOf(f.requests[4], "finish")["instruction"]).toContain(
+        "only 0 of 4 live test cases on src/tool-http.mjs pass on this source (0%)",
+      );
+    }
+  },
+);
+
+// Only results on the source being published count. Once the source changes they are stale and
+// test nothing there, so they hold nothing back: the review judges the stale cases as before.
+it("counts no result that ran on an earlier source", async () => {
+  const { file, outcomes } = scoredBatch({ pass: 8, fail: 15 });
+  const { host } = liveTestHost(outcomes);
+  const published = publications();
+  let root = "";
+  const f = await fixture(
+    async (_request, index) => {
+      // The agent edits the source after the batch, then runs the example again on it.
+      if (index === 1) await writeWorkspace(root, { "src/tool.ts": `${toolSource}// edited\n` });
+      return (
+        [
+          call("live_tests", runAll, "run"),
+          call("execute", example, "example"),
+          call("finish_build", finish, "finish"),
+        ][index] ?? prose()
+      );
+    },
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  await f.run();
+  expect(published.seen).toHaveLength(1);
+  expect(published.seen[0]?.coverage).toContain("0 pass, 0 fail, 0 inconclusive, 23 stale");
 });
