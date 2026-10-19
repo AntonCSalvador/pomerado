@@ -228,9 +228,27 @@ const withListPrefix = (value: unknown, path: string, kept: number): unknown => 
     : { ...value, [head]: withListPrefix(value[head], rest.join("."), kept) };
 };
 /**
+ * `value` as compact JSON, with each object key outside a list item and each item of such a list
+ * on its own line. An item stays whole on one line. A later publication round then diffs a rerun
+ * of the same output, or one changed record, as the few lines that changed.
+ */
+const lineJson = (value: unknown): string => {
+  if (Array.isArray(value))
+    return value.length === 0
+      ? "[]"
+      : `[\n${value.map((item) => JSON.stringify(item)).join(",\n")}\n]`;
+  if (!isRecord(value)) return JSON.stringify(value);
+  return `{${Object.entries(value)
+    .filter(([, field]) => field !== undefined)
+    .map(([key, field]) => `${JSON.stringify(key)}:${lineJson(field)}`)
+    .join(",\n")}}`;
+};
+
+/**
  * The host's record of an example's output in `state`, with `fields` after it, such as the
  * `reason` a host gives for an output it could not read (`unavailable`). The record is compact
- * JSON, so the 96 KiB limit keeps as many of the output's records as it can.
+ * JSON, so the 96 KiB limit keeps as many of the output's records as it can, with each field and
+ * each record of a top-level list on its own line (`lineJson`).
  */
 export const exampleOutputRecord = (
   source: ExampleOutputSource,
@@ -238,7 +256,7 @@ export const exampleOutputRecord = (
   fields: Json = {},
 ): ExampleOutputEvidence => ({
   state,
-  text: JSON.stringify({
+  text: lineJson({
     kind: source.kind ?? "verified_example_output",
     executionId: source.executionId,
     executedEntrypoint: source.executedEntrypoint,
