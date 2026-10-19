@@ -108,6 +108,7 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
         Effect.mapError(askError),
       ),
     recordBuildEffect: (effect) => Effect.sync(() => context.setBuildEffect(effect)),
+    entryNavigation: context.entryNavigation,
     reviewTaskUpdate: (candidate) =>
       context.reviewTaskUpdate(candidate).pipe(
         Effect.map((result) => ({ ...result.decision, reviewId: result.reviewId })),

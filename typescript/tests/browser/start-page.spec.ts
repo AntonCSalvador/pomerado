@@ -5,6 +5,7 @@ import { Effect, Schema } from "effect";
 import type { HostExecute } from "../../src/runtime/host-execute.js";
 import { configureSiteIdentity } from "../../src/runtime/same-site.js";
 import {
+  loadEntry,
   localStartHooks,
   SavedSession,
   saveSessionCode,
@@ -22,6 +23,15 @@ const startSite = async () => {
   const server = createServer((request, response) => {
     const path = new URL(request.url ?? "/", "http://site.test").pathname;
     hits.set(path, (hits.get(path) ?? 0) + 1);
+    // A page that moved twice, and one the site does not have.
+    if (path === "/old" || path === "/older") {
+      response.writeHead(path === "/older" ? 301 : 302, {
+        location: path === "/older" ? "/old" : "/claims",
+      });
+      response.end();
+      return;
+    }
+    response.statusCode = path === "/missing" ? 404 : 200;
     response.setHeader("Content-Type", "text/html");
     response.end(`<h1>${path}</h1>`);
   });
@@ -287,5 +297,45 @@ test("saves a sibling subdomain's tab storage only while no added suffix splits 
     ]);
   } finally {
     configureSiteIdentity({});
+  }
+});
+
+// The host's load of the request's page: one call that reports how it went, whatever happened.
+test("loads the request's page and reports its status, its redirects and where it landed", async ({
+  page,
+}) => {
+  const site = await startSite();
+  const { execute, targetId } = await host(page);
+  try {
+    const load = (path: string) =>
+      Effect.runPromise(loadEntry(execute, targetId, `${site.origin}${path}`, 30_000));
+    expect(await load("/older")).toEqual({
+      outcome: "ready",
+      requestedUrl: `${site.origin}/older`,
+      resolvedUrl: `${site.origin}/claims`,
+      redirects: [
+        { url: `${site.origin}/older`, status: 301 },
+        { url: `${site.origin}/old`, status: 302 },
+      ],
+      redirectsTruncated: false,
+      status: 200,
+      durationMs: expect.any(Number),
+    });
+    expect(page.url()).toBe(`${site.origin}/claims`);
+    expect(await load("/missing")).toMatchObject({
+      outcome: "http_error",
+      resolvedUrl: `${site.origin}/missing`,
+      redirects: [],
+      status: 404,
+    });
+    await page.route(`${site.origin}/refused`, (route) => route.abort("connectionrefused"));
+    expect(await load("/refused")).toMatchObject({
+      outcome: "failed",
+      requestedUrl: `${site.origin}/refused`,
+      status: null,
+      failure: { kind: "refused" },
+    });
+  } finally {
+    await site.close();
   }
 });

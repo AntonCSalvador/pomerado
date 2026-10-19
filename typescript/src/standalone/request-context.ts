@@ -24,7 +24,7 @@ import {
   sourceChunk,
   type SdkFiles,
 } from "../guardian/source.js";
-import type { ExecutionEvidence } from "../mint/contracts.js";
+import { mintEntryNavigation, type ExecutionEvidence } from "../mint/contracts.js";
 import { publicationScope, type PublicationReview } from "../mint/publication-review.js";
 import {
   allowedEffectsFor,
@@ -52,6 +52,9 @@ import type { StandaloneSession } from "./session.js";
 import { error } from "./errors.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { runtimeSourceEntry } from "../execution/runtime-sources.js";
+import { loadEntry, type EntryNavigationOutcome } from "../runtime/start-state.js";
+/** How long the load of the request's page may take. */
+const entryNavigationTimeoutMs = 30_000;
 /** The folder Guardian's publication policy names the SDK's modules under, `pomerado/`. */
 const packageFolder = "pomerado/";
 /**
@@ -125,18 +128,32 @@ export const sourceInspector = (
     );
   };
 };
-/** The request's checked site and the navigation to it. Builds no Guardian. */
+/**
+ * The request's checked site and the navigation to it. Builds no Guardian. The navigation loads
+ * the request's page in one browser call that never fails: how it went, a load that failed
+ * included, is the entry state the build reads (`entryNavigation`).
+ */
 export const requestSite = (session: StandaloneSession, request: Pick<PomeradoRequest, "url">) =>
   Effect.gen(function* () {
     const url = yield* Effect.try({ try: () => new URL(request.url), catch: error });
     if (!["https:", "http:"].includes(url.protocol) || url.username || url.password)
       return yield* Effect.fail(new Error("Provide an HTTP or HTTPS site URL without credentials"));
+    let entry: EntryNavigationOutcome | undefined;
     return {
       url,
       siteOrigin: url.origin,
-      navigate: session.browser
-        .execute(`await page.goto(${JSON.stringify(url.href)}); return null;`, 60)
-        .pipe(Effect.asVoid),
+      navigate: loadEntry(
+        session.browser.execute,
+        session.browser.targetId,
+        request.url,
+        entryNavigationTimeoutMs,
+      ).pipe(
+        Effect.map((outcome) => {
+          entry = outcome;
+        }),
+      ),
+      /** How the load of the request's page went, once the navigation ran. */
+      entryNavigation: () => mintEntryNavigation(request.url, entry),
     };
   });
 
@@ -217,7 +234,8 @@ export interface ReviewStep {
 export const requestContext = (session: StandaloneSession, request: PomeradoRequest) =>
   Effect.gen(function* () {
     const { options, policy, secrets, projection, browser } = session;
-    let site = yield* requestSite(session, request);
+    const requested = yield* requestSite(session, request);
+    let site = requested;
     const invocationId = randomUUID();
     const observations = currentDateObservations(yield* DateTime.now);
     let buildEffect: "read" | "write" | undefined =
@@ -590,6 +608,12 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
       running,
       recorded,
       observe,
+      /**
+       * How the load of the request's own page went, for the build's model; undefined until it
+       * ran. A site a task update moved to is the host's own choice, never a page the caller
+       * requested.
+       */
+      entryNavigation: requested.entryNavigation,
       /** Opens the build's site, which the build's start does once; the browser is then active. */
       navigate: Effect.suspend(() => site.navigate).pipe(
         Effect.tap(() =>

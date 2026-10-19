@@ -41,6 +41,7 @@ import {
 import type { SandboxSession, SkillDescriptor } from "@openai/agents/sandbox";
 import type { AgentInputItem } from "@openai/agents";
 import type { Deadline } from "../runtime/deadline.js";
+import type { EntryNavigationOutcome } from "../runtime/start-state.js";
 import type { ModelDiagnosticTiming } from "../models/model-diagnostic-timing.js";
 import type { RuntimeRecordInput } from "../models/model-runtime-record.js";
 import type {
@@ -1617,6 +1618,38 @@ export type MintEntryNavigation =
       /** Host-authored explanation of the browser replacement. */
       readonly instruction?: string;
     };
+
+/**
+ * The entry state the minter reads, from how the host's load of the caller's page went
+ * (`EntryNavigationOutcome`), or `open_failed` when the host's browser did not open. The caller's
+ * own page URLs are shown to the model exactly as given; they are intentionally not screened or
+ * masked. Undefined until the host has attempted the entry.
+ */
+export const mintEntryNavigation = (
+  entryUrl: string,
+  outcome: EntryNavigationOutcome | "open_failed" | undefined,
+): MintEntryNavigation | undefined => {
+  if (outcome === undefined) return undefined;
+  if (outcome === "open_failed")
+    return { state: "not_opened", outcome: "failed", requestedUrl: entryUrl };
+  if (outcome.outcome === "ready" || outcome.outcome === "http_error")
+    return {
+      state: "opened",
+      outcome: outcome.outcome,
+      requestedUrl: entryUrl,
+      resolvedUrl: outcome.resolvedUrl,
+      redirects: outcome.redirects,
+      status: outcome.status,
+    };
+  return {
+    state: "not_opened",
+    outcome: outcome.outcome,
+    requestedUrl: entryUrl,
+    ...(outcome.outcome === "skipped"
+      ? {}
+      : { resolvedUrl: outcome.resolvedUrl, redirects: outcome.redirects }),
+  };
+};
 
 /** The durable journal of one logical example execution. */
 export interface ExampleJournal {
