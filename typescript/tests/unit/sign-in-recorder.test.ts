@@ -932,6 +932,83 @@ it("refuses a password screen before any identifier screen while the build holds
   expect(host.filled).toEqual([]);
 });
 
+it("records a screen that asks for the password again with a code as a version 5 refill, and a refill without a code as none", async () => {
+  const host = harness({ held: account, answers: { code: ["482913"] } });
+  const published = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(identifierAndPassword, undefined, Effect.void);
+      yield* recorder.step(
+        {
+          fields: [
+            { selector: "#password", slot: "password" },
+            { selector: "#code", slot: "code" },
+          ],
+          submit: "#sign-in",
+        },
+        undefined,
+        Effect.void,
+      );
+      expect((yield* recorder.step(signedIn, undefined, Effect.void)).verified).toBe(true);
+      return recorder.published();
+    }),
+  );
+  expect(published?.recipe).toMatchObject({
+    version: 5,
+    steps: [
+      { fields: [{ selector: "#user" }, { selector: "#password" }] },
+      {
+        fields: [
+          { selector: "#password", slot: "password" },
+          { selector: "#code", slot: "code" },
+        ],
+        refills: ["password"],
+      },
+    ],
+  });
+  expect(published?.recipe.steps[0]).not.toHaveProperty("refills");
+
+  const plain = harness({ held: account });
+  const again = await plain.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(identifierAndPassword, undefined, Effect.void);
+      yield* recorder.step(passwordOnly, undefined, Effect.void);
+      yield* recorder.step(signedIn, undefined, Effect.void);
+      return recorder.published();
+    }),
+  );
+  expect(again?.recipe.version).toBe(1);
+  expect(again?.recipe.steps[1]).not.toHaveProperty("refills");
+});
+
+it("records no refill on a screen that asks for the password again after a code already went out", async () => {
+  const host = harness({ held: account, answers: { code: ["482913", "135790"] } });
+  const published = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(identifierAndPassword, undefined, Effect.void);
+      yield* recorder.step(
+        { fields: [{ selector: "#otp", slot: "code" }], submit: "#verify" },
+        undefined,
+        Effect.void,
+      );
+      yield* recorder.step(
+        {
+          fields: [
+            { selector: "#password", slot: "password" },
+            { selector: "#code", slot: "code" },
+          ],
+          submit: "#sign-in",
+        },
+        undefined,
+        Effect.void,
+      );
+      yield* recorder.step(signedIn, undefined, Effect.void);
+      return recorder.published();
+    }),
+  );
+  expect(published?.recipe.version).toBe(1);
+  expect(published?.recipe.steps.some((step) => "refills" in step)).toBe(false);
+});
+
 it("fills a password twice at most in one sign-in, and a ZIP once", async () => {
   const host = harness({ held: account, answers: { zip: ["94110"] } });
   await host.run((recorder) =>

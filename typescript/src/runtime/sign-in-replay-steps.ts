@@ -10,6 +10,7 @@ import type {
   AutofillStepRequest,
   SecretSlot,
 } from "../destinations/autofill-step.js";
+import { isSecondFactor } from "../destinations/autofill-recipe.js";
 import {
   armStep,
   isExtraSecret,
@@ -239,9 +240,29 @@ export const fillFailure = (step: AutofillStep, report: AutofillStepReport) => {
 };
 
 /**
+ * Whether a recorded screen's planned refill of `slot` holds now: the screen lists it
+ * (`planned`, its recipe step's `refills`), it went out once at most so far, and the screen also
+ * asks for a second factor this replay has not sent, as a site that wants the password entered
+ * again with a one-time code does. A screen asking for it again any other way is a rejection.
+ */
+const plannedRefill = (
+  step: AutofillStep,
+  slot: SecretSlot,
+  planned: readonly SecretSlot[],
+  maySent: ReadonlySet<SecretSlot>,
+  refilled: ReadonlySet<SecretSlot>,
+) =>
+  planned.includes(slot) &&
+  !refilled.has(slot) &&
+  step.fields.some(
+    (field) => isSecondFactor(field.slot) && isSecret(field.slot) && !maySent.has(field.slot),
+  );
+
+/**
  * Whether a step would fill a secret that may have gone out already beyond what a retry of a
- * rejected code allows: a password or code once more each, so either goes out at most twice; a
- * date of birth, ZIP, recovery code or private answer never again.
+ * rejected code, or the recorded screen's planned refill, allows: a password or code once more
+ * each, so either goes out at most twice; a date of birth, ZIP, recovery code or private answer
+ * never again.
  */
 export const refillRefused = (
   step: AutofillStep,
@@ -249,6 +270,7 @@ export const refillRefused = (
   refilled: ReadonlySet<SecretSlot>,
   codeAgain: "rejected" | undefined,
   corrected: ReadonlySet<AutofillSlot>,
+  planned: readonly SecretSlot[] = [],
 ) =>
   step.fields.some(
     (field) =>
@@ -258,7 +280,8 @@ export const refillRefused = (
       !(
         codeAgain === "rejected" &&
         (field.slot === "code" || (provesLogin(field.slot) && !refilled.has(field.slot)))
-      ),
+      ) &&
+      !plannedRefill(step, field.slot, planned, maySent, refilled),
   );
 
 /** Records each secret a step may have sent, and those it sent a second time. */
@@ -555,6 +578,7 @@ const retryRefusal = <E>(
   codeAgain: "rejected" | undefined,
   explicitCodeRejection: boolean,
   corrected: ReadonlySet<AutofillSlot>,
+  planned: readonly SecretSlot[],
 ) => {
   const { retry, sent, progress } = session;
   if (
@@ -563,7 +587,7 @@ const retryRefusal = <E>(
     retry.codeAttempts.current >= 2
   )
     return "code_rejected" as const;
-  if (refillRefused(asked, sent.maySent, progress.refilled, codeAgain, corrected))
+  if (refillRefused(asked, sent.maySent, progress.refilled, codeAgain, corrected, planned))
     return codeAgain === "rejected" && explicitCodeRejection
       ? "code_rejected"
       : "credential_already_filled";
@@ -573,7 +597,8 @@ const retryRefusal = <E>(
 /**
  * One inspected screen filled and submitted with this run's values. Returns why it did not
  * complete, or undefined when it did. Only a request the page sent carrying a value counts as
- * sending it; a submit that may have sent one counts against the fill allowance.
+ * sending it; a submit that may have sent one counts against the fill allowance. `planned` is the
+ * recorded screen's `refills`.
  */
 export const runReplayStep = <E>(
   session: ReplaySession<E>,
@@ -582,6 +607,7 @@ export const runReplayStep = <E>(
   codeAgain?: "rejected",
   explicitCodeRejection = false,
   corrected: ReadonlySet<AutofillSlot> = new Set(),
+  planned: readonly SecretSlot[] = [],
 ) =>
   Effect.gen(function* () {
     const { input, retry, sent, progress, record } = session;
@@ -589,7 +615,14 @@ export const runReplayStep = <E>(
     // A value-free replay stops before any screen with a field.
     if (credentials === undefined && asked.fields.length > 0) return valuesNeeded;
     codeAgain ??= retry.rejectedValues.code?.size ? "rejected" : undefined;
-    const refused = retryRefusal(session, asked, codeAgain, explicitCodeRejection, corrected);
+    const refused = retryRefusal(
+      session,
+      asked,
+      codeAgain,
+      explicitCodeRejection,
+      corrected,
+      planned,
+    );
     if (refused !== undefined) return refused;
     const resolved =
       credentials === undefined

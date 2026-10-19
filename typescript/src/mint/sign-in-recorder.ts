@@ -4,6 +4,7 @@ import { lostTyping, maySend, typingRefusal } from "../destinations/autofill-ref
 import type {
   AutofillInspection,
   AutofillScreens,
+  AutofillSlot,
   AutofillSignedIn,
   AutofillStep,
   AutofillStepReport,
@@ -33,6 +34,7 @@ import {
   type SignInValueHooks,
 } from "../destinations/sign-in-recipe.js";
 import type { AutofillPopup } from "../destinations/autofill-contracts.js";
+import { isSecondFactor } from "../destinations/autofill-recipe.js";
 import type { CredentialRejectedField, WebsiteCredentials } from "../runtime/authentication.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { InputRequestFailure } from "../runtime/input-request.js";
@@ -536,6 +538,17 @@ export const makeSignInRecorder = <E>(input: {
           stopHearing = browser.onRequest(tracker.heard);
         }
         const record = open;
+        // A screen of this sign-in that asks for the password an earlier one took, beside a
+        // second factor none of its earlier screens took, records the refill, which a run's
+        // replay then makes in the same place, and only there.
+        const earlier = (which: (slot: AutofillSlot) => boolean) =>
+          record.steps.some((taken) => taken.fields.some((field) => which(field.slot)));
+        const reasked =
+          !opened &&
+          refills.includes("password") &&
+          earlier((slot) => slot === "password") &&
+          !earlier(isSecondFactor) &&
+          step.fields.some((field) => isSecondFactor(field.slot));
         armStep(
           record,
           step,
@@ -544,6 +557,9 @@ export const makeSignInRecorder = <E>(input: {
           tracker.sequence(),
           browser.authenticationOrigins,
         );
+        const armed = record.steps.at(-1);
+        if (reasked && armed !== undefined)
+          record.steps[record.steps.length - 1] = { ...armed, refills: ["password"] };
         const report = yield* browser.fill({ step, values: filledValues, inspection: inspected });
         yield* tracker.settled;
         // A fill refused or not attempted cannot have sent what it held.
