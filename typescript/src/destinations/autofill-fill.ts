@@ -27,6 +27,7 @@ import {
   type AutofillStep,
   type FillSlot,
   type AutofillStepReport,
+  hostSubmits,
   LocatedError,
   notingHostTrust,
   Targets,
@@ -432,7 +433,7 @@ const submitWhenEnabled = (input: FillInput, progress: FillProgress, call: Autof
   Effect.gen(function* () {
     const started = Date.now();
     const sendMs = input.step.fields.length > 0 ? Math.min(input.settleMs ?? 5_000, pageSendMs) : 0;
-    const readsOnly = input.step.submit === undefined && sendMs > 0;
+    const readsOnly = !hostSubmits(input.step) && sendMs > 0;
     let unsentSince: number | undefined;
     let lost: Either.Either<CallAnswer, Error> | undefined;
     let lastLost = false;
@@ -624,7 +625,7 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
       }),
     );
     if (clicked._tag === "Left")
-      return failedCall(progress, clicked.left, { mayMutate: step.submit !== undefined });
+      return failedCall(progress, clicked.left, { mayMutate: hostSubmits(step) });
     const answer = clicked.right;
     if ("pageSent" in answer) return filledReport(step, progress, "page", answer.url);
     if ("refusal" in answer || "checked" in answer)

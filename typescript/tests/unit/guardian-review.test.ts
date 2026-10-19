@@ -629,7 +629,7 @@ describe("OpenAI reviewer policy and trusted authority", () => {
       makeGuardian(reviewer(markedUpstreamPolicy)).review(pending, readEntrypoint),
     );
     const rule =
-      "into the fields the step names and clicks the step's submit. The host fills a code, recovery_code or private_answer slot only after you allow the step, from a saved value or by asking the owner then. So allow such a step without an earlier code or answer. Judge it against the screen the file shows for it.";
+      "into the fields the step names and clicks the step's submit, or presses its submitKey. The host fills a code, recovery_code or private_answer slot only after you allow the step, from a saved value or by asking the owner then. So allow such a step without an earlier code or answer. Judge it against the screen the file shows for it.";
     for (const policy of [
       requests[0]?.systemInstructions ?? "",
       guardianExecutionPolicy(otherHost),

@@ -376,6 +376,7 @@ const screenFor = <E>(
       fields: recorded.fields,
       ...(recorded.popup === undefined ? {} : { popup: recorded.popup }),
       ...(recorded.submit === undefined ? {} : { submit: recorded.submit }),
+      ...(recorded.submitKey === undefined ? {} : { submitKey: recorded.submitKey }),
     });
     if (recorded.methods === undefined) return step;
     // The choice screen shows before a method is picked; its first option finds it.
@@ -811,6 +812,7 @@ const retryCode = <E>(
       fields,
       ...(shown.popup === undefined ? {} : { popup: shown.popup }),
       ...(shown.submit === undefined ? {} : { submit: shown.submit }),
+      ...(shown.submitKey === undefined ? {} : { submitKey: shown.submitKey }),
     };
     const inspected = yield* input.browser.inspect(retryStep);
     if ("outcome" in inspected) return "none" as const;

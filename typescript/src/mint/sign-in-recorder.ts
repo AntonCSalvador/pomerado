@@ -92,14 +92,24 @@ const filledNotices = {
   page: "The host filled the fields, and the page may have sent them itself: once the last field was filled, the screen moved on, emptied its fields or stopped taking typing before the host clicked anything. Explore read-only to read the next screen (never read a field the host filled), then send its signInStep, or signInStep.signedIn with what shows the site signed in.",
 } as const;
 
+/** What the minter does after a step whose submit key the host pressed. */
+const keyNotices = {
+  failed:
+    "The host filled the fields, but its press of the step's submitKey failed. Never press it yourself: explore read-only to see the page (never read a field the host filled), then continue with the next signInStep, or signedIn.",
+  clicked:
+    "The host filled the fields and pressed the step's submitKey in the last field. Explore read-only to read the next screen (never read a field the host filled), then send its signInStep, or signInStep.signedIn with what shows the site signed in.",
+} as const;
+
 /** What the minter does after a screen the host inspected and maybe filled. */
-const stepNotice = (report: AutofillStepReport) => {
+const stepNotice = (report: AutofillStepReport, step?: Pick<AutofillStep, "submitKey">) => {
   if (report.outcome === "refused")
     return `The host typed and clicked nothing (${report.reason}), so nothing reached the site and no sign-in was spent. Correct the step from the page's evidence, ${recovery}.`;
   if (lostTyping(report))
     return "The host lost the answer of the call that typed a field, so that field may hold its value. The host never clicked the submit. It never retries a fill by itself. Explore read-only to see the page, then continue with the next signInStep.";
   if (report.outcome === "uncertain")
     return `The host lost the fill call's answer: the fields and the submit may have reached the site. It never retries a fill by itself. Explore read-only to see the page, then continue with the next signInStep, ${recovery}.`;
+  if (step?.submitKey !== undefined && (report.submit === "failed" || report.submit === "clicked"))
+    return keyNotices[report.submit];
   return filledNotices[report.submit];
 };
 
@@ -574,7 +584,7 @@ export const makeSignInRecorder = <E>(input: {
           return yield* autofillRefusalFailure(refusal, {
             nothingSubmitted: record.mayHaveSent !== true && record.submittedSlots.size === 0,
           });
-        return { report, result: { nextStep: stepNotice(report) } };
+        return { report, result: { nextStep: stepNotice(report, step) } };
       }).pipe(
         Effect.ensuring(
           Effect.sync(() => {

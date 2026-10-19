@@ -100,12 +100,28 @@ describe("decodeSignInRecipe", () => {
         signedIn: { selector: "#account-menu", openPath: "/settings" },
       },
     ],
+    [
+      "version 5 with a code step its key submits",
+      {
+        version: 5,
+        steps: [
+          ...steps,
+          {
+            page: "https://example.test/login/code",
+            fields: [{ selector: "#code", slot: "code" }],
+            submitKey: "Enter",
+            submittedBy: "host",
+          },
+        ],
+        signedIn,
+      },
+    ],
   ])("reads %s", (_name, recipe) => {
     expect(decodeSignInRecipe(JSON.stringify(recipe))).toEqual(recipe);
   });
 
   it("refuses a version it does not know, so a run never drops what that version adds", () => {
-    expect(decodeSignInRecipe(JSON.stringify({ version: 5, steps, signedIn }))).toBe(
+    expect(decodeSignInRecipe(JSON.stringify({ version: 6, steps, signedIn }))).toBe(
       "unknown_version",
     );
   });
@@ -177,6 +193,24 @@ describe("decodeSignInRecipe", () => {
       "a version 4 parent that is not a lower-case host name",
       JSON.stringify({ version: 4, workspace: { parent: "Example.com" }, steps, signedIn }),
     ],
+    ...[
+      ["a submit", { submit: "#verify" }],
+      ["no field", { fields: [] }],
+    ].map(([name, change]) => [
+      `a version 5 key-submitted step with ${String(name)}`,
+      JSON.stringify({
+        version: 5,
+        steps: [
+          {
+            page: "https://example.test/login/code",
+            fields: [{ selector: "#code", slot: "code" }],
+            submitKey: "Enter",
+            ...Object(change),
+          },
+        ],
+        signedIn,
+      }),
+    ]),
     [
       "a version 4 recipe with a key this host does not know",
       JSON.stringify({ version: 4, signInOrigins: ["https://id.example.net"], steps, signedIn }),
@@ -275,6 +309,26 @@ describe("signInRecipe", () => {
       "signedIn",
     ]);
     expect(Object.keys((JSON.parse(text) as { steps: object[] }).steps[1] ?? {})[0]).toBe("origin");
+  });
+
+  it("writes version 5 only for a step its key submits, keeping a workspace relation", () => {
+    const code = {
+      page: "https://example.test/login/code",
+      fields: [{ selector: "#code", slot: "code" as const }],
+      submitKey: "Enter" as const,
+    };
+    expect(signInRecipe([recorded], signedIn).version).toBe(1);
+    const recipe = signInRecipe([recorded, code], signedIn, { workspace: { parent: "example.test" } });
+    expect(recipe).toMatchObject({ version: 5, workspace: { parent: "example.test" } });
+    expect(recipe.steps[1]).toEqual({ ...code });
+    const text = signInRecipeText(recipe);
+    expect(decodeSignInRecipe(text)).toEqual(recipe);
+    expect(Object.keys(JSON.parse(text) as object)).toEqual([
+      "version",
+      "workspace",
+      "steps",
+      "signedIn",
+    ]);
   });
 
   it("holds no value, question text, label or after-submit control", () => {
