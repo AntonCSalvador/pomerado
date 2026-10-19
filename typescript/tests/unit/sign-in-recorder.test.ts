@@ -501,6 +501,7 @@ it("refuses a recorded selector holding [private], the mask the minter sees for 
         nextStep: selectorsNotice,
       });
       for (const step of [
+        { fields: [{ selector: "input[value='[private]']", accepts: ["username"] }] },
         { fields: [{ selector: "#user", accepts: ["username"] }], submit: "#go-[private]" },
         {
           fields: [
