@@ -581,7 +581,7 @@ it("refuses a recorded selector holding [private], the mask the minter sees for 
       }
       expect(host.filled).toEqual([]);
       expect(host.reviewed).toEqual([]);
-      // The placeholders another host's minter sees are refused by the shared guard as before.
+      // The `[password]`, `[code]` and `[recovery_code]` placeholders are refused by the shared guard as before.
       const placeholder = yield* recorder.step(
         {
           fields: [{ selector: "#user", accepts: ["username"] }],
