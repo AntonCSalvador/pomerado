@@ -231,9 +231,10 @@ exception: it is optional unless the task can't run without it (below).
   the caller typed it. A whole-name or code match outranks a partial one, so an airport code
   picks that airport, not its city. Then count the matches at the best rank. With none,
   throw `InvalidInput` at once, saying the site has no match, with `field` and `available`,
-  the closest entries it showed. With one, use it. With several, ask the caller which one with
-  a declared choice question whose options are those matches as the site labels them
-  (.agents/caller-input/SKILL.md).
+  the closest entries it showed. With one, use it. With several, a read takes the first in
+  the site's own order and returns the one it used, as the site labels it. A write asks the
+  caller which one with a declared choice question whose options are those matches as the
+  site labels them (.agents/caller-input/SKILL.md).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
   match that accepts the usual forms of the same name, such as a name with or without its
   accents (Abaca for Abacá), a city alone or with its state and country, or a company with

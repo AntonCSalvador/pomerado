@@ -142,6 +142,7 @@
 
 ### Other changes
 
+- A read whose caller value matches several of the site's entries equally, such as a city with several airports, takes the first in the site's own order and returns the one it used, as the site labels it, instead of asking the caller which one. A write still asks with a declared choice question whose options are those entries. The core and caller-input skills say so; a value the site does not list, a near-miss name and a greyed-out option are handled as before.
 - The authoring guidance asks for faster tools, fewer test rounds and fewer owner questions, without weakening any check:
   - The core and search skills wait for a change only after a step that changed the page or should have, and skip a second change wait when nothing changed; the values a tool returns still get their one `waitForRows` or `waitForValues`, and a value settles on two consecutive identical reads. A choice already in the requested state gets no step, and an unset optional one is read from the page where it shows.
   - A challenge the build saw is named as one answer of the same `waitForOutcome`, never probed separately on every pass of a home-made loop or after a swallowed timeout.
