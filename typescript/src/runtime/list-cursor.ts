@@ -4,7 +4,6 @@ import { canonicalJson } from "./fingerprint.js";
 import {
   decodeListDraft,
   listDraftFields,
-  listDraftPrefix,
   listCursorMaxLength,
   listCursorTtlMs,
   type CursorRefusal,
@@ -266,11 +265,12 @@ export type DroppedListCursor = Extract<
 /**
  * Signs the `next_cursor` a run's output holds and fills `next_cursor_expires_at`,
  * `listCursorTtlMs` (ten minutes) from `now`. `input` is the caller's input for the run, as sent.
- * Only a runtime draft is signed; a next cursor in any other form is left in the output as it
- * is, and `admitListCursor` refuses it if a caller sends it back. A draft that does not decode,
- * or whose site link is off the tool's site, is dropped: `next_cursor` becomes null, `has_more`
- * stays true, and both `next_cursor_unavailable` and `dropped` say why. Every valid draft fits in
- * a cursor, so none is dropped for its size.
+ * Only a runtime draft is signed. A next cursor in any other form, which `admitListCursor` would
+ * refuse if a caller sent it back, a draft that does not decode, and a draft whose site link is
+ * off the tool's site are dropped: `next_cursor` becomes null and `dropped` says why. `has_more`
+ * stays as the output gave it, true unless it is false, and when it is true
+ * `next_cursor_unavailable` says why too. Every valid draft fits in a cursor, so none is dropped
+ * for its size.
  */
 export const sealListOutput = (
   output: unknown,
@@ -280,17 +280,20 @@ export const sealListOutput = (
   if (typeof output !== "object" || output === null || Array.isArray(output)) return { output };
   const fields = output as Record<string, unknown>;
   const next = fields["next_cursor"];
-  if (typeof next !== "string" || !next.startsWith(listDraftPrefix)) return { output };
-  const drop = (dropped: DroppedListCursor) => ({
-    output: {
-      ...fields,
-      next_cursor: null,
-      next_cursor_expires_at: null,
-      has_more: true,
-      next_cursor_unavailable: dropped,
-    },
-    dropped,
-  });
+  if (typeof next !== "string") return { output };
+  const drop = (dropped: DroppedListCursor) => {
+    const hasMore = fields["has_more"] !== false;
+    return {
+      output: {
+        ...fields,
+        next_cursor: null,
+        next_cursor_expires_at: null,
+        has_more: hasMore,
+        ...(hasMore ? { next_cursor_unavailable: dropped } : {}),
+      },
+      dropped,
+    };
+  };
   const draft = decodeListDraft(next);
   if (draft === undefined) return drop("not_a_draft");
   if (draft.pos.href !== undefined && !onSite(draft.pos.href, scope.siteOrigin))

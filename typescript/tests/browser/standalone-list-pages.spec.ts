@@ -27,6 +27,18 @@ const referenceTool = async () =>
   ).replace('"../../src/browser/index.js"', '"../runtime/index.js"');
 
 /**
+ * A tool that writes its own next cursor, which the host never signs and would refuse if a caller
+ * sent it back.
+ */
+const ownCursorTool = `import { Schema } from "effect";
+import { defineOperation } from "../runtime/index.js";
+export default defineOperation({
+  name: "own_cursor",
+  input: Schema.Struct({}),
+  output: Schema.Struct({ next_cursor: Schema.NullOr(Schema.String), has_more: Schema.Boolean }),
+}, async () => ({ next_cursor: "page=2", has_more: true }));`;
+
+/**
  * A listing site that pages `pageSize` rows at a time behind a search form, with a Next link. Its
  * `listings` are the rows in the site's order; a test changes them between calls.
  */
@@ -100,18 +112,18 @@ test("a list pages by signed cursors across changes and refuses a stale cursor b
             timeoutMs: 20_000,
             listCursors: { now: () => now },
           });
+          const runTool = (content: string, input: Record<string, unknown>) =>
+            service.run(
+              {
+                entrypoint: "src/tool.mjs",
+                files: [{ path: "src/tool.mjs", content }],
+                inputSchema: {},
+                outputSchema: {},
+              },
+              { url: site.url, intent: "Search the listings", effect: "read", input },
+            );
           const run = (input: Record<string, unknown>) =>
-            service
-              .run(
-                {
-                  entrypoint: "src/tool.mjs",
-                  files: [{ path: "src/tool.mjs", content: source }],
-                  inputSchema: {},
-                  outputSchema: {},
-                },
-                { url: site.url, intent: "Search the listings", effect: "read", input },
-              )
-              .pipe(Effect.map((output) => output as Page));
+            runTool(source, input).pipe(Effect.map((output) => output as Page));
           const ids = (page: Page) => page.results.map((row) => row.id);
 
           const first = yield* run({ query: "lamps", limit: 2 });
@@ -150,6 +162,14 @@ test("a list pages by signed cursors across changes and refuses a stale cursor b
           site.listings.splice(site.listings.indexOf("L1"), 1);
           const across = yield* run({ query: "lamps", limit: 3, cursor: boundary.next_cursor });
           expect(ids(across)).toEqual(["L4", "L5", "L6"]);
+
+          // A tool's own next cursor never reaches the caller: the host would refuse it.
+          expect(yield* runTool(ownCursorTool, {})).toEqual({
+            next_cursor: null,
+            next_cursor_expires_at: null,
+            has_more: true,
+            next_cursor_unavailable: "not_a_draft",
+          });
 
           // A cursor past its ten minutes, one sent with other inputs, a position written by hand,
           // or a cursor in a form the host never signs ends the run before the site.

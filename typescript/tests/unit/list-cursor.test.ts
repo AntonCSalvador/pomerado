@@ -228,6 +228,29 @@ describe("a cursor the host did not sign", () => {
       });
   });
 
+  it("never reaches the caller as a tool's next cursor, which the host would refuse", () => {
+    const legacy = { query: "lamps" };
+    const more = { results: [], next_cursor: "page=3", has_more: true };
+    expect(sealListOutput(more, legacy, scope())).toEqual({
+      output: {
+        results: [],
+        next_cursor: null,
+        next_cursor_expires_at: null,
+        has_more: true,
+        next_cursor_unavailable: "not_a_draft",
+      },
+      dropped: "not_a_draft",
+    });
+    // A tool that says the list has no more keeps saying so, with no reason for a missing cursor.
+    const ended = { results: [], next_cursor: "page=3", has_more: false };
+    expect(sealListOutput(ended, legacy, scope())).toEqual({
+      output: { results: [], next_cursor: null, next_cursor_expires_at: null, has_more: false },
+      dropped: "not_a_draft",
+    });
+    const none = { results: [], next_cursor: null, has_more: false };
+    expect(sealListOutput(none, legacy, scope())).toEqual({ output: none });
+  });
+
   it("names another host version for a cursor in another version's form", () => {
     expect(admitListCursor({ ...input, cursor: "pc2.k1.body.signature" }, scope())).toMatchObject({
       ok: false,
