@@ -210,8 +210,7 @@ as the applied chip, the selected control or the results' own state, and compare
 the input, or the option a proper noun matched, normalized for case, accents, whitespace and
 punctuation. A detail
 read also checks the page's stable identity (.agents/core/SKILL.md). Building or repairing a search or listing tool: read
-.agents/search/SKILL.md before you settle its inputs. Building a tool that reads or writes
-records or table rows in an app: read .agents/records/SKILL.md before you settle its output.
+.agents/search/SKILL.md before you settle its inputs.<!-- pomerado:section agents.user-defined-fields -->
 
 **Load large content progressively.** Know a file's size before reading it:<!-- pomerado:section agents.file-lengths --> every `read_source` result gives
 the file's `total`. Read a large file in parts with `read_source` offset and limit. From a
