@@ -5,6 +5,7 @@ import {
   cursorPairOf,
   decodeCasesFile,
   judgeCase,
+  liveTestsEvidence,
   primaryListOf,
   signedInTestInputRefusal,
   testInputKey,
@@ -242,5 +243,73 @@ describe("the signed-in test input bound", () => {
     // A batch that would add two inputs when one is left runs nothing.
     expect(signedInTestInputRefusal([first], [{ query: "desk" }, { query: "chair" }])).toBeDefined();
     expect(signedInTestInputRefusal([], [combined, { query: "desk" }, { query: "chair" }])).toBeDefined();
+  });
+});
+
+describe("liveTestsEvidence", () => {
+  const failedThenDeleted = {
+    id: "sort-price",
+    caseDigest: "case",
+    sourceDigest: "earlier",
+    verdict: "fail" as const,
+    got: "TimeoutError",
+    frame: "src/tool.ts:12",
+    durationMs: 1,
+    input: { query: "lamp", sort: "price_low" },
+    expect: "result" as const,
+  };
+
+  // Running out of time for live tests leaves gaps to the rationale, never a failure: a source fix
+  // and a passing case of its input still clear it, so it keeps counting.
+  it("keeps a deleted failure counting, with a source fix as its way out, when time ran out", () => {
+    const { record, coverage } = liveTestsEvidence({
+      file: { cases: [] },
+      outOfTime: true,
+      versions: [
+        {
+          version: "playwright",
+          sourceDigest: "published",
+          records: new Map([[failedThenDeleted.id, failedThenDeleted]]),
+          inputSchema: { type: "object", properties: { query: { type: "string" } } },
+        },
+      ],
+    });
+    expect(record).toMatchObject({ outOfTime: true });
+    expect(record.retired).toEqual([
+      expect.objectContaining({
+        id: "sort-price",
+        lastVerdict: "fail",
+        clearedBy: expect.objectContaining({ ways: expect.arrayContaining(["excusedBy"]) }),
+      }),
+    ]);
+    expect(record.retired[0]).not.toHaveProperty("outsideSchema");
+    expect(coverage).toContain("1 of those failures still counts.");
+  });
+
+  // A host that read no input schema cannot mark a failure outsideSchema, so the record never
+  // offers that way out.
+  it("offers no schema bound as a way out when the host read no input schema", () => {
+    const failed = {
+      id: "deleted-case",
+      caseDigest: "case",
+      sourceDigest: "earlier",
+      verdict: "fail" as const,
+      got: "TimeoutError",
+      durationMs: 1,
+      input: { query: "lamp" },
+      expect: "result" as const,
+    };
+    const { record } = liveTestsEvidence({
+      file: { cases: [] },
+      versions: [
+        { version: "playwright", sourceDigest: "published", records: new Map([[failed.id, failed]]) },
+      ],
+    });
+    expect(record.retired).toEqual([
+      expect.objectContaining({
+        id: "deleted-case",
+        clearedBy: expect.objectContaining({ ways: ["changedExpectationBy", "excusedBy"] }),
+      }),
+    ]);
   });
 });
