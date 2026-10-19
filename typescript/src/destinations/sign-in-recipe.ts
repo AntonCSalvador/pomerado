@@ -237,14 +237,18 @@ export interface SignInRequest {
 }
 
 /**
- * Each run of two or more one-character values among `values`, in order, joined: what a code split
- * across one-character boxes is once its boxes go out as separate values.
+ * Of each run of consecutive one-character values among `values`, every stretch exactly as long as
+ * a code split across boxes (`lengths`), joined in order: what such a code is once its boxes go out
+ * as separate values. A one-character value beside the boxes, such as a checkbox's `1`, stays out of
+ * the code.
  */
-const oneCharacterRuns = (values: readonly unknown[]): string[] => {
+const oneCharacterRuns = (values: readonly unknown[], lengths: readonly number[]): string[] => {
   const runs: string[] = [];
   let run: string[] = [];
   const end = () => {
-    if (run.length > 1) runs.push(run.join(""));
+    for (const length of lengths)
+      for (let start = 0; start + length <= run.length; start++)
+        runs.push(run.slice(start, start + length).join(""));
     run = [];
   };
   for (const value of values) {
@@ -257,29 +261,47 @@ const oneCharacterRuns = (values: readonly unknown[]): string[] => {
 };
 
 /** The one-character runs (`oneCharacterRuns`) of a JSON value's arrays and objects, at any depth. */
-const jsonRuns = (value: unknown): string[] => {
+const jsonRuns = (value: unknown, lengths: readonly number[]): string[] => {
   if (typeof value !== "object" || value === null) return [];
   const values = Array.isArray(value) ? (value as unknown[]) : Object.values(value);
-  return [...oneCharacterRuns(values), ...values.flatMap(jsonRuns)];
+  return [
+    ...oneCharacterRuns(values, lengths),
+    ...values.flatMap((item) => jsonRuns(item, lengths)),
+  ];
 };
 
 /**
  * The texts a request carries a code split across one-character boxes in when it sends each box as
- * a value of its own, as a form that posts each box as its own field does: each run of two or more
- * consecutive one-character values, joined in order, of the URL's query, of a form-encoded body
- * and of a JSON body's arrays and objects. A code sent whole is in the request's own text already.
- * Held in memory only, like the request's body, and never logged.
+ * a value of its own, as a form that posts each box as its own field does: each stretch of
+ * consecutive one-character values as long as a pending code (`lengths`), joined in order, of the
+ * URL's query, of a form-encoded body and of a JSON body's arrays and objects. A code sent whole is
+ * in the request's own text already. Held in memory only, like the request's body, and never
+ * logged.
  */
-const splitCodeTexts = (request: Pick<SignInRequest, "url" | "body">): string[] => {
+const splitCodeTexts = (
+  request: Pick<SignInRequest, "url" | "body">,
+  lengths: readonly number[],
+): string[] => {
+  if (lengths.length === 0) return [];
   const params = (search: string) => [...new URLSearchParams(search).values()];
   const query = URL.parse(request.url)?.search ?? "";
   const body = request.body ?? "";
   const parsed = Either.try(() => JSON.parse(body) as unknown);
   const fromBody = Either.isRight(parsed)
-    ? jsonRuns(parsed.right)
-    : oneCharacterRuns(params(body));
-  return [...new Set([...oneCharacterRuns(params(query)), ...fromBody])];
+    ? jsonRuns(parsed.right, lengths)
+    : oneCharacterRuns(params(body), lengths);
+  return [...new Set([...oneCharacterRuns(params(query), lengths), ...fromBody])];
 };
+
+/** The lengths, in characters, of the pending codes long enough to have been typed one per box. */
+const pendingCodeLengths = (record: SignInRecord) => [
+  ...new Set(
+    [...record.pending]
+      .filter(([slot]) => slot === "code")
+      .map(([, value]) => Array.from(value).length)
+      .filter((length) => length > 1),
+  ),
+];
 
 /** Whether `texts` carry every expected value; the host's matching of registered values. */
 export type SecretMatcher = (
@@ -422,7 +444,11 @@ export const noteFormSubmit = (
   Effect.gen(function* () {
     const watch = record?.watch;
     if (record === undefined || watch === undefined) return [];
-    const texts = [request.url, request.body ?? "", ...splitCodeTexts(request)];
+    const texts = [
+      request.url,
+      request.body ?? "",
+      ...splitCodeTexts(request, pendingCodeLengths(record)),
+    ];
     const carried: AutofillSlot[] = [];
     const script = scriptRequest(watch, sentAt, request);
     const judged = sentAsJudged(watch, sentAt, request);
