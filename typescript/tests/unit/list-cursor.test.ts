@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { Effect } from "effect";
+import { Cause, Effect, Exit, Option, Schema } from "effect";
 import { readFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { describe, expect, it } from "vitest";
@@ -12,10 +12,16 @@ import {
   type ListCursorKeys,
   type ListCursorScope,
 } from "../../src/runtime/list-cursor.js";
+import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
+import { Deadline } from "../../src/runtime/deadline.js";
+import { defineOperation, executeOperation } from "../../src/runtime/operation.js";
+import { operationErrors } from "../../src/runtime/operation-failure.js";
 import {
   finishList,
   listCursorMaxLength,
   listCursorTtlMs,
+  listInputFields,
+  listOutputFields,
   listSeenMax,
   selectRows,
   startList,
@@ -278,6 +284,69 @@ describe("a cursor the host did not sign", () => {
     expect(() =>
       startList(hosted({ ...input, cursor: "page=2" }), { mechanism: "pages" }),
     ).toThrow(expect.objectContaining({ name: "InvalidInput", field: "cursor", kind: "malformed" }));
+  });
+});
+
+describe("an Effect operation's list", () => {
+  // An HTTP version is an Effect operation: its list's refusal reaches the host as the typed
+  // refusal, as a Kernel script's does, never as a defect.
+  const listTool = (mechanism: ListMechanism) =>
+    defineOperation({
+      name: "search_lamps",
+      input: Schema.Struct({ query: Schema.String, ...listInputFields }),
+      output: Schema.Struct({ results: Schema.Array(Schema.String), ...listOutputFields }),
+      run: (value) =>
+        Effect.gen(function* () {
+          const list = startList(value, { mechanism });
+          const page = finishList(list, {
+            rows: [],
+            keyOf: String,
+            next: null,
+            hasMore: false,
+            totalResults: null,
+            listChanged: false,
+          });
+          return { results: [], ...page };
+        }),
+    });
+  const execute = (mechanism: ListMechanism, value: object, list: ListHost) =>
+    Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const journal = yield* makeEffectJournal;
+        return yield* Effect.scoped(executeOperation(listTool(mechanism), value, { list })).pipe(
+          Effect.provideService(ExecutionContext, {
+            deadline: Deadline.after(),
+            journal,
+            events: { emit: () => Effect.void },
+            capture: { start: Effect.void, finish: Effect.void },
+          }),
+        );
+      }),
+    );
+  const failureOf = (exit: Exit.Exit<unknown, unknown>) => {
+    if (!Exit.isFailure(exit)) throw new Error("the run succeeded");
+    const failure = Cause.failureOption(exit.cause);
+    if (Option.isNone(failure)) throw new Error(`not a typed failure: ${Cause.pretty(exit.cause)}`);
+    return failure.value;
+  };
+
+  it("fails with the typed refusal for a cursor from before the tool paged another way", async () => {
+    const value = { ...input, cursor: cursorOf(pageOne()) };
+    const admitted = admitListCursor(value, scope());
+    if (!admitted.ok) throw new Error(`refused: ${admitted.reason}`);
+    const failure = failureOf(await execute("append", value, admitted.list));
+    expect(failure).toBeInstanceOf(operationErrors.InvalidInput);
+    expect(failure).toMatchObject({
+      field: "cursor",
+      kind: "mechanism_changed",
+      message: expect.stringContaining("This tool now pages the site another way"),
+    });
+  });
+
+  it("fails with the typed refusal for a cursor its host did not check", async () => {
+    const failure = failureOf(await execute("pages", { ...input, cursor: "page=2" }, {}));
+    expect(failure).toBeInstanceOf(operationErrors.InvalidInput);
+    expect(failure).toMatchObject({ field: "cursor", kind: "malformed" });
   });
 });
 

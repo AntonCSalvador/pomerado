@@ -82,6 +82,23 @@ export const loginFieldKeys = {
  * address, an email-shaped username (a site whose usernames are emails). A username of digits is
  * never taken as the phone number: it is as often a member number.
  */
+/**
+ * Whether a login's username is a username of its own. A login saved without one keeps its
+ * primary identifier, an email address, phone number or account number, as its username and under
+ * its own key, so a username equal to one of its identifiers is that identifier: a sign-in types it
+ * into a field that takes that kind, or a username alone.
+ */
+export const separateUsername = (login: {
+  readonly username: string;
+  readonly email?: string | undefined;
+  readonly phone?: string | undefined;
+  readonly accountNumber?: string | undefined;
+}) =>
+  login.username !== "" &&
+  login.username !== login.email &&
+  login.username !== login.phone &&
+  login.username !== login.accountNumber;
+
 export const heldField = (
   field: AnsweredLoginField,
   credentials: WebsiteCredentials,

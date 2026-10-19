@@ -225,7 +225,11 @@ export const localSignInLogin = (options: {
 }): SignInLogin<MintFailure> => {
   let held: WebsiteCredentials | undefined;
   // The first ask may be declined: the owner has no account, or wants the public part only.
-  const askLogin = (reason: "missing_credentials" | "invalid_credentials", username?: string) =>
+  const askLogin = (
+    reason: "missing_credentials" | "invalid_credentials",
+    username?: string,
+    triesLeft?: number,
+  ) =>
     Effect.gen(function* () {
       const answers = yield* options
         .ask({
@@ -236,7 +240,7 @@ export const localSignInLogin = (options: {
             {
               id: "login",
               type: "credential",
-              prompt: credentialPrompt(reason),
+              prompt: credentialPrompt(reason, triesLeft),
               fields: "username_password",
               reason,
               allowSave: false,
@@ -266,6 +270,7 @@ export const localSignInLogin = (options: {
     values: Effect.suspend(() =>
       held === undefined ? askLogin("missing_credentials") : Effect.succeed(held),
     ),
-    correct: (_field, rejected) => askLogin("invalid_credentials", rejected.username),
+    correct: (_field, rejected, triesLeft) =>
+      askLogin("invalid_credentials", rejected.username, triesLeft),
   };
 };

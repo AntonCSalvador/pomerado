@@ -6,12 +6,11 @@ import { makeInputAsker } from "../../src/inputs/callback.js";
 import { makeRunSecrets } from "../../src/inputs/secrets.js";
 import type { SignInRequest } from "../../src/destinations/sign-in-recipe.js";
 import { signInForRun } from "../../src/runtime/sign-in-replay.js";
-import { askingValueHooks } from "../../src/runtime/sign-in-values.js";
 import { expectNotCarried, hostKeyboard, hostPage } from "./autofill-host-page.js";
 
 // A run's sign-in whose code screen is six one-character boxes with no form and no button, whose
 // own script sends the code once every box holds a digit. The run asks for the code once, types
-// one digit in each box, and counts the code as sent once the page's request carries it whole.
+// one digit in each box, and counts the code as sent once the boxes' screen sent itself.
 
 const site = "https://bank.example.test";
 const host = "bank.example.test";
@@ -165,8 +164,8 @@ const run = async (
           typing: { typed: false },
         }),
         login: localSignInLogin({ ask, register: secrets.register, siteOrigin: site }),
-        values: askingValueHooks({ ask, register: secrets.register, site: host, siteOrigin: site }),
-        carries: secrets.carries,
+        ask,
+        secrets,
         site: host,
         siteOrigin: site,
         timing: { stepWaitMs: 8_000, pollMs: 250 },
@@ -178,7 +177,7 @@ const run = async (
 };
 
 const codePrompt = `Enter the sign-in code ${host} sent you.`;
-const refusedPrompt = `The site did not accept the last code, so it needs a new one. ${codePrompt}`;
+const refusedPrompt = `The site refused the last code. Enter the newest sign-in code ${host} sent you.`;
 
 test("a run signs in through six code boxes that send themselves, asking for the code once, and the site gets it once", async ({
   page,
@@ -202,16 +201,18 @@ test("a run asks for one new code, saying the site refused the last, when six co
   expect(sent).toEqual(["135791", code]);
 });
 
-test("a run never says the site refused a code that six code boxes only seemed to send", async ({
+test("a run takes six code boxes that only seemed to send a code and show again as a refused code, and the site gets none", async ({
   page,
 }) => {
   const { sent } = await serve(page, true);
   const { result, prompts } = await run(page, [code, "135791"]);
+  // The boxes went away after the last digit, so the code counts as sent: the run cannot tell a
+  // widget that sent nothing from a site that refused the code. A code is tried at most twice.
   expect(result).toMatchObject({
     _tag: "Left",
-    left: { code: "RecipeFailed", reason: "sign_in_check_failed" },
+    left: { code: "CredentialsRejected", reason: "code" },
   });
-  expect(prompts).toEqual(["login", codePrompt]);
+  expect(prompts).toEqual(["login", codePrompt, refusedPrompt, refusedPrompt]);
   expect(sent).toEqual([]);
 });
 
@@ -222,7 +223,8 @@ test("a run types nothing into six code boxes for a code that does not fit them"
     _tag: "Left",
     left: { code: "NeedsInput", reason: "sign_in_value" },
   });
-  expect(prompts).toEqual(["login", codePrompt]);
+  // A code that does not fit the boxes is asked twice more, then the step goes unanswered.
+  expect(prompts).toEqual(["login", codePrompt, codePrompt, codePrompt]);
   expect(sent).toEqual([]);
   for (const box of [1, 2, 3, 4, 5, 6]) await expect(page.locator(`#otp-${box}`)).toHaveValue("");
 });

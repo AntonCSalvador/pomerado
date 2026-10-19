@@ -1,0 +1,381 @@
+import { Clock, Duration, Effect } from "effect";
+import type { YieldableError } from "effect/Cause";
+import type { AutofillRecipeStep } from "../destinations/autofill-recipe.js";
+import type {
+  AutofillInspection,
+  AutofillRefusal,
+  AutofillSignedInCheck,
+  AutofillStep,
+  AutofillStepRequest,
+} from "../destinations/autofill-step.js";
+import { callFailure } from "../destinations/autofill-refusal-evidence.js";
+import { pageCallFailure, report } from "./sign-in-telemetry.js";
+import type { AutofillHooks } from "./autofill-state.js";
+import type { AutofillReplayInput, AutofillReplayTiming } from "./autofill-replay-steps.js";
+
+import {
+  cantTell,
+  landingSettleMs,
+  leftSignInScreens,
+  settledSessionLanding,
+  stillOff,
+  type OffScreens,
+} from "./autofill-replay-pages.js";
+
+/**
+ * Which pages are the recorded screens: by default each screen's exact recorded page; a replay of a
+ * tool with a workspace relation puts its workspace screens on the login's workspace origin.
+ */
+export interface ReplayScreens {
+  readonly onScreens: (page: string) => boolean;
+  readonly matches: (page: string, recorded: AutofillRecipeStep) => boolean;
+}
+
+const exactScreens = (steps: readonly AutofillRecipeStep[]): ReplayScreens => {
+  const pages = new Set(steps.map((step) => step.page));
+  return {
+    onScreens: (page) => pages.has(page),
+    matches: (page, recorded) => page === recorded.page,
+  };
+};
+
+/** A later page or ready credential fields prove progression; a coincident same-page button cannot. */
+const inspectReplayProgression = <E>(
+  hooks: Pick<AutofillHooks<E>, "inspect">,
+  currentPage: string,
+  current: AutofillStep,
+  alternatives: readonly AutofillStep[],
+  later: readonly AutofillRecipeStep[],
+  resolve: (request: AutofillStepRequest) => AutofillStep,
+  screens: ReplayScreens,
+) =>
+  Effect.gen(function* () {
+    for (const alternative of alternatives) {
+      const found = yield* hooks.inspect(alternative);
+      if (!("outcome" in found)) return { found } as const;
+    }
+    for (const recorded of later) {
+      const probes =
+        recorded.methods === undefined
+          ? [resolve(recorded)]
+          : recorded.methods.map((method) => ({
+              fields: [],
+              submit: method.selector,
+              ...(recorded.popup === undefined ? {} : { popup: recorded.popup }),
+            }));
+      for (const probe of probes) {
+        const found = yield* hooks.inspect(probe);
+        if (
+          !("outcome" in found) &&
+          screens.matches(found.page, recorded) &&
+          (found.page !== currentPage ||
+            (current.fields.length > 0 &&
+              probe.fields.some(
+                (field) => !current.fields.some((previous) => previous.selector === field.selector),
+              )))
+        )
+          return { next: recorded } as const;
+      }
+    }
+    return undefined;
+  });
+
+/**
+ * How long a screen check whose page call failed waits before its one retry: the call can fail
+ * while a single-page app is still starting, such as a frame that detaches mid-scan.
+ */
+const pageErrorSettleMs = 1_000;
+
+/** A failed page call's own error goes to the failure archive; its step event keeps the reason. */
+const reportCallFailure = (
+  input: Pick<AutofillReplayInput, "correlation">,
+  inspected: AutofillInspection | AutofillRefusal,
+) => {
+  const detail = "outcome" in inspected ? callFailure(inspected) : undefined;
+  return detail === undefined
+    ? Effect.void
+    : report.failure(pageCallFailure(detail), {
+        component: "worker",
+        operation: "autofill.inspect",
+        phase: "autofill_replay",
+        subCause: "autofill_step_failed",
+        correlation: input.correlation,
+      });
+};
+
+/** Inspect a screen, once more after a short settle when its page call failed. */
+const inspectSettled = <E extends YieldableError, V extends string>(
+  input: Pick<AutofillReplayInput<E, V>, "hooks" | "emit" | "correlation">,
+  step: AutofillStep,
+) =>
+  Effect.gen(function* () {
+    const inspected = yield* input.hooks.inspect(step);
+    if (!("outcome" in inspected) || inspected.reason !== "page_unavailable") return inspected;
+    yield* reportCallFailure(input, inspected);
+    yield* input.emit({ stage: "retried", reason: inspected.reason });
+    yield* Effect.sleep(Duration.millis(pageErrorSettleMs));
+    const retried = yield* input.hooks.inspect(step);
+    yield* reportCallFailure(input, retried);
+    return retried;
+  });
+
+type ChallengeGate<V extends string> = NonNullable<AutofillHooks<unknown, V>["challenge"]>;
+/**
+ * Runs the challenge gate's look at the page and, once it cleared a challenge, may send the screen
+ * the replay last submitted again before the awaited screen's wait goes on.
+ */
+export type ClearThenResubmit<E = unknown, V extends string = string> = (
+  gate: ChallengeGate<V>,
+  awaited: AutofillStep,
+) => Effect.Effect<Effect.Effect.Success<ChallengeGate<V>>, E>;
+
+/**
+ * A screen's wait at its deadline. A screen still missing then may sit behind a challenge the site
+ * put up after the last submit, which no change to the recipe gets past: before the replay ends on
+ * it, a host with a challenge look (`challenge`) looks at the page and works a challenge it
+ * confirms there. A cleared challenge may first let the screen the replay last submitted be sent
+ * again (`resubmit`), before the wait's next check would read that screen showing again as the
+ * site's answer (`credential_screen_returned`), then gives the awaited screen its own wait again;
+ * one the host could not clear ends the replay as `challenge_unsolved`, its vendor kept in
+ * `progress`.
+ */
+const atDeadline =
+  <E, V extends string>(
+    hooks: Pick<AutofillHooks<E, V>, "challenge">,
+    progress: { challenge?: V | undefined },
+    stepWaitMs: number,
+    resubmit: ClearThenResubmit<E, V>,
+  ) =>
+  (missing: AutofillRefusal, until: number, awaited: AutofillStep) =>
+    Effect.gen(function* () {
+      if ((yield* Clock.currentTimeMillis) < until) return { until } as const;
+      const challenge =
+        missing.reason === "not_found" && hooks.challenge !== undefined
+          ? yield* resubmit(hooks.challenge, awaited)
+          : undefined;
+      if (challenge === undefined) return { end: { found: missing } as const } as const;
+      if (challenge.outcome === "failed") {
+        progress.challenge = challenge.vendor;
+        return { end: "challenge_unsolved" as const } as const;
+      }
+      return { until: (yield* Clock.currentTimeMillis) + stepWaitMs } as const;
+    });
+
+/**
+ * A sign-in that may end on a page that can't tell, with nothing sent, went past the screens once
+ * the page left them and the entry page, stayed put a moment and can't tell, as a site's login page
+ * sends a signed-in browser to its account picker. The last check decides from that page.
+ */
+const landedCantTell = <E extends YieldableError, V extends string>(
+  input: Pick<AutofillReplayInput<E, V>, "hooks" | "recipe">,
+  sent: boolean,
+  off: OffScreens | undefined,
+  now: number,
+  here: AutofillSignedInCheck,
+  screens: ReplayScreens,
+) =>
+  !sent &&
+  input.hooks.confirmCantTell !== undefined &&
+  off !== undefined &&
+  now - off.since >= landingSettleMs &&
+  cantTell(here, input.recipe, screens.onScreens);
+
+/** Why a screen's wait ended past the screens, if it did. */
+const landedReason = (shown: boolean, sessionWent: boolean, cantTellLanding: boolean) =>
+  shown
+    ? "signed_in_indicator"
+    : sessionWent
+      ? "landing_check_required"
+      : cantTellLanding
+        ? "cant_tell_landing"
+        : undefined;
+
+/** What a screen's wait reads and sets of the replay's progress. */
+type ScreenWaitProgress<V extends string> = {
+  readonly anythingSent: boolean;
+  /** The recorded steps that ran, fieldless clicks included. */
+  readonly ran: readonly AutofillStep[];
+  challenge?: V | undefined;
+  alreadySignedIn?: boolean;
+};
+
+/**
+ * The saved session's account-page check, run at most once per replay while it waits for the
+ * recipe's first screen with no step run yet: some sites show a signed-in browser a page of their
+ * own at the login address, such as their public front page, with no sign-in form, no marker and
+ * no redirect, so the page neither shows the screen nor leaves the entry. Once the page stayed put
+ * that long without the screen, or before the screen's wait would end at its deadline, the
+ * recipe's account page decides: passing, the profile was already signed in; failing, the entry
+ * opens again, which is where that wait started, and the wait goes on. A later screen's wait never
+ * runs it: reopening the entry would undo a recorded click, such as a "Log in" link.
+ */
+const makeSessionCheck = <E extends YieldableError, V extends string>(
+  input: Pick<AutofillReplayInput<E, V>, "hooks" | "recipe" | "entryUrl" | "emit">,
+  progress: ScreenWaitProgress<V>,
+  check: Effect.Effect<boolean, E> | undefined,
+) => {
+  let ran = false;
+  // The page where the screen is missing, and since when it stayed there.
+  let stayed: OffScreens | undefined;
+  return (url: string | undefined, now: number, until: number) =>
+    Effect.gen(function* () {
+      stayed = stillOff(stayed, url, now);
+      if (
+        ran ||
+        check === undefined ||
+        progress.anythingSent ||
+        progress.ran.length > 0 ||
+        input.recipe.signedIn.openPath === undefined ||
+        (now < until && (stayed === undefined || now - stayed.since < landingSettleMs))
+      )
+        return false;
+      ran = true;
+      if (yield* check) {
+        progress.alreadySignedIn = true;
+        yield* input.emit({ stage: "skipped", reason: "saved_session_signed_in" });
+        return true;
+      }
+      yield* input.hooks.open(input.entryUrl);
+      return false;
+    });
+};
+
+/** A screen's wait at each poll: the saved session's check (`makeSessionCheck`), then its deadline. */
+const sessionThenDeadline = <E extends YieldableError, V extends string>(
+  input: Pick<AutofillReplayInput<E, V>, "hooks" | "recipe" | "entryUrl" | "emit">,
+  progress: ScreenWaitProgress<V>,
+  timing: AutofillReplayTiming,
+  resubmit: ClearThenResubmit<E, V>,
+  check: Effect.Effect<boolean, E> | undefined,
+) => {
+  const sessionCheck = makeSessionCheck(input, progress, check);
+  const deadline = atDeadline(input.hooks, progress, timing.stepWaitMs, resubmit);
+  return (
+    missing: AutofillRefusal,
+    until: number,
+    awaited: AutofillStep,
+    url: string | undefined,
+  ) =>
+    Effect.gen(function* () {
+      if (yield* sessionCheck(url, yield* Clock.currentTimeMillis, until))
+        return { end: "signed_in" as const } as const;
+      return yield* deadline(missing, until, awaited);
+    });
+};
+
+/**
+ * Waits for the recorded stage to become ready, or for evidence of a later stage or landing, and
+ * at its deadline lets the challenge gate look for a challenge hiding the screen (`atDeadline`).
+ * A saved session's account-page check (`sessionCheck`) may end a wait that sent nothing.
+ */
+export const makeReplayScreenWait = <
+  E extends YieldableError,
+  V extends string = string,
+  Rejection extends string = never,
+>(
+  input: Pick<AutofillReplayInput<E, V>, "hooks" | "recipe" | "entryUrl" | "emit" | "correlation">,
+  progress: ScreenWaitProgress<V>,
+  timing: AutofillReplayTiming,
+  resolve: (request: AutofillStepRequest) => AutofillStep,
+  rejection?: () => Effect.Effect<Rejection | undefined, E>,
+  resubmit: ClearThenResubmit<E, V> = (gate) => gate,
+  screens: ReplayScreens = exactScreens(input.recipe.steps),
+  sessionCheck?: Effect.Effect<boolean, E>,
+) => {
+  const { hooks, recipe } = input;
+  const leftSignIn = (url?: string) => leftSignInScreens(screens.onScreens, input.entryUrl, url);
+  const checkHere = hooks.check(
+    { selector: recipe.signedIn.selector, urlPath: recipe.signedIn.urlPath },
+    recipe.steps,
+  );
+  const now = Clock.currentTimeMillis;
+  const deadline = sessionThenDeadline(input, progress, timing, resubmit, sessionCheck);
+  /** Inspect the current stage, rejection evidence and proved later stages before timing a wait. */
+  const inspectStage = (
+    step: AutofillStep,
+    currentPage: string,
+    later: readonly AutofillRecipeStep[],
+    alternatives: readonly AutofillStep[],
+  ) =>
+    Effect.gen(function* () {
+      const inspected = yield* inspectSettled(input, step);
+      if (!("outcome" in inspected)) return { found: inspected } as const;
+      // Failing again, the page's signed-in check decides before the replay ends.
+      if (inspected.reason === "page_unavailable") return { pageError: inspected } as const;
+      if (
+        inspected.reason !== "not_found" &&
+        inspected.reason !== "not_editable" &&
+        inspected.reason !== "popup_missing"
+      )
+        return { found: inspected } as const;
+      if (rejection !== undefined) {
+        const rejected = yield* rejection();
+        if (rejected === "extra_retried") return rejected;
+        if (rejected !== undefined) return rejected;
+      }
+      const progressed = yield* inspectReplayProgression(
+        hooks,
+        currentPage,
+        step,
+        alternatives,
+        later,
+        resolve,
+        screens,
+      );
+      if (progressed !== undefined) {
+        if (progressed.found !== undefined) return { found: progressed.found } as const;
+        yield* input.emit({
+          stage: "skipped",
+          reason: "later_recorded_screen",
+          nextStep: recipe.steps.indexOf(progressed.next),
+        });
+        return "skipped" as const;
+      }
+      return { waiting: inspected } as const;
+    });
+  return (
+    step: AutofillStep,
+    until: number,
+    currentPage: string,
+    later: readonly AutofillRecipeStep[] = [],
+    alternatives: readonly AutofillStep[] = [],
+  ) =>
+    Effect.gen(function* () {
+      const left = { off: undefined as OffScreens | undefined };
+      let waitUntil = until;
+      while (true) {
+        const stage = yield* inspectStage(step, currentPage, later, alternatives);
+        if (stage === "extra_retried") continue;
+        if (typeof stage === "string") return stage;
+        if (stage.found !== undefined) return { found: stage.found } as const;
+        const inspected = stage.waiting ?? stage.pageError;
+        const here = yield* checkHere;
+        // Leaving the screens ends the wait for an account-page recipe: at once for a saved
+        // profile's session, before anything was sent; after a submit, once the page off them
+        // stayed put, so a passing page between two screens is waited out while a skipped one
+        // (a remembered device's code screen) is not, and the full check decides.
+        left.off = stillOff(left.off, leftSignIn(here.url) ? here.url : undefined, yield* now);
+        const sessionWent = settledSessionLanding(
+          recipe.signedIn.openPath,
+          left.off,
+          progress.anythingSent,
+          yield* now,
+        );
+        const landed = landedReason(
+          here.signedIn,
+          sessionWent,
+          landedCantTell(input, progress.anythingSent, left.off, yield* now, here, screens),
+        );
+        if (landed !== undefined) {
+          yield* input.emit({ stage: "skipped", reason: landed });
+          return "signed_in" as const;
+        }
+        // A bounded wait without observed progress stops the replay; a page error at once.
+        if (stage.pageError !== undefined) return { found: inspected } as const;
+        const next = yield* deadline(inspected, waitUntil, step, here.url);
+        if ("end" in next) return next.end;
+        waitUntil = next.until;
+        yield* Effect.sleep(Duration.millis(timing.pollMs));
+      }
+    });
+};
