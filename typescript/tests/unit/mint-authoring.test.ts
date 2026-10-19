@@ -205,7 +205,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   ["core", "- The code works for every value the schema accepts."],
   [
     "core",
-    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. When more than one option matches, list them for the caller instead of picking one.",
+    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. When more than one option matches, a read takes the first in the site's order and returns the one it used, and a write lists them for the caller instead of picking one.",
   ],
   ["core", "Take the site origin from the context's `siteOrigin`."],
   ["core", "The tools and the files you may edit are in `AGENTS.md`."],
@@ -837,7 +837,7 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["a61a9a9d7e291eae077fb7835c379573b30016c3424b3cc92e783ec4dcfc2fa2", "core"],
+    ["d4b766d376a317868c1d08a0305c8e79eed576c17060aa9cd78aab4ab3519aff", "core"],
     ["fb27753b30c3e53a0a51b07b13eedfbae2555e4abb861fe287a7f9d352018a7a", "search"],
     ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
     ["3c50b8548da85efbdeb173ff0e13969053a7cff6208ce8297bbac6ad8361360e", "testing"],
@@ -846,7 +846,7 @@ it("renders the pinned standalone authoring", async () => {
     ["f17ddc96cd999764d5a203416b2318b43366bcbc7b3ae3e6912a4a35a720c2e4", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["27752e5db7ec53b24e144dcc77f4bc2dedc84e613177964cbdd2a685fa552121", "caller-input"],
-    ["e3f1bf2ec18dc6285b34e01ed9c3b95ba8d3cf41e2a8eb0a7cdd3540b6948848", "publication"],
+    ["b4e90c672c882c2f2193be9e4b38be12be954b0a329fc4c1f240b9e2cf712aa0", "publication"],
     ["69a275fc44bc2bd80f12148f34daf4e35ab119aaab0b125edb24cf628459272d", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);

@@ -239,7 +239,8 @@ exception: it is optional unless the task can't run without it (below).
   match that accepts the usual forms of the same name, such as a name with or without its
   accents (Abaca for Abacá), a city alone or with its state and country, or a company with
   or without Ltd. or Inc. Never require an exact match.
-  When more than one option matches, list them for the caller instead of picking one.
+  When more than one option matches, a read takes the first in the site's order and returns
+  the one it used, and a write lists them for the caller instead of picking one.
 - On a write, every choice the session met is an input: each option on the path,
   add-ons and pre-selected defaults included, except one the request or an answer settled,
   which is the tool's default (above). A costly choice, one that changes what the caller
