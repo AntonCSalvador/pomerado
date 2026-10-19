@@ -6,9 +6,9 @@ description: Design and run a few combined live test cases for a read. A read si
 # Test a read with a few combined cases
 
 This skill is for reads. A write does the original task: it proves its tool with its act session
-(writes skill), designs no tests, runs no live test and builds no offline test suite, and checks
-its HTTP version once, against that session (http-mcp skill). A read proves its operation with its
-example, run again after each fix as the core skill says, then tests what the example did not
+(writes skill), designs no tests, runs no live test and builds no offline test suite<!-- pomerado:section testing.write-http-check -->. It still checks its
+composed script's read-back and comparison offline over what the session read (writes skill). A
+read proves its operation with its example, run again after each fix as the core skill says, then tests what the example did not
 exercise with a few live cases, each designed to cover as much as it can. A read signed out runs a
 handful (below). A signed-in read runs at most two distinct inputs beyond its example: one
 combined filter case, and a second only when it needs one (Signed-in reads, below). Report what
@@ -23,7 +23,8 @@ inputs. Offline cases may use isolated workers; a live test is one read-only flo
 like the example: the site origin page, with the browser's cookies and site storage kept. So
 the tool sets every value its input controls itself, never relying on what the site remembers.
 A read proves its operation with purpose=example and iterates from that start; running the
-example or a live test again is normal.
+example or a live test again after a fix is normal, but keep rounds few: fix everything a run
+shows before you run again (Run and fix the cases, below).
 
 ## The combined case
 
@@ -70,9 +71,7 @@ own signed-in browser, one at a time and warm, never on a new browser. Each case
 under the signed-in session rules that already apply to the example: it saves no record, view or
 setting, and a filter the site saves with a view or setting goes through the page's own row query
 or is restored in the same step, as the workspace guide says. Design no other cases: no example
-run cold, no no-results case and no edge cases.
-Check `src/tool-http.mjs` once against the example's input (execute purpose `test`, target
-`liveBrowser`, no `testInput`), and run the combined case on it too. Publication review reads
+run cold, no no-results case and no edge cases.<!-- pomerado:section testing.signed-in-http --> Publication review reads
 the host's record of the cases you ran signed in, judges a failing case as a bug, and treats
 what you did not test as disclosure, not a gap. Then go on at "Run and fix the cases", below.
 
@@ -143,9 +142,10 @@ Write them in `test/cases.json`:
 `purpose` says in a sentence what the case establishes. `expect` is `result`, `empty`,
 `invalid_input` or `error`: a loud refusal the tool throws on purpose, `InputNotApplied`; any
 other throw is a bug and fails the case. Expect `empty`, `invalid_input` or `error` only for an
-input the site really has no results for, does not offer or cannot apply, or a blank or over-long
-value the input schema refuses; an input that tailors the answer and that the site won't apply
-expects `result`, labeled with the applied value. Apart from a made-up value in the no-results
+input the site really has no results for, does not offer or cannot apply; a value the input schema
+refuses, such as a blank or over-long one, needs no case, since the schema bound is its test. An
+input that tailors the answer and that the site won't apply expects `result`, labeled with the
+applied value. Apart from a made-up value in the no-results
 case, use real values the site offers, which you saw while
 exploring: listed options, places, dates, counts, records and retailers the site lists. Never use
 a person's, account's or record's name, number or code, and never the caller's own values beyond
@@ -165,17 +165,27 @@ relies on something the site remembered: set that value from the input. You get 
 error with the source line that threw. Name cases in action `plan` to read their full outputs,
 and check what they mean, not just pass or fail: every item matches the filters, the order follows
 the sort, the applied location is the one asked for or labeled as another, page 2 differs from
-page 1. A failing case is a bug in the tool: fix the code at that line. Never drop the input, narrow the schema or change a
-case's expectation to match what it returned to make it pass; fix the code. The one exception
-is a case that expected an answer the site itself does not give for that input, such as `result`
-where the site shows its own no-results page: confirm it in a capture of a page reached through
-the site's own controls or a URL they produce, that reads back the input as the site applied it
-and shows the site's no-results state, never a challenge, error, sign-in, blocked or loading
-page. Then change the expectation to what the site shows, and name that capture in the case's
-`purpose` and in `coverage`; review accepts the change only against it. While a fix is in
-progress, prefer rerunning only the failing cases, all of them together in one batch named in
-`cases`, not one batch each: a batch of every case waits on its slowest case, each batch waits on
-its own review, and the cases that passed run again once after your last edit. A
+page 1. A failing case is a bug in the tool: fix the code at that line. Never drop the input,
+narrow the schema except where the site itself bounds the value, or change a case's expectation
+to match what it returned to make it pass; fix the code. The one exception is a case that
+expected an answer the site itself does not give for that input. Confirm the site's own answer in
+a capture of the site's own controls or a URL they produce, never a challenge, sign-in, blocked or
+loading page: for `empty`, a page that reads back the input as the site applied it and shows the
+site's no-results state; for `result`, such a page listing the site's own results for it, such as
+near matches for a query nothing matches exactly; for `invalid_input` or `error`, the site's own
+form refusing that input, with its own validation message or, where the captures hold the site's
+responses, a 400, 413, 414 or 422 response to the request its form sent. A refusal of the request
+your tool made proves nothing, since that request can be wrong, and neither does a 401, 403, 404,
+405, 429 or 5xx. Then change the expectation to what the site shows, and name that capture in the
+case's `purpose` and in `coverage`; review accepts the change only against it. Where the site
+itself bounds a value, such as its own field's maximum length, put that bound in the input schema
+rather than a case. Before you run again,
+fix everything the batch revealed: read every failure and every output, and batch as many fixes
+as you can into one edit rather than one fix per run. Then rerun the failing cases and every case
+the fixes can touch, all of them together in one batch named in `cases`, in the same round on
+each version you ship whose source the fixes changed; a version you stopped fixing and will not
+ship needs none. Each batch waits on its slowest case and its own review, so aim for few
+rounds; the cases that passed run again once after your last edit. A
 run that returns partly filled results, or passes only when run again, is missing a wait for
 content: fix the wait, not the retry, then run that input again a few times.
 
@@ -190,16 +200,16 @@ missing wait: a styled checkbox or option whose click does not change its state,
 hydrates late, or a list that reloads and drops the choice. Stop reworking the click. Look at
 what the site did when that control did apply, in a probe or the captures where the host keeps
 them. When the results URL then carries the choice, apply it through that URL (`AGENTS.md`,
-"Work through the page's own controls"). When the page's own data request takes it as a field
-and its answer echoes what applied, apply it there in `src/tool-http.mjs`; when that version
-passes the cases, run the example on it, and the tool publishes `http` alone (http-mcp skill).
-That is a finished tool: stop fixing the Playwright version. Either way, read the input back
+"Work through the page's own controls").<!-- pomerado:section testing.data-request-filter --> Either way, read the input back
 from the site's committed state or the answer.
 
 After the example passes, read its returned fields once at the answer and again about 10 s later
 on the same page; a field that changed is filled late, so wait for it in source or describe it as
 live, such as a countdown. A run that sits idle after its answer showed, or opens controls its
-input did not use, works for more than it returns: trim it. Read every string in each result.
+input did not use, works for more than it returns: trim it. Where a run's result reports timing
+for each step, read it, and remove waits and round trips the answer does not need, such as a
+wait on a page no step changed or a probe repeated on every poll, never one the answer needs.
+A slow tool still publishes. Read every string in each result.
 After each run with output the host reports output checks: values that hold code, styles, markup
 or template leftovers, text read collapsed or cut short, a whole card's text, repeated entries or
 records, and fields that never vary or are always empty. Check each against the page: fix a wrong
@@ -218,25 +228,21 @@ case tests while time remained, holds publication back.
 Publication review starts only when at least 70% of the cases you ran on the code you publish pass. Inconclusive results count neither way.
 Deleting or changing a case after it failed does not hide the
 failure: the record keeps its last result as retired, and so does a failure that passes when run again on the same code, as
-flaky. When `live_tests` answers `no_time`, run the example last and publish; the record says time
+flaky. A rerun on the same code that ends inconclusive, such as a challenge, leaves the failure as
+the case's result. A retired failure stops counting only on what the host can check: a case that passes the
+same input after you change the code, with a result the old case's own expectation accepts
+(`excusedBy`; an `InvalidInput` refusal satisfies `error`), or an input schema bound on a value
+the input supplied (`outsideSchema`), which publication checks against the site's own field; a
+field the schema newly requires never counts. A case that now expects another answer for that
+input (`changedExpectationBy`) clears it only with a capture of the site's own answer for that
+exact input, as above, named in its `purpose`. Relabelling a case, or rebuilding it under new ids,
+clears nothing and adds another retired failure each time. The record's `clearedBy` says what can
+clear each failure that still counts. When `live_tests` answers `no_time`, run the example last and publish; the record says time
 ran out.
 
 When the host offers no `live_tests`, a read runs its cases one input at a time instead: execute
 purpose `test`, target `liveBrowser`, with `testInput`, the tool's input as JSON text; the host
-may limit how many. A signed-in read's inputs there count toward the same two.
-
-Test the HTTP version, `src/tool-http.mjs`, the same way as `src/tool.mjs`: run the same cases as
-a batch on it with `live_tests` entrypoint `src/tool-http.mjs`, in parallel, and fix it until
-every case passes on it (http-mcp skill). It need not wait for the Playwright version: when every
-case passes on the HTTP version, run the example on it and publish `http` alone, even while a case
-still fails on the Playwright version. Each version keeps its own result for each case: a batch on
-one never replaces or stales the other's, and `plan` shows the results of the entrypoint you name.
-The publication record shows each case's result on each version that ships, and the review judges
-each version from its own results; a version that does not ship is neither recorded nor judged. A
-test of `src/tool-http.mjs` counts for the HTTP version only for the source it ran. Where the host
-offers no `live_tests`, run its inputs one at a time with execute, entrypoint `src/tool-http.mjs`
-and `testInput`, and check `testInput` against the schema yourself first: a failed test marks the
-HTTP version's latest live test failed until a later one passes.
+may limit how many. A signed-in read's inputs there count toward the same two.<!-- pomerado:section testing.http-cases -->
 
 The example uses the caller's input, or your `exampleInput` when that input is empty, and offline
 tests always use the caller's input. If a test shows the schema must widen, widen it in source;

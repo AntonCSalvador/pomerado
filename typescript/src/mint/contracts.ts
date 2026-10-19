@@ -32,10 +32,13 @@ import {
   AutofillApproval,
   DateOfBirthFormat,
   IdentifierKinds,
+  maximumCodeBoxes,
   maximumStepFields,
   RejectedMarker,
   SecretSlots,
   SignInMethodChoice,
+  stepFieldsFit,
+  stepFieldsMessage,
   SubmitKey,
 } from "../destinations/autofill-contracts.js";
 import type { SandboxSession, SkillDescriptor } from "@openai/agents/sandbox";
@@ -520,7 +523,10 @@ export const SignInStep = Schema.Union(
           ),
         ),
       ),
-    ).pipe(Schema.maxItems(maximumStepFields)),
+    ).pipe(
+      Schema.maxItems(maximumStepFields + maximumCodeBoxes),
+      Schema.filter(stepFieldsFit, { message: () => stepFieldsMessage }),
+    ),
     submit: Schema.optional(SignInSelector),
     /**
      * Enter, pressed in the last field to submit that field's form, on a screen whose form has no
@@ -946,9 +952,7 @@ export const ExecutionEvidence: Schema.Schema<ExecutionEvidence> = Schema.Struct
   ),
 });
 
-/**
- * Why a read's HTTP version can't port, as the http-mcp skill's "When it can't port" names it.
- */
+/** Why a read's HTTP version can't port. */
 export const HttpVersionSignal = Schema.Literal(
   "per_request_hash_or_page_id",
   "bot_wall_on_page_fetch",

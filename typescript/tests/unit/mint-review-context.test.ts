@@ -13,11 +13,13 @@ import {
   pageLocation,
   reviewDenied,
   reviewFailureOf,
+  trackedWrites,
   type CurrentExecution,
   type ExecutionEntry,
   type MintReviewHost,
   type ObservedPage,
 } from "../../src/mint/review-context.js";
+import type { WriteOutcome } from "../../src/mint/outcome-review-contracts.js";
 import { portableMintProjection } from "../support/portable-mint.js";
 
 const projection = portableMintProjection(["private-schema-value"]);
@@ -276,6 +278,49 @@ describe("mintReviewContext", () => {
       browser: "not_opened",
       executions: state.executions,
     });
+  });
+
+  it("gives an execution review each tracked write with its newest assessment, and a question review none", async () => {
+    const writes: readonly WriteOutcome[] = [
+      {
+        write: {
+          executionId: "write_1",
+          purpose: "act",
+          entrypoint: "src/save.mjs",
+          sourceDigest: "digest_1",
+          status: "completed",
+          effect: "possible",
+        },
+        status: "applied",
+        assessment: {
+          executionId: "write_1",
+          version: 2,
+          outcome: "done",
+          explanation: "The saved note is listed.",
+          evidence: ["execution:read_1"],
+          assessedAt: 0,
+        },
+      },
+      {
+        write: {
+          executionId: "write_2",
+          purpose: "act",
+          status: "result_lost",
+          effect: "possible",
+        },
+        status: "may_have_applied",
+      },
+    ];
+    const tracked = [
+      { executionId: "write_1", purpose: "act", entrypoint: "src/save.mjs", outcome: "done" },
+      { executionId: "write_2", purpose: "act", outcome: "unassessed" },
+    ];
+    expect(trackedWrites(writes)).toStrictEqual(tracked);
+    const { host } = fakeHost();
+    const withWrites: MintReviewHost = { ...host, writes: () => writes };
+    expect((await context(withWrites, live("act"))).writes).toStrictEqual(tracked);
+    expect(await context(withWrites)).not.toHaveProperty("writes");
+    expect(await context(host, live("act"))).not.toHaveProperty("writes");
   });
 });
 

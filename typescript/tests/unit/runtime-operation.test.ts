@@ -1,13 +1,15 @@
-import { Effect, Exit, Layer, Schema } from "effect";
+import { Cause, Chunk, Effect, Exit, Layer, Option, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
 import { Deadline } from "../../src/runtime/deadline.js";
 import {
   CaptureUnavailable,
+  InvalidInput,
   maximumInputIssuePath,
   maximumInputIssues,
 } from "../../src/runtime/errors.js";
 import { defineOperation, executeOperation } from "../../src/runtime/operation.js";
+import { operationErrors } from "../../src/runtime/operation-failure.js";
 import { leftOf } from "../support/expect-failure.js";
 import type { ConditionObservation, ConditionState } from "../../src/browser/index.js";
 
@@ -201,6 +203,83 @@ describe("operation host", () => {
   });
 });
 
+describe("an input refusal thrown outside an Effect", () => {
+  // An Effect operation that calls a runtime helper, such as `startList`, inside `Effect.gen` sees
+  // the helper's throw as a defect. The runner fails the run with the caller's input refusal and
+  // leaves every other defect as one.
+  const run = (body: () => Effect.Effect<number>) =>
+    Effect.gen(function* () {
+      const context = yield* makeContext();
+      const operation = defineOperation({
+        name: "read_amount",
+        input: Schema.Void,
+        output: Schema.Number,
+        run: body,
+      });
+      return yield* Effect.scoped(executeOperation(operation, undefined)).pipe(
+        Effect.provide(Layer.succeed(ExecutionContext, context)),
+      );
+    }).pipe(Effect.runPromiseExit);
+  const throwing = (error: unknown) => () =>
+    Effect.sync(() => {
+      throw error;
+    });
+  const causeOf = (exit: Exit.Exit<unknown, unknown>) => {
+    if (!Exit.isFailure(exit)) throw new Error("the run succeeded");
+    return exit.cause;
+  };
+  /** A refusal as another copy of the runtime, such as one a tool bundles, constructs it. */
+  class OtherCopyRefusal extends Error {
+    override readonly name = "InvalidInput";
+    readonly _tag = "InvalidInput";
+    constructor(
+      message: string,
+      readonly field: string,
+      readonly kind: string,
+    ) {
+      super(message);
+    }
+  }
+
+  it("fails with the runtime's refusal, its message and fields kept", async () => {
+    const refusal = new operationErrors.InvalidInput("Pick another size", {
+      field: "size",
+      available: ["One Size"],
+    });
+    const cause = causeOf(await run(throwing(refusal)));
+    expect(Option.getOrUndefined(Cause.failureOption(cause))).toBe(refusal);
+  });
+
+  it("fails with a refusal from another copy of the runtime", async () => {
+    const refusal = new OtherCopyRefusal("Not a cursor this tool returned", "cursor", "malformed");
+    const cause = causeOf(await run(throwing(refusal)));
+    expect(Option.getOrUndefined(Cause.failureOption(cause))).toBe(refusal);
+  });
+
+  it("leaves a thrown schema InvalidInput, a plain Error and Effect.die as defects", async () => {
+    const schemaError = new InvalidInput({ operation: "read_amount" });
+    const plain = new Error("unexpected page");
+    for (const [defect, body] of [
+      [schemaError, throwing(schemaError)],
+      [plain, throwing(plain)],
+      [plain, () => Effect.die(plain)],
+    ] as const) {
+      const cause = causeOf(await run(body));
+      expect(Option.isNone(Cause.failureOption(cause))).toBe(true);
+      expect(Option.getOrUndefined(Cause.dieOption(cause))).toBe(defect);
+    }
+  });
+
+  it("keeps the whole cause when another error ends the run beside the refusal", async () => {
+    const refusal = new operationErrors.InvalidInput("Pick another size", { field: "size" });
+    const cleanup = new Error("cleanup failed");
+    const body = () => throwing(refusal)().pipe(Effect.ensuring(Effect.die(cleanup)));
+    const cause = causeOf(await run(body));
+    expect(Option.isNone(Cause.failureOption(cause))).toBe(true);
+    expect(Chunk.toReadonlyArray(Cause.defects(cause))).toEqual([refusal, cleanup]);
+  });
+});
+
 /** The issues an operation's input decode reports for `input`, through the operation host. */
 const issuesFor = async <A, I>(input: Schema.Schema<A, I>, value: unknown) => {
   const operation = defineOperation({
@@ -218,7 +297,7 @@ const issuesFor = async <A, I>(input: Schema.Schema<A, I>, value: unknown) => {
       ),
     ),
   );
-  if (failure._tag !== "InvalidInput")
+  if (!(failure instanceof InvalidInput))
     throw new Error(`Expected InvalidInput, got ${failure._tag}`);
   return failure.issues;
 };

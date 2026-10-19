@@ -67,6 +67,7 @@ import {
   taskUpdateForReview,
   type PendingTaskUpdate,
   type TaskChange,
+  type TaskUpdateConfirmer,
 } from "../guardian/task-update.js";
 import { siteDomain } from "../runtime/same-site.js";
 import { validateSignedInMarker } from "../destinations/signed-in-marker.js";
@@ -3311,6 +3312,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const maintenanceConfirmer = (
         dependencies.taskUpdateConfirmer?.() ?? Effect.succeed("none" as const)
       ).pipe(
+        // A host outside the type, such as a script returning another word, names nobody.
+        Effect.map((confirmer): TaskUpdateConfirmer =>
+          confirmer === "owner" || confirmer === "owner_request" ? confirmer : "none",
+        ),
         Effect.catchAll((error) =>
           reportFailure(error, {
             component: "mint",
@@ -3327,7 +3332,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       let newBuildAskedAt: number | undefined;
       /** Guardian's review of a confirmed update, then the host's application of an allowed one. */
-      const reviewAndApplyTaskUpdate = (submitted: TaskUpdateRequest) =>
+      const reviewAndApplyTaskUpdate = (
+        submitted: TaskUpdateRequest,
+        /** The confirmer the gate already asked the host about, so one update asks once. */
+        asked?: TaskUpdateConfirmer,
+      ) =>
         Effect.gen(function* () {
           const review = dependencies.reviewTaskUpdate;
           const apply = dependencies.applyTaskUpdate;
@@ -3354,7 +3363,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               // Who can confirm, as the host says; a change that only adds or tightens output
               // fields reaches review even when nobody can.
               ...(request.mode === "maintenance"
-                ? { maintenance: { confirmer: yield* maintenanceConfirmer } }
+                ? { maintenance: { confirmer: asked ?? (yield* maintenanceConfirmer) } }
                 : {}),
               // So Guardian knows a site change here can only be a new build.
               ...(dependencies.siteMoveUnsupported === true
@@ -3719,6 +3728,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           return {
             cursor: cursorPairOf(input, output),
             list: primaryListOf(input, output),
+            inputSchema: input,
             outputSchema: output,
           };
         });
@@ -3765,7 +3775,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   : `Design a handful of cases in ${liveTestCasesPath} from what you saw on the site, as the testing skill says: one case that sets together every input the example left unset, the example's input once more, no results, the next page, and another case only where a different layout or real variant needs it. Then call live_tests with action run.`
                 : cases.every((testCase) => testCase.status === "pass")
                   ? "Every case passes on the current source. Check what the outputs mean (filters applied to every item, rows each filter excludes gone, page two holding new rows, the order, the applied location), add a case for anything the tool claims that no case tests yet, then make your last edit, run every case again, run the example last and call finish_build."
-                  : `Fix the code for each failing case at its frame. While a fix is in progress, prefer rerunning only the failing cases, together in one batch named in cases. Add a case for anything the tool claims that no case tests yet, then, after your last edit, run every case once with cases null. Publication review reads ${liveTestsEvidencePath}, the host's record of these results on the source you publish, against what the tool claims.`,
+                  : `Fix the code for each failing case at its frame. Fix everything this batch revealed before you run again, then rerun the failing cases and every case the fixes can touch, together in one batch named in cases, on each version you ship whose source the fixes changed. Add a case for anything the tool claims that no case tests yet, then, after your last edit, run every case once with cases null. Publication review reads ${liveTestsEvidencePath}, the host's record of these results on the source you publish, against what the tool claims.`,
           };
         });
       /**
@@ -3849,7 +3859,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               kind: "host_live_tests",
               status: "no_cursor",
               instruction:
-                "A next_page case needs an input field named cursor (or page_token) and an output field such as next_cursor, both strings or numbers, in the tool's schemas. Add them, or drop next_page. Nothing was executed.",
+                "A next_page case needs the list fields in the tool's schemas: the string input cursor and output next_cursor, which listInputFields and listOutputFields from pomerado/runtime give. Add them, or drop next_page. Nothing was executed.",
             });
           const digest = yield* stepDigest(request.entrypoint);
           if (digest === undefined)
@@ -3915,18 +3925,21 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const verdicts: Record<string, number> = {};
           const judgedRuns = result.cases.flatMap((run) => {
             const testCase = selected.find((entry) => entry.id === run.id);
-            return testCase === undefined
-              ? []
-              : [
-                  {
-                    run,
-                    testCase,
-                    judged: judgeCase(testCase, run, "list" in shape ? shape.list : undefined),
-                  },
-                ];
+            if (testCase === undefined) return [];
+            const judged = judgeCase(testCase, run, "list" in shape ? shape.list : undefined);
+            const previous = recordsFor(request.entrypoint).get(run.id);
+            // An inconclusive rerun, such as a challenge or a site block, tested nothing about
+            // the tool, so a failure it follows on the same source and case keeps counting, with
+            // the output it returned.
+            const keepsFailure =
+              judged.verdict === "inconclusive" &&
+              previous?.verdict === "fail" &&
+              previous.caseDigest === caseDigest(testCase) &&
+              previous.sourceDigest === sourceDigest;
+            return [{ run, testCase, judged, keepsFailure }];
           });
           // Every case's fields first, so each case's output check counts the whole batch.
-          for (const { run, judged } of judgedRuns)
+          for (const { run, judged } of judgedRuns.filter((entry) => !entry.keepsFailure))
             if (judged.output === undefined)
               liveTestFills.delete(outputKey(request.entrypoint, run.id));
             else
@@ -3934,7 +3947,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 sourceDigest,
                 fill: fieldFill(judged.output),
               });
-          for (const { run, testCase, judged } of judgedRuns) {
+          for (const { run, testCase, judged, keepsFailure } of judgedRuns) {
+            verdicts[judged.verdict] = (verdicts[judged.verdict] ?? 0) + 1;
+            if (attemptBound && judged.verdict === "inconclusive" && judged.got === "deadline")
+              liveTestsOutOfTime = true;
+            if (keepsFailure) continue;
             const screened =
               judged.output === undefined
                 ? undefined
@@ -3977,11 +3994,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             const version = liveTestVersion(request.entrypoint);
             const previous = records.get(run.id);
             // A failure the run replaces stays in the record: the case changed after it, or it
-            // did not fail again on the same source and case, which shows it is flaky.
+            // passed when run again on the same source and case, which shows it is flaky.
             const flaky =
               previous?.caseDigest === digestOfCase &&
               previous.sourceDigest === sourceDigest &&
-              judged.verdict !== "fail";
+              judged.verdict === "pass";
             if (
               previous !== undefined &&
               previous.verdict === "fail" &&
@@ -4024,9 +4041,6 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               ...(testCase.next_page === true ? { nextPage: true } : {}),
               ...(signedInBatch ? { signedIn: true as const } : {}),
             });
-            verdicts[judged.verdict] = (verdicts[judged.verdict] ?? 0) + 1;
-            if (attemptBound && judged.verdict === "inconclusive" && judged.got === "deadline")
-              liveTestsOutOfTime = true;
           }
           yield* reportBestEffort(
             dependencies.diagnostics?.emit("mint.live_tests", {
@@ -4083,6 +4097,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             new Map([...liveTestRecords[version]].filter(([, record]) => counted(record)));
           const read = yield* readCasesFile;
           const published = liveTestVersion(entrypoint);
+          // The input schema each version publishes, which marks a retired input it rejects.
+          const inputSchemaOf = (path: string) =>
+            Effect.map(liveTestShape(path), (shape) =>
+              "inputSchema" in shape ? { inputSchema: shape.inputSchema } : {},
+            );
           const replacedOf = (version: LiveTestVersion) =>
             liveTestReplaced.filter(
               (record) => liveTestVersion(record.entrypoint) === version && counted(record),
@@ -4094,6 +4113,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               sourceDigest: yield* stepDigest(entrypoint),
               records: recordsOf(published),
               replaced: replacedOf(published),
+              ...(yield* inputSchemaOf(entrypoint)),
             },
           ];
           if (published === "playwright" && !httpRuledOut) {
@@ -4120,6 +4140,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 sourceDigest: yield* stepDigest(httpEntrypoint),
                 records: recordsOf("http"),
                 replaced: replacedOf("http"),
+                ...(yield* inputSchemaOf(httpEntrypoint)),
               });
           }
           return liveTestsEvidence({
@@ -4488,7 +4509,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       plannedCases: planned,
                       instruction: signedIn()
                         ? `Your example passed, so the tool's schemas are settled. ${signedInPlanInstruction} Fix the code until it passes, then make your last edit, run it again and run the example last.`
-                        : `Your example passed, so the tool's schemas are settled. Design the cases in ${liveTestCasesPath} as the testing skill says, from what you saw on the site: one case that combines the inputs the example left unset, each set to a value at least one example row fails while some rows still pass, the example's input once more, a query with no results, the next page, and another case only where a different page layout or a real variant needs it. Run them with live_tests action run and fix every failing case, preferring to rerun only the failing ones while you fix. Then make your last edit, run every case again and run the example last.`,
+                        : `Your example passed, so the tool's schemas are settled. Design the cases in ${liveTestCasesPath} as the testing skill says, from what you saw on the site: one case that combines the inputs the example left unset, each set to a value at least one example row fails while some rows still pass, the example's input once more, a query with no results, the next page, and another case only where a different page layout or a real variant needs it. Run them with live_tests action run and fix every failing case, fixing everything a batch reveals before you run again. Then make your last edit, run every case again and run the example last.`,
                     },
                   });
             }).pipe(
@@ -5361,7 +5382,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     repeatableRead,
                   },
                   (error.code === "ReviewDenied" && error.review?.reason === "evidence"
-                    ? "Not published yet: Guardian needs more evidence to judge this publication, and the rationale names each missing item. Gather each one within your authority, such as running the live tests or cases it names so their results reach the test record, and fix every finding, then call finish_build again. Missing evidence is not a refusal and never a reason for a policy block. The existing example and result remain recorded."
+                    ? "Not published yet: Guardian needs more evidence to judge this publication, and the rationale names each missing item. Gather each one within your authority, such as running the live tests or cases it names so their results reach the test record, or exploring the site's own controls for a capture it names, and fix every finding, then call finish_build again. A retired failure in publication/tests.json clears only by a way its clearedBy lists: running the same cases again on the same source clears none. Missing evidence is not a refusal and never a reason for a policy block. The existing example and result remain recorded."
                     : error.code === "ReviewDenied" && error.review !== undefined
                       ? "Not published: Guardian blocked this publication. Each finding's explanation says what is wrong, the evidence and the fix, at its file and byte range. Fix every finding and each missing item the rationale names, then call finish_build again with the same executionId. The existing example and result remain recorded."
                       : "Not published. The existing example and result remain recorded. Source edits and another finish_build publication review may continue; this does not guarantee the failure is repairable.") +
@@ -5750,11 +5771,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       );
                     const refusal = taskUpdateRefusal(submitted);
                     if (refusal !== undefined) return taskUpdateAnswer("update_refused", refusal);
+                    let askedConfirmer: TaskUpdateConfirmer | undefined;
                     if (request.mode === "maintenance" && !keepsContract(submitted)) {
                       // Only the tool's owner confirms a change that takes from the registered
                       // contract; adding or tightening an output field takes nothing away.
                       const confirmer = yield* maintenanceConfirmer;
-                      if (confirmer === "none")
+                      askedConfirmer = confirmer;
+                      if (confirmer !== "owner" && confirmer !== "owner_request")
                         return taskUpdateAnswer("update_refused", {
                           reason: "owner_unavailable",
                           instruction:
@@ -5795,7 +5818,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         instruction:
                           "confirmedBy names questions the caller has not answered in this build, so nothing confirms the update and nothing changed. Ask the caller with request_input, then call mint_update again naming the questions they answered.",
                       });
-                    return yield* reviewAndApplyTaskUpdate(submitted);
+                    return yield* reviewAndApplyTaskUpdate(submitted, askedConfirmer);
                   }).pipe(
                     Effect.catchIf(
                       (error) => error.code === "ReviewUnavailable",
