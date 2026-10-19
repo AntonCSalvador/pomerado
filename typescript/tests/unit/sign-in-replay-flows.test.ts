@@ -463,6 +463,42 @@ it("waits out a write's skipped code screen when its landing shows no marker, op
   expect(fake.trace).toEqual(["open:/login", "ask:missing_credentials", "open:/login", "fill:login"]);
 });
 
+// The local browser starts every call empty, so a read's check without values never takes a
+// blank login page for a signed-in one: it waits for the form the page draws late, then asks.
+it("asks a read's login when its entry page draws the form late, since the local browser started empty", { timeout: 20_000 }, async () => {
+  const fake = scriptedSite({
+    entry: "login",
+    screens: { login: loginScreen, account: [] },
+    fill: (_page, values) => (signedLogin(values) ? { next: "account", signIn: true } : {}),
+  });
+  let openedAt = Date.now();
+  const drawnAfterMs = 2_500;
+  const browser: SignInReplayBrowser<never> = {
+    ...fake.browser,
+    open: (url) =>
+      fake.browser.open(url).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            openedAt = Date.now();
+          }),
+        ),
+      ),
+    inspect: (step) =>
+      Date.now() - openedAt < drawnAfterMs
+        ? Effect.succeed({ outcome: "refused" as const, reason: "not_found" as const })
+        : fake.browser.inspect(step),
+  };
+  const { result } = await signIn(
+    recipe(loginStep),
+    { ...fake, browser },
+    {},
+    { stepWaitMs: 8_000, pollMs: 20 },
+    true,
+  );
+  expect(result).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(fake.trace).toEqual(["open:/login", "ask:missing_credentials", "open:/login", "fill:login"]);
+});
+
 it("never fills a password a later screen asks for again after it went out", async () => {
   const againStep = {
     page: `${origin}/again`,

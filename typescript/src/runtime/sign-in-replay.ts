@@ -116,6 +116,8 @@ type ReplayFailure<E> = SignInRunFailed | ReplayBrowserFailed<E>;
  * The shared replay's page hooks over the local browser: `check` reads the marker once, `confirm`
  * waits for a marker drawn late (`settledMarkerCheck`), and a read's sign-in may end on a page that
  * can't tell (`confirmCantTell`). An entry page that does not load fails `entry_page_unavailable`.
+ * Each call's browser context starts empty (`startedEmpty`), so a check without values never ends
+ * on a login entry that can't tell. The engine reads `pageState` only for that, so none is given.
  */
 const replayHooks = <E>(
   browser: SignInReplayBrowser<E>,
@@ -160,6 +162,7 @@ const replayHooks = <E>(
     markerVisible: (selector, screenPage, popup) =>
       browser.markerVisible(selector, screenPage, popup).pipe(Effect.mapError(failed)),
     ...(allowCantTell ? { confirmCantTell: () => Effect.void } : {}),
+    startedEmpty: true,
   };
 };
 
