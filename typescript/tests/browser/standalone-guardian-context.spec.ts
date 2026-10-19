@@ -115,10 +115,11 @@ test("a read build's reviews carry each step's own context", async () => {
     );
     expect(screened?.["observations"]).toEqual(dated);
 
-    // A question review has no step: no effects, no current execution and no step results.
+    // A question review has no step: no effects, no current execution and no step results. The
+    // request's page loaded before the build started, so the browser is already active.
     const question = guardian.reviews.find((review) => review.kind === "question");
     expect(effectsOf(question)).toEqual([]);
-    expect(contextOf(question!)).toMatchObject({ repeatableRead: true, browser: "not_opened" });
+    expect(contextOf(question!)).toMatchObject({ repeatableRead: true, browser: "active" });
     expect(contextOf(question!)).not.toHaveProperty("currentExecution");
     expect(question?.input).not.toHaveProperty("untrusted_step_results");
 
@@ -148,7 +149,7 @@ test("a read build's reviews carry each step's own context", async () => {
       );
     }
 
-    // The command runs before any page is open, with its sandbox's facts.
+    // The command runs before any live step, with its sandbox's facts.
     expect(currentOf(command!)).toEqual({
       purpose: "command",
       target: "pureFiles",
@@ -156,14 +157,15 @@ test("a read build's reviews carry each step's own context", async () => {
       commandSandbox: { cwd: ".", timeoutSeconds: 30, maxOutputBytes: 1_048_576 },
     });
     expect(contextOf(command!)).not.toHaveProperty("executedSources");
-    expect(contextOf(command!)?.["browser"]).toBe("not_opened");
+    expect(contextOf(command!)?.["browser"]).toBe("active");
     // Executed sources are the entrypoint's imports, not the whole workspace.
     expect(sourcesOf(explore!, "executedSources")).toEqual(["operation/explore/look.mjs"]);
     expect(sourcesOf(explore!, "operationSources")).toContain("operation/src/unused.mjs");
-    expect(contextOf(explore!)?.["browser"]).toBe("not_opened");
+    // No live step has observed a page yet, so Guardian is shown none.
+    expect(contextOf(explore!)?.["browser"]).toBe("active");
     expect(contextOf(explore!)).not.toHaveProperty("currentPage");
-    // Once a step ran, the browser is active. A live test and an example start on a reset page,
-    // so Guardian is not shown the page the last step left; it still gets the last results.
+    // A live test and an example start on a reset page, so Guardian is not shown the page the
+    // last step left; it still gets the last results.
     expect(contextOf(liveTest!)?.["browser"]).toBe("active");
     for (const review of [liveTest, example1, example2])
       expect(contextOf(review!)).not.toHaveProperty("currentPage");
@@ -305,8 +307,9 @@ test("a step that starts on a reset page is shown no page, and the next step the
       "explore",
       "test",
     ]);
-    // The example is the first live step, so no page is open when Guardian reviews it.
-    expect(contextOf(example!)?.["browser"]).toBe("not_opened");
+    // The example is the first live step. The request's page loaded before the build started, so
+    // the browser is active, but the example starts on a reset page and is shown none.
+    expect(contextOf(example!)?.["browser"]).toBe("active");
     expect(contextOf(example!)).not.toHaveProperty("currentPage");
     // It reset the page and loaded the site root, which the next explore continues from.
     expect(contextOf(deeper!)).toMatchObject({
@@ -1156,6 +1159,7 @@ test("a step Guardian denies never runs", async () => {
     html(response, "<title>Fixture</title><h1>Public fixture</h1>"),
   );
   const guardian = recordingGuardian({ decide: () => "deny" });
+  let before: readonly string[] = [];
   try {
     const { last } = await mint({
       effect: "read",
@@ -1163,12 +1167,17 @@ test("a step Guardian denies never runs", async () => {
       guardian,
       turns: [
         () => patch({ "explore/look.mjs": probe() }),
-        () => [call("execute", execution("explore", "explore/look.mjs"), "explore")],
+        () => {
+          before = [...site.requests];
+          return [call("execute", execution("explore", "explore/look.mjs"), "explore")];
+        },
       ],
     });
     expect(executions(guardian.reviews)).toHaveLength(1);
     expect(JSON.stringify(toolResult(last, "explore"))).toContain("ReviewDenied");
-    expect(site.requests).toEqual([]);
+    // The host loaded the request's page before the build started; the denied step loaded nothing.
+    expect(before).toEqual(["GET /"]);
+    expect(site.requests).toEqual(before);
   } finally {
     await site.close();
   }
