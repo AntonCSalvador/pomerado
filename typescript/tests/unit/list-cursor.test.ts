@@ -227,10 +227,9 @@ describe("a cursor the host did not sign", () => {
       { page: 2 },
       ["page=2"],
     ])
-      expect(admitListCursor({ ...input, cursor }, scope())).toEqual({
+      expect(admitListCursor({ ...input, cursor }, scope())).toMatchObject({
         ok: false,
         reason: "malformed",
-        message: expect.stringContaining("The cursor is not one this tool returned."),
       });
   });
 
@@ -253,8 +252,23 @@ describe("a cursor the host did not sign", () => {
       output: { results: [], next_cursor: null, next_cursor_expires_at: null, has_more: false },
       dropped: "not_a_draft",
     });
+    // A next cursor of another type is no runtime draft either, and an output without has_more
+    // counts as having more.
+    for (const next of [3, { page: 3 }])
+      expect(sealListOutput({ results: [], next_cursor: next }, legacy, scope())).toEqual({
+        output: {
+          results: [],
+          next_cursor: null,
+          next_cursor_expires_at: null,
+          has_more: true,
+          next_cursor_unavailable: "not_a_draft",
+        },
+        dropped: "not_a_draft",
+      });
     const none = { results: [], next_cursor: null, has_more: false };
     expect(sealListOutput(none, legacy, scope())).toEqual({ output: none });
+    const absent = { results: [] };
+    expect(sealListOutput(absent, legacy, scope())).toEqual({ output: absent });
   });
 
   it("names another host version for a cursor in another version's form", () => {

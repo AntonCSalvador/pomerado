@@ -265,12 +265,13 @@ export type DroppedListCursor = Extract<
 /**
  * Signs the `next_cursor` a run's output holds and fills `next_cursor_expires_at`,
  * `listCursorTtlMs` (ten minutes) from `now`. `input` is the caller's input for the run, as sent.
- * Only a runtime draft is signed. A next cursor in any other form, which `admitListCursor` would
- * refuse if a caller sent it back, a draft that does not decode, and a draft whose site link is
- * off the tool's site are dropped: `next_cursor` becomes null and `dropped` says why. `has_more`
- * stays as the output gave it, true unless it is false, and when it is true
- * `next_cursor_unavailable` says why too. Every valid draft fits in a cursor, so none is dropped
- * for its size.
+ * Only a runtime draft is signed; an absent or null next cursor leaves the output unchanged. A
+ * next cursor in any other form or of any other type, which `admitListCursor` would refuse if a
+ * caller sent it back, a draft that does not decode, and a draft whose site link is off the
+ * tool's site are dropped: `next_cursor` becomes null and `dropped` says why. `has_more` stays as
+ * the output gave it, true unless it is false (an output without it gets `has_more: true`), and
+ * when it is true `next_cursor_unavailable` says why too. Every valid draft fits in a cursor, so
+ * none is dropped for its size.
  */
 export const sealListOutput = (
   output: unknown,
@@ -280,7 +281,7 @@ export const sealListOutput = (
   if (typeof output !== "object" || output === null || Array.isArray(output)) return { output };
   const fields = output as Record<string, unknown>;
   const next = fields["next_cursor"];
-  if (typeof next !== "string") return { output };
+  if (next === undefined || next === null) return { output };
   const drop = (dropped: DroppedListCursor) => {
     const hasMore = fields["has_more"] !== false;
     return {
