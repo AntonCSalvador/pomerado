@@ -227,22 +227,38 @@ const withListPrefix = (value: unknown, path: string, kept: number): unknown => 
     ? { ...value, [head]: Array.isArray(value[head]) ? value[head].slice(0, kept) : value[head] }
     : { ...value, [head]: withListPrefix(value[head], rest.join("."), kept) };
 };
+/** A plain array or object, which `lineJson` splits; JSON.stringify writes anything else. */
+const isPlainContainer = (value: unknown): value is object => {
+  if (typeof value !== "object" || value === null) return false;
+  if (typeof (value as { readonly toJSON?: unknown }).toJSON === "function") return false;
+  if (Array.isArray(value)) return true;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+/** JSON.stringify's text, or undefined for undefined, a function or a symbol. */
+const wholeJson = (value: unknown) => JSON.stringify(value) as string | undefined;
+
 /**
  * `value` as compact JSON, with each object key outside a list item and each item of such a list
- * on its own line. An item stays whole on one line. A later publication round then diffs a rerun
- * of the same output, or one changed record, as the few lines that changed.
+ * on its own line, down to the record's output and the levels `recordLists` finds lists at. An
+ * item, and anything deeper, stays whole on one line as JSON.stringify writes it, so the text
+ * without its newlines is JSON.stringify's. A later publication round then diffs a rerun of the
+ * same output as the few lines that changed.
  */
-const lineJson = (value: unknown): string => {
-  if (Array.isArray(value))
-    return value.length === 0
-      ? "[]"
-      : `[\n${value.map((item) => JSON.stringify(item)).join(",\n")}\n]`;
-  if (!isRecord(value)) return JSON.stringify(value);
-  return `{${Object.entries(value)
-    .filter(([, field]) => field !== undefined)
-    .map(([key, field]) => `${JSON.stringify(key)}:${lineJson(field)}`)
-    .join(",\n")}}`;
+const lineJson = (value: unknown, depth: number): string | undefined => {
+  if (depth > 5 || !isPlainContainer(value)) return wholeJson(value);
+  if (!Array.isArray(value)) return lineObject(value, depth);
+  if (value.length === 0) return "[]";
+  return `[\n${Array.from(value, (item: unknown) => wholeJson(item) ?? "null").join(",\n")}\n]`;
 };
+const lineObject = (value: object, depth = 0): string =>
+  `{${Object.entries(value)
+    .flatMap(([key, field]) => {
+      const text = lineJson(field, depth + 1);
+      return text === undefined ? [] : [`${JSON.stringify(key)}:${text}`];
+    })
+    .join(",\n")}}`;
 
 /**
  * The host's record of an example's output in `state`, with `fields` after it, such as the
@@ -256,7 +272,7 @@ export const exampleOutputRecord = (
   fields: Json = {},
 ): ExampleOutputEvidence => ({
   state,
-  text: lineJson({
+  text: lineObject({
     kind: source.kind ?? "verified_example_output",
     executionId: source.executionId,
     executedEntrypoint: source.executedEntrypoint,

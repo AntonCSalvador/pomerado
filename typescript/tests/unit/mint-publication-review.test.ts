@@ -244,6 +244,42 @@ describe("the example's output evidence", () => {
     expect(checked).toEqual(["available", "truncated"]);
     expect(envelope).toMatchObject({ state: "withheld", reason: "credential_precheck" });
   });
+
+  it("keeps a deeply nested output, writing the levels below the record's lists whole", async () => {
+    let value: unknown = "leaf";
+    for (let level = 0; level < 3000; level += 1) value = { next: value };
+    const checked: string[] = [];
+    const evidence = await Effect.runPromise(
+      exampleOutputEvidence(source, JSON.stringify(value), (text) =>
+        Effect.sync(() => (checked.push(text), true)),
+      ),
+    );
+    expect(evidence.state).toBe("available");
+    expect(checked).toEqual([evidence.text]);
+    // Compared as text: a recursive deep equality would run out of stack itself.
+    const record = JSON.parse(evidence.text) as { readonly output: unknown };
+    expect(JSON.stringify(record.output)).toBe(JSON.stringify(value));
+    expect(evidence.text.replaceAll("\n", "")).toBe(JSON.stringify(JSON.parse(evidence.text)));
+    expect(evidence.text.split("\n").length).toBeLessThan(15);
+  });
+
+  it("writes a field the way JSON.stringify does when it holds what JSON never parses to", () => {
+    const sparse = [1];
+    sparse[2] = 3;
+    const fields = {
+      list: [1, undefined, () => 1, 2],
+      sparse,
+      at: new Date(0),
+      custom: { toJSON: () => "custom" },
+      nested: { at: new Date(0), skipped: () => 1, missing: undefined, kept: 1 },
+      skipped: () => 1,
+      missing: undefined,
+    };
+    const { text } = exampleOutputRecord(source, "available", fields);
+    expect(text.replaceAll("\n", "")).toBe(
+      JSON.stringify({ kind: "verified_example_output", ...source, state: "available", ...fields }),
+    );
+  });
 });
 
 describe("the example output record across publication rounds", () => {
