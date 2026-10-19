@@ -393,8 +393,6 @@ export const makeSignInRecorder = (input: {
     let filled: string[] = [];
     let step: AutofillStep = { ...request, fields: [] };
     return Effect.gen(function* () {
-      // The minter went on: the screen before, which it submitted or which sent itself, is sent.
-      settleMinter(h, h.autofillSignIn.current);
       const masked = maskedMethodRefusal(h, request);
       if (masked !== undefined) return shown(yield* masked);
       const holding = maskedSelector(request);
@@ -402,6 +400,9 @@ export const makeSignInRecorder = (input: {
         return shown(
           yield* refusedStep(h, "selector_names_contact", holding, identityNotices.selectors),
         );
+      // The minter went on: the screen before, which it submitted or which sent itself, is sent.
+      // A step refused above typed nothing, so it leaves that screen as it was.
+      settleMinter(h, h.autofillSignIn.current);
       let held = login.held();
       step = values.resolve(request, held);
       if (step.fields.some((field) => field.slot === "password") && heldPasswordRejected(h))
