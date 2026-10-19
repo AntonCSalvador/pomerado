@@ -363,7 +363,7 @@ boxes().forEach((box, index) => box.addEventListener("input", () => {
 }));
 </script>`;
 
-for (const read of [1, 2, 3])
+for (const read of [1, 2])
   test(`a widget with no button that takes its boxes away at read ${read} of its last box by a submit call of the host is reported sent by the page`, async ({
     page,
   }) => {
@@ -379,8 +379,8 @@ for (const read of [1, 2, 3])
 
 /**
  * A code screen of one box and no button that sends the code once the box holds six digits, then
- * puts the account in place of the box as the third read of it after that starts. A look of the
- * host reads the box twice as it finds it, then once more to check it holds what was typed. A step
+ * puts the account in place of the box as the second read of it after that starts. A look of the
+ * host reads the box once as it finds it, then once more to check it holds what was typed. A step
  * of one field has no emptiness read, so that check alone decides whether the look reads the box
  * as empty.
  */
@@ -392,7 +392,7 @@ let reads = null;
 new MutationObserver((records) => {
   for (const record of records) {
     const starts = record.attributeName.startsWith("data-fixture-") && record.oldValue === null;
-    if (reads === null || !starts || record.target !== box || ++reads !== 3) continue;
+    if (reads === null || !starts || record.target !== box || ++reads !== 2) continue;
     view.innerHTML = '<p id="account">Signed in</p>';
     return;
   }
@@ -546,6 +546,121 @@ for (const [name, onPassword] of [
     });
     expect(posted.map((received) => Object.fromEntries(received))).toEqual([{ username, password }]);
   });
+
+/**
+ * A sign-in form that locks every field and its button as the password is typed, then turns them
+ * as the host reads it: `turns` lists each state it takes, locked or not, as the host goes from
+ * reading its username field to reading its password field, starting with the second time since
+ * the lock, so the host first sees it locked. The host's test page marks each element it reads with
+ * a `data-fixture-` attribute (`isolatedLocatorPage`), which the form sees. A host that read the
+ * two fields one at a time would find the username as it was and the password as it is now, a form
+ * that never was. The form logs each state it takes.
+ */
+const turningLogin = (turns: readonly boolean[]) =>
+  login(`const controls = [...form.elements];
+const lock = (locked) => {
+  controls.forEach((control) => { control.disabled = locked; });
+  console.log(locked ? "locked" : "unlocked");
+};
+lock(true);
+const turns = ${JSON.stringify(turns)};
+let last = null;
+let reads = 0;
+new MutationObserver((records) => {
+  for (const record of records) {
+    if (!record.attributeName.startsWith("data-fixture-") || record.oldValue !== null) continue;
+    if (record.target.id === "password" && last === "username" && ++reads >= 2 && reads - 2 < turns.length)
+      lock(turns[reads - 2]);
+    last = record.target.id;
+  }
+}).observe(form, { attributes: true, attributeOldValue: true, subtree: true });`);
+
+/** The states the page's form logged it took, in order. */
+const statesLogged = (page: Page) => {
+  const states: string[] = [];
+  page.on("console", (message) => {
+    if (["locked", "unlocked"].includes(message.text())) states.push(message.text());
+  });
+  return states;
+};
+
+test("a sign-in form with a button that locks every field and its button while it checks the password, and unlocks them between the host's reads of two fields, is clicked once", async ({
+  page,
+}) => {
+  const states = statesLogged(page);
+  const { posted } = await serve(page, turningLogin([false]));
+  const report = await fill(page, loginStep, [username, password]);
+  expect(states).toEqual(["locked", "unlocked"]);
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: [
+      { slot: "username", status: "filled" },
+      { slot: "password", status: "filled" },
+    ],
+    submit: "clicked",
+  });
+  expect(posted.map((received) => Object.fromEntries(received))).toEqual([{ username, password }]);
+});
+
+test("a sign-in form with a button that locks every field and its button, unlocks them and locks them again while the host reads it is refused on the third change, and never clicked", async ({
+  page,
+}) => {
+  const states = statesLogged(page);
+  const { posted } = await serve(page, turningLogin([false, true]));
+  const report = await fill(page, loginStep, [username, password]);
+  expect(states).toEqual(["locked", "unlocked", "locked"]);
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: [
+      { slot: "username", status: "filled" },
+      { slot: "password", status: "filled" },
+    ],
+    submit: "refused",
+    failureDetail: { phase: "change" },
+  });
+  expect(report).not.toHaveProperty("clicked");
+  expect(maySend(report)).toBe(false);
+  expect(posted).toEqual([]);
+});
+
+test("a sign-in form that draws its password field again as the host starts reading its fields is inspected as the form it then shows", async ({
+  page,
+}) => {
+  // The first time the host reads the username field, the form puts a copy of its password field
+  // in its place, after the host found the one it replaced, and logs that it did.
+  const replaced: string[] = [];
+  page.on("console", (message) => {
+    if (message.text() === "replaced") replaced.push(message.text());
+  });
+  await serve(
+    page,
+    `${login("")}<script>
+const observer = new MutationObserver((records) => {
+  if (!records.some((record) => record.target.id === "username" && record.attributeName.startsWith("data-fixture-"))) return;
+  observer.disconnect();
+  const field = document.getElementById("password");
+  field.replaceWith(field.cloneNode(true));
+  console.log("replaced");
+});
+observer.observe(document.forms[0], { attributes: true, subtree: true });
+</script>`,
+  );
+  const inspect = async () =>
+    Effect.runPromise(
+      inspectAutofillStep({
+        step: loginStep,
+        page: await hostPage(page),
+        siteOrigin: site,
+        authenticationOrigins: [],
+      }),
+    );
+  const first = await inspect();
+  expect(replaced).toEqual(["replaced"]);
+  const again = await inspect();
+  if ("outcome" in first || "outcome" in again) throw new Error("Inspection refused");
+  expect(first.targets).toEqual(again.targets);
+  expect(first.targets.fields[1]).toMatchObject({ actions: [`${site}/session`], editable: true });
+});
 
 test("a sign-in form with a button that draws itself again, empty, once the password is typed is never clicked nor taken as sent by the page", async ({
   page,

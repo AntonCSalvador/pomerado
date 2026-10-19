@@ -66,6 +66,24 @@ export const CalendarDate = Schema.String.pipe(
 );
 
 /**
+ * Page code: the shape of a form control element (`FormControlShape`), as `formControlShape` reads
+ * it. A function source, so another call can read the shape in the same evaluation as other
+ * properties of the element.
+ */
+export const formControlShapeCode = String.raw`(element) => {
+    const popup = element.getAttribute("aria-haspopup");
+    if (element instanceof HTMLSelectElement) return "select";
+    // A date picker's popup is a dialog or grid: the field still takes typing.
+    if (popup === "dialog" || popup === "grid") return element instanceof HTMLInputElement ? "text" : "other";
+    if (element.getAttribute("role") === "combobox" || popup === "listbox" || popup === "true" || popup === "menu")
+      return "combobox";
+    if (element instanceof HTMLInputElement && element.type === "date") return "date";
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element.isContentEditable)
+      return "text";
+    return "other";
+  }`;
+
+/**
  * Page code for a Kernel call body, where `page` is in scope: paste it at the top of the code
  * string, then call its functions with your verified Playwright locators. Every function reads
  * back that the page took the value and throws an Error whose message is a fixed reason, never a
@@ -110,18 +128,7 @@ const formControlFrame = async (control, options) => {
   return frame ?? control.page().mainFrame();
 };
 const formControlShape = (control, options) =>
-  control.evaluate((element) => {
-    const popup = element.getAttribute("aria-haspopup");
-    if (element instanceof HTMLSelectElement) return "select";
-    // A date picker's popup is a dialog or grid: the field still takes typing.
-    if (popup === "dialog" || popup === "grid") return element instanceof HTMLInputElement ? "text" : "other";
-    if (element.getAttribute("role") === "combobox" || popup === "listbox" || popup === "true" || popup === "menu")
-      return "combobox";
-    if (element instanceof HTMLInputElement && element.type === "date") return "date";
-    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element.isContentEditable)
-      return "text";
-    return "other";
-  }, undefined, options);
+  control.evaluate(${formControlShapeCode}, undefined, options);
 const formatDate = ${String(formatDate)};
 const formControlOrdinal = (day) => {
   const number = Number(day);
