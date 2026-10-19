@@ -233,6 +233,7 @@ const signIn = (
   fake: ScriptedSite,
   answers: Answers = {},
   timing: AutofillReplayTiming = fastTiming,
+  allowCantTell = false,
 ) => {
   const secrets = makeRunSecrets();
   const { ask, prompts } = owner(fake, answers);
@@ -249,6 +250,7 @@ const signIn = (
         site,
         siteOrigin: origin,
         timing,
+        ...(allowCantTell ? { allowCantTell } : {}),
       }),
     ),
   ).then((result) => ({ result, prompts }));
@@ -429,31 +431,36 @@ it("omits the recorded password when the identifier goes straight to the method 
   expect(fake.fills.flatMap(({ values }) => values)).not.toContain(login.password);
 });
 
-it("checks a recipe's account page once the site lands off the recorded screens, without waiting out the skipped code screen", { timeout: 20_000 }, async () => {
-  // After the login the site trusts the device and lands on its home page, which doesn't show the
-  // marker; the account page the recipe names does.
-  const fake = scriptedSite({
+// After the login the site trusts the device and lands on its home page, which doesn't show the
+// marker; the account page the recipe names does. No check of the session opens that page.
+const skippedCodeSite = () =>
+  scriptedSite({
     entry: "login",
     screens: { login: loginScreen, code: ["#code", "#verify"], home: [], account: [] },
     fill: (_page, values) => (signedLogin(values) ? { next: "home", signIn: true } : {}),
   });
+const accountRecipe = () => ({
+  ...recipe(loginStep, codeStep),
+  signedIn: { selector: "#account", openPath: "/account" },
+});
+
+it("signs a read in once the site lands off the recorded screens past a skipped code screen, opening no account page", { timeout: 20_000 }, async () => {
+  const fake = skippedCodeSite();
   const started = Date.now();
-  const { result } = await signIn(
-    { ...recipe(loginStep, codeStep), signedIn: { selector: "#account", openPath: "/account" } },
-    fake,
-    {},
-    { stepWaitMs: 15_000, pollMs: 20 },
-  );
+  const { result } = await signIn(accountRecipe(), fake, {}, { stepWaitMs: 15_000, pollMs: 20 }, true);
   expect(result).toEqual(Either.right({ alreadySignedIn: false }));
-  expect(fake.trace).toEqual([
-    "open:/login",
-    "ask:missing_credentials",
-    "open:/login",
-    "fill:login",
-    "open:/account",
-  ]);
+  expect(fake.trace).toEqual(["open:/login", "ask:missing_credentials", "open:/login", "fill:login"]);
   // The screen wait and the marker wait each end once the landing page stayed put 1.5 s.
   expect(Date.now() - started).toBeLessThan(10_000);
+});
+
+it("waits out a write's skipped code screen when its landing shows no marker, opening no account page", { timeout: 20_000 }, async () => {
+  const fake = skippedCodeSite();
+  const { result } = await signIn(accountRecipe(), fake, {}, { stepWaitMs: 2_000, pollMs: 20 });
+  expect(result).toEqual(
+    Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "not_found" })),
+  );
+  expect(fake.trace).toEqual(["open:/login", "ask:missing_credentials", "open:/login", "fill:login"]);
 });
 
 it("never fills a password a later screen asks for again after it went out", async () => {
