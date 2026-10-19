@@ -600,9 +600,9 @@ describe("the publication policy", () => {
     );
   });
 
-  // A write may refuse before its first commit mark with a refusal its output schema declares; a
-  // check that can refuse runs before the mark of the commit it guards. Every host judges both.
-  it("judges a declared write refusal and each check before its commit mark", () => {
+  // A write may refuse before its first commit mark with a refusal its output schema declares. Every
+  // host judges it. The writes skill, not this policy, says where a check that can refuse runs.
+  it("judges a declared write refusal before its first commit mark", () => {
     for (const policy of [
       guardianPublicationPolicy,
       publicationPolicyFor({ hostFiles: "Synthetic.", precheck: "Synthetic.", dataVendor: "synthetic" }),
@@ -614,8 +614,10 @@ describe("the publication policy", () => {
         "'unverifiable' is valid only if the session evidence shows the site offered no commit response the script can check, no confirmation and no read-back. A write may declare refusals in its output schema: a branch that requires status \"refused\" and a reason from a listed set of stable lowercase codes, with the values the caller needs, such as the total and the limit it exceeded. Returned before the script enters its first commit mark, a declared refusal reports the write not applied. The script must return one only for the condition its reason names, from values it read on the page and compared with its input, and before enteringCommit; a declared refusal returned after a commit mark, for a condition the script never checks, or without the values its reason compares, is a confirmation finding, and so is a refusal returned in an output shape the schema does not declare as one. The composed script must report each confirm popup to decideDialog under the same literal step name as the session step, so runs accept the same popups without asking.",
       );
       expect(policy).toContain(
-        "An unavailable session output limits the claims it can support; it never calls for another run of the write. In a write, every check that can refuse the task or change what it commits runs before the enteringCommit call of the commit it guards, such as choosing an option that changes the price, deciding an add-on, reading the total and comparing it with a limit the input sets, or checking availability, the items, the address or the payment; the marked call only re-reads what a change since those checks would make wrong, clicks once and confirms. A confirmation finding at that source text: a check that can refuse made inside the marked call for the commit it guards (after that commit's enteringCommit and before its click) or after that commit, or a refusal the script returns as its output after a commit mark or in a shape its output schema does not declare as a refusal, instead of throwing InvalidInput before that mark; a run that stops there reports a possible change although nothing was sent. No finding: a refusal the output schema declares, returned before the first commit mark; a re-read inside the marked call that stops before the click and throws OperationFailure because a value it checked earlier changed, such as total_changed; and a check that can only run after an earlier marked step, such as a total shown only after a saved address step, made before the later step's mark, whose refusal then honestly reports a possible change.\n",
+        "An unavailable session output limits the claims it can support; it never calls for another run of the write.\n",
       );
+      expect(policy).not.toContain("every check that can refuse");
+      expect(policy).not.toContain("the commit it guards");
     }
   });
 
