@@ -80,6 +80,17 @@ Pomerado has three parts. The minter builds an integration, Guardian reviews the
 - A blocked-explanation review also gets the harness's decision ledger as `question_review.decisionLedger`: the build's Guardian denials of executions, live test batches and publications, with the rationale and findings Guardian wrote, and the live test cases whose latest result did not pass, with what their tool threw marked `toolReported`. It is bounded, a takeover keeps it, and it does not depend on what Guardian's compacted conversation still holds.
 - Both reviews also get the build's effect, once the owner or the request decided it, as `question_review.buildEffect`. Their `allowedEffects` stays empty on purpose, so this is how Guardian knows a write build publishes only after it does the requested task once, for real.
 
+### Sign-in versions
+
+`checkSignInVersion` from `pomerado/core/mint/sign-in-version` checks a sign-in recipe and the address its runs start from as one version, deterministically, before a host publishes it.
+
+- The recipe is decoded as a host reads it first; one that does not decode, such as one with no steps or a workspace page that is more than a path, is refused as `invalid_recipe`.
+- The checks then run over the entry URL, every step's page and selectors, the signed-in marker and the recipe's workspace relation. Every exact page runs on an https origin of the site itself, and a workspace step, named by path only, on each login's own host on the site's registrable domain.
+- They refuse the recording account's identity values and masked contacts or numbers anywhere, host labels included, sign-out steps and a marker account page that signs out, a one-time or credentialed entry URL, a marker a signed-out page shows, a workspace relation for another domain, a page that is not https (`insecure_origin`), and a page on any other domain (`foreign_origin`).
+- A refusal names each rule and the part's path, never the value.
+- Off-site sign-in pages are always reported under their own rule, `foreign_origin`; a host that permits sign-in on another site's origin drops that rule's findings itself and still gets the https rule. A host says whether it already asked about a one-time entry URL, which then passes with only its path read for masked numbers, and the identity rules apply to the identity values a caller passes.
+- The local host runs the check before it publishes a build's sign-in and refuses `finish_build` as `sign_in_version_refused` when it fails, sign-in pages on another domain included, even one on a declared authentication origin. It passes no identity values, which it applied screen by screen while recording.
+
 ## Guardian
 
 - Guardian is a second model that reviews the minter's work before it takes effect.

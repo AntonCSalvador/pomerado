@@ -399,6 +399,7 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   "read_back_required",
   "login_url_one_time",
   "login_url_contains_credential",
+  "sign_in_version_refused",
   // An execution on the site the build moved away from: a fresh example on the current site.
   "example_before_site_change",
   // Restored inputs change the code, which needs its own example.
@@ -5224,6 +5225,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     error.reason,
                     { ...error.publicationFeedback },
                     "Not published: each part named in parts holds a registered credential (credentialKinds names the kind, never the value). A published tool never carries one, and the host changes nothing itself. For loginUrl, run authenticate again with a login URL that has no credential in it, the site's plain sign-in page. For name, description, siteName or siteSummary, rewrite the text without it. Then call finish_build again with the same executionId. The host refuses every time until the credential is gone; the build is not over.",
+                  );
+                if (error.reason === "sign_in_version_refused")
+                  return notPublished(
+                    error.code,
+                    error.reason,
+                    { signInFindings: error.publicationFeedback?.signInFindings ?? [] },
+                    "Not published: the sign-in this tool would publish fails the host's sign-in version check. signInFindings names each rule and the part of the sign-in recipe or login URL it refused, never a value. The host changed nothing. Run authenticate again so the sign-in records without those parts: start from the site's stable sign-in page as loginUrl, name no account in a selector, page or marker, leave out any step or account page that signs out, and use a signed-in marker that only signed-in pages show. Then call finish_build again with the same executionId. The host refuses every time until the sign-in passes.",
                   );
                 if (error.reason === "definition_login_reference") {
                   const section = error.screening?.section;

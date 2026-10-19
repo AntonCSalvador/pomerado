@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { isSecret } from "../runtime/autofill-state.js";
 import type { AutofillSignInState } from "../runtime/autofill-state.js";
 import { type AutofillHost, autofillRecovery, refusedStep, result } from "./autofill-results.js";
+import { namesMaskedContact } from "./sign-in-guards.js";
 
 // What an autofill sign-in publishes with the tool never names one account: a signed-in check runs
 // for every login, and a method's selector is copied into the recipe.
@@ -69,17 +70,11 @@ export const identityRefusal = (h: Host, open: AutofillSignInState, indicator: A
       })
     : undefined;
 
-/**
- * A selector that copies a masked contact detail, as choice buttons show one ("Text (***) ***-1234",
- * "j•••@example.com"): a run of mask characters, or four or more digits in a row.
- */
-const namesContact = (selector: string) => /[*•●]{2,}|\d{4,}/u.test(selector);
-
 /** A refusal of a method choice whose selector copies a masked contact detail, or undefined. */
 export const maskedMethodRefusal = (h: Host, step: Pick<AutofillStep, "methods" | "submit">) => {
   if (step.methods === undefined) return undefined;
-  const masked = step.methods.findIndex((option) => namesContact(option.selector));
-  if (masked === -1 && !namesContact(step.submit ?? "")) return undefined;
+  const masked = step.methods.findIndex((option) => namesMaskedContact(option.selector));
+  if (masked === -1 && !namesMaskedContact(step.submit ?? "")) return undefined;
   return refusedStep(
     h,
     "selector_names_contact",
