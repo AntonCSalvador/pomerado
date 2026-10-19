@@ -62,7 +62,7 @@ describe("keys written one after another", () => {
   });
 });
 
-// The local publication precheck refuses a hard-coded provider key as the hosted gate does.
+// The local publication precheck refuses a hard-coded provider key, naming the file and where.
 describe("providerKeyRefusal", () => {
   it.each([
     ["a live payment key", fake("sk_live_", "FAKEsynthetic0000")],
