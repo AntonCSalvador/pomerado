@@ -23,7 +23,8 @@ inputs. Offline cases may use isolated workers; a live test is one read-only flo
 like the example: the site origin page, with the browser's cookies and site storage kept. So
 the tool sets every value its input controls itself, never relying on what the site remembers.
 A read proves its operation with purpose=example and iterates from that start; running the
-example or a live test again is normal.
+example or a live test again after a fix is normal, but keep rounds few: fix everything a run
+shows before you run again (Run and fix the cases, below).
 
 ## The combined case
 
@@ -172,10 +173,12 @@ where the site shows its own no-results page: confirm it in a capture of a page 
 the site's own controls or a URL they produce, that reads back the input as the site applied it
 and shows the site's no-results state, never a challenge, error, sign-in, blocked or loading
 page. Then change the expectation to what the site shows, and name that capture in the case's
-`purpose` and in `coverage`; review accepts the change only against it. While a fix is in
-progress, prefer rerunning only the failing cases, all of them together in one batch named in
-`cases`, not one batch each: a batch of every case waits on its slowest case, each batch waits on
-its own review, and the cases that passed run again once after your last edit. A
+`purpose` and in `coverage`; review accepts the change only against it. Before you run again,
+fix everything the batch revealed: read every failure and every output, and batch as many fixes
+as you can into one edit rather than one fix per run. Then rerun the failing cases and every case
+the fixes can touch, all of them together in one batch named in `cases`, on each version you
+ship in the same round. Each batch waits on its slowest case and its own review, so aim for few
+rounds; the cases that passed run again once after your last edit. A
 run that returns partly filled results, or passes only when run again, is missing a wait for
 content: fix the wait, not the retry, then run that input again a few times.
 
@@ -199,7 +202,10 @@ from the site's committed state or the answer.
 After the example passes, read its returned fields once at the answer and again about 10 s later
 on the same page; a field that changed is filled late, so wait for it in source or describe it as
 live, such as a countdown. A run that sits idle after its answer showed, or opens controls its
-input did not use, works for more than it returns: trim it. Read every string in each result.
+input did not use, works for more than it returns: trim it. Where a run's result reports timing
+for each step, read it, and remove waits and round trips the answer does not need, such as a
+wait on a page no step changed or a probe repeated on every poll, never one the answer needs.
+A slow tool still publishes. Read every string in each result.
 After each run with output the host reports output checks: values that hold code, styles, markup
 or template leftovers, text read collapsed or cut short, a whole card's text, repeated entries or
 records, and fields that never vary or are always empty. Check each against the page: fix a wrong
@@ -227,7 +233,9 @@ may limit how many. A signed-in read's inputs there count toward the same two.
 
 Test the HTTP version, `src/tool-http.mjs`, the same way as `src/tool.mjs`: run the same cases as
 a batch on it with `live_tests` entrypoint `src/tool-http.mjs`, in parallel, and fix it until
-every case passes on it (http-mcp skill). It need not wait for the Playwright version: when every
+every case passes on it (http-mcp skill). Run its batch in the same round as the Playwright
+version's, after the same fixes, rather than finishing one version first. It need not wait for
+the Playwright version to pass: when every
 case passes on the HTTP version, run the example on it and publish `http` alone, even while a case
 still fails on the Playwright version. Each version keeps its own result for each case: a batch on
 one never replaces or stales the other's, and `plan` shows the results of the entrypoint you name.

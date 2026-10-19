@@ -65,8 +65,12 @@ lead, not proof that a request made the data.
 **Location, store and dates.** Set them the way the page's own request does: a URL parameter, a
 cookie the page's location call sets, or the same POST. Read the applied value back from the
 answer. If the Playwright version applies a location or store and the HTTP version can't,
-don't use HTTP: rule it out with `location_not_applicable`. Results that differ from the example
-only because they used another location are a failed test, not a difference to note.
+don't use HTTP: rule it out with `location_not_applicable`. The Playwright version may still
+combine both: set the location through the page's controls, then read the results with the
+page's own data request in that session (`page.evaluate(() => fetch(...))`,
+`references/kernel-page-fetch.ts`), reading the applied location back from the page or the
+answer, especially when that is faster than waiting for rendered cards. Results that differ
+from the example only because they used another location are a failed test, not a difference to note.
 
 ## When it can't port
 

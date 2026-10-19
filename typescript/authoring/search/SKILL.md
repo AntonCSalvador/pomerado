@@ -48,10 +48,11 @@ inputs use (see "Apply and read back").
 
 ## Apply and read back
 
-On every run, set each input the site has a control for through that control, or through the URL
-or data request the site itself uses for it when the control is unreliable (testing skill), never
-by filtering the returned rows, then read it back from the site's committed state: the
-applied-filter chips, the selected sort, an option the site shows selected, or the results header.
+On every run, set each input the site has a control for through that control, through the
+results URL when the site's URL reliably carries it (`AGENTS.md`, "Work through the page's own
+controls"), or through the data request the site itself uses for it when the control is
+unreliable (testing skill), never by filtering the returned rows, then read it back from the
+site's committed state: the applied-filter chips, the selected sort, an option the site shows selected, or the results header.
 A URL naming the input does not show it applied. When a filter did not apply, the tool throws
 `OperationFailure` naming it, so the run fails and the tool gets repaired; it never returns
 unfiltered results as filtered.
@@ -73,13 +74,15 @@ with `waitForChange`, as the core skill says.
 
 ## Location
 
-A location or store is an input that tailors the answer: follow the core skill's input schema,
-"Inputs that tailor the answer". To apply the caller's location, try each way the site offers:
+When the results, prices or availability depend on a location or store, offer it as an optional
+input, a ZIP or postal code or a store as the site takes them, even when the request names
+neither: it tailors the answer (core skill, the input schema, "Inputs that tailor the answer").
+To apply the caller's location, try each way the site offers:
 the store picker, the ZIP or postal-code box, the delivery or pickup choice, and the manual entry
 beside "use current location". Decline the browser's location permission when the site asks;
-declining often reveals a manual ZIP field. Read the applied location back and return it, such as
-`applied_store` or `applied_zip`. A store missing from the site's picker throws `InvalidInput`
-with `field` and `available`, the stores it offers, and so do a store and a ZIP that exclude each
+declining often reveals a manual ZIP field. Read the applied location back and always return
+it, as `applied_store` or `applied_zip`, the site's default included when the caller gave none.
+A store missing from the site's picker throws `InvalidInput` with `field` and `available`, the stores it offers, and so do a store and a ZIP that exclude each
 other. When the site still won't apply the caller's location, or says it does not serve it,
 return the results it did show with the applied location beside the caller's and the site's
 message, never as the caller's location's results. A filter or sort the page resets stays strict:
@@ -90,7 +93,9 @@ the tool throws `InputNotApplied` with the requested and applied value (core ski
 Wait for the search's answer with `waitForOutcome` (core skill). Prefer naming its error, its
 no-results message and its results over waiting for the results alone, and name results by the
 page's most stable sign, such as the result count or heading for the query, over one layout's
-classes. Read every field of every result you return from that result's own card on every run.
+classes. Read every field of every result you return from that result's own record on every
+run: the page's own structured data for it when that holds the same fields, otherwise its card
+(core skill).
 Lean toward more information (core skill, output fields): return the facts each card shows
 without a click that a caller
 could reasonably use to choose among results, with full displayed values, and a maker or provider
@@ -119,6 +124,9 @@ item once, keyed by its own ID (pagination skill). Before the first example, lis
 IDs for a typical query, and check that no ID repeats and that the first rows match the query.
 Read the query the site applied from the page's embedded state, such as its search data, rather
 than from a selector scoped to one container, which another layout of the results page breaks.
+When the site corrected or rewrote the caller's query, such as fixing its spelling, its echo
+shows the query it searched: return the site's results and say so, never silently, with that
+query as `applied_query` and a `query_corrected` boolean.
 
 ## Answer quickly
 
@@ -132,7 +140,12 @@ what its inputs need:
   "Only with `include: ["filters"]`". When the page already shows the groups without a click,
   the tool may return those, and says they are the visible ones.
 - Skip a step whose result the page already shows, such as a location, store or sort that is
-  already the caller's.
+  already the caller's, and its wait: wait for the results again only after a step that changed
+  them or should have (core skill).
+- When results depend on state the site sets only in the page, such as a store, a run may set it
+  through the page's controls and then read the results with the page's own data request in the
+  same session (http-mcp skill, "Location, store and dates"), especially when that is faster
+  than waiting for the cards.
 - Never wait for the page's `load` event, for network idle, or for rows and content you will not
   return.
 - Fetch a per-result extra the cards lack, such as availability, in one batched request when the
