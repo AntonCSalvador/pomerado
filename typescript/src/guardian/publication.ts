@@ -246,9 +246,9 @@ const isSignInChoiceFinding = (
 /**
  * A temporary, narrow exception until choices on a site's sign-in pages become declared inputs of
  * the sign-in: an input design finding about such a choice, in the host's sign-in recipe, is set
- * aside in `excusedSignInChoices` instead of blocking. It applies only to a denial for a source
- * correction, input feedback or a host-owned file; every other finding, and every other kind of
- * decision, stands exactly as Guardian returned it. With nothing left, the decision allows; with
+ * aside in `excusedSignInChoices` instead of blocking. It applies only to an outcome of deny with
+ * reason source correction, input feedback or host-owned file; every other finding, and every
+ * other decision, an escalation included, stands exactly as Guardian returned it. With nothing left, the decision allows; with
  * only input findings left, it is input feedback.
  */
 const withoutSignInChoiceFindings = (
@@ -256,9 +256,10 @@ const withoutSignInChoiceFindings = (
   files: ReadonlyMap<string, IndexedFile>,
 ): Decision & { readonly excusedSignInChoices?: readonly PublicationFinding[] } => {
   if (
-    decision.reason !== "source_correction" &&
-    decision.reason !== "input_feedback" &&
-    decision.reason !== "host_owned"
+    decision.outcome !== "deny" ||
+    (decision.reason !== "source_correction" &&
+      decision.reason !== "input_feedback" &&
+      decision.reason !== "host_owned")
   )
     return decision;
   const excused = decision.findings.filter((finding) => isSignInChoiceFinding(finding, files));

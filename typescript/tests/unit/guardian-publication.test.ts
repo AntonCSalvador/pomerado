@@ -507,10 +507,18 @@ describe("a finding about a choice on the site's sign-in pages", () => {
     signedIn: { selector: "#account" },
   });
   const entry = 'export { default } from "./src/tool.mjs";';
+  // Paths a looser match on the recipe's name would also accept; only the exact one is the recipe.
+  const lookalikes = [
+    "operation/sub/auth-fill.json",
+    "xoperation/auth-fill.json",
+    "auth-fill.json",
+    "operation/auth-fill.json.bak",
+  ];
   const withHostFiles = new Map([
     ...files,
     ["operation/auth-fill.json", recipe],
     ["operation/operation.mjs", entry],
+    ...lookalikes.map((path) => [path, recipe] as const),
   ]);
   const hostFile = (path: string, text: string) => ({
     path,
@@ -526,7 +534,17 @@ describe("a finding about a choice on the site's sign-in pages", () => {
         ...(pending.publication?.files ?? []),
         hostFile("operation/auth-fill.json", recipe),
         hostFile("operation/operation.mjs", entry),
+        ...lookalikes.map((path) => hostFile(path, recipe)),
       ],
+    },
+  };
+  // The same bundle with the recipe marked as the minter's, which the minter can then fix.
+  const minterRecipePending: PendingExecution = {
+    ...hostPending,
+    publication: {
+      files: (hostPending.publication?.files ?? []).map((file) =>
+        file.path === "operation/auth-fill.json" ? { ...file, owner: "minter" as const } : file,
+      ),
     },
   };
   const at = (path: string, category: string) => ({
@@ -538,7 +556,11 @@ describe("a finding about a choice on the site's sign-in pages", () => {
   });
   const inRecipe = (category: string) => at("operation/auth-fill.json", category);
   const rationale = "The sign-in picks a location the caller does not choose.";
-  const review = (decision: Record<string, unknown>, diagnostics?: GuardianDiagnostics) =>
+  const review = (
+    decision: Record<string, unknown>,
+    diagnostics?: GuardianDiagnostics,
+    reviewed: PendingExecution = hostPending,
+  ) =>
     Effect.runPromise(
       makeGuardian(
         {
@@ -552,7 +574,7 @@ describe("a finding about a choice on the site's sign-in pages", () => {
             ),
         },
         diagnostics,
-      ).review(hostPending, sourcesOf(withHostFiles)),
+      ).review(reviewed, sourcesOf(withHostFiles)),
     ).then(({ decision: decided }) => decided);
 
   it.each([
@@ -657,6 +679,46 @@ describe("a finding about a choice on the site's sign-in pages", () => {
     async ({ reason, finding }) => {
       const decided = await review({ outcome: "deny", reason, findings: [finding] });
       expect(decided).toMatchObject({ outcome: "deny", reason, findings: [finding] });
+      expect(decided).not.toHaveProperty("excusedSignInChoices");
+    },
+  );
+
+  // Only a denial is ever relaxed: an escalation asks for a person's decision and passes through
+  // untouched, whatever its findings.
+  it.each([
+    { reason: "source_correction", category: "input_option" },
+    { reason: "input_feedback", category: "input_option" },
+    { reason: "source_correction", category: "example_value" },
+  ])(
+    "keeps a $reason escalation whose only finding is a sign-in page $category",
+    async ({ reason, category }) => {
+      const decided = await review({ outcome: "escalate", reason, findings: [inRecipe(category)] });
+      expect(decided).toMatchObject({ outcome: "escalate", reason, findings: [inRecipe(category)] });
+      expect(decided).not.toHaveProperty("excusedSignInChoices");
+    },
+  );
+
+  // A recipe the minter owns is the minter's to fix, so its finding blocks like any other.
+  it("keeps an input finding in a sign-in recipe the minter owns blocking", async () => {
+    const decided = await review(
+      { outcome: "deny", reason: "input_feedback", findings: [inRecipe("input_option")] },
+      undefined,
+      minterRecipePending,
+    );
+    expect(decided).toMatchObject({
+      outcome: "deny",
+      reason: "input_feedback",
+      findings: [inRecipe("input_option")],
+    });
+    expect(decided).not.toHaveProperty("excusedSignInChoices");
+  });
+
+  it.each(lookalikes)(
+    "keeps an input finding in %s, which is not the host's sign-in recipe, blocking",
+    async (path) => {
+      const finding = at(path, "input_option");
+      const decided = await review({ outcome: "deny", reason: "input_feedback", findings: [finding] });
+      expect(decided).toMatchObject({ outcome: "deny", reason: "input_feedback", findings: [finding] });
       expect(decided).not.toHaveProperty("excusedSignInChoices");
     },
   );
