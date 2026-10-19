@@ -11,14 +11,10 @@ script from a reset start by running its example until it works (re-running a re
 example is normal); resolve its missing choices with reads when possible. A write build
 does the caller's requested task once, live (in as many write steps as it takes), then
 composes its script from what happened (the `writes` skill). A read tests what its example
-did not exercise with a few combined live cases (the `testing` skill): a read signed out runs a
-handful, and a signed-in read one combined case that sets the optional inputs its example left
-unset, two distinct inputs at most. A write proves its tool with its act session; it never reads
+did not exercise with a few combined live cases (the `testing` skill). A write proves its tool
+with its act session; it never reads
 the `testing` skill or designs further tests<!-- pomerado:section core.write-http-check -->.
-The scope follows what the tool is now, not what the build started as: a read that becomes a
-write, in a new build or a repair, keeps to the one run from then on, a read that signs in keeps
-to the signed-in bound from then on, and a repair that rebuilds a signed-in tool or a write as a
-read signed out tests it as one. Credentials and
+The scope follows what the tool is now, as the `testing` skill says. Credentials and
 sign-in codes
 belong to the host; never request a password, cookie or TOTP seed in model-visible text.
 
@@ -84,7 +80,7 @@ answers `{ success, result, error, stderr }`. Throw
   loading a document passes `waitForLoadState` at once. Opening a record by its identifier or URL
   can also answer with a removed or not-found page: name it, and throw `InvalidInput` with the
   page's own words and `field`, never a readiness timeout. The waits paragraph below shows how to
-  paste `waitCode` and call it. Prefer no fixed pauses unless necessary.
+  paste `waitCode` and call it.
 - Wait for a change (`waitForChange`, or a settle of your own) only after a step that changed the
   page or should have, such as a click, fill or navigation that loads new results. Skip it when no
   step changed the page since the last wait, such as after closing a panel without picking
@@ -238,7 +234,10 @@ exception: it is optional unless the task can't run without it (below).
     description that the site picks it, which can differ from run to run.
   - When the caller gives one, honor it. Try each way the site offers, preferring one that needs
     nothing more from the caller, then read the applied value back from the page and return it
-    as `applied_<input>`, such as `applied_store`, `applied_zip` or `applied_vehicle`.
+    as `applied_<input>`, such as `applied_store`, `applied_zip` or `applied_vehicle`. For a
+    location, those ways are the store picker, the ZIP or postal-code box, the delivery or pickup
+    choice and the manual entry beside "use current location". Decline the browser's location
+    permission when the site asks; declining often reveals a manual ZIP field.
   - When the site needs more detail to apply it, such as a street address instead of a ZIP or a
     vehicle's trim, add that detail as its own optional input. Its description says what it is
     for and that it is sent to the site. Submit only what the caller gave; never invent or reuse
@@ -458,11 +457,14 @@ inputs. Scope the row locator to the main list, and leave out related, recommend
 viewed and "others also" sections; with `include: ["related"]` return them in their own `related`
 list of the same row shape, never mixed into the results and never counted toward a limit. A
 sponsored or promoted row inside the main list stays where it is, marked as such, unless the list
-already holds the same item (pagination skill); a promoted carousel is not part of the main list.
+already holds the same item (pagination skill); a promoted carousel, or any carousel or banner
+with its own heading or scroller, is not part of the main list, even when its items are marked
+sponsored. Return each item once.
 A card that
 stands for a group, such as one product in several flavours or sizes, a hotel with several room
 types or a building with several units for rent, is one result marked as a group (for example
-`kind: "group"`), with the options or count the card shows, never presented as one of its members.
+`kind: "group"`), with the options or count the card shows and a note that its link opens one
+member, never presented as one of its members.
 
 Then, for every field:
 - Prefer parsing what the page shows into typed fields over returning a result row, card or
@@ -623,11 +625,11 @@ or choosing a fallback. Use `locator.waitFor` for one expected state, `waitForOu
 (below) when the page can answer more than one way, `waitForRows`, `waitForValues` or
 `waitForChange` (below) for the values you return, or, only where none fits, a bounded loop of
 your own that reads every condition in one `evaluate` per pass;
-`count()` and `isVisible()` only observe the current instant. A ready page should
-pass immediately; do not add a fixed sleep. Share one bounded navigation deadline across navigation
-and first-page readiness, as in `references/navigation.ts`. Readiness polling
-only observes: do not repeat `goto`, reload, login, submission or another action
-inside it. Preserve site/path and account guards while waiting.
+`count()` and `isVisible()` only observe the current instant. Share one bounded navigation
+deadline across navigation
+and first-page readiness, as in `references/navigation.ts`. Readiness polling and every re-check
+below only observe: do not repeat `goto`, reload, login, submission, the action that caused the
+change or another action inside them. Preserve site/path and account guards while waiting.
 Wait for the values you will return, not for their containers or the rest of the page. A record
 is ready when each value you return is filled in and reads the same on two looks
 (`waitForValues`): two consecutive identical reads, the first included. Call it after a step
@@ -639,8 +641,9 @@ page size. A slot that is present but empty, a skeleton, `aria-busy` or reading 
 still loading, never absent; a slot with no identifier is not a result. A value still loading
 when the page stops progressing fails the run, optional or not: null is only for a field this
 record's markup lacks altogether, as the build saw on records without it, never for a slow one.
-Never wait for rows you won't return, for the whole list to stop changing, or for the page's
-`load` event. Read image links from attributes (`src`, `srcset`) without scrolling. A page with
+Use observed conditions: never add a fixed sleep, since a ready page passes immediately, and
+never wait for rows you won't return, for the whole list to stop changing, for whole-page
+network idle or for the page's `load` event. Read image links from attributes (`src`, `srcset`) without scrolling. A page with
 an outcome is ready only when it shows that outcome: results, or the site's own empty message.
 Before acting on a control, wait until loading overlays covering it are gone and its section is
 expanded. A panel or dialog you opened does not go away by waiting: close it with its own
@@ -657,14 +660,11 @@ before extraction. If any changed, read again within the deadline.
 Build any check that values stopped changing from stable keys, such as record IDs, names and
 prices, never from text that changes on its own, such as a countdown, a timer, a rotating badge
 or a live viewer count.
-These re-checks only observe: never repeat the click, submission or navigation that caused the
-change.
 After an action that can navigate, prefer waiting with `waitForOutcome` for a control only the destination page has, beside every other answer the action can give, over waiting for the destination URL alone, then extract. Keep the action,
 readiness wait and extraction in the same Kernel execute call when possible. If a read
 reports “Execution context was destroyed,” the action may already have succeeded.
 Reacquire page/frame locators, wait for readiness and retry only the read within the
 original deadline. Never repeat the click or submission as part of that recovery.
-Use observed conditions, without fixed sleeps, whole-page network-idle waits or the `load` event.
 For an unknown destination, inspect after the document transition; do not invent a
 selector or repeat the action in a follow-up read.
 Import `waitCode` from the runtime (`outcomeWaitCode` declares `waitForOutcome` alone, for code
@@ -689,8 +689,7 @@ no-progress window. A request already in flight when a wait starts is not seen: 
 loading its list, name its loading sign as `loading`. Read results;
 return an empty list for a listing's empty state;
 throw `InvalidInput` with `field` and the site's own words for a refusal; handle a greyed-out
-choice the input asked for as "Configure, then read" says, unavailable data on a read and `InvalidInput`
-with `available` on a write; ask the caller about a pick-one list
+choice the input asked for as "Configure, then read" says; ask the caller about a pick-one list
 (.agents/caller-input/SKILL.md). It throws an
 `Error` named `OutcomeWaitFailure` whose message says what each outcome matched, which progress
 signs it saw and when progress stopped: `outcome_ambiguous` when the winning locator matches more
@@ -729,22 +728,15 @@ and wait for the intended page/control within the existing deadline and job budg
 do not click the challenge, reload, or navigate to another route merely because
 the earlier probe timed out. A new probe execution does not require new navigation.
 A live example, a live read `test`, and a write session's first `act` step are
-different: the host resets
-the browser to the site origin before it runs, closing other tabs, and keeps the
-browser's cookies and site storage. So the source must set every value its input controls,
-such as a location, store, filter or search, itself, and never rely on what the site
-remembers from exploration; a live test case that runs cold, on a new browser with an empty
-profile, is the proof. A published run can start on such a browser too, so the source also sets
-up its own start state from a cold page, such as a guest session, a chosen location or a consent
-banner, never relying on cookies or state only the build's browser holds. A sign-in that started and was never verified is the exception: that
+different: they start from a reset page, as `AGENTS.md` says ("Reads, writes and examples"),
+so the source sets every value its input controls and its own start state itself. A sign-in that started and was never verified is the exception: that
 reset clears cookies and site storage. When the page is signed out after that reset, or after a
 full page load your source asks about with `ensureSignedIn`, the host signs in again by itself;
 do not call `authenticate` for it. When the host cannot keep the site signed in, the step fails with
 `session_not_kept`: report that cause instead of signing in again. That source must perform
 the flow from its input,
 never rely on a page an exploration left open. So a read iterates from a reset start,
-and re-running its example or live test is normal. A live test stays read-only. A write
-session's later `act` steps continue on the page the previous step left.
+and re-running its example or live test is normal.
 If the deadline expires, report the named readiness failure and use current
 screened evidence to distinguish a remaining challenge, loading and changed
 layout.<!-- pomerado:section core.challenge-reference --> Do not invent a CAPTCHA bypass or replace the target with an arbitrary
@@ -755,10 +747,8 @@ heading are the page you meant: a wrong or error page needs the site's own route
 page, never a new selector. Otherwise repair that wait and keep the checks that already
 passed. A `DeadlineExceeded` phase of `execution` is the shared operation deadline. Before increasing a timeout, make one bounded observation of the candidate
 target count or state; increase it only when evidence shows that the correct unique
-target is slow. Do not catch-and-repeat timed-out work. A click or navigation that
-timed out is an uncertain transition: it may already have taken effect. Inspect the
-retained page in the next probe and do not repeat the action until you know where
-the page landed.
+target is slow. Do not catch-and-repeat timed-out work: a timed-out click or navigation is
+an uncertain transition (`AGENTS.md`).
 
 Never call `.first()` (or `.nth(0)`) on a broad text or regex match, whether to
 click it or to wait for readiness: collapsed menus often hold an earlier hidden

@@ -269,7 +269,8 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   record in the site's list or search, then call `verified()`. If the
   write happened, call `verified()` there and publish against that step, never
   submitting it again. If nothing happened, do the write with the
-  caller's values and read its confirmation. The host refuses only an unchanged
+  caller's values, which is the first commit, not a repeat, and read its confirmation. If no
+  read-back can tell, never submit again: publish it as `unverifiable`. The host refuses only an unchanged
   commit step run again straight after it sent state-changing requests, and never
   resubmits for you. Make the composed script match what actually worked end to end.
 - A failed step that sent no state-changing request changes nothing: the next `act`
@@ -385,10 +386,9 @@ schema; the host re-reads the corrected schema offline. `write_not_submitted` me
 session has not demonstrated the requested write: no step recorded a confirmation, and no
 `act` step Guardian labelled a write reached the site unless the outcome review found it
 did not happen. Continue the remaining authorized work. If a step may already have
-committed, read back first, in a new file. If the write happened, publish with
-`readback`. The host runs a step that may have committed only once, unless the outcome
-review finds it did not happen. If no read-back can tell, never submit again: publish it
-as `unverifiable`. Filling a form or an offline example
+committed, read back first, in a new file, as "Never repeat a step blindly" says. The host runs
+a step that may have committed only once, unless the outcome review finds it did not happen.
+Filling a form or an offline example
 is not the write. An unreadable step output never justifies a run either: the write
 publishes with its output recorded as unavailable.
 
@@ -397,9 +397,8 @@ open (a commit that recorded its confirmation stays done), on the same browser, 
 in: read `page.url()` first, and prefer not to sign in again. Only after a publication whose
 capture failed do they run on a fresh browser on a new, empty profile: read `page.url()`
 first and sign in again when the build signs in. Before
-running a commit again, run an `act` step that only reads the site or the account to see
-whether the earlier commit landed, and never resubmit one that did. If no read-back can
-tell, never submit again. Guardian reviews every
+running a commit again, read back whether the earlier commit landed, as "Never repeat a step
+blindly" says. Guardian reviews every
 `act` step and denies one that would repeat a finished commit.
 
 Guardian labels each step it allows `read`, `write` or `authentication`, and every step

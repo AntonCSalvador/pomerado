@@ -257,9 +257,12 @@ whose answers come back to you while this attempt continues, when:
    the key rules say;
 6. how the tool should use an input that tailors the answer is genuinely ambiguous, such as
    whether a postal code sets the store or only finds nearby ones: ask the design question
-   `input_use_<input>` (.agents/core/SKILL.md, "Inputs that tailor the answer");
+   `input_use_<input>` (.agents/core/SKILL.md, "Inputs that tailor the answer"); an input whose
+   description starts "By design:" records that answer, so keep its use and description word for
+   word;
 7. the site never shows a value the request needs: ask before you build whether to build without
-   it or stop (.agents/core/SKILL.md, "Find contract gaps before your first example");
+   it or stop, and settle every other contract gap before your first example too
+   (.agents/core/SKILL.md, "Find contract gaps before your first example");
 8. you would leave out or refuse a capability the site offers, such as a field or column type,
    an option, or what a review finding asks for, because supporting it costs more, such as a
    lookup or an extra request: before narrowing, ask the owner one batched question that lists
@@ -477,13 +480,17 @@ write session's first act step start on the site origin page, with fresh page st
 host closes other tabs and loads the site origin, and keeps the browser's cookies and site
 storage. So the source must set every value its input controls, such as a location, store,
 filter or search, itself, never rely on what the site remembers; a live test case that runs
-cold, first on a new browser with an empty profile, is the proof. A build whose sign-in
+cold, first on a new browser with an empty profile, is the proof. A published run can start on
+such a browser too, so the source also sets up its own start state from a cold page, such as a
+guest session, a chosen location or a consent banner, never relying on cookies or state only the
+build's browser holds. A build whose sign-in
 started and was never confirmed is the exception: its resets clear cookies and site storage,
 so a half-finished sign-in never reaches a step. Every sign-in step starts a new sign-in, a
 signed-in check included, so check once per sign-in: a check after the host confirmed one
 starts a new sign-in. That source must run the flow from the input, including
 entering search terms, options and dates, not read results an exploration left on screen.
-A write session's later act steps continue on the page the previous step left.
+A live test stays read-only. A write session's later act steps continue on the page the
+previous step left.
 
 The host execute receipt and `review_rejected` feedback carry `repeatableRead`. Only explicit
 host `repeatableRead:true` permits another fresh Guardian-reviewed example read after
@@ -505,10 +512,9 @@ submit one; when its task needs that, ask the caller with request_input what wou
 change the task to a write with mint_update, as .agents/writes/SKILL.md says; a live read example
 that already ran is fine. An updated result makes it a write build in place. The first act step claims the write, later steps continue it, and the step that records the site's confirmation
 ends it. A write build runs no live example or live test, and no live explore once its session
-starts. Never repeat a write step blindly: after a step that failed and may have committed,
-first run an act step that only reads whether the write happened; if it did, record the
-read-back and publish; if a fresh read-back shows nothing happened, do the write with the
-caller's values, which is the first commit, not a repeat. The host never resubmits for you. A
+starts. Never repeat a write step that may have committed: first read back whether the write
+happened, as .agents/writes/SKILL.md says ("Never repeat a step blindly"); the host never
+resubmits for you. A
 write's task is done once, in its act session, and uncertain private-field submissions stay
 fenced, regardless of the read flag. An authentication submission with an unknown outcome is
 always fenced.
@@ -524,16 +530,13 @@ during exploration too, not only in the published tool. A filter the site does n
 part of the read.
 
 Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md). It designs
-its own cases at the start, from what it saw on the site: a handful, each covering as much as it
-can, led by one case that sets together every input the example left unset. It refines them once
-the example passes, runs them in parallel batches<!-- pomerado:section agents.http-cases -->. Finish in this order: your last edit, every case again on each version you ship, then
-the example last, before `finish_build`. A signed-in read runs that combined case, and a second
-only for inputs that cannot be set together: two distinct inputs at most, which the host
-enforces, on its own signed-in browser. A write does the original task: its act session is the
-one run that proves the tool. It designs no tests and runs no live tests or offline test suites
+a handful of combined cases from what it saw on the site and
+runs them in parallel batches<!-- pomerado:section agents.http-cases -->. Finish in this order: your last edit, every case again on each version you ship, then
+the example last, before `finish_build`. A signed-in read tests two distinct inputs at most. A
+write's act session is the one run that proves the tool: it designs no tests and runs no live
+tests or offline test suites
 beyond it<!-- pomerado:section agents.write-http-check -->. The scope follows what the tool is
-now: a read that becomes a write keeps to the one run from then on, a read that signs in keeps to
-the signed-in bound, and a repair that rebuilds one as a read signed out tests it as one.
+now, as the testing skill says.
 Report skipped, unsupported or missing bodies honestly.
 
 <!-- pomerado:section agents.implementations -->
