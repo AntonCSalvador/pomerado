@@ -210,10 +210,12 @@ export const guardedSubmit = (
     readonly settleMs: number;
     readonly inspection: string | undefined;
     readonly exempt: readonly string[] | null;
+    readonly alertsBefore: boolean;
   },
 ): AutofillFillCall => ({
   kind: "submit",
   settleMs: call.settleMs,
+  ...(call.alertsBefore ? { alertsBefore: true as const } : {}),
   guardKey,
   guardCall: randomUUID(),
   inspection: call.inspection,

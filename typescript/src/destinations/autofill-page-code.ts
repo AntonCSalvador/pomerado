@@ -51,10 +51,10 @@ return {
  *   `guardKey` and armed for `guardCall`, with every form action and link destination as the
  *   step's inspection found them, which the page kept under `inspection`, the submission's method
  *   as judged, and how each field's secret is found by value, if it is one), reads the page's
- *   alert text, clicks the submit (or, for a step with a submit key, presses that key in its last
- *   field, which stands as the submit),
+ *   alert text when the host counts new alerts (`alertsBefore`), clicks the submit (or, for a step
+ *   with a submit key, presses that key in its last field, which stands as the submit),
  *   waits for the page to settle and reads its controls (`pageControlsCode`), with how many of
- *   their alerts did not show before the click (`newAlerts`). A disabled submit it
+ *   their alerts did not show before the click (`newAlerts`) when it read them. A disabled submit it
  *   never clicks: it says so and does nothing, and the host calls again while the page may still
  *   enable it.
  */
@@ -90,7 +90,15 @@ export type AutofillFillCall =
       readonly fieldGet: readonly boolean[];
       /** Only look: a call that finds the step's fields clicks nothing and answers `none`. */
       readonly look?: true;
+      /**
+       * Read the page's alerts just before the click, waiting at most `alertsBeforeMs`, so the
+       * answer counts the new ones after it (`newAlerts`); a read that runs out counts nothing.
+       */
+      readonly alertsBefore?: true;
     };
+
+/** How long the read of the page's alerts before a submit's click may hold the click back. */
+const alertsBeforeMs = 500;
 
 /**
  * Page code: when any control differs from the one the host last judged (the submit's `editable`
@@ -302,8 +310,16 @@ const refusedSubmission = async () => {
   return null;
 };
 ${pageControlsCode}
-// The alert text the page shows before the click, so the host counts only what the submit brought.
-const alertsBefore = await pageControls(true).then((found) => found.alerts, () => null);
+// The alert text the page shows before the click, so the host counts only what the submit brought:
+// read only for a host that counts, and never past a short bound, so no frame holds the click back.
+const alertsBefore = ${
+    call.alertsBefore === true
+      ? `await Promise.race([
+  pageControls(true).then((found) => found.alerts, () => null),
+  new Promise((resolve) => setTimeout(() => resolve(null), ${alertsBeforeMs})),
+])`
+      : "null"
+  };
 const navigated = primary
   .waitForEvent("framenavigated", { predicate: (frame) => frame === primary.mainFrame(), timeout: ${call.settleMs} })
   .then(() => true, () => false);

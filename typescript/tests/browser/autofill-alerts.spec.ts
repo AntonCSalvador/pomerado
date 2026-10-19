@@ -33,23 +33,40 @@ const answered = [
   ),
 ].join("");
 
-const serve = async (page: Page) => {
-  await page.route(`${site}/**`, async (route) =>
-    route.fulfill({
-      contentType: "text/html",
-      body:
-        route.request().method() === "POST"
-          ? answered
-          : `${banner}${form('<input id="password" name="password" type="password">')}`,
-    }),
-  );
-  await page.goto(`${site}/login`);
+/**
+ * The sign-in page, whose own script counts each time something reads its alerts, in the tab's
+ * session storage, which outlives the submit's page load; `slow` makes each read take 3 s, as a
+ * frame that answers late does.
+ */
+const signInPage = (slow: boolean) =>
+  `<script>
+const query = Document.prototype.querySelectorAll;
+Document.prototype.querySelectorAll = function (selector) {
+  if (String(selector).includes('role~="alert"')) {
+    sessionStorage.setItem("alertReads", String(Number(sessionStorage.getItem("alertReads") ?? 0) + 1));
+    ${slow ? "const end = Date.now() + 3000; while (Date.now() < end);" : ""}
+  }
+  return query.call(this, selector);
 };
+</script>${banner}${form('<input id="password" name="password" type="password">')}`;
 
-test("a submit's answer is the alert text a person sees that was not there before the click", async ({
-  page,
-}) => {
-  await serve(page);
+/**
+ * Signs in on a page served so, with the fill's own options, and returns the report and how many
+ * times the sign-in page's alerts were read before the submit left it.
+ */
+const signIn = async (
+  page: Page,
+  options: { readonly countNewAlerts?: boolean; readonly slow?: boolean; readonly settleMs?: number },
+) => {
+  const posted: string[] = [];
+  await page.route(`${site}/**`, async (route) => {
+    if (route.request().method() === "POST") posted.push(route.request().url());
+    await route.fulfill({
+      contentType: "text/html",
+      body: route.request().method() === "POST" ? answered : signInPage(options.slow === true),
+    });
+  });
+  await page.goto(`${site}/login`);
   const inspection = await Effect.runPromise(
     inspectAutofillStep({
       step,
@@ -66,10 +83,19 @@ test("a submit's answer is the alert text a person sees that was not there befor
       inspection,
       page: await hostPage(page),
       keyboard: (await hostKeyboard(page)).keyboard,
-      settleMs: 500,
+      settleMs: options.settleMs ?? 500,
+      ...(options.countNewAlerts === true ? { countNewAlerts: true } : {}),
     }),
   );
   if (report.outcome !== "filled") throw new Error(`Fill did not complete: ${report.outcome}`);
+  const reads = await page.evaluate(() => Number(sessionStorage.getItem("alertReads") ?? 0));
+  return { report, reads, posted };
+};
+
+test("a submit's answer is the alert text a person sees that was not there before the click", async ({
+  page,
+}) => {
+  const { report } = await signIn(page, { countNewAlerts: true });
   expect(report.controls?.alerts).toEqual([
     "We use cookies on this site",
     "The password is incorrect",
@@ -77,4 +103,30 @@ test("a submit's answer is the alert text a person sees that was not there befor
   ]);
   // The notice shown before the click is no answer to it.
   expect(report.controls?.newAlerts).toBe(2);
+});
+
+// Only a host that reads the count pays for the read before the click: a run's replay, and any
+// host that did not ask, clicks without it, and its report counts nothing.
+test("a fill that does not ask for the count never reads the alerts before its click", async ({
+  page,
+}) => {
+  const { report, reads } = await signIn(page, {});
+  expect(reads).toBe(0);
+  expect(report.controls?.alerts).toContain("The password is incorrect");
+  expect(report.controls?.newAlerts).toBeUndefined();
+});
+
+// A frame that answers the read late never holds the click back for long: the click goes ahead,
+// and with no read before it, the report counts nothing.
+test("a read before the click that a frame answers late gives no count and holds the click back no longer", async ({
+  page,
+}) => {
+  const { report, reads, posted } = await signIn(page, {
+    countNewAlerts: true,
+    slow: true,
+    settleMs: 5000,
+  });
+  expect(reads).toBe(1);
+  expect(posted).toHaveLength(1);
+  expect(report.controls?.newAlerts).toBeUndefined();
 });
