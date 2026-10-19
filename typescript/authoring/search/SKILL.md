@@ -135,8 +135,20 @@ query as `applied_query` and a `query_corrected` boolean.
 ## Answer quickly
 
 A search should answer in seconds. Every click and wait runs on every call, so a run does only
-what its inputs need:
-- Open, set and read back only the groups the caller's inputs use. Always return
+what its inputs need.
+
+Try the fast path first. While exploring, check whether the results page loads directly by URL
+with the inputs encoded (`AGENTS.md`, "Work through the page's own controls"), and whether the
+page's own data request or embedded data carries the result fields. When both hold, the default
+design is: set a location or store through the page's controls first if the URL cannot carry it,
+load the results URL, then read that data in the same session (`page.evaluate(() => fetch(...))`
+for a data request, core skill), reading the applied location back from the page or that
+answer. Drive the search form and read rendered rows only when they don't.
+
+- The main path visits only the controls an input sets: a filter, sort, quick switch or other
+  optional control the caller left unset is never opened, clicked or waited on, so a run with
+  every optional input unset touches none of them. Read its applied state from the page's data
+  or results where they show it (core skill, "Configure, then read"). Always return
   `applied_filters`: the groups the tool set, as the page reads them back.
 - Return the site's offered filter groups only when the caller asks, through an optional
   `include` list input holding `"filters"`. Their output field, such as `available_filters`, is
@@ -145,10 +157,6 @@ what its inputs need:
   the tool may return those, and says they are the visible ones.
 - Skip a step whose result the page already shows, such as a location, store or sort that is
   already the caller's, and the change wait that would follow it (core skill).
-- When results depend on state the site sets only in the page, such as a store, a run may set it
-  through the page's controls and then read the results with the page's own data request in the
-  same session (`page.evaluate(() => fetch(...))`, core skill), especially when that is faster
-  than waiting for the cards. Read the applied location back from the page or that answer.
 - Never wait for the page's `load` event, for network idle, or for rows and content you will not
   return.
 - Fetch a per-result extra the cards lack, such as availability, in one batched request when the
@@ -168,7 +176,8 @@ order, sponsored ones in place.
 The description briefly states the design decisions, limits and interpretations a caller needs,
 such as the site's default location, how many results one call returns and how the site pages. A
 search sets every input you expose in at least one live run before publishing, as the testing
-skill says, most of them together in one combined case; a signed-in one runs that combined case
+skill says, most of them together in one combined case, and also runs the path with every
+optional input unset, which its example often already is; a signed-in one runs that combined case
 and at most one more. A search signed out's cases also include one query the site answers with a
 fallback or "no exact matches" view, whose expectation you write only after seeing what the site
 shows for it. Give each input an
