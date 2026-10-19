@@ -258,15 +258,16 @@ const keyTerms = (
  * A key body after its prefix, read as far as its characters run, so no key loses its tail. A
  * key written in the body that the body could not read whole is read whole by its own rule:
  *
- * - A random body is never cut, since its first part may not be random alone. At each word start
- *   in it, its start or after a separator, it reads such a key that needs no random body into
- *   itself (`sk-…-whsec_…+…`), and `isProviderKey` accepts a match that holds a key.
+ * - A random body is never cut, since its first part may not be random alone. At its start and
+ *   after each separator it reads such a key that needs no random body into itself
+ *   (`sk-…-whsec_…+…`), and `isProviderKey` accepts a match that holds a key.
  * - Any other body, at each word start in it, reads in a key whose prefix it reads but whose
  *   body it does not (`xoxb-…-sk-…_…`). A separator ends it only before a key whose prefix it
  *   cannot read (`whsec_…/ghp_…`), so both keys are found and masked whole. Read `within` another
  *   body, it ends only before a key that body cannot read whole either (`sk-…-whsec_…=whsec_…`).
  *
- * Every other key shape is more of the same key (`sk-proj-…-bl_…_…`).
+ * Every other key shape is more of the same key (`sk-proj-…-bl_…_…`). Each run of letters and
+ * digits is read at once, so the keys it may read in are tried only where a run starts or ends.
  */
 function bodyLoop(shape: KeyShape, within: KeyShape = shape): string {
   const { body } = shape;
@@ -281,7 +282,7 @@ function bodyLoop(shape: KeyShape, within: KeyShape = shape): string {
       true,
       shape,
     );
-    return held === "" ? all : `(?:${wordStart}(?:${held})|${word}|${separator})*`;
+    return held === "" ? all : `(?:${held})?(?:${word}+|${separator}(?:${held})?)*`;
   }
   const take = keyTerms(
     (inner, prefix) => reads(body, prefix) && widerBody(inner, shape),
@@ -295,20 +296,24 @@ function bodyLoop(shape: KeyShape, within: KeyShape = shape): string {
   );
   if (take === "" && cut === "") return all;
   const taken = take === "" ? "" : `${wordStart}(?:${take})|`;
-  return `(?:${taken}${word}|${separator}${cut === "" ? "" : `(?!${cut})`})*`;
+  return `(?:${taken}${word}+|${separator}${cut === "" ? "" : `(?!${cut})`})*`;
 }
 
 /**
  * A key body: at least `minBody` of its characters, then the body as `bodyLoop` reads it. A part
  * shorter than `minBody` before a key the body stops at still counts on its own wherever the
- * body's characters, read through every separator, run `minBody` long.
+ * body's characters, read through every separator, run `minBody` long. A body that needs no
+ * random body and starts with `minBody` letters or digits reads them at once, which is faster
+ * than looking ahead and reading them again; its loop would read them the same way.
  */
 const bodyPattern = (shape: KeyShape) => {
   const all = characters(shape.body);
   const loop = bodyLoop(shape);
-  return loop === `${all}*`
-    ? `${all}{${String(shape.minBody)},}`
-    : `(?=${all}{${String(shape.minBody)}})${loop}`;
+  if (loop === `${all}*`) return `${all}{${String(shape.minBody)},}`;
+  const reach = `(?=${all}{${String(shape.minBody)}})`;
+  if (isRandomShape(shape)) return `${reach}${loop}`;
+  const word = characters(shape.body.slice(0, shape.body.length - separatorsOf(shape.body).length));
+  return `(?:${word}{${String(shape.minBody)}}|${reach})${loop}`;
 };
 // Only a body with a separator can hold another key after one.
 const providerShapes = credentialPolicy.providerKeys.flatMap((shape) =>
