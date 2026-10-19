@@ -20,7 +20,11 @@ import {
   publicationOutputPolicy,
 } from "../../src/guardian/publication.js";
 import { inputFeedbackInstruction } from "../../src/mint/input-feedback.js";
-import { loadAuthoringSkills, loadWorkspaceGuide } from "../../src/mint/skills.js";
+import {
+  type AuthoringOptions,
+  loadAuthoringSkills,
+  loadWorkspaceGuide,
+} from "../../src/mint/skills.js";
 import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
 import { Deadline } from "../../src/runtime/deadline.js";
 import { offlineKernel } from "../support/offline-kernel.js";
@@ -918,7 +922,7 @@ answer. Drive the search form and read rendered rows only when they don't.
 const loadAuthoring = async (
   directory: string,
   render?: (text: string, sectionKey: string) => string,
-  options?: { readonly searchUrlFastPath?: boolean },
+  options?: AuthoringOptions,
 ) => {
   const skills = await Effect.runPromise(loadAuthoringSkills(directory, render, options));
   const guide = await Effect.runPromise(loadWorkspaceGuide(directory, render, options));
@@ -993,6 +997,24 @@ it("refuses the search URL fast path when a file lacks one of its passages", asy
     expect(
       await Effect.runPromise(
         Effect.either(loadAuthoringSkills(root, undefined, { searchUrlFastPath: true })),
+      ),
+    ).toMatchObject({ _tag: "Left", left: { code: "Unavailable" } });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("refuses the search URL fast path when the workspace guide lacks its passage", async () => {
+  const root = await authoringCopy((path, text) =>
+    path.endsWith(join("workspace", "AGENTS.md"))
+      ? text.replace("the tool may open that URL", "the tool may load that URL")
+      : text,
+  );
+  try {
+    expect((await loadAuthoring(root)).agents).toContain("the tool may load that URL");
+    expect(
+      await Effect.runPromise(
+        Effect.either(loadWorkspaceGuide(root, undefined, { searchUrlFastPath: true })),
       ),
     ).toMatchObject({ _tag: "Left", left: { code: "Unavailable" } });
   } finally {

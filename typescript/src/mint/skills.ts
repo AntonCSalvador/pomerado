@@ -237,7 +237,7 @@ const withSearchUrlFastPath =
  * What a host may turn on in the authoring it loads. `searchUrlFastPath` renders the search URL
  * fast path (`searchUrlFastPathPassages`). It is off when absent, and the local host leaves it off.
  */
-type AuthoringOptions = { readonly searchUrlFastPath?: boolean };
+export type AuthoringOptions = { readonly searchUrlFastPath?: boolean };
 
 const hostRender = (render: AuthoringRender, options: AuthoringOptions) =>
   options.searchUrlFastPath === true ? withSearchUrlFastPath(render) : render;
