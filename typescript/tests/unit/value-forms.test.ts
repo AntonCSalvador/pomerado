@@ -67,6 +67,14 @@ describe("shown forms of a value", () => {
     ]);
   });
 
+  it("counts a padded short value's trimmed forms as short, by the shown value they came from", () => {
+    const padded = shownForms("   ab   ");
+    expect(padded).toContainEqual(["   ab   ", false]);
+    expect(padded).toContainEqual(["%20%20%20ab%20%20%20", false]);
+    expect(padded).toContainEqual(["ab", true]);
+    expect(padded).toContainEqual([Buffer.from("   ab   ").toString("base64"), false]);
+  });
+
   it("keeps every other form of a value a URL cannot encode", () => {
     expect(forms("pass\ud800word")).toContain("pass\ud800word");
   });
