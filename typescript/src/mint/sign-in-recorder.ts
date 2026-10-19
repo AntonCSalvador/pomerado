@@ -4,6 +4,7 @@ import { lostTyping, maySend, typingRefusal } from "../destinations/autofill-ref
 import type {
   AutofillInspection,
   AutofillScreens,
+  AutofillSlot,
   AutofillSignedIn,
   AutofillStep,
   AutofillStepReport,
@@ -528,11 +529,15 @@ export const makeSignInRecorder = <E>(input: {
         }
         const record = open;
         // A screen of this sign-in that asks for the password an earlier one took, beside a
-        // second factor, records the refill, which a run's replay then makes in the same place.
+        // second factor none of its earlier screens took, records the refill, which a run's
+        // replay then makes in the same place, and only there.
+        const earlier = (which: (slot: AutofillSlot) => boolean) =>
+          record.steps.some((taken) => taken.fields.some((field) => which(field.slot)));
         const reasked =
           !opened &&
           refills.includes("password") &&
-          record.steps.some((earlier) => earlier.fields.some((field) => field.slot === "password")) &&
+          earlier((slot) => slot === "password") &&
+          !earlier(isSecondFactor) &&
           step.fields.some((field) => isSecondFactor(field.slot));
         armStep(
           record,

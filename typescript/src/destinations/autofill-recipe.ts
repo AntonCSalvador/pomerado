@@ -188,7 +188,7 @@ export const RefillAutofillRecipe = Schema.Struct({
               step.refills.every((slot) =>
                 step.fields.some((field) => "slot" in field && field.slot === slot),
               )),
-        ) || "a step refills only a field it takes, beside a second factor",
+        ) || "a step's refills name a field it takes, and it takes a code or recovery code",
     ),
   );
 export const AutofillRecipe = Schema.Union(

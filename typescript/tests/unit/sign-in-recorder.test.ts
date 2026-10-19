@@ -980,6 +980,35 @@ it("records a screen that asks for the password again with a code as a version 5
   expect(again?.recipe.steps[1]).not.toHaveProperty("refills");
 });
 
+it("records no refill on a screen that asks for the password again after a code already went out", async () => {
+  const host = harness({ held: account, answers: { code: ["482913", "135790"] } });
+  const published = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(identifierAndPassword, undefined, Effect.void);
+      yield* recorder.step(
+        { fields: [{ selector: "#otp", slot: "code" }], submit: "#verify" },
+        undefined,
+        Effect.void,
+      );
+      yield* recorder.step(
+        {
+          fields: [
+            { selector: "#password", slot: "password" },
+            { selector: "#code", slot: "code" },
+          ],
+          submit: "#sign-in",
+        },
+        undefined,
+        Effect.void,
+      );
+      yield* recorder.step(signedIn, undefined, Effect.void);
+      return recorder.published();
+    }),
+  );
+  expect(published?.recipe.version).toBe(1);
+  expect(published?.recipe.steps.some((step) => "refills" in step)).toBe(false);
+});
+
 it("fills a password twice at most in one sign-in, and a ZIP once", async () => {
   const host = harness({ held: account, answers: { zip: ["94110"] } });
   await host.run((recorder) =>
