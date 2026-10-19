@@ -3858,7 +3858,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               kind: "host_live_tests",
               status: "no_cursor",
               instruction:
-                "A next_page case needs an input field named cursor (or page_token) and an output field such as next_cursor, both strings or numbers, in the tool's schemas. Add them, or drop next_page. Nothing was executed.",
+                "A next_page case needs the list fields in the tool's schemas: the string input cursor and output next_cursor, which listInputFields and listOutputFields from pomerado/runtime give. Add them, or drop next_page. Nothing was executed.",
             });
           const digest = yield* stepDigest(request.entrypoint);
           if (digest === undefined)
