@@ -6352,6 +6352,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           ...(dependencies.hostToolDescriptions === undefined
             ? {}
             : { hostToolDescriptions: dependencies.hostToolDescriptions }),
+          ...(dependencies.compactionSkillsNote === undefined
+            ? {}
+            : { compactionSkillsNote: dependencies.compactionSkillsNote }),
           actions: withHostNotices(
             dependencies.retainCapture === undefined
               ? (({ retainCapture: _capture, ...available }) => available)(reviewedActions)

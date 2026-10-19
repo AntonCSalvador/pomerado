@@ -271,3 +271,228 @@ it("leaves a short history to the provider and never compacts it", async () => {
   expect(outcome.build).toBe("published");
   expect(f.requests.some(isCompaction)).toBe(false);
 });
+
+const skillCatalog = ["core", "publication", "search"].map((name) => ({
+  name,
+  description: `Synthetic ${name} skill`,
+  content: `Synthetic ${name} rules.`,
+}));
+const skillPage = (name: string) => `.agents/${name}/SKILL.md`;
+const readSource = (path: string, callId: string, inputTokens = 2_000): ModelResponse => ({
+  usage: usage(inputTokens, 1_024),
+  output: [
+    {
+      type: "function_call",
+      name: "read_source",
+      callId,
+      arguments: JSON.stringify({ path, offset: null, limit: null, paths: null }),
+      status: "completed",
+    },
+  ],
+});
+/** A read_source call the host refuses before reading: it names a path and paths together. */
+const refusedRead = (path: string, callId: string): ModelResponse => ({
+  usage: usage(2_000, 1_024),
+  output: [
+    {
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: `I already read ${skillPage("search")}.` }],
+    },
+    {
+      type: "function_call",
+      name: "read_source",
+      callId,
+      arguments: JSON.stringify({
+        path,
+        offset: null,
+        limit: null,
+        paths: [{ path, offset: null, limit: null }],
+      }),
+      status: "completed",
+    },
+  ],
+});
+/** The host's own note in these tests: just the skill names it is given. */
+const namesNote = (skills: readonly string[]) => `skills read: ${JSON.stringify(skills)}`;
+const noteItems = (request: ModelRequest | undefined) =>
+  items(request).filter(
+    (item) =>
+      item.type === "message" &&
+      item.role === "user" &&
+      typeof item.content === "string" &&
+      item.content.startsWith("skills read: "),
+  );
+const listedSkills = (request: ModelRequest | undefined): unknown =>
+  noteItems(request).map((item) =>
+    item.type === "message" && typeof item.content === "string"
+      ? JSON.parse(item.content.slice("skills read: ".length))
+      : undefined,
+  );
+
+it("tells the model after an idle compaction which skills it read, with the same bytes on each later request", async () => {
+  const executionStarted = deferred();
+  const compactionReturned = deferred();
+  const awaitOther = (other: Promise<void>) => Promise.race([other, settle().then(settle)]);
+  const f = await fixture(
+    async (request) => {
+      if (isCompaction(request)) {
+        await awaitOther(executionStarted.promise);
+        compactionReturned.resolve();
+        return compacted();
+      }
+      const turn = turns(f.requests).length - 1;
+      return [
+        () => readSource(skillPage("core"), "read_core"),
+        // Neither a read the host refused nor the model's own claim is a read.
+        () => refusedRead(skillPage("publication"), "read_publication"),
+        // A path that is not a skill of the catalog is no skill read, even when it parses as one.
+        () => readSource(skillPage("unlisted"), "read_unlisted"),
+        () => call("execute", example, mintIdleCompactionTokens + 10_000),
+        // Read after the compacted prefix: still in view, so not listed.
+        () => readSource(skillPage("search"), "read_search", 30_000),
+        () => call("finish_build", finish, 32_000),
+      ][turn]!();
+    },
+    {
+      skills: skillCatalog,
+      compactionSkillsNote: namesNote,
+      reviewAndExecute: (_input, beforeDispatch = () => Effect.void) =>
+        beforeDispatch(readAllow).pipe(
+          Effect.zipRight(
+            Effect.promise(async () => {
+              executionStarted.resolve();
+              await awaitOther(compactionReturned.promise);
+              await settle();
+              return executed;
+            }),
+          ),
+        ),
+    },
+  );
+  const outcome = await f.run();
+
+  expect(outcome.build).toBe("published");
+  const sent = turns(f.requests);
+  expect(sent).toHaveLength(6);
+  // Nothing before the compaction carries a note.
+  for (const request of sent.slice(0, 4)) expect(noteItems(request)).toEqual([]);
+  const [afterCompaction, later] = sent.slice(4);
+  // The compacted window is the compaction item, then the note.
+  expect(items(afterCompaction)[0]).toMatchObject(compactedItem);
+  expect(items(afterCompaction)[1]).toEqual(noteItems(afterCompaction)[0]);
+  expect(listedSkills(afterCompaction)).toEqual([["core"]]);
+  // The next request keeps the window's bytes, so its cached prefix holds.
+  expect(JSON.stringify(items(later).slice(0, 2))).toBe(
+    JSON.stringify(items(afterCompaction).slice(0, 2)),
+  );
+  expect(listedSkills(later)).toEqual([["core"]]);
+});
+
+it("names the skills read in the minter's own note when the host gives none", async () => {
+  const executionStarted = deferred();
+  const compactionReturned = deferred();
+  const awaitOther = (other: Promise<void>) => Promise.race([other, settle().then(settle)]);
+  const f = await fixture(
+    async (request) => {
+      if (isCompaction(request)) {
+        await awaitOther(executionStarted.promise);
+        compactionReturned.resolve();
+        return compacted();
+      }
+      const turn = turns(f.requests).length - 1;
+      return [
+        () => readSource(skillPage("search"), "read_search"),
+        () => readSource(`/workspace/${skillPage("core")}`, "read_core"),
+        () => call("execute", example, mintIdleCompactionTokens + 10_000),
+        () => call("finish_build", finish, 30_000),
+      ][turn]!();
+    },
+    {
+      skills: skillCatalog,
+      reviewAndExecute: (_input, beforeDispatch = () => Effect.void) =>
+        beforeDispatch(readAllow).pipe(
+          Effect.zipRight(
+            Effect.promise(async () => {
+              executionStarted.resolve();
+              await awaitOther(compactionReturned.promise);
+              await settle();
+              return executed;
+            }),
+          ),
+        ),
+    },
+  );
+  const outcome = await f.run();
+
+  expect(outcome.build).toBe("published");
+  const last = items(turns(f.requests).at(-1));
+  expect(last[0]).toMatchObject(compactedItem);
+  const note = last[1];
+  if (note?.type !== "message" || typeof note.content !== "string")
+    throw new Error("No note after the compaction");
+  expect(note.role).toBe("user");
+  expect(note.content).toContain("core");
+  expect(note.content).toContain("search");
+  expect(note.content).not.toContain("publication");
+});
+
+it("inserts the note once after the provider's own compaction and keeps it on each later request", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        () => readSource(skillPage("core"), "read_core"),
+        () => refusedRead(skillPage("publication"), "read_publication"),
+        // The provider compacted inside this request, below the idle watermark.
+        (): ModelResponse => ({
+          ...call("execute", example, 5_000),
+          output: [compactedItem, ...call("execute", example).output],
+        }),
+        () => readSource(skillPage("search"), "read_search"),
+        () => call("finish_build", finish),
+      ][index]!(),
+    { skills: skillCatalog, compactionSkillsNote: namesNote },
+  );
+  const outcome = await f.run();
+
+  expect(outcome.build).toBe("published");
+  expect(f.requests.some(isCompaction)).toBe(false);
+  expect(f.requests).toHaveLength(5);
+  for (const request of f.requests.slice(0, 3)) expect(noteItems(request)).toEqual([]);
+  const [afterCompaction, later] = f.requests.slice(3);
+  for (const request of [afterCompaction, later]) {
+    expect(items(request)[0]).toMatchObject(compactedItem);
+    expect(items(request)[1]).toEqual(noteItems(request)[0]);
+    // Once: the skills read before the compacting request, not the read after it.
+    expect(listedSkills(request)).toEqual([["core"]]);
+  }
+  expect(JSON.stringify(items(later).slice(0, 2))).toBe(
+    JSON.stringify(items(afterCompaction).slice(0, 2)),
+  );
+});
+
+it("sends no note after a compaction when no skill was read", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        () => readSource("src/tool.ts", "read_tool"),
+        () => refusedRead(skillPage("core"), "read_core"),
+        (): ModelResponse => ({
+          ...call("execute", example, 5_000),
+          output: [compactedItem, ...call("execute", example).output],
+        }),
+        () => call("finish_build", finish),
+      ][index]!(),
+    { skills: skillCatalog },
+  );
+  const outcome = await f.run();
+
+  expect(outcome.build).toBe("published");
+  const last = items(f.requests.at(-1));
+  expect(last[0]).toMatchObject(compactedItem);
+  expect(last.slice(1).map((item) => item.type)).toEqual([
+    "function_call",
+    "function_call_result",
+  ]);
+});
