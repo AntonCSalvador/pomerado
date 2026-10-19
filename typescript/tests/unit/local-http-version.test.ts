@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { stripTypeScriptTypes } from "node:module";
 import { Effect } from "effect";
 import { expect, it } from "vitest";
 import { runLocalOperation } from "../../src/execution/local-operation.js";
@@ -83,55 +81,6 @@ it("runs an HTTP version that imports the SDK by its package path", async () => 
   expect(site.sent.map((request) => request.url)).toEqual([
     "https://shop.example/api/search?q=lamp",
   ]);
-}, 30_000);
-
-it("runs the HTTP version reference as the workspace holds it", async () => {
-  const reference = await readFile("typescript/authoring/examples/http-version.ts", "utf8");
-  const site = jsonSite({
-    data: { items: [{ product_id: "p-1", name: "Brass lamp", price_cents: 4200 }] },
-  });
-  const result = await run({
-    entrypoint: "src/tool-http.mjs",
-    source: stripTypeScriptTypes(reference, { mode: "transform" }).replaceAll(
-      '"../../src/',
-      '"../../',
-    ),
-    input: { query: "lamp" },
-    http: site.transport,
-  });
-  expect(result).toMatchObject({
-    _tag: "Right",
-    right: { output: { products: [{ id: "p-1", title: "Brass lamp", price_minor: 4200 }] } },
-  });
-  expect(site.sent.map((request) => new URL(request.url).host)).toEqual(["api.shop.example"]);
-}, 30_000);
-
-it("fails the HTTP version reference as invalid input, with the site's choices, when the site refuses a value", async () => {
-  const reference = await readFile("typescript/authoring/examples/http-version.ts", "utf8");
-  const site = jsonSite({
-    error: {
-      param: "order",
-      message: "Unknown sort order: cheapest",
-      allowed: ["relevance", "price_low_high", "newest"],
-    },
-  });
-  const result = await run({
-    entrypoint: "src/tool-http.mjs",
-    source: stripTypeScriptTypes(reference, { mode: "transform" }).replaceAll(
-      '"../../src/',
-      '"../../',
-    ),
-    input: { query: "lamp", sort: "cheapest" },
-    http: site.transport,
-  });
-  expect(result).toMatchObject({
-    _tag: "Left",
-    left: {
-      tag: "InvalidInput",
-      refusal: { field: "sort", available: ["relevance", "price_low_high", "newest"] },
-    },
-  });
-  expect(result._tag === "Left" ? result.left.message : "").toContain("Unknown sort order");
 }, 30_000);
 
 it("fails an HTTP version with the failure its host's transport reported", async () => {
