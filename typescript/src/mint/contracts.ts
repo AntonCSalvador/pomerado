@@ -946,9 +946,7 @@ export const ExecutionEvidence: Schema.Schema<ExecutionEvidence> = Schema.Struct
   ),
 });
 
-/**
- * Why a read's HTTP version can't port, as the http-mcp skill's "When it can't port" names it.
- */
+/** Why a read's HTTP version can't port. */
 export const HttpVersionSignal = Schema.Literal(
   "per_request_hash_or_page_id",
   "bot_wall_on_page_fetch",
