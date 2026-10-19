@@ -3925,18 +3925,21 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const verdicts: Record<string, number> = {};
           const judgedRuns = result.cases.flatMap((run) => {
             const testCase = selected.find((entry) => entry.id === run.id);
-            return testCase === undefined
-              ? []
-              : [
-                  {
-                    run,
-                    testCase,
-                    judged: judgeCase(testCase, run, "list" in shape ? shape.list : undefined),
-                  },
-                ];
+            if (testCase === undefined) return [];
+            const judged = judgeCase(testCase, run, "list" in shape ? shape.list : undefined);
+            const previous = recordsFor(request.entrypoint).get(run.id);
+            // An inconclusive rerun, such as a challenge or a site block, tested nothing about
+            // the tool, so a failure it follows on the same source and case keeps counting, with
+            // the output it returned.
+            const keepsFailure =
+              judged.verdict === "inconclusive" &&
+              previous?.verdict === "fail" &&
+              previous.caseDigest === caseDigest(testCase) &&
+              previous.sourceDigest === sourceDigest;
+            return [{ run, testCase, judged, keepsFailure }];
           });
           // Every case's fields first, so each case's output check counts the whole batch.
-          for (const { run, judged } of judgedRuns)
+          for (const { run, judged } of judgedRuns.filter((entry) => !entry.keepsFailure))
             if (judged.output === undefined)
               liveTestFills.delete(outputKey(request.entrypoint, run.id));
             else
@@ -3944,7 +3947,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 sourceDigest,
                 fill: fieldFill(judged.output),
               });
-          for (const { run, testCase, judged } of judgedRuns) {
+          for (const { run, testCase, judged, keepsFailure } of judgedRuns) {
+            verdicts[judged.verdict] = (verdicts[judged.verdict] ?? 0) + 1;
+            if (attemptBound && judged.verdict === "inconclusive" && judged.got === "deadline")
+              liveTestsOutOfTime = true;
+            if (keepsFailure) continue;
             const screened =
               judged.output === undefined
                 ? undefined
@@ -3986,15 +3993,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             const records = recordsFor(request.entrypoint);
             const version = liveTestVersion(request.entrypoint);
             const previous = records.get(run.id);
-            const rerun =
-              previous?.caseDigest === digestOfCase && previous.sourceDigest === sourceDigest;
-            // An inconclusive rerun, such as a challenge or a site block, tested nothing about
-            // the tool, so a failure it follows on the same source and case keeps counting.
-            const keepsFailure =
-              rerun && previous.verdict === "fail" && judged.verdict === "inconclusive";
             // A failure the run replaces stays in the record: the case changed after it, or it
             // passed when run again on the same source and case, which shows it is flaky.
-            const flaky = rerun && judged.verdict === "pass";
+            const flaky =
+              previous?.caseDigest === digestOfCase &&
+              previous.sourceDigest === sourceDigest &&
+              judged.verdict === "pass";
             if (
               previous !== undefined &&
               previous.verdict === "fail" &&
@@ -4014,33 +4018,29 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               for (const dropped of ofVersion.slice(0, Math.max(0, ofVersion.length - maximumBatchCases)))
                 liveTestReplaced.splice(liveTestReplaced.indexOf(dropped), 1);
             }
-            if (!keepsFailure)
-              records.set(run.id, {
-                id: run.id,
-                entrypoint: request.entrypoint,
-                caseDigest: digestOfCase,
-                sourceDigest,
-                verdict: judged.verdict,
-                got: judged.got,
-                ...(judged.detail === undefined ? {} : { detail: judged.detail }),
-                ...(judged.errorClass === undefined ? {} : { errorClass: judged.errorClass }),
-                ...(message === undefined ? {} : { message }),
-                ...(judged.frame === undefined ? {} : { frame: judged.frame }),
-                ...(judged.refusal === undefined ? {} : { refusal: judged.refusal }),
-                ...(excerpt === undefined ? {} : { excerpt }),
-                ...(outputChecks === undefined ? {} : { outputChecks }),
-                durationMs: Math.max(0, Math.round(run.durationMs)),
-                ...(run.lane === undefined ? {} : { lane: run.lane }),
-                ...(run.start === undefined ? {} : { start: run.start }),
-                input: testCase.input,
-                purpose: testCase.purpose,
-                expect: testCase.expect,
-                ...(testCase.next_page === true ? { nextPage: true } : {}),
-                ...(signedInBatch ? { signedIn: true as const } : {}),
-              });
-            verdicts[judged.verdict] = (verdicts[judged.verdict] ?? 0) + 1;
-            if (attemptBound && judged.verdict === "inconclusive" && judged.got === "deadline")
-              liveTestsOutOfTime = true;
+            records.set(run.id, {
+              id: run.id,
+              entrypoint: request.entrypoint,
+              caseDigest: digestOfCase,
+              sourceDigest,
+              verdict: judged.verdict,
+              got: judged.got,
+              ...(judged.detail === undefined ? {} : { detail: judged.detail }),
+              ...(judged.errorClass === undefined ? {} : { errorClass: judged.errorClass }),
+              ...(message === undefined ? {} : { message }),
+              ...(judged.frame === undefined ? {} : { frame: judged.frame }),
+              ...(judged.refusal === undefined ? {} : { refusal: judged.refusal }),
+              ...(excerpt === undefined ? {} : { excerpt }),
+              ...(outputChecks === undefined ? {} : { outputChecks }),
+              durationMs: Math.max(0, Math.round(run.durationMs)),
+              ...(run.lane === undefined ? {} : { lane: run.lane }),
+              ...(run.start === undefined ? {} : { start: run.start }),
+              input: testCase.input,
+              purpose: testCase.purpose,
+              expect: testCase.expect,
+              ...(testCase.next_page === true ? { nextPage: true } : {}),
+              ...(signedInBatch ? { signedIn: true as const } : {}),
+            });
           }
           yield* reportBestEffort(
             dependencies.diagnostics?.emit("mint.live_tests", {

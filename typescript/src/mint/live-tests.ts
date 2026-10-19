@@ -917,7 +917,7 @@ const siteAnswerCapture: Readonly<Record<SiteAnswer, string>> = {
   no_results:
     "the site's own no-results state for this exact input: a page reached through the site's own controls or a URL they produce, that reads back the input as the site applied it",
   refusal:
-    "the site's own controls refusing this exact input: its own validation message for it on its own form, or, where the captures hold the site's responses, a 400, 413, 414 or 422 response to the request its own form sent with it; never the request this tool made, and never a 401, 403, 404, 405 or 429",
+    "the site's own controls refusing this exact input: its own validation message for it on its own form, or, where the captures hold the site's responses, a 400, 413, 414 or 422 response to the request its own form sent with it; never the request this tool made, and never a 401, 403, 404, 405 or 429, a 5xx or a timeout",
 };
 
 /**
@@ -937,8 +937,8 @@ const clearedBy = (
   ];
   const others = [
     record.expect === undefined
-      ? "a case that passes this input after a source change with the expectation this case had (excusedBy)"
-      : `a case that passes this input after a source change with a result that expect ${record.expect} accepts (excusedBy)`,
+      ? "a case of this input that passes after a source change, with the expectation this case had (excusedBy)"
+      : `a case of this input that passes after a source change, with the answer this case expected (${record.expect})${record.expect === "error" ? " or a refusal that expectation accepts" : ""} (excusedBy)`,
     ...(schemaRead
       ? [
           "a bound in the published input schema on a value this input supplies, only where the site itself bounds that value (outsideSchema)",

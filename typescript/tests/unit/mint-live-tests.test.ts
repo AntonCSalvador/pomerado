@@ -877,6 +877,21 @@ it("marks a retired failure outsideSchema only where the schema bounds a value i
   expect(wholeInputRule.retired[0]).not.toHaveProperty("outsideSchema");
   expect(stillCounting(wholeInputRule)).toBe(1);
 
+  // The bound sits in one branch of a rule over the whole input, which the input breaks by lacking
+  // both identifiers: the query's length is not why the schema rejects it.
+  const boundInBranch = await retiredUnder(longQuery, {
+    ...schemas,
+    input: {
+      ...schemas.input,
+      anyOf: [
+        { required: ["zip"] },
+        { required: ["store_id"], properties: { query: { type: "string", maxLength: 5 } } },
+      ],
+    },
+  });
+  expect(boundInBranch.retired[0]).not.toHaveProperty("outsideSchema");
+  expect(stillCounting(boundInBranch)).toBe(1);
+
   const loosened = await retiredUnder(longQuery, schemas, queryBoundedAt(400));
   expect(loosened.retired[0]).not.toHaveProperty("outsideSchema");
   expect(stillCounting(loosened)).toBe(1);
