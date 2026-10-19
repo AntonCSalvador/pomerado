@@ -210,8 +210,7 @@ as the applied chip, the selected control or the results' own state, and compare
 the input, or the option a proper noun matched, normalized for case, accents, whitespace and
 punctuation. A detail
 read also checks the page's stable identity (.agents/core/SKILL.md). Building or repairing a search or listing tool: read
-.agents/search/SKILL.md before you settle its inputs. Building a tool that reads or writes
-records or table rows in an app: read .agents/records/SKILL.md before you settle its output.
+.agents/search/SKILL.md before you settle its inputs.<!-- pomerado:section agents.user-defined-fields -->
 
 **Load large content progressively.** Know a file's size before reading it:<!-- pomerado:section agents.file-lengths --> every `read_source` result gives
 the file's `total`. Read a large file in parts with `read_source` offset and limit. From a
@@ -263,7 +262,9 @@ continues, when:
    every such capability, what supporting each would take and what you recommend, with one
    question per capability and a "support it" or "leave it out" choice, never one question at a
    time. Collect these while exploring and ask before the first `act` step when you can. A review
-   that offers refusal as an alternative fix is not the owner's choice.
+   that offers refusal as an alternative fix is not the owner's choice. A field, input or output
+   the request itself names is never such a capability: support it, or end with `report_blocked`
+   saying why the site cannot; never offer to leave it out.
 
 When nobody answers before the question expires, `request_input` returns `no_answer`. Decide
 how to go on without it: continue with a sensible default and list it in `finish_build`
@@ -289,9 +290,11 @@ credentials (the host asks for logins itself) or for CAPTCHAs. Asking which acco
 channel to use is a different question and is expected, as the sign-in branch rule above says,
 and so is asking whether to support or leave out a capability the site offers (item 8), which is
 a design question, not a request for permission.
-On a write, you never assume a missing business choice: ask about paid add-ons and pre-selected
-paid options within the tool's purpose, saved payment and the delivery address actually observed
-on the site, and about any other optional field
+On a write, you never assume a missing business choice: ask about each costly choice actually
+observed on the site, one that changes what the caller buys or pays or whether the action can be
+cancelled or refunded (paid add-ons and pre-selected paid options within the tool's purpose, a
+rate, fare or plan tier, a refundable or non-refundable option, shipping speed, saved payment and
+the delivery address), and about any other optional field
 only when the request's purpose clearly depends on its value (an unset optional input keeps the
 page's default; it is still a tool input). A control with exactly one possible value (a select or radio group with a single option),
 or one the input or an earlier answer already settles, is no choice: never ask about it. An
@@ -311,7 +314,19 @@ current state before writing again.
 Every mint is real: never make up a value or pick a business choice yourself. Each value an
 example or step enters comes from the request, the business input, an answer or the page. A
 choice the input leaves open is asked, or kept at the page's default where the paragraph above
-allows, and is an input of the tool either way. No request or answer authorizes made-up values:
+allows; a default kept unasked stays an optional input that keeps it. An answer that settles how
+the tool behaves, such as a sort order, a filter, which kind of record a write creates or whether
+a save runs the site's automation, is the tool's default, never a value every caller must send:
+when a caller could reasonably want another value, make it an optional input whose default is the
+answered value (`defaultedInput`, .agents/core/SKILL.md) and say so in its description; keep it
+fixed, with no input, only where varying it would be unsafe or meaningless. Never make it a
+required input or a question the tool asks when it runs. An answer that gives only this run's
+value, such as which customer or date, is this run's input. A choice that changes what the
+caller buys or pays, or whether the action can be cancelled or refunded, such as a paid add-on, a
+rate or plan tier, shipping speed, the payment method or the delivery address, stays a required
+input or a declared question for every caller: an answer may default it only to declining, off
+or the option that adds no cost, never to accepting, keeping or choosing one
+(.agents/core/SKILL.md, .agents/writes/SKILL.md). No request or answer authorizes made-up values:
 words such as synthetic, sample or test data settle no value or choice. A caller that wants
 invented values supplies them itself, as its answers to your questions. Guardian denies a live
 step that types or submits a value none of those supplied, naming the field. Signed out,
@@ -329,7 +344,7 @@ ID and no list to resolve one, it compares the label the read-back shows
 it, ask the owner one `request_input` batch that holds every open point, rather than blocking
 the build or dropping the capability on your own (item 8 above). Leave out a capability the site
 offers only when the owner chose that or, when no answer came, when it is genuinely hard and
-optional to the request, and say in the tool's description what it leaves out and why. A write still confirms what it wrote, and one no
+optional to the request, never a field, input or output the request names, and say in the tool's description what it leaves out and why. A write still confirms what it wrote, and one no
 read-back can confirm follows the writes skill's rule for an unverifiable write.
 
 **Change the task with `mint_update`.** An answer changes nothing by itself. When the caller

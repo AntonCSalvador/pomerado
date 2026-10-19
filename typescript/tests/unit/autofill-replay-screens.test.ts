@@ -1,7 +1,10 @@
-import { Effect, TestContext } from "effect";
+import { Data, Effect, TestContext } from "effect";
 import { expect, it } from "vitest";
 import type { AutofillStep } from "../../src/destinations/autofill-step.js";
-import { makeReplayScreenWait, type SignInReplayBrowser } from "../../src/runtime/sign-in-replay-steps.js";
+import { makeReplayScreenWait } from "../../src/runtime/autofill-replay-screens.js";
+import type { AutofillHooks } from "../../src/runtime/autofill-state.js";
+
+class TestFailure extends Data.TaggedError("TestFailure")<{ readonly code: string }> {}
 
 it.each(["not_found", "not_editable"] as const)(
   "keeps a required account choice when it is %s beside ready password fields",
@@ -13,7 +16,7 @@ it.each(["not_found", "not_editable"] as const)(
       submit: "#submit",
     } satisfies AutofillStep;
     const later = { ...password, page };
-    const browser: SignInReplayBrowser<never> = {
+    const hooks: AutofillHooks<TestFailure> = {
       inspect: (step) =>
         Effect.succeed(
           step.fields[0]?.selector === "#password"
@@ -26,25 +29,24 @@ it.each(["not_found", "not_editable"] as const)(
               }
             : { outcome: "refused", reason },
         ),
-      confirm: () =>
-        Effect.succeed({ signedIn: false, failed: "indicator_not_visible", url: page }),
+      check: () => Effect.succeed({ signedIn: false, failed: "indicator_not_visible", url: page }),
       fill: () => Effect.dieMessage("Unexpected fill"),
+      confirm: () => Effect.dieMessage("Unexpected confirm"),
       open: () => Effect.dieMessage("Unexpected open"),
-      markerVisible: () => Effect.dieMessage("Unexpected marker"),
-      onRequest: () => () => undefined,
-      authenticationOrigins: [],
     };
     const wait = makeReplayScreenWait(
       {
-        browser,
+        hooks,
         entryUrl: page,
         recipe: {
           version: 1,
           steps: [{ ...choice, page }, later],
           signedIn: { selector: "#identity" },
         },
+        emit: () => Effect.void,
+        correlation: { jobId: "job", attemptId: "attempt" },
       },
-      { anythingSent: false },
+      { anythingSent: false, ran: [] },
       { stepWaitMs: 0, pollMs: 1 },
       () => password,
     );
