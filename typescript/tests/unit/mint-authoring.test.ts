@@ -799,7 +799,7 @@ it("renders the pinned standalone authoring", async () => {
     ["9c8d7256bd2f53cec0b11f7f6cf25a07fe9b87837938ca78dc8f8867e843aba0", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["e425e194933160e1094a5d5cecd917bcff31015ce6f506d4bda8383797aa6bad", "caller-input"],
-    ["9903e3f1b5df144b807e10bd4befff346b62f593a5d778209a92a2b8134c3853", "publication"],
+    ["09b8c58b5b887022515aebc470cf1861a95fbbef788a6ed9ea0213ab00a44f62", "publication"],
     ["75257864c06d65f78833bfafb30bf84bf554e216768f792c3e9f2b3f8b15fc5a", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
@@ -819,10 +819,10 @@ it("renders the pinned standalone input-feedback instructions", () => {
       ]),
     ),
   ).toStrictEqual([
-    ["26b53239bde35350bc88dc584fa69fddde12db5b0aae5b5053cdd80279f50b4b", "read, 1 left"],
-    ["cb45ab082464bd0cf11c02b0dd6b5a5a62e8b0e4420393eceafe7793326c9d1f", "read, 0 left"],
-    ["f5b9e26570746eb670ad261bcfeacd42c7131646c969258ee940de90527c93e9", "write, 1 left"],
-    ["0929e3fa7b78c3aa95dc64e79b586cccb6f596dcbfe051b3d43d17413da55bf6", "write, 0 left"],
+    ["10bfff2324305b9608cd2a153a0b90e8c6e28383d4f32d7bf09d10ec23479705", "read, 1 left"],
+    ["31cd716b81eca4aeb91fd2997f5cbcc6f110071b4488eab16435b184d3fae43a", "read, 0 left"],
+    ["95f8842b93f08b7e92092f5f5e8e2996688a587763299560caa770f7fe4828d8", "write, 1 left"],
+    ["971c876f338e973bce199c666d750ceaf1808d88911f7e5cbe87bb69c7433ec1", "write, 0 left"],
   ]);
 });
 

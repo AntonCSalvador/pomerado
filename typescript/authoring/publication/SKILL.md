@@ -196,10 +196,11 @@ pomerado:section publication.saved-files:end -->.
    - the input schema: no account-specific value (a passenger, loyalty or member number, saved
      card or address, account ID) as an enum member, example or default; every input as general
      as the site's field, never narrowed to the example's value; on a write, every option the
-     session met on the path is an input, and a paid add-on or pre-selected paid option within
-     the tool's purpose, the payment method and the delivery address are inputs or run-time
-     questions, never left to the page's default or hard-coded from the build's request or
-     answers, which spoke for one caller; a paid upsell outside the tool's purpose is declined;
+     session met on the path is an input or a settled default, and a costly choice, one that
+     changes what the caller buys or pays or whether the action can be cancelled or refunded
+     (core skill), is an input or a run-time question whose default may only decline it, never
+     left to the page's default or hard-coded from the build's request or answers, which spoke
+     for one caller; a paid upsell outside the tool's purpose is declined;
    - a pop-up that shows only for some accounts, states or visits is handled when present and
      never required;
    - declared questions ask only what the page or the caller uniquely knows, never a login;
