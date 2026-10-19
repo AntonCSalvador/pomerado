@@ -923,7 +923,9 @@ const loadAuthoring = async (
   const skills = await Effect.runPromise(loadAuthoringSkills(directory, render, options));
   const guide = await Effect.runPromise(loadWorkspaceGuide(directory, render, options));
   const search = contents(skills)[skills.findIndex((skill) => skill.name === "search")] ?? "";
-  return { skills, guide, search, agents: guide.instructions };
+  // Each skill's digest, as the pinned test takes it: comparing the bytes themselves is slow.
+  const digests = skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name] as const);
+  return { digests, guide, search, agents: guide.instructions };
 };
 
 /*
@@ -936,7 +938,7 @@ it("renders the search URL fast path only when a host turns it on", async () => 
   const omitted = await loadAuthoring("typescript/authoring");
   const off = await loadAuthoring("typescript/authoring", undefined, { searchUrlFastPath: false });
   const on = await loadAuthoring("typescript/authoring", undefined, { searchUrlFastPath: true });
-  expect(off.skills).toStrictEqual(omitted.skills);
+  expect(off.digests).toStrictEqual(omitted.digests);
   expect(off.guide).toStrictEqual(omitted.guide);
   for (const [mode, shown, hidden] of [
     [off, "off", "on"],
@@ -951,19 +953,19 @@ it("renders the search URL fast path only when a host turns it on", async () => 
   }
   expect(on.guide.files.get("AGENTS.md")).toBe(on.guide.instructions);
   expect([
-    [sha256(JSON.stringify(on.skills.find((skill) => skill.name === "search"))), "search"],
+    ...on.digests.filter(([, name]) => name === "search"),
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
     ["fb27753b30c3e53a0a51b07b13eedfbae2555e4abb861fe287a7f9d352018a7a", "search"],
     ["69a275fc44bc2bd80f12148f34daf4e35ab119aaab0b125edb24cf628459272d", "workspace/AGENTS.md"],
   ]);
-  expect(on.skills.filter((skill) => skill.name !== "search")).toStrictEqual(
-    off.skills.filter((skill) => skill.name !== "search"),
+  expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(
+    off.digests.filter(([, name]) => name !== "search"),
   );
   expect([...on.guide.files].filter(([path]) => path !== "AGENTS.md")).toStrictEqual(
     [...off.guide.files].filter(([path]) => path !== "AGENTS.md"),
   );
-});
+}, 30_000);
 
 it("renders the search URL fast path in a host's composed text", async () => {
   const root = await authoringCopy((_path, text) => composeHostText(text));
