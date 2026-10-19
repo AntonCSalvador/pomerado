@@ -18,7 +18,9 @@ import { shopAccount, shopCode, startShop } from "./shop-fixture.js";
 
 // A login the site rejected during an automatic sign-in is never sent again by the next one: the
 // next sign-in asks for a correction before it types anything. A rejected code is asked fresh,
-// with the login kept.
+// with the login kept. The shop shows its error under the form, which the recipe records as the
+// login screen's rejection marker, and the corrections a field gets, two, last until a sign-in
+// verifies.
 
 const shopRecipe = (origin: string, code: boolean) => ({
   version: 1 as const,
@@ -31,6 +33,7 @@ const shopRecipe = (origin: string, code: boolean) => ({
       ],
       submit: shopSignIn.submit,
       submittedBy: "host" as const,
+      rejectedMarkers: [{ slot: "password" as const, selector: "#login-error" }],
     },
     ...(code
       ? [
@@ -100,6 +103,7 @@ await primary.fill("input[name=password]", ${JSON.stringify(shopAccount.password
 await primary.click("button");
 await primary.locator("#account").waitFor({ timeout: 10000 });`);
           shop.state.signedInLogin = "account";
+          shop.state.loginError = true;
           const signIn = makeRunSignIn(
             session,
             { recipe: shopRecipe(shop.origin, code), entryUrl: `${shop.origin}/login` },
@@ -156,28 +160,19 @@ test("an automatic sign-in after one whose login the site rejected asks for a co
 
 test("a correction that repeats the login the site rejected is asked again before anything is typed", async () => {
   test.setTimeout(180_000);
-  // As above, but the next sign-in's first correction gives the rejected password again.
+  // The first correction gives the rejected password again, and the one asked after it goes
+  // unanswered.
   const run = await signedOutTwice((reason, nth) =>
-    reason === "missing_credentials"
-      ? wrong
-      : nth === 1
-        ? undefined
-        : nth === 2
-          ? wrong
-          : shopAccount.password,
+    reason === "missing_credentials" || nth === 1 ? wrong : undefined,
   );
+  // Both corrections are spent, so the next sign-in refuses before it types the rejected login.
   expect(run.answers).toEqual([
     { outcome: "refused", cause: "session_sign_in_failed" },
-    { outcome: "signed_in", signedInAgain: true },
+    { outcome: "refused", cause: "session_sign_in_failed" },
   ]);
   // The rejected password goes out only the first time.
-  expect(run.posts).toEqual([1, 1]);
-  expect(run.asked).toEqual([
-    "missing_credentials",
-    "invalid_credentials",
-    "invalid_credentials",
-    "invalid_credentials",
-  ]);
+  expect(run.posts).toEqual([1, 0]);
+  expect(run.asked).toEqual(["missing_credentials", "invalid_credentials", "invalid_credentials"]);
 });
 
 test("corrections that keep repeating the login the site rejected refuse the sign-in, typing nothing", async () => {
@@ -189,13 +184,9 @@ test("corrections that keep repeating the login the site rejected refuse the sig
     { outcome: "refused", cause: "session_sign_in_failed" },
     { outcome: "refused", cause: "session_sign_in_failed" },
   ]);
+  // The next sign-in's correction is the last of two, and it repeats the rejected password.
   expect(run.posts).toEqual([1, 0]);
-  expect(run.asked).toEqual([
-    "missing_credentials",
-    "invalid_credentials",
-    "invalid_credentials",
-    "invalid_credentials",
-  ]);
+  expect(run.asked).toEqual(["missing_credentials", "invalid_credentials", "invalid_credentials"]);
 });
 
 test("a code the site rejected during an automatic sign-in leaves the login as it was: the next sign-in asks only for a fresh code", async () => {
