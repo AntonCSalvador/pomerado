@@ -163,7 +163,9 @@ Finish in this order: make your last edit, run every case once more (`cases` nul
 version you ship, run the example last, then call `finish_build`. Publication review reads the
 host's record of your cases (`publication/tests.json`), not your account of them, and judges
 them against what the tool claims: a failing case, or a claim no passing case tests while time
-remained, holds publication back. Deleting or changing a case after it failed does not hide the
+remained, holds publication back.
+Publication review starts only when at least 70% of the cases you ran on the code you publish pass. Inconclusive results count neither way.
+Deleting or changing a case after it failed does not hide the
 failure: the record keeps its last result as retired, and so does a failure that passes when run again on the same code, as
 flaky. When `live_tests` answers `no_time`, run the example last and publish; the record says time
 ran out.
