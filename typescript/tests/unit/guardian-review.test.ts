@@ -837,6 +837,38 @@ describe("OpenAI reviewer policy and trusted authority", () => {
     },
   );
 
+  // With the parent domain as the allowed origin, its name covers the added suffix's hosts, so
+  // Guardian is told the suffixes the host added to the list below it, whose hosts the policy
+  // already keeps apart as hosts the list gives a registrable domain of their own.
+  it("names the added private suffixes below a parent-domain site", async () => {
+    configureSiteIdentity({ privateSuffixes: ["apps.example.test"] });
+    try {
+      const requests = readThenDecide({
+        outcome: "allow",
+        rationale: "Guarded on the site.",
+        action: "read",
+      });
+      await Effect.runPromise(
+        makeGuardian(reviewer("Synthetic upstream {{ tenant_policy_config }}")).review(
+          { ...pending, allowedOrigins: ["https://example.test"] },
+          readEntrypoint,
+        ),
+      );
+      expect(modelInput(requests)).toHaveProperty("trusted_authority.allowedSites", [
+        {
+          scheme: "https",
+          registrableDomain: "example.test",
+          addedPrivateSuffixes: ["apps.example.test"],
+        },
+      ]);
+      expect(requests[0]?.systemInstructions ?? "").toContain(
+        "except a host the list gives a registrable domain of its own",
+      );
+    } finally {
+      configureSiteIdentity({});
+    }
+  });
+
   it("gives every execution review the exact payment frame origins", async () => {
     const requests = readThenDecide({
       outcome: "allow",

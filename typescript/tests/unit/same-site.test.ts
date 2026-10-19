@@ -83,6 +83,16 @@ describe("a host's added private suffixes", () => {
     expect(registrableDomain("apps.example.test.")).toBeUndefined();
   });
 
+  it("reads a URL or host:port as the public list does, and no host name as no site", () => {
+    configureSiteIdentity({ privateSuffixes: ["apps.example.test"] });
+    expect(registrableDomain("alpha.apps.example.test:8443")).toBe("alpha.apps.example.test");
+    expect(registrableDomain("https://alpha.apps.example.test/p")).toBe("alpha.apps.example.test");
+    expect(registrableDomain("https://alpha.apps.example.test")).toBe("alpha.apps.example.test");
+    expect(registrableDomain(".apps.example.test")).toBeUndefined();
+    expect(registrableDomain(".alpha.apps.example.test")).toBeUndefined();
+    expect(siteOf(".apps.example.test")).not.toBe("example.test");
+  });
+
   it("takes the longest suffix, added or listed", () => {
     configureSiteIdentity({ privateSuffixes: ["apps.example.test", "eu.apps.example.test"] });
     expect(siteOf("alpha.eu.apps.example.test")).toBe("alpha.eu.apps.example.test");

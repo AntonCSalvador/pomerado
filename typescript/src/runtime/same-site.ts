@@ -75,12 +75,26 @@ export interface SiteIdentity {
    * the site it computed. With no such suffix it is the plain `host === domain` or `.domain` test.
    */
   readonly hostOnSiteSource: (domain: string) => string;
+  /**
+   * The added private suffixes at or below `domain`: every host that is one of them or below one
+   * is another site than `domain`, though its name ends in `domain`. Empty with no added suffix.
+   */
+  readonly separateSuffixes: (domain: string) => readonly string[];
 }
 
 const labelPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
 
-/** The form a suffix match reads a host in: lower case with no trailing dots, as the list does. */
-const normalHost = (hostname: string) => hostname.toLowerCase().replace(/\.+$/u, "");
+/**
+ * The host name a suffix match reads, as the public list's lookup reads it: taken out of a URL or
+ * `host:port` the same way, in lower case with no trailing dots. Undefined for anything with an
+ * empty label, such as a leading dot, so an added suffix never matches text that is no host name.
+ */
+const normalHost = (input: string) => {
+  const host = parse(input, { allowPrivateDomains: true })
+    .hostname?.toLowerCase()
+    .replace(/\.+$/u, "");
+  return host === undefined || host.split(".").includes("") ? undefined : host;
+};
 
 const labelCount = (name: string) => (name === "" ? 0 : name.split(".").length);
 
@@ -114,8 +128,8 @@ export const makeSiteIdentity = (options: SiteIdentityOptions = {}): SiteIdentit
     if (privateSuffixes.length === 0) return listed;
     const host = normalHost(hostname);
     // A host that is itself an added suffix has no registrable domain, as a bare listed one has
-    // none.
-    if (privateSuffixes.includes(host)) return undefined;
+    // none; neither has text the list reads a domain in but that is no host name.
+    if (host === undefined || privateSuffixes.includes(host)) return undefined;
     const added = privateSuffixes
       .filter((suffix) => host.endsWith(`.${suffix}`))
       .reduce((longest, suffix) => (labelCount(suffix) > labelCount(longest) ? suffix : longest), "");
@@ -150,17 +164,26 @@ export const makeSiteIdentity = (options: SiteIdentityOptions = {}): SiteIdentit
     );
   };
 
+  const separateSuffixes = (domain: string) =>
+    privateSuffixes.filter((suffix) => suffix === domain || suffix.endsWith(`.${domain}`));
+
   const hostOnSiteSource = (domain: string) => {
     const site = JSON.stringify(domain);
-    const below = privateSuffixes.filter(
-      (suffix) => suffix === domain || suffix.endsWith(`.${domain}`),
-    );
+    const below = separateSuffixes(domain);
     return below.length === 0
       ? `((host) => host === ${site} || host.endsWith("." + ${site}))`
       : `((host) => host === ${site} || (host.endsWith("." + ${site}) && !${JSON.stringify(below)}.some((suffix) => host === suffix || host.endsWith("." + suffix))))`;
   };
 
-  return { privateSuffixes, registrableDomain, siteOf, siteDomain, sameSite, hostOnSiteSource };
+  return {
+    privateSuffixes,
+    registrableDomain,
+    siteOf,
+    siteDomain,
+    sameSite,
+    hostOnSiteSource,
+    separateSuffixes,
+  };
 };
 
 let configured = makeSiteIdentity();
@@ -168,7 +191,8 @@ let configured = makeSiteIdentity();
 /**
  * Sets the process's site identity: the public suffix list plus the host's own private suffixes.
  * A host calls it once at startup, before any site check, with the list its own configuration
- * names; every site check in this package then reads it. Throws `InvalidPrivateSuffix`, keeping
+ * names; every site check in this package then reads it. Each process, and each bundle with its
+ * own copy of this module, that runs site checks configures it. Throws `InvalidPrivateSuffix`, keeping
  * the identity in force, when an entry is refused. With no suffixes it restores the default, the
  * public list alone.
  */
@@ -194,6 +218,10 @@ export const siteDomain = (siteOrigin: string): string | undefined =>
 /** `SiteIdentity.sameSite` under the process's site identity. */
 export const sameSite = (authorizedSiteOrigin: string | undefined, url: URL): boolean =>
   configured.sameSite(authorizedSiteOrigin, url);
+
+/** `SiteIdentity.separateSuffixes` under the process's site identity. */
+export const separateSuffixes = (domain: string): readonly string[] =>
+  configured.separateSuffixes(domain);
 
 /** `SiteIdentity.hostOnSiteSource` under the process's site identity. */
 export const hostOnSiteSource = (domain: string): string => configured.hostOnSiteSource(domain);
