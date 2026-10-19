@@ -84,6 +84,8 @@ export type ReadyBlocker =
  * self-opening panels it closed and whether it expanded the control's section.
  */
 export interface ReadyResult {
+  /** Removes the locator handlers that close `dismiss` panels before later actions. */
+  readonly release: () => Promise<void>;
   readonly afterMs: number;
   readonly looks: number;
   readonly waitedFor: readonly ReadyBlocker[];
@@ -115,8 +117,9 @@ const outcomeWaitCandidate = (name, value) => {
   if (kind === "check" && typeof spec !== "function") refuse("needs a function as check");
   if (kind === "url" && !(typeof spec === "string" || outcomeWaitIsRegExp(spec) || typeof spec === "function"))
     refuse("needs a string, a RegExp or a function of the URL as url");
-  if (kind === "response" && !(typeof spec === "function" || (spec !== null && typeof spec === "object")))
-    refuse("needs a function of the response or { method, url, status, navigation } as response");
+  if (kind === "response" && !(typeof spec === "function" ||
+      (spec !== null && typeof spec === "object" && ["method", "url", "status", "navigation"].some((field) => spec[field] !== undefined))))
+    refuse("needs a function of the response or { method, url, status, navigation }, with at least one of them, as response");
   if (kind === "dialog" && !(spec === true || typeof spec === "string" || Array.isArray(spec)))
     refuse('needs true, a dialog type such as "alert", or a list of types as dialog');
   if (kind === "popup" && !(spec === true || typeof spec === "function")) refuse("needs true or a function of the new page as popup");
@@ -241,6 +244,7 @@ const outcomeWaitEvents = (candidates) => {
     seen: (kind) => seen[kind],
     navigatedSince: (at) => navigatedAt >= at,
     dialogOpen: () => dialog !== undefined,
+    dialog: () => dialog,
     unnamedDialog: () => unnamedDialog,
     dialogSignal,
     hitSignal,
@@ -451,9 +455,11 @@ const outcomeWaitEvidence = async (candidate, observation, state, events, now) =
 export const readyWaitCode = String.raw`
 // Runs in the page: the state of the control's visible matches at one look.
 const readyWaitInPage = (elements, spec) => {
+  // Visible as Playwright counts it: a box and no visibility:hidden. A transparent native input
+  // under a styled checkbox, radio or switch still counts.
   const shows = (element) =>
     (typeof element.checkVisibility === "function"
-      ? element.checkVisibility({ visibilityProperty: true, opacityProperty: true })
+      ? element.checkVisibility({ visibilityProperty: true })
       : element.getClientRects().length > 0) &&
     element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const visible = elements.filter(shows);
@@ -498,7 +504,7 @@ const readyWaitInPage = (elements, spec) => {
   return { blockers, box, details };
 };
 // Whether a section toggle shows its section collapsed: aria-expanded="false", or the summary of a
-// closed details element. A toggle with neither is collapsed while the control is hidden.
+// closed details element; null when it says neither.
 const readyWaitCollapsed = (toggle) =>
   toggle.evaluate((element) => {
     const expanded = element.getAttribute("aria-expanded");
@@ -558,7 +564,7 @@ const waitForReady = async (target, options = {}) => {
     for (const close of dismiss) {
       await page.addLocatorHandler(close, async () => {
         await close.filter({ visible: true }).first().click({ timeout: waitLimits.action }).catch(() => undefined);
-      }, { times: dismissLimit });
+      }, { times: dismissLimit, noWaitAfter: true });
       handlers.push(close);
     }
   };
@@ -574,22 +580,30 @@ const waitForReady = async (target, options = {}) => {
     let quietBefore = false;
     while (true) {
       looks += 1;
-      let state;
-      try {
-        // Close what opened on its own first: it may be what covers the control.
+      // Every click and read is bounded by the deadline: a page held up by a pending navigation
+      // reads as absent until then.
+      const left = () => Math.max(1, until - Date.now());
+      const read = async () => {
+        // Close what opened on its own first: it may be what covers the control. After a click,
+        // the panel gets a moment to close before it is clicked again.
         for (const close of dismiss) {
           if (dismissed >= dismissLimit) break;
+          const shown = close.filter({ visible: true }).first();
           if ((await close.filter({ visible: true }).count()) === 0) continue;
           dismissed += 1;
-          await close.filter({ visible: true }).first().click({ timeout: waitLimits.action }).catch(() => undefined);
+          await shown.click({ timeout: Math.min(waitLimits.action, left()) }).catch(() => undefined);
+          await shown.waitFor({ state: "hidden", timeout: Math.min(1000, left()) }).catch(() => undefined);
         }
-        state = await target.evaluateAll(readyWaitInPage, spec);
-        if (options.expand !== undefined && !expandTried && (await options.expand.filter({ visible: true }).count()) > 0) {
-          const collapsed = await readyWaitCollapsed(options.expand.filter({ visible: true }).first());
-          if (collapsed === true || (collapsed === null && (state.blockers[0] === "hidden" || state.blockers[0] === "absent"))) {
+        const state = await target.evaluateAll(readyWaitInPage, spec);
+        // Expand only a section that holds the control hidden, and only once: a toggle that says
+        // it is expanded, or a control already showing or not yet there, is never clicked.
+        if (options.expand !== undefined && !expandTried && state.blockers[0] === "hidden" &&
+            (await options.expand.filter({ visible: true }).count()) > 0) {
+          const toggle = options.expand.filter({ visible: true }).first();
+          if ((await readyWaitCollapsed(toggle)) !== false) {
             expandTried = true;
             expanded = true;
-            await options.expand.filter({ visible: true }).first().click({ timeout: waitLimits.action });
+            await toggle.click({ timeout: Math.min(waitLimits.action, left()) });
             state.blockers = ["collapsed", ...state.blockers];
           }
         }
@@ -600,6 +614,13 @@ const waitForReady = async (target, options = {}) => {
           }
         if (options.pending !== undefined && (await page.evaluate(options.pending))) state.blockers.push("pending");
         if (options.until !== undefined && !(await options.until())) state.blockers.push("until");
+        return state;
+      };
+      let state;
+      try {
+        const reading = read();
+        reading.catch(() => undefined);
+        state = (await waitBounded(reading, Math.max(left(), 1000))) ?? { blockers: ["absent"] };
       } catch (error) {
         if (!waitContextLost(error)) throw error;
         state = { blockers: ["absent"] };

@@ -761,7 +761,8 @@ re-rendered is not read while a step that leaves the same answer still resolves;
 changed element counts at once. `waitForOutcome` returns the name of the answer that showed.
 An answer may also be `{ invalid: form }` (a field the site marked invalid), `{ gone: locator }`
 (a form or dialog that closed), `{ url }` (a navigation or route change), `{ response }`,
-`{ dialog }` (a native dialog, left open for you), `{ popup }`, `{ announced: text }` (a toast or
+`{ dialog }` (a native dialog, left open as `result.dialog`: keep it on `globalThis.dialog` and
+return its type and message for `decideDialog`, as `references/native-dialog.ts` does), `{ popup }`, `{ announced: text }` (a toast or
 alert a live region announced, even one gone before a look) or `{ check: fn }`.
 `waitForOutcomeResult` returns the winner with its `evidence`, such as the invalid fields' labels
 and messages, the toast's text or the `response`.

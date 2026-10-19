@@ -332,6 +332,31 @@ test.describe("outcome race after an action", () => {
     expect(answer).toMatchObject({ outcome: "committed", evidence: { status: 201 } });
   });
 
+  test("a deadline ends the wait in time even while a slow submit holds the page", async ({ page }) => {
+    await site(
+      page,
+      {
+        "/": `<form id="record" aria-label="Edit record" action="/api/records" method="post">
+            <input name="title" value="x"><button id="save">Save</button></form>`,
+      },
+      (request) => (request.method() === "POST" ? { contentType: "text/html", body: "<p>Saved</p>", delayMs: 6000 } : undefined),
+    );
+    const answer = await race(
+      page,
+      `${saveOutcomes} committed: { response: { method: "POST" } },`,
+      "action: () => save.click({ noWaitAfter: true }), deadline: Date.now() + 1000, noProgressMs: 8000,",
+    );
+    // It ends at its deadline, long before the submit's answer at 6 s.
+    expect(answer.reason).toBe("outcome_timeout");
+    expect(answer.ms).toBeLessThan(4000);
+  });
+
+  test("a response outcome names at least one thing to match", async ({ page }) => {
+    await page.setContent("<p>page</p>");
+    const answer = await call(page, `return await waitForOutcome({ saved: { response: {} } });`);
+    expect(answer.error).toMatch(/needs a function of the response or \{ method, url, status, navigation \}, with at least one/u);
+  });
+
   test("a batched GraphQL save never sends the named request, and the page's toast still decides", async ({
     page,
   }) => {
@@ -449,6 +474,40 @@ test.describe("outcome race after an action", () => {
       evidence: { type: "alert", message: "Record saved" },
       extra: `${origin}/`,
     });
+  });
+
+  test("an alert the click's own handler raises decides without hanging the click", async ({ page }) => {
+    await site(page, { "/": recordForm(`alert("Record saved");`) });
+    const answer = await race(
+      page,
+      `${saveOutcomes} alerted: { dialog: "alert" },`,
+      "",
+      `(async () => { await result.dialog.accept(); return page.evaluate(() => document.title + "ok"); })()`,
+    );
+    expect(answer).toMatchObject({ outcome: "alerted", evidence: { type: "alert", message: "Record saved" }, extra: "ok" });
+  });
+
+  test("a dialog that opens after another outcome won is still handed back, not left to freeze the page", async ({
+    page,
+  }) => {
+    await site(
+      page,
+      { "/": recordForm(`await fetch("/api/records", { method: "POST", body: "{}" }); alert("Saved");`) },
+      (request) => (request.method() === "POST" ? { status: 201, body: "{}" } : undefined),
+    );
+    const answer = await race(
+      page,
+      `committed: { response: { method: "POST", status: 201 } }, alerted: { dialog: true },`,
+      "",
+      `(async () => {
+        // The alert opens just after the response; give it the moment it needs, then handle it.
+        await page.waitForEvent("dialog", { timeout: 1000 }).catch(() => undefined);
+        const held = result.dialog !== undefined;
+        await result.dialog?.dismiss();
+        return { held, readable: await page.evaluate(() => 1 + 1) };
+      })()`,
+    );
+    expect(answer).toMatchObject({ outcome: "committed", extra: { readable: 2 } });
   });
 
   test("a native dialog no outcome names fails at once, naming its type", async ({ page }) => {
@@ -722,14 +781,14 @@ test.describe("readiness before acting", () => {
       `dismiss: page.getByRole("button", { name: "Cancel Tour" })`,
       `(async () => {
         await page.evaluate(() => window.openTourLater());
-        await new Promise((resolve) => setTimeout(resolve, 1200));
+        // The tour covers the button by the time it is clicked.
+        await page.waitForFunction(() => document.querySelector(".shepherd-element") !== null, null, { timeout: 3000 });
         await page.locator("#target").click({ timeout: 2000 });
         await result.release();
-        return page.locator("#clicks").textContent();
+        return { clicks: await page.locator("#clicks").textContent(), tour: await page.locator(".shepherd-element").count() };
       })()`,
     );
-    expect(answer.ms).toBeGreaterThanOrEqual(1200);
-    expect(answer).toMatchObject({ dismissed: 0, extra: "1" });
+    expect(answer).toMatchObject({ dismissed: 0, extra: { clicks: "1", tour: 0 } });
   });
 
   test("a cookie banner over the control is accepted, then the control is ready", async ({ page }) => {
@@ -763,6 +822,33 @@ test.describe("readiness before acting", () => {
     await page.setContent(`<details><summary>Advanced</summary><label>Timeout <input id="t"></label></details>`);
     const answer = await ready(page, `page.locator("#t")`, `expand: page.locator("summary"), stableMs: 50`);
     expect(answer).toMatchObject({ expanded: true });
+  });
+
+  test("a toggle that says collapsed is not clicked while its control already shows", async ({ page }) => {
+    await page.setContent(`
+      <button id="toggle" aria-expanded="false">Billing</button><input aria-label="ZIP">
+      <script>document.querySelector("#toggle").onclick = () => { throw new Error("toggled"); };</script>`);
+    expect(await ready(page, `page.getByLabel("ZIP")`, `expand: page.locator("#toggle")`)).toMatchObject({ expanded: false });
+  });
+
+  test("an open section whose control has not loaded yet is not toggled closed", async ({ page }) => {
+    await page.setContent(`
+      <button id="toggle">Billing</button><div id="billing"></div>
+      <script>
+        document.querySelector("#toggle").onclick = () => { document.querySelector("#billing").hidden = true; };
+        window.begin = () => setTimeout(() => { document.querySelector("#billing").innerHTML = '<input aria-label="ZIP">'; }, 200);
+      </script>`);
+    const answer = await ready(page, `page.getByLabel("ZIP")`, `expand: page.locator("#toggle"), stableMs: 50`);
+    expect(answer).toMatchObject({ expanded: false });
+    expect(answer.waitedFor).toContain("absent");
+  });
+
+  test("a styled checkbox whose native input is transparent is ready", async ({ page }) => {
+    await page.setContent(`
+      <label class="switch" style="position:relative;display:inline-block;padding:4px">
+        <input type="checkbox" style="opacity:0;position:absolute;inset:0;margin:0"> <span class="slider">Remember me</span>
+      </label>`);
+    expect(await ready(page, `page.getByRole("checkbox", { name: "Remember me" })`, "")).toMatchObject({ waitedFor: [] });
   });
 
   test("an expanded section is never toggled closed", async ({ page }) => {
