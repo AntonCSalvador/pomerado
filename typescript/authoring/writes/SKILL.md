@@ -55,8 +55,10 @@ add, save or submit anything there.
 
 Read the path's options with read-only exploration where you can, then ask with
 `request_input` about the ones the caller's input does not settle, as `AGENTS.md` ("Try
-hard, then ask") says: each paid add-on and pre-selected paid option within the tool's
-purpose, the payment method and the delivery address you saw, and any other option only when
+hard, then ask") says: each costly choice you saw, one that changes what the caller buys or
+pays or whether the action can be cancelled or refunded (each paid add-on and pre-selected paid
+option within the tool's purpose, a rate, fare or plan tier, a refundable or non-refundable
+option, shipping speed, the payment method and the delivery address), and any other option only when
 the request's purpose clearly depends on it. An unasked optional field keeps the page's
 default and is still an optional input of the script. Ask only about options the site
 actually shows. Never keep, clear, accept or decline one of those unasked. A paid upsell
@@ -169,8 +171,9 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   Location names the new record went through as soon as it arrives, with no wait for the
   page. A 200 whose
   body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says
-  the work is queued, went through too; return the site's own status word for it in the
-  output. Then read what the output promises from that response or from the page the commit
+  the work is queued, went through too; return that in the output as a status in the core
+  notation, such as `queued`, with the site's own word in a `status_label` field. Then read
+  what the output promises from that response or from the page the commit
   left, match it to the caller's values, and call `verified()` with no argument just before
   returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page,
   such as a list, a history or an account screen, only to prove the write: a commit that went
@@ -249,8 +252,7 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
 Once the session has started, a live `explore` or `test` is refused, and a write
 build never runs a live `example`: read what the composed script will need, such as a lookup's
 list, in an `act` step that changes nothing. The session is the one run that proves the write:
-design no tests and build no offline test suite for it. Its HTTP version gets one offline replay of
-the session (http-mcp skill), and the testing skill is not for a write.
+design no tests and build no offline test suite for it.<!-- pomerado:section writes.http-replay -->
 
 ## Check the read-back
 
@@ -307,13 +309,22 @@ the task completed but its commit steps were not marked; never repeat the write
 to add them.
 
 Every option the session met on its path is an input of the script, add-ons and
-pre-selected defaults included: required when the site requires a choice, optional
-otherwise. The script sets each option from its input. An unset optional input leaves the
-page's default, as in a read. The exception is a paid add-on or pre-selected paid option
+pre-selected defaults included: required only when the site requires a choice that neither
+the request nor an answer settled, optional otherwise. The script sets each option from its
+input. An unset optional input leaves the page's default, as in a read. An option the request
+or the owner's answer settled as how the tool behaves, such as which kind of record it
+creates, which line type a free-text line takes or whether a save runs the site's automation,
+is the tool's default: an optional input declared with `defaultedInput` and the answered value,
+whose description says so (core skill), never a required input or a question the script asks.
+The exception is a paid add-on or pre-selected paid option
 within the tool's purpose, the payment method and the delivery address: each must be
 explicit, so the script never keeps, clears, accepts or declines one the input leaves open. It
 asks with a declared question before the commit mark (the caller-input skill), offering a
-saved payment or address as an account-specific choice. Choosing the address and payment is
+saved payment or address as an account-specific choice. The same holds for any choice that
+changes what the caller buys or pays, or whether the action can be cancelled or refunded, such
+as a rate, fare or plan tier, a refundable option or shipping speed (core skill). An owner's
+answer may make declining such an option, turning it off or the option that adds no cost the
+default of its optional input, never accepting, keeping or choosing one. Choosing the address and payment is
 part of a checkout's job, so the page's pre-selected one is never used silently. The request
 and the owner's answers settle such a choice for the session only: the published tool serves
 other callers, so it takes the choice as an input or asks, never hard-codes the build's answer.

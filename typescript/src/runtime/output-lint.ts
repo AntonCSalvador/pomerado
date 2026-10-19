@@ -7,10 +7,12 @@
  * Some checks block publication (`blockingOutputChecks`): code, styles, markup and template
  * leftovers in a string are never what a page shows a person. The rest are flags for the reviewer:
  * a value read while collapsed or cut short, a field that never varies or is always empty,
- * repeated entries, records or item IDs, very long strings, and one field restating its siblings (a
- * whole card's text). Every finding is a lead, never a verdict: when a flagged value is correct as
- * returned, such as code on a tool that returns code or page text that only resembles code, the
- * minter names its path and check with the reason as an override, and the reviewer sees both.
+ * repeated entries, records or item IDs, very long strings, one field restating its siblings (a
+ * whole card's text), a date or timestamp not in the form its field declares, and one value
+ * written in two letter cases in one list. Every finding is a lead, never a verdict: when a
+ * flagged value is correct as returned, such as code on a tool that returns code or page text
+ * that only resembles code, the minter names its path and check with the reason as an override,
+ * and the reviewer sees both.
  *
  * `lintSchemas` adds two advisory checks of the declared schemas rather than the values
  * (`loose_text`, `looser_than_input`). `lintOutput` never reports them, so a run's checks and
@@ -32,6 +34,8 @@ export const outputChecks = [
   "duplicate_records",
   "constant_field",
   "empty_field",
+  "format_mismatch",
+  "case_variant",
   "loose_text",
   "looser_than_input",
 ] as const;
@@ -304,6 +308,36 @@ const waivedByMediaType: Readonly<Record<string, readonly OutputCheck[]>> = {
 const expandControl =
   /^(?:(?:show|see|read|view|load)\s+(?:more|all|less|full|everything|details|the\s+rest)\b.*|(?:\.\.\.|\u2026)?\s*more\s*(?:\.\.\.|\u2026)?|less|expand(?:\s+all)?|\+\s*\d+\s*more|\d+\s+more|full\s+(?:description|details|text|review)s?)$/iu;
 
+/** A date as `format: "date"` declares it, and a timestamp as `format: "date-time"` does. */
+const isoDate = /^\d{4}-\d{2}-\d{2}$/u;
+const isoDateTime =
+  /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})$/u;
+/** The longest value compared for `case_variant`: a status, tag or label, never prose. */
+const caseVariantLength = 40;
+
+/**
+ * Among short strings, each one that differs only by letter case from one seen before it: a
+ * value written two ways, such as `paid` and `Paid`. Returns how many and the first.
+ */
+const caseVariants = (values: readonly unknown[]) => {
+  const seen = new Map<string, Set<string>>();
+  let count = 0;
+  let sample: string | undefined;
+  for (const value of values) {
+    if (typeof value !== "string" || value.length > caseVariantLength) continue;
+    const folded = value.toLowerCase();
+    if (folded === value.toUpperCase()) continue;
+    const forms = seen.get(folded) ?? new Set<string>();
+    if (forms.size > 0 && !forms.has(value)) {
+      count++;
+      sample ??= value;
+    }
+    forms.add(value);
+    seen.set(folded, forms);
+  }
+  return { count, sample };
+};
+
 const sampleOf = (text: string) =>
   text.length <= sampleLength ? text : `${text.slice(0, sampleLength - 1)}\u2026`;
 
@@ -544,6 +578,12 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
     if (/^\s|\s$/u.test(text) || /\n[^\S\n]*\n[^\S\n]*\n/u.test(text)) flag(path, "untrimmed", text);
     if (text.length > (allowedLength ?? (inRow ? longRowValue : longValue)))
       flag(path, "too_long", text);
+    const format = schema.annotation(node, "format");
+    if (
+      (format === "date" && !isoDate.test(text)) ||
+      (format === "date-time" && !isoDateTime.test(text))
+    )
+      flag(path, "format_mismatch", text);
     // A card_text section is a card's whole text, its controls included. An ending ellipsis
     // counts only when the page offered a control to expand it; a snippet the site cuts short
     // and shows in full elsewhere is not collapsed.
@@ -585,6 +625,12 @@ export const lintOutput = (output: unknown, options: OutputLintOptions = {}): Ou
         idPaths.add(`${path}[].${key}`);
         flag(`${path}[].${key}`, "duplicate_entries", sample, repeated);
       }
+    }
+    // One value written in two letter cases across the list's records.
+    for (const key of new Set(records.flatMap((record) => Object.keys(record)))) {
+      const variants = caseVariants(records.map((record) => record[key]));
+      if (variants.count > 0)
+        flag(`${path}[].${key}`, "case_variant", variants.sample, variants.count);
     }
     if (records.length < 3) return;
     const seen = new Set<string>();
@@ -1092,6 +1138,10 @@ export const outputCheckMeaning: Readonly<Record<OutputCheck, string>> = {
     "is empty or null in every record checked, this run's and, when given, the tool's other tested runs', so the read may never find it",
   loose_text:
     "is a required string whose declared schema accepts an empty string or whitespace alone",
+  format_mismatch:
+    "is not in the form its field declares: a format date that is not YYYY-MM-DD, such as a timestamp or the site's own wording, or a format date-time that is not ISO 8601 with an offset",
+  case_variant:
+    "holds one value in two letter cases across the list, such as paid and Paid, so callers cannot compare it",
   looser_than_input:
     "is declared looser than the input field of the same name: its enum or format pattern dropped, a smaller minLength, or optional or nullable where the input is required",
 };
@@ -1109,5 +1159,5 @@ export const outputChecksNotice = (findings: readonly OutputFinding[]) =>
           meaning: outputCheckMeaning[finding.check],
         })),
         instruction:
-          "The host checked every value this run returned. Check each finding against the page. Fix a wrong value at the read in source: read rendered text with visibleText, visibleTexts or readRows, expand collapsed text before reading it and read it back, and scope rows to the main list; never clean a string afterwards. A repeated item ID is often a sponsored copy of an organic result: first check whether the rows are variants or line items that share an ID on purpose, and return a copy once only when it is the same item (pagination skill). A field empty in every record of every tested run was usually read from a collapsed section or a guessed key: check it against a record whose page shows it, then read it from the page's embedded record data or the opened section, or remove it. A check can be wrong: when a value is correct as it is, such as code the tool is meant to return or the page's own text that only resembles code, name its path and check with the reason in finish_build's outputOverrides. A field that holds code or markup on purpose can declare its contentMediaType instead; its findings then name that type and never block. Blocking findings (script, css, markup, template_residue) refuse finish_build until fixed or overridden; the others never block. loose_text and looser_than_input judge the declared schema, not a value: type a needed value's field as strictly as the core skill says, and keep a field loose only where the page may genuinely not show its value. The publication reviewer reads every finding and every override with its reason.",
+          "The host checked every value this run returned. Check each finding against the page. Fix a wrong value at the read in source: read rendered text with visibleText, visibleTexts or readRows, expand collapsed text before reading it and read it back, and scope rows to the main list; never clean a string afterwards. A repeated item ID is often a sponsored copy of an organic result: first check whether the rows are variants or line items that share an ID on purpose, and return a copy once only when it is the same item (pagination skill). A field empty in every record of every tested run was usually read from a collapsed section or a guessed key: check it against a record whose page shows it, then read it from the page's embedded record data or the opened section, or remove it. A check can be wrong: when a value is correct as it is, such as code the tool is meant to return or the page's own text that only resembles code, name its path and check with the reason in finish_build's outputOverrides. A field that holds code or markup on purpose can declare its contentMediaType instead; its findings then name that type and never block. Blocking findings (script, css, markup, template_residue) refuse finish_build until fixed or overridden; the others never block. format_mismatch and case_variant name a value in another notation than its field promises: convert it in code to the declared form, a date as YYYY-MM-DD, a timestamp as ISO 8601 with an offset, an enum value in lowercase snake_case with the site's wording in a separate *_label field, unless the request states another notation, which an override then names. loose_text and looser_than_input judge the declared schema, not a value: type a needed value's field as strictly as the core skill says, and keep a field loose only where the page may genuinely not show its value. The publication reviewer reads every finding and every override with its reason.",
       };

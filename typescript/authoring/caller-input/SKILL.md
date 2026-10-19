@@ -99,9 +99,11 @@ Try first. Ask only for what the page or the caller uniquely knows at that point
 
 Never ask for a value the request, the input or an earlier answer already supplied, a private
 one included: use that value. Never undo an answer that declined something by doing it anyway
-or by offering it as an input (core skill), except a paid add-on within the tool's purpose, the
-payment method or the delivery address a write still meets on its path, which stays an input or
-a declared question (writes skill). In the tool, take it from its input, or a private one, such as
+or by offering it as an input (core skill), except a costly choice a write still meets on its path,
+one that changes what the caller buys or pays or whether the action can be cancelled or refunded
+(a paid add-on within the tool's purpose, a rate, fare or plan tier, a refundable option, shipping
+speed, the payment method or the delivery address), which stays an input or a declared question
+(writes skill). In the tool, take it from its input, or a private one, such as
 part of an identity number, through a declared `secret` question, never a plain-text field.
 When question review finds a question redundant, remove the ask and use the supplied value; a
 reworded question still asks for it again. A placeholder that stands in for a redacted value,
@@ -219,14 +221,21 @@ on it.
   or offers fewer options than the selection bounds need.
 
 Let these failures end the run. Never catch one to pick a default, the first option or
-a guessed value. For a write, ask before its consequential step when the site allows
-it, so an unanswered question leaves the site unchanged. A hold or a cart the run made
+a guessed value. For a write, ask every question you can before its first commit step,
+reading options in a step that saves nothing, so an unanswered question leaves the site
+unchanged rather than holding a partial save. A question whose options the site shows only past
+a saved step, such as delivery slots for a cart that step filled, may come after it. A hold or a cart the run made
 before the question is reported as a possible change when no answer comes.
 
 ## During a mint
 
 A read build's example run, or a write build's `act` step, asks the build's owner
-through the same request, and the answer comes back to the running script. Guardian
+through the same request, and the answer comes back to the running script. Ask the owner each
+decision once per build: one a declared question will ask during the run needs no
+`request_input` of your own first. The host reuses an earlier answer to a choice,
+multi_choice, text or confirm question, never a secret, code or login, for a later ask with the
+same id, type, prompt and options, so keep a declared question unchanged between runs unless its
+review asks for a rewording. Guardian
 reviews each question first. When it asks for a rewording, nobody is asked, the `ask`
 fails and the execution's result carries `scriptQuestion` with Guardian's rationale:
 change the declared question as it says and execute again. If the owner does not answer
