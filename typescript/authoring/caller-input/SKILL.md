@@ -217,8 +217,9 @@ on it.
 - `Undeclared` or `InvalidOptions`: the ask names an id that `questions` does not
   declare, gives a choice no options or duplicate values, gives options to another type,
   or offers fewer options than the selection bounds need.
-- `AskedAfterCommit`: a write asked after it entered a commit step (`enteringCommit`), so the
-  site may already hold part of the write, such as a saved draft, while the caller decides.
+- `AskedAfterCommit`: a write asked after it entered a commit step (`enteringCommit`) and
+  before `verified()` confirmed the write, so the site may already hold part of the write, such
+  as a saved draft, while the caller decides.
   Nobody is asked. Only a one-time or authenticator code the site asks for at that step may
   be asked after it. Ask every other question before the first commit step, or take the value
   from the input.

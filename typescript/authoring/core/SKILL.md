@@ -166,8 +166,8 @@ a value the request genuinely leaves open; never make a required field optional 
 that asks. A choice the request or the owner's answer settled as how the tool behaves, such as
 which kind of record it creates, is the tool's fixed behavior: at most an optional input that
 defaults to the answered value, never a required input or a question at run time. A write asks
-before its first commit step: after one, the runtime refuses every question but a code the site
-asks for at that step (caller-input skill). An input that tailors the answer on a read is the
+before its first commit step: after one, until `verified()`, the runtime refuses every question
+but a code the site asks for at that step (caller-input skill). An input that tailors the answer on a read is the
 exception: it is optional unless the task can't run without it (below).
 
 - The code works for every value the schema accepts. Never let the schema promise what

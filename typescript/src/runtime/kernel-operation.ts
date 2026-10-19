@@ -139,9 +139,10 @@ export interface KernelOperationContext<
    * the deadline pauses while the caller decides; the next call gets the answers written into
    * its code. It throws `ScriptInputFailure` when no usable answer comes, such as `NoResponse`.
    * A card question's answer is a card handle for `fillCard`, never the card itself. Once the
-   * script entered a commit step (`enteringCommit`), it asks only for a one-time or authenticator
-   * code the site asks for at that step and refuses anything else as `AskedAfterCommit`, asking
-   * nobody: ask every other question before the first commit step.
+   * script entered a commit step (`enteringCommit`), and until `verified()` confirms the write,
+   * it asks only for a one-time or authenticator code the site asks for at that step and refuses
+   * anything else as `AskedAfterCommit`, asking nobody: ask every other question before the first
+   * commit step.
    */
   readonly ask: ScriptAsk<Questions>;
   /** Asks one declared question and returns its answer itself, not one answer per id. */
@@ -242,8 +243,9 @@ while (true) {
 type Declared = ScriptQuestionDeclarations[string];
 /**
  * How far a run's write has come, as its questions see it: the first commit step the script
- * entered, live or offline, and the questions its contract declares. Once a step is entered, a
- * question other than a code the site asks for is refused (`askedAfterCommit`).
+ * entered since its write was last confirmed (`verified`), live or offline, and the questions its
+ * contract declares. While a step is entered and unconfirmed, a question other than a code the
+ * site asks for is refused (`askedAfterCommit`).
  */
 interface WriteProgress {
   entered: string | undefined;
@@ -491,6 +493,8 @@ const makeKernelOperationContext = <Input>(
     if (options.write?.confirmation === "unverifiable")
       throw new WriteConfirmationRefused({ declared: "unverifiable", recorded: kind });
     if (options.journal !== undefined) Effect.runSync(options.journal.confirmed(kind));
+    // A confirmed write is whole, so a question after it leaves nothing half done.
+    if (options.progress !== undefined) options.progress.entered = undefined;
   },
   // Marks a named commit step sent just before the execute call that dispatches it. An offline
   // run records no mark, but its questions still count from the step, as a live run's do.

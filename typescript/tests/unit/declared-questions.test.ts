@@ -353,6 +353,16 @@ describe("a question asked after a commit mark", () => {
     }
   });
 
+  it("asks again once verified() confirmed the write, which is then whole", async () => {
+    const { result, asked } = await run(
+      write(
+        `async ({ ask, enteringCommit, verified }) => { enteringCommit("submit"); verified(); return { kind: (await ask({ line_kind: ${lineOptions} })).line_kind }; }`,
+      ),
+    );
+    expect(Either.isRight(result) && result.right.output).toEqual({ kind: "item" });
+    expect(asked).toHaveLength(1);
+  });
+
   it("asks the same question before the first commit mark", async () => {
     const { result, asked } = await run(
       write(

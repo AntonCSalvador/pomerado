@@ -152,7 +152,7 @@ const markName = /^[A-Za-z][A-Za-z0-9_-]{0,47}$/u;
 export const askedAfterCommit = (id: string, step: string) =>
   new ScriptInputFailure({
     code: "AskedAfterCommit",
-    message: `${questionIdPattern.test(id) ? `Script question ${id}` : "A script question"} was asked after the commit step ${markName.test(step) ? `${step} ` : ""}was entered, so the site may already hold part of this write. Ask every question before the first enteringCommit, or take the value from the input; only a code the site sends at that step may be asked after it.`,
+    message: `${questionIdPattern.test(id) ? `Script question ${id}` : "A script question"} was asked after the commit step ${markName.test(step) ? `${step} ` : ""}was entered, so the site may already hold part of this write. Ask every question before the first enteringCommit, or take the value from the input; until verified() confirms the write, only a code the site sends at that step may be asked.`,
   });
 
 /** What each asked question needs at ask time: the page's options for a choice, else nothing. */
@@ -166,8 +166,9 @@ export type AskSpecOf<Declaration> = Declaration extends {
  * `NoResponse`: the caller did not answer in time, and the run fails as `no_response`.
  * `Undeclared`: an id the contract does not declare. `InvalidOptions`: options missing for a
  * choice, given for another type, duplicated, too many, or selection bounds they cannot meet.
- * `AskedAfterCommit`: a write asked once one of its commit steps was entered, so the site may
- * already hold part of the write while the caller decides; only a code the site sends at that
+ * `AskedAfterCommit`: a write asked once one of its commit steps was entered and before
+ * `verified()` confirmed it, so the site may already hold part of the write while the caller
+ * decides; only a code the site sends at that
  * step may be asked then. The others mean the question could not be asked or its answer could
  * not be used.
  *
