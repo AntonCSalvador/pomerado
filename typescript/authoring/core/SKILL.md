@@ -403,8 +403,13 @@ stop. When they need it, end with `report_blocked` reason `site_lacks_capability
 names, the record's identifier as the site shows it, and the context those depend on as the page
 shows it, such as dates, a party size or a location. Make each one required and non-null, typed
 so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for
-text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the
-request's wording or a description says. A run whose output fails its schema goes to repair.
+text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever a
+description says. A run whose output fails its schema goes to repair.
+- The owner may settle a different form for every run: in the request's own explicit words, in
+  an answer to your design question or in a task update, such as blank fields returned as empty
+  strings. Publication review honours that decision as stated. Build it that way, and say in
+  the field's description what the owner chose. It never covers a value the page shows that
+  the code failed to read, or anything personal or account-specific.
 - Type each output field as strictly as its value: required text is non-empty and trimmed
   (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports
   an input's value reuses that input's enum or pattern. Make one optional or nullable only where
