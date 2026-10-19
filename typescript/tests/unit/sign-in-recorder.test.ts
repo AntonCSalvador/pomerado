@@ -396,6 +396,7 @@ it.each<[string, SignInStep]>([
       methods: [{ method: "sms", selector: "button:has-text('Text ***-***-1234')" }],
     },
   ],
+  ["[private] selector", { fields: [], submit: "button:has-text('Continue as [private]')" }],
 ])("counts the screen before as sent when a %s step is refused, so a corrected login's third fill of the same password is refused", async (_, refusedStep) => {
   let fills = 0;
   const host = harness({
