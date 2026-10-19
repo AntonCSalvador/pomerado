@@ -24,8 +24,17 @@ import {
   sourceChunk,
   type SdkFiles,
 } from "../guardian/source.js";
-import type { ExecutionEvidence } from "../mint/contracts.js";
-import { publicationScope, type PublicationReview } from "../mint/publication-review.js";
+import { mintEntryNavigation, type ExecutionEvidence } from "../mint/contracts.js";
+import { publicDefinitionPath } from "../guardian/publication.js";
+import {
+  exampleOutputPath,
+  inlineFilesNote,
+  inlinePublicationPaths,
+  outputDigestPath,
+  publicationScope,
+  withInlineFiles,
+  type PublicationReview,
+} from "../mint/publication-review.js";
 import {
   allowedEffectsFor,
   currentDateObservations,
@@ -52,6 +61,13 @@ import type { StandaloneSession } from "./session.js";
 import { error } from "./errors.js";
 import { failureDetail } from "../runtime/failure-detail.js";
 import { runtimeSourceEntry } from "../execution/runtime-sources.js";
+import {
+  loadEntry,
+  stopLoadingCode,
+  type EntryNavigationOutcome,
+} from "../runtime/start-state.js";
+/** How long the load of the request's page may take. */
+const entryNavigationTimeoutMs = 30_000;
 /** The folder Guardian's publication policy names the SDK's modules under, `pomerado/`. */
 const packageFolder = "pomerado/";
 /**
@@ -125,18 +141,45 @@ export const sourceInspector = (
     );
   };
 };
-/** The request's checked site and the navigation to it. Builds no Guardian. */
+/**
+ * The request's checked site and the navigation to it. Builds no Guardian. The navigation loads
+ * the request's page in one browser call and never fails: how it went, a load that failed
+ * included, is the entry state the build reads (`entryNavigation`). A load that failed then stops
+ * the tab's loading.
+ */
 export const requestSite = (session: StandaloneSession, request: Pick<PomeradoRequest, "url">) =>
   Effect.gen(function* () {
     const url = yield* Effect.try({ try: () => new URL(request.url), catch: error });
     if (!["https:", "http:"].includes(url.protocol) || url.username || url.password)
       return yield* Effect.fail(new Error("Provide an HTTP or HTTPS site URL without credentials"));
+    let entry: EntryNavigationOutcome | undefined;
     return {
       url,
       siteOrigin: url.origin,
-      navigate: session.browser
-        .execute(`await page.goto(${JSON.stringify(url.href)}); return null;`, 60)
-        .pipe(Effect.asVoid),
+      navigate: loadEntry(
+        session.browser.execute,
+        session.browser.targetId,
+        request.url,
+        entryNavigationTimeoutMs,
+      ).pipe(
+        Effect.tap((outcome) =>
+          Effect.sync(() => {
+            entry = outcome;
+          }),
+        ),
+        // Chromium may commit its error page after a failed load's goto rejects, which would cut
+        // off the next step's own load, so the tab stops loading. A load that ran out of time is
+        // left to finish.
+        Effect.flatMap((outcome) =>
+          outcome.outcome === "failed"
+            ? session.browser
+                .execute(stopLoadingCode(session.browser.targetId), 10)
+                .pipe(Effect.ignore)
+            : Effect.void,
+        ),
+      ),
+      /** How the load of the request's page went, once the navigation ran. */
+      entryNavigation: () => mintEntryNavigation(request.url, entry),
     };
   });
 
@@ -217,7 +260,8 @@ export interface ReviewStep {
 export const requestContext = (session: StandaloneSession, request: PomeradoRequest) =>
   Effect.gen(function* () {
     const { options, policy, secrets, projection, browser } = session;
-    let site = yield* requestSite(session, request);
+    const requested = yield* requestSite(session, request);
+    let site = requested;
     const invocationId = randomUUID();
     const observations = currentDateObservations(yield* DateTime.now);
     let buildEffect: "read" | "write" | undefined =
@@ -337,17 +381,25 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
     /**
      * Guardian's publication review: the bundle under `operation/`, the source a read example ran
      * under `executed/`, and the publication files the host wrote, read against the caller's
-     * input. A denial carries Guardian's reason and findings.
+     * input. The small files it reads first go in the request (`withInlineFiles`), and its notes
+     * say so. A denial carries Guardian's reason and findings.
      */
     const reviewPublication: PublicationReview = (publication) =>
       Effect.gen(function* () {
+        const inline = inlinePublicationPaths({
+          definition: publication.evidence.get(publicDefinitionPath) ?? "",
+          entrypoint: publication.entrypoint,
+          files: publication.files,
+          digest: publication.evidence.get(outputDigestPath),
+          exampleOutput: publication.evidence.get(exampleOutputPath),
+        });
         const { turn, readSource } = yield* pending({
           entrypoint: `operation/${publication.entrypoint}`,
           sources: new Map(
             [...publication.files].map(([path, text]) => [`operation/${path}`, text] as const),
           ),
           input,
-          note: publication.notes,
+          note: `${inline.length === 0 ? "" : `${inlineFilesNote} `}${publication.notes}`,
           // References are readable but stay out of the index below.
           evidence: new Map([
             ...(publication.references ?? []),
@@ -357,19 +409,21 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
             ...publication.evidence,
           ]),
         });
+        const reviewed = yield* withInlineFiles(
+          {
+            ...turn,
+            allowedEffects: publication.allowedEffects,
+            publication: publicationScope(
+              publication.files,
+              publication.evidence,
+              publication.references === undefined ? {} : { references: publication.references },
+            ),
+          },
+          readSource,
+          inline,
+        );
         const result = yield* guardian
-          .review(
-            {
-              ...turn,
-              allowedEffects: publication.allowedEffects,
-              publication: publicationScope(
-                publication.files,
-                publication.evidence,
-                publication.references === undefined ? {} : { references: publication.references },
-              ),
-            },
-            readSource,
-          )
+          .review(reviewed, readSource)
           .pipe(Effect.mapError((failure) => reviewFailureOf(failure)));
         const { outcome } = result.decision;
         if (outcome !== "allow")
@@ -594,6 +648,12 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
       running,
       recorded,
       observe,
+      /**
+       * How the load of the request's own page went, for the build's model; undefined until it
+       * ran. A site a task update moved to is the host's own choice, never a page the caller
+       * requested.
+       */
+      entryNavigation: requested.entryNavigation,
       /** Opens the build's site, which the build's start does once; the browser is then active. */
       navigate: Effect.suspend(() => site.navigate).pipe(
         Effect.tap(() =>

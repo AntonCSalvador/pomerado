@@ -145,18 +145,21 @@ export const mintReviewContext = (
         ? {}
         : { currentPage: page }),
       executions: [...host.executions()],
-      ...(writes.length === 0
-        ? {}
-        : {
-            writes: writes.map(({ write, assessment }) => ({
-              executionId: write.executionId,
-              purpose: write.purpose,
-              ...(write.entrypoint === undefined ? {} : { entrypoint: write.entrypoint }),
-              outcome: assessment?.outcome ?? ("unassessed" as const),
-            })),
-          }),
+      ...(writes.length === 0 ? {} : { writes: trackedWrites(writes) }),
     };
   });
+
+/**
+ * The build's tracked writes as an execution review sees them: each write's execution, purpose
+ * and entrypoint, with the outcome review's newest assessment, `unassessed` before the first.
+ */
+export const trackedWrites = (writes: readonly WriteOutcome[]) =>
+  writes.map(({ write, assessment }) => ({
+    executionId: write.executionId,
+    purpose: write.purpose,
+    ...(write.entrypoint === undefined ? {} : { entrypoint: write.entrypoint }),
+    outcome: assessment?.outcome ?? ("unassessed" as const),
+  }));
 
 /** The operation files an execution loads: its entrypoint's import closure, keeping the prefix. */
 const executedOperationSources = (

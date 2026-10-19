@@ -399,6 +399,7 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   "read_back_required",
   "login_url_one_time",
   "login_url_contains_credential",
+  "sign_in_version_refused",
   // An execution on the site the build moved away from: a fresh example on the current site.
   "example_before_site_change",
   // Restored inputs change the code, which needs its own example.
@@ -3728,6 +3729,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           return {
             cursor: cursorPairOf(input, output),
             list: primaryListOf(input, output),
+            inputSchema: input,
             outputSchema: output,
           };
         });
@@ -3858,7 +3860,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               kind: "host_live_tests",
               status: "no_cursor",
               instruction:
-                "A next_page case needs an input field named cursor (or page_token) and an output field such as next_cursor, both strings or numbers, in the tool's schemas. Add them, or drop next_page. Nothing was executed.",
+                "A next_page case needs the list fields in the tool's schemas: the string input cursor and output next_cursor, which listInputFields and listOutputFields from pomerado/runtime give. Add them, or drop next_page. Nothing was executed.",
             });
           const digest = yield* stepDigest(request.entrypoint);
           if (digest === undefined)
@@ -3924,18 +3926,21 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const verdicts: Record<string, number> = {};
           const judgedRuns = result.cases.flatMap((run) => {
             const testCase = selected.find((entry) => entry.id === run.id);
-            return testCase === undefined
-              ? []
-              : [
-                  {
-                    run,
-                    testCase,
-                    judged: judgeCase(testCase, run, "list" in shape ? shape.list : undefined),
-                  },
-                ];
+            if (testCase === undefined) return [];
+            const judged = judgeCase(testCase, run, "list" in shape ? shape.list : undefined);
+            const previous = recordsFor(request.entrypoint).get(run.id);
+            // An inconclusive rerun, such as a challenge or a site block, tested nothing about
+            // the tool, so a failure it follows on the same source and case keeps counting, with
+            // the output it returned.
+            const keepsFailure =
+              judged.verdict === "inconclusive" &&
+              previous?.verdict === "fail" &&
+              previous.caseDigest === caseDigest(testCase) &&
+              previous.sourceDigest === sourceDigest;
+            return [{ run, testCase, judged, keepsFailure }];
           });
           // Every case's fields first, so each case's output check counts the whole batch.
-          for (const { run, judged } of judgedRuns)
+          for (const { run, judged } of judgedRuns.filter((entry) => !entry.keepsFailure))
             if (judged.output === undefined)
               liveTestFills.delete(outputKey(request.entrypoint, run.id));
             else
@@ -3943,7 +3948,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 sourceDigest,
                 fill: fieldFill(judged.output),
               });
-          for (const { run, testCase, judged } of judgedRuns) {
+          for (const { run, testCase, judged, keepsFailure } of judgedRuns) {
+            verdicts[judged.verdict] = (verdicts[judged.verdict] ?? 0) + 1;
+            if (attemptBound && judged.verdict === "inconclusive" && judged.got === "deadline")
+              liveTestsOutOfTime = true;
+            if (keepsFailure) continue;
             const screened =
               judged.output === undefined
                 ? undefined
@@ -3986,11 +3995,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             const version = liveTestVersion(request.entrypoint);
             const previous = records.get(run.id);
             // A failure the run replaces stays in the record: the case changed after it, or it
-            // did not fail again on the same source and case, which shows it is flaky.
+            // passed when run again on the same source and case, which shows it is flaky.
             const flaky =
               previous?.caseDigest === digestOfCase &&
               previous.sourceDigest === sourceDigest &&
-              judged.verdict !== "fail";
+              judged.verdict === "pass";
             if (
               previous !== undefined &&
               previous.verdict === "fail" &&
@@ -4033,9 +4042,6 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               ...(testCase.next_page === true ? { nextPage: true } : {}),
               ...(signedInBatch ? { signedIn: true as const } : {}),
             });
-            verdicts[judged.verdict] = (verdicts[judged.verdict] ?? 0) + 1;
-            if (attemptBound && judged.verdict === "inconclusive" && judged.got === "deadline")
-              liveTestsOutOfTime = true;
           }
           yield* reportBestEffort(
             dependencies.diagnostics?.emit("mint.live_tests", {
@@ -4092,6 +4098,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             new Map([...liveTestRecords[version]].filter(([, record]) => counted(record)));
           const read = yield* readCasesFile;
           const published = liveTestVersion(entrypoint);
+          // The input schema each version publishes, which marks a retired input it rejects.
+          const inputSchemaOf = (path: string) =>
+            Effect.map(liveTestShape(path), (shape) =>
+              "inputSchema" in shape ? { inputSchema: shape.inputSchema } : {},
+            );
           const replacedOf = (version: LiveTestVersion) =>
             liveTestReplaced.filter(
               (record) => liveTestVersion(record.entrypoint) === version && counted(record),
@@ -4103,6 +4114,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               sourceDigest: yield* stepDigest(entrypoint),
               records: recordsOf(published),
               replaced: replacedOf(published),
+              ...(yield* inputSchemaOf(entrypoint)),
             },
           ];
           if (published === "playwright" && !httpRuledOut) {
@@ -4129,6 +4141,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 sourceDigest: yield* stepDigest(httpEntrypoint),
                 records: recordsOf("http"),
                 replaced: replacedOf("http"),
+                ...(yield* inputSchemaOf(httpEntrypoint)),
               });
           }
           return liveTestsEvidence({
@@ -5213,6 +5226,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     { ...error.publicationFeedback },
                     "Not published: each part named in parts holds a registered credential (credentialKinds names the kind, never the value). A published tool never carries one, and the host changes nothing itself. For loginUrl, run authenticate again with a login URL that has no credential in it, the site's plain sign-in page. For name, description, siteName or siteSummary, rewrite the text without it. Then call finish_build again with the same executionId. The host refuses every time until the credential is gone; the build is not over.",
                   );
+                if (error.reason === "sign_in_version_refused")
+                  return notPublished(
+                    error.code,
+                    error.reason,
+                    { signInFindings: error.publicationFeedback?.signInFindings ?? [] },
+                    "Not published: the sign-in this tool would publish fails the host's sign-in version check. signInFindings names each rule and the part of the sign-in recipe or login URL it refused, never a value. The host changed nothing. Run authenticate again so the sign-in records without those parts: start from the site's stable sign-in page as loginUrl, name no account in a selector, page or marker, leave out any step or account page that signs out, and use a signed-in marker that only signed-in pages show. Then call finish_build again with the same executionId. The host refuses every time until the sign-in passes.",
+                  );
                 if (error.reason === "definition_login_reference") {
                   const section = error.screening?.section;
                   return notPublished(
@@ -5370,7 +5390,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     repeatableRead,
                   },
                   (error.code === "ReviewDenied" && error.review?.reason === "evidence"
-                    ? "Not published yet: Guardian needs more evidence to judge this publication, and the rationale names each missing item. Gather each one within your authority, such as running the live tests or cases it names so their results reach the test record, and fix every finding, then call finish_build again. Missing evidence is not a refusal and never a reason for a policy block. The existing example and result remain recorded."
+                    ? "Not published yet: Guardian needs more evidence to judge this publication, and the rationale names each missing item. Gather each one within your authority, such as running the live tests or cases it names so their results reach the test record, or exploring the site's own controls for a capture it names, and fix every finding, then call finish_build again. A retired failure in publication/tests.json clears only by a way its clearedBy lists: running the same cases again on the same source clears none. Missing evidence is not a refusal and never a reason for a policy block. The existing example and result remain recorded."
                     : error.code === "ReviewDenied" && error.review !== undefined
                       ? "Not published: Guardian blocked this publication. Each finding's explanation says what is wrong, the evidence and the fix, at its file and byte range. Fix every finding and each missing item the rationale names, then call finish_build again with the same executionId. The existing example and result remain recorded."
                       : "Not published. The existing example and result remain recorded. Source edits and another finish_build publication review may continue; this does not guarantee the failure is repairable.") +
