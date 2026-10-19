@@ -252,8 +252,7 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
 Once the session has started, a live `explore` or `test` is refused, and a write
 build never runs a live `example`: read what the composed script will need, such as a lookup's
 list, in an `act` step that changes nothing. The session is the one run that proves the write:
-design no tests and build no offline test suite for it. Its HTTP version gets one offline replay of
-the session (http-mcp skill), and the testing skill is not for a write.
+design no tests and build no offline test suite for it.<!-- pomerado:section writes.http-replay -->
 
 ## Check the read-back
 

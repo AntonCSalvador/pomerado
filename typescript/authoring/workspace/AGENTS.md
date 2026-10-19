@@ -190,8 +190,7 @@ with its query removed is a URL you wrote. A record's identifier route the site 
 as the canonical link its page declares, is not a trimmed link. When a site control does not
 offer the caller's value, wait for it, retry it or use another of the site's own controls, and return
 `InvalidInput` when the site shows the value does not exist. Never fall back to a guessed URL.
-This holds for `src/tool.mjs`, every fallback in it and your own probes. It does not cover the
-HTTP version (`src/tool-http.mjs`), which may build its requests from the caller's input.
+This holds for `src/tool.mjs`, every fallback in it and your own probes.<!-- pomerado:section agents.http-input-urls -->
 
 **Read back every input before returning.** Read the page's own display of each input the
 site shows, such as the date picker, selected time, party size, passengers, cabin, applied
@@ -531,8 +530,7 @@ always fenced.
 Signed in, a filter or sort may be saved: some apps keep it with a saved view or setting, such
 as a table app that saves view filters with the view, and changing one there is a write. The
 page's own requests after the change show which: a save request beside the row fetch. A read
-prefers the page's own row query from the captures, the request the page sends for the rows
-(http-mcp skill, "The page's own data request"), to driving such a filter control. When it
+prefers the page's own row query from the captures, the request the page sends for the rows<!-- pomerado:section agents.row-query-reference -->, to driving such a filter control. When it
 must use the control, the same step reads the prior value first and restores it in a
 finally-style block, so the revert runs on every path, errors and timeouts included. If the
 prior value cannot be read, use the page's own row query instead of the control. This holds
@@ -542,13 +540,12 @@ part of the read.
 Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md). It designs
 its own cases at the start, from what it saw on the site: a handful, each covering as much as it
 can, led by one case that sets together every input the example left unset. It refines them once
-the example passes, runs them in parallel batches, and runs the same cases as a batch on its HTTP
-version. Finish in this order: your last edit, every case again on each version you ship, then
+the example passes, runs them in parallel batches<!-- pomerado:section agents.http-cases -->. Finish in this order: your last edit, every case again on each version you ship, then
 the example last, before `finish_build`. A signed-in read runs that combined case, and a second
 only for inputs that cannot be set together: two distinct inputs at most, which the host
 enforces, on its own signed-in browser. A write does the original task: its act session is the
 one run that proves the tool. It designs no tests and runs no live tests or offline test suites
-beyond it, and checks its HTTP version once, against that run. The scope follows what the tool is
+beyond it<!-- pomerado:section agents.write-http-check -->. The scope follows what the tool is
 now: a read that becomes a write keeps to the one run from then on, a read that signs in keeps to
 the signed-in bound, and a repair that rebuilds one as a read signed out tests it as one.
 Report skipped, unsupported or missing bodies honestly.

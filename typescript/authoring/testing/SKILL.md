@@ -6,8 +6,7 @@ description: Design and run a few combined live test cases for a read. A read si
 # Test a read with a few combined cases
 
 This skill is for reads. A write does the original task: it proves its tool with its act session
-(writes skill), designs no tests, runs no live test and builds no offline test suite, and checks
-its HTTP version once, against that session (http-mcp skill). A read proves its operation with its
+(writes skill), designs no tests, runs no live test and builds no offline test suite<!-- pomerado:section testing.write-http-check -->. A read proves its operation with its
 example, run again after each fix as the core skill says, then tests what the example did not
 exercise with a few live cases, each designed to cover as much as it can. A read signed out runs a
 handful (below). A signed-in read runs at most two distinct inputs beyond its example: one
@@ -71,9 +70,7 @@ own signed-in browser, one at a time and warm, never on a new browser. Each case
 under the signed-in session rules that already apply to the example: it saves no record, view or
 setting, and a filter the site saves with a view or setting goes through the page's own row query
 or is restored in the same step, as the workspace guide says. Design no other cases: no example
-run cold, no no-results case and no edge cases.
-Check `src/tool-http.mjs` once against the example's input (execute purpose `test`, target
-`liveBrowser`, no `testInput`), and run the combined case on it too. Publication review reads
+run cold, no no-results case and no edge cases.<!-- pomerado:section testing.signed-in-http --> Publication review reads
 the host's record of the cases you ran signed in, judges a failing case as a bug, and treats
 what you did not test as disclosure, not a gap. Then go on at "Run and fix the cases", below.
 
@@ -194,10 +191,7 @@ missing wait: a styled checkbox or option whose click does not change its state,
 hydrates late, or a list that reloads and drops the choice. Stop reworking the click. Look at
 what the site did when that control did apply, in a probe or the captures where the host keeps
 them. When the results URL then carries the choice, apply it through that URL (`AGENTS.md`,
-"Work through the page's own controls"). When the page's own data request takes it as a field
-and its answer echoes what applied, apply it there in `src/tool-http.mjs`; when that version
-passes the cases, run the example on it, and the tool publishes `http` alone (http-mcp skill).
-That is a finished tool: stop fixing the Playwright version. Either way, read the input back
+"Work through the page's own controls").<!-- pomerado:section testing.data-request-filter --> Either way, read the input back
 from the site's committed state or the answer.
 
 After the example passes, read its returned fields once at the answer and again about 10 s later
@@ -230,20 +224,7 @@ ran out.
 
 When the host offers no `live_tests`, a read runs its cases one input at a time instead: execute
 purpose `test`, target `liveBrowser`, with `testInput`, the tool's input as JSON text; the host
-may limit how many. A signed-in read's inputs there count toward the same two.
-
-Test the HTTP version, `src/tool-http.mjs`, the same way as `src/tool.mjs`: run the same cases as
-a batch on it with `live_tests` entrypoint `src/tool-http.mjs`, in parallel, and fix it until
-every case passes on it (http-mcp skill). It need not wait for the Playwright version: when every
-case passes on the HTTP version, run the example on it and publish `http` alone, even while a case
-still fails on the Playwright version. Each version keeps its own result for each case: a batch on
-one never replaces or stales the other's, and `plan` shows the results of the entrypoint you name.
-The publication record shows each case's result on each version that ships, and the review judges
-each version from its own results; a version that does not ship is neither recorded nor judged. A
-test of `src/tool-http.mjs` counts for the HTTP version only for the source it ran. Where the host
-offers no `live_tests`, run its inputs one at a time with execute, entrypoint `src/tool-http.mjs`
-and `testInput`, and check `testInput` against the schema yourself first: a failed test marks the
-HTTP version's latest live test failed until a later one passes.
+may limit how many. A signed-in read's inputs there count toward the same two.<!-- pomerado:section testing.http-cases -->
 
 The example uses the caller's input, or your `exampleInput` when that input is empty, and offline
 tests always use the caller's input. If a test shows the schema must widen, widen it in source;
