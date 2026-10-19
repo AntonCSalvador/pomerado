@@ -24,6 +24,7 @@ import {
   diagnosticStorageFailure,
 } from "../../src/models/model-diagnostic-failure.js";
 import { EventUnavailable } from "../../src/runtime/errors.js";
+import { configureSiteIdentity } from "../../src/runtime/same-site.js";
 import { markedUpstreamPolicy, tenantPolicyCopies } from "../support/tenant-policy.js";
 
 const makeSourceReader = (root: string) =>
@@ -797,6 +798,44 @@ describe("OpenAI reviewer policy and trusted authority", () => {
     ]);
     expect(input).not.toHaveProperty("trusted_execution_context.currentPage");
   });
+
+  // A host's added private suffix makes each subdomain below it its own site, so another one is
+  // off the authorized site, and one the owner names is an owner-named origin.
+  it.each([
+    [[], "example.test", undefined],
+    [["apps.example.test"], "alpha.apps.example.test", ["https://beta.apps.example.test"]],
+  ])(
+    "with added private suffixes %j, Guardian's authorized site is %s",
+    async (privateSuffixes, registrableDomain, ownerNamed) => {
+      configureSiteIdentity({ privateSuffixes });
+      try {
+        const requests = readThenDecide({
+          outcome: "allow",
+          rationale: "Guarded on the site.",
+          action: "read",
+        });
+        await Effect.runPromise(
+          makeGuardian(reviewer("Synthetic upstream {{ tenant_policy_config }}")).review(
+            {
+              ...pending,
+              allowedOrigins: ["https://alpha.apps.example.test"],
+              requestedIntent: "Read the report at https://beta.apps.example.test/reports.",
+            },
+            readEntrypoint,
+          ),
+        );
+        const input = modelInput(requests);
+        expect(input).toHaveProperty("trusted_authority.allowedSites", [
+          { scheme: "https", registrableDomain },
+        ]);
+        if (ownerNamed === undefined)
+          expect(input).not.toHaveProperty("trusted_authority.ownerNamedOrigins");
+        else expect(input).toHaveProperty("trusted_authority.ownerNamedOrigins", ownerNamed);
+      } finally {
+        configureSiteIdentity({});
+      }
+    },
+  );
 
   it("gives every execution review the exact payment frame origins", async () => {
     const requests = readThenDecide({
