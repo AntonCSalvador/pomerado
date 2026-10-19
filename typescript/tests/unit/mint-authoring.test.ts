@@ -842,7 +842,7 @@ it("renders the pinned standalone authoring", async () => {
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
     ["92fc0b7671fa69255608725756172a9c4d7f2ceed5a7096a039a1025ea764a27", "core"],
-    ["383cee1bb2a53578fcd519f4c6ceca0bcdb113b481cffac4c42cb4715d52659d", "search"],
+    ["0d2259dda1fd5a909a036b6b10b918c0d1b4a88da3aa3486cc06027312ceb39d", "search"],
     ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
     ["082f781d0987c8953ce7871d2a4cf35d24737516bc71132591c16fcf57d2b9d4", "testing"],
     ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
@@ -900,9 +900,12 @@ unreliable (testing skill), never by filtering the returned rows, then read it b
 
 Try the fast path first. While exploring, check whether the page's own data request or embedded
 data carries the result fields. When it does, the default design is: reach the results through
-the page's controls, then read that data in the same session (\`page.evaluate(() => fetch(...))\`
-for a data request, core skill), reading the applied location back from the page or that
-answer. Read rendered rows only when it doesn't.
+the page's controls, then read that data in the same session, reading the applied location back
+from the page or that answer. Read rendered rows only when it doesn't. For a data request, prefer
+catching the page's own answer in the same call as the step that sends it
+(\`Promise.all([page.waitForResponse(...), button.click()])\`, core skill). Fetching it in the page
+(\`page.evaluate(() => fetch(...))\`) is fine to speed things up or when that answer can't be
+caught, once the page itself has reached the results, not as the only step.
 
 - The main path`,
     on: `what its inputs need.
@@ -911,9 +914,12 @@ Try the fast path first. While exploring, check whether the results page loads d
 with the inputs encoded (\`AGENTS.md\`, "Work through the page's own controls"), and whether the
 page's own data request or embedded data carries the result fields. When both hold, the default
 design is: set a location or store through the page's controls first if the URL cannot carry it,
-load the results URL, then read that data in the same session (\`page.evaluate(() => fetch(...))\`
-for a data request, core skill), reading the applied location back from the page or that
-answer. Drive the search form and read rendered rows only when they don't.
+load the results URL, then read that data in the same session, reading the applied location back
+from the page or that answer. Drive the search form and read rendered rows only when they don't.
+For a data request, prefer catching the page's own answer in the same call as the step that sends
+it (\`Promise.all([page.waitForResponse(...), button.click()])\`, core skill). Fetching it in the
+page (\`page.evaluate(() => fetch(...))\`) is fine to speed things up or when that answer can't be
+caught, once the page itself has reached the results, not as the only step.
 
 - The main path`,
   },
@@ -935,9 +941,13 @@ const loadAuthoring = async (
 /*
  * A host turns the search URL fast path on with `searchUrlFastPath`. Off, which is also what
  * omitting it gives, renders the URL guidance as it stood before; on renders the fast path's
- * text, whose search skill and workspace guide digests are the ones pinned before the flag. Every
- * other file renders the same either way.
+ * text, whose workspace guide digest is the one pinned before the flag. Either way the search
+ * skill's page-data paragraph ends with the same data-request sentence, once. Every other file
+ * renders the same either way.
  */
+const dataRequestSentence =
+  "For a data request, prefer catching the page's own answer in the same call as the step that sends it (`Promise.all([page.waitForResponse(...), button.click()])`, core skill). Fetching it in the page (`page.evaluate(() => fetch(...))`) is fine to speed things up or when that answer can't be caught, once the page itself has reached the results, not as the only step.";
+
 it("renders the search URL fast path only when a host turns it on", async () => {
   const omitted = await loadAuthoring("typescript/authoring");
   const off = await loadAuthoring("typescript/authoring", undefined, { searchUrlFastPath: false });
@@ -954,13 +964,14 @@ it("renders the search URL fast path only when a host turns it on", async () => 
       expect(mode.search).toContain(passage[shown]);
       expect(mode.search).not.toContain(passage[hidden]);
     }
+    expect(mode.search.replace(/\s+/g, " ").split(dataRequestSentence)).toHaveLength(2);
   }
   expect(on.guide.files.get("AGENTS.md")).toBe(on.guide.instructions);
   expect([
     ...on.digests.filter(([, name]) => name === "search"),
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
-    ["fb27753b30c3e53a0a51b07b13eedfbae2555e4abb861fe287a7f9d352018a7a", "search"],
+    ["3eab0c3ce4fe41164a06d06ffaa9544c66c85870e618fb5d1ae48a553cf98b06", "search"],
     ["69a275fc44bc2bd80f12148f34daf4e35ab119aaab0b125edb24cf628459272d", "workspace/AGENTS.md"],
   ]);
   expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(

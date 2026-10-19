@@ -137,9 +137,12 @@ what its inputs need.
 
 Try the fast path first. While exploring, check whether the page's own data request or embedded
 data carries the result fields. When it does, the default design is: reach the results through
-the page's controls, then read that data in the same session (`page.evaluate(() => fetch(...))`
-for a data request, core skill), reading the applied location back from the page or that
-answer. Read rendered rows only when it doesn't.
+the page's controls, then read that data in the same session, reading the applied location back
+from the page or that answer. Read rendered rows only when it doesn't. For a data request, prefer
+catching the page's own answer in the same call as the step that sends it
+(`Promise.all([page.waitForResponse(...), button.click()])`, core skill). Fetching it in the page
+(`page.evaluate(() => fetch(...))`) is fine to speed things up or when that answer can't be
+caught, once the page itself has reached the results, not as the only step.
 
 - The main path visits only the controls an input sets: a filter, sort, quick switch or other
   optional control the caller left unset is never opened, clicked or waited on, so a run with
