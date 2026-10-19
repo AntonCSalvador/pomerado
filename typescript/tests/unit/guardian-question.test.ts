@@ -6,7 +6,7 @@ import { OpenAIProvider, setDefaultModelProvider, Usage } from "@openai/agents";
 import type { ModelRequest, ModelResponse } from "@openai/agents";
 import { Effect } from "effect";
 import { afterEach, expect, it } from "vitest";
-import { makeOpenAIReviewer } from "../../src/guardian/openai.js";
+import { makeOpenAIReviewer, ownerOutputChangeCarveOut } from "../../src/guardian/openai.js";
 import {
   guardianPublicationPolicy,
   neededValueStandard,
@@ -227,6 +227,25 @@ it("judges a design question's options by the publication review's needed-value 
   const input = JSON.parse(userText(requests[0])) as { trusted_review: { policy: string } };
   expect(input.trusted_review.policy).toContain(neededValueStandard);
   expect(guardianPublicationPolicy).toContain(neededValueStandard);
+});
+
+// In maintenance the owner confirms a field made optional, nullable or removed through the very
+// question the needed-value rule would otherwise reword, so that rule leaves the owner's
+// confirmation of an output contract change to the rule that allows it.
+it("leaves the owner's confirmation of an output contract change to the rule that allows it", async () => {
+  const requests = scripted([[message({ outcome: "allow_business", rationale: "Allowed." })]]);
+  await Effect.runPromise(
+    makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).reviewQuestion(
+      pending,
+      question,
+      unreadable,
+    ),
+  );
+  const input = JSON.parse(userText(requests[0])) as { trusted_review: { policy: string } };
+  const neededValueRule = input.trusted_review.policy
+    .split("\n")
+    .find((line) => line.includes(neededValueStandard));
+  expect(neededValueRule).toContain(ownerOutputChangeCarveOut);
 });
 
 // Without a saved login the host picks no sign-in method, so rewording the minter's question
