@@ -476,11 +476,6 @@
       "import": "./dist/typescript/src/privacy/credential-policy.js",
       "default": "./dist/typescript/src/privacy/credential-policy.js"
     },
-    "./core/privacy/known-values": {
-      "types": "./dist/typescript/src/privacy/known-values.d.ts",
-      "import": "./dist/typescript/src/privacy/known-values.js",
-      "default": "./dist/typescript/src/privacy/known-values.js"
-    },
     "./core/privacy/secret-keys": {
       "types": "./dist/typescript/src/privacy/secret-keys.d.ts",
       "import": "./dist/typescript/src/privacy/secret-keys.js",
@@ -490,6 +485,11 @@
       "types": "./dist/typescript/src/privacy/url-spans.d.ts",
       "import": "./dist/typescript/src/privacy/url-spans.js",
       "default": "./dist/typescript/src/privacy/url-spans.js"
+    },
+    "./core/privacy/value-forms": {
+      "types": "./dist/typescript/src/privacy/value-forms.d.ts",
+      "import": "./dist/typescript/src/privacy/value-forms.js",
+      "default": "./dist/typescript/src/privacy/value-forms.js"
     },
     "./core/registry/issues": {
       "types": "./dist/typescript/src/registry/issues.d.ts",

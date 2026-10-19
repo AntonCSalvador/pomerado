@@ -5,7 +5,7 @@ import {
   isCardSlot,
   shortCardPart,
 } from "../destinations/payment-frames.js";
-import { formDecoded, shownForms } from "../privacy/known-values.js";
+import { formDecoded, shownForms } from "../privacy/value-forms.js";
 
 /**
  * A short form of a secret (`shownForms`) counts in source only as a whole token, as the
