@@ -10,13 +10,15 @@ inputs, desired result and permitted effects. A read build explores, then iterat
 script from a reset start by running its example until it works (re-running a read's
 example is normal); resolve its missing choices with reads when possible. A write build
 does the caller's requested task once, live (in as many write steps as it takes), then
-composes its script from what happened (the `writes` skill). Only a read signed out designs
-and runs tests beyond its example, live test cases included (the `testing` skill). A signed-in
-read proves its tool with its example and a write with its act session; neither reads the
-`testing` skill or designs further tests, and each checks its HTTP version once, against that
-run. The scope follows what the tool is now, not what the build started as: a read that signs in
-or becomes a write, in a new build or a repair, keeps to the one run from then on, and a repair
-that rebuilds a signed-in tool or a write as a read signed out tests it fully. Credentials and
+composes its script from what happened (the `writes` skill). A read tests what its example
+did not exercise with a few combined live cases (the `testing` skill): a read signed out runs a
+handful, and a signed-in read one combined case that sets the optional inputs its example left
+unset, two distinct inputs at most. A write proves its tool with its act session; it never reads
+the `testing` skill or designs further tests, and checks its HTTP version once, against that run.
+The scope follows what the tool is now, not what the build started as: a read that becomes a
+write, in a new build or a repair, keeps to the one run from then on, a read that signs in keeps
+to the signed-in bound from then on, and a repair that rebuilds a signed-in tool or a write as a
+read signed out tests it as one. Credentials and
 sign-in codes
 belong to the host; never request a password, cookie or TOTP seed in model-visible text.
 
@@ -330,7 +332,9 @@ the task can't run without it (below).
   example.
 - Make each input as strict as the site's field: required text is non-empty and not whitespace
   alone (`Schema.NonEmptyString.pipe(Schema.pattern(/\S/u))`, which still takes a caller's stray
-  space); a date, time or code keeps its `pattern`; a fixed set is a `Literal` enum. Make an input
+  space); free text takes a `maxLength` no longer than the site's own field takes, so a blank or
+  over-long value is refused before the site is touched; a date, time or code keeps its
+  `pattern`; a fixed set is a `Literal` enum. Make an input
   optional only when the site accepts the field blank and the tool works without it.
 - Start each field's description with how many values it takes and what each one is, such as "One city name" or "A list of airport codes", so the input's cardinality is clear. A description that starts "By design:" keeps that marker first and puts the number of values after it, such as "By design: one postal code, …", never before it.
 - When a field takes one value and a caller might send several, say "one per call" and prefer a
@@ -403,8 +407,13 @@ stop. When they need it, end with `report_blocked` reason `site_lacks_capability
 names, the record's identifier as the site shows it, and the context those depend on as the page
 shows it, such as dates, a party size or a location. Make each one required and non-null, typed
 so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for
-text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the
-request's wording or a description says. A run whose output fails its schema goes to repair.
+text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever a
+description says. A run whose output fails its schema goes to repair.
+- The owner may settle a different form for every run: in the request's own explicit words, in
+  an answer to your design question or in a task update, such as blank fields returned as empty
+  strings. Publication review honours that decision as stated. Build it that way, and say in
+  the field's description what the owner chose. It never covers a value the page shows that
+  the code failed to read, or anything personal or account-specific.
 - Type each output field as strictly as its value: required text is non-empty and trimmed
   (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports
   an input's value reuses that input's enum or pattern. Make one optional or nullable only where
@@ -821,7 +830,7 @@ Never recreate a write or login to recover an observation. See
 
 The tools and the files you may edit are in `AGENTS.md`. The host binds the caller's actual input/account; no tool
 argument selects another account or private reference. A live test's `testInput`, on a
-read signed out only, is an input you choose, with public values only
+read only, is an input you choose, with values the site shows and never a private identifier
 (.agents/testing/SKILL.md). Every new command/probe/execution gets Guardian review<!-- pomerado:section core.tools-and-files -->.
 Nested Playwright actions do not each trigger review. A probe operation still receives the host-bound business
 input. Its declared schema must accept that input even when the bounded observation

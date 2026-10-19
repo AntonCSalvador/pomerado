@@ -242,6 +242,6 @@ does not authorize another submit.
 
 ## Standalone fixture checks
 
-Use the same supplied-input/observed-control rules and browser helper APIs. A read signed out may check pure parsers with `pureFiles` and supplied fixtures (testing skill); a signed-in read or a write proves its form flow with its one run, the example or the act session, and builds no fixture checks. Never invent a live field value merely to test a control.
+Use the same supplied-input/observed-control rules and browser helper APIs. A read signed out may check pure parsers with `pureFiles` and supplied fixtures (testing skill); a signed-in read proves its form flow with its example and its combined case, and a write with its act session, and neither builds fixture checks. Never invent a live field value merely to test a control.
 
 pomerado:section forms.fixture-checks:end -->

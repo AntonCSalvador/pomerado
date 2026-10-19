@@ -300,7 +300,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   // when the build finds one, and neither skill names it as a gap.
   [
     "testing",
-    "and an option the page lists but greys out, such as a sold-out size, which a read returns as unavailable data. Prefer also a query or filter with no results (`empty`, never a throw) when you find one. Without one, move on: it needs no `notTested` entry and no question;",
+    "Without a no-results answer, move on: it needs no `notTested` entry and no question;",
   ],
   ["publication", "and untested (such as a later page or another layout, live)."],
   [
@@ -353,7 +353,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   // fails the output check.
   [
     "core",
-    "**Never loosen a value the request needs.** The values the request needs are each value it names, the record's identifier as the site shows it, and the context those depend on as the page shows it, such as dates, a party size or a location. Make each one required and non-null, typed so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever the request's wording or a description says. A run whose output fails its schema goes to repair. - Type each output field as strictly as its value: required text is non-empty and trimmed (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports an input's value reuses that input's enum or pattern. Make one optional or nullable only where the page may genuinely not show the value. - The one exception is a record whose own page genuinely does not show the value, such as an item that is sold out and shows no amount, or a listing that shows no date yet. Then the value may be null only together with a field that says why, such as its availability, and both descriptions say so. - Null never covers a value the page shows that the code failed to read: that throws `OperationFailure` naming it. Never turn a read that found nothing into null (`?.innerText ?? null`); a missing element is a failure, not an absence. - Before your first example, list the needed values. If the page may not show one, settle it then: find where the site shows it, on every layout its records use, or ask the owner. **Output fields.** Design the output for what a caller could use, and lean toward more fields and more information rather than the minimum: include the facts about each record or result that a caller could reasonably use to identify, choose, compare or act on it, not only the values the request names. Leave out what is unrelated to the tool's purpose or of no use to a caller. - Keep each value's full displayed text. Read the element that holds the whole value, never a shorter or secondary one. When the page splits one value across elements, such as a maker line above a linked name or an author line above a title, return each part in its own field. Never drop either part. - Prefer a separate typed field for each fact over folding it into another field's text. Never derive a value the page does not show. - A field that is not a needed value is nullable when records on this site can lack it, and it is null exactly when this record does not show it. - Never declare a field the code does not read. A field that is always null, empty or fixed is not a disclosed limit: read it from the page, or leave the field out.",
+    "**Never loosen a value the request needs.** The values the request needs are each value it names, the record's identifier as the site shows it, and the context those depend on as the page shows it, such as dates, a party size or a location. Make each one required and non-null, typed so a value the code could not read fails the output check (`Schema.NonEmptyTrimmedString` for text, `Schema.Int` for a count), never optional, nullable or plain `Schema.Number`, whatever a description says. A run whose output fails its schema goes to repair. - The owner may settle a different form for every run: in the request's own explicit words, in an answer to your design question or in a task update, such as blank fields returned as empty strings. Publication review honours that decision as stated. Build it that way, and say in the field's description what the owner chose. It never covers a value the page shows that the code failed to read, or anything personal or account-specific. - Type each output field as strictly as its value: required text is non-empty and trimmed (`Schema.NonEmptyTrimmedString`), a date or time keeps its `pattern`, and a field that reports an input's value reuses that input's enum or pattern. Make one optional or nullable only where the page may genuinely not show the value. - The one exception is a record whose own page genuinely does not show the value, such as an item that is sold out and shows no amount, or a listing that shows no date yet. Then the value may be null only together with a field that says why, such as its availability, and both descriptions say so. - Null never covers a value the page shows that the code failed to read: that throws `OperationFailure` naming it. Never turn a read that found nothing into null (`?.innerText ?? null`); a missing element is a failure, not an absence. - Before your first example, list the needed values. If the page may not show one, settle it then: find where the site shows it, on every layout its records use, or ask the owner. **Output fields.** Design the output for what a caller could use, and lean toward more fields and more information rather than the minimum: include the facts about each record or result that a caller could reasonably use to identify, choose, compare or act on it, not only the values the request names. Leave out what is unrelated to the tool's purpose or of no use to a caller. - Keep each value's full displayed text. Read the element that holds the whole value, never a shorter or secondary one. When the page splits one value across elements, such as a maker line above a linked name or an author line above a title, return each part in its own field. Never drop either part. - Prefer a separate typed field for each fact over folding it into another field's text. Never derive a value the page does not show. - A field that is not a needed value is nullable when records on this site can lack it, and it is null exactly when this record does not show it. - Never declare a field the code does not read. A field that is always null, empty or fixed is not a disclosed limit: read it from the page, or leave the field out.",
   ],
   // A list returns one page per call and a cursor to the next.
   [
@@ -418,7 +418,7 @@ const formerSections: readonly (readonly [string, string])[] = [
   ["workspace/AGENTS.md", "Testing a read signed out is your job, never the caller's (.agents/testing/SKILL.md)."],
   ["workspace/AGENTS.md", "- `src/`: your operation. It exists from the start and is empty until you write to it"],
   ["testing", "Choose cases that catch actual risk: applied filters, IDs, units, authoritative empty"],
-  ["testing", "Where the host offers `live_tests`, a read signed out has no limit on live tests, and the host runs them for you in parallel."],
+  ["testing", "Where the host offers `live_tests`, the host runs a read signed out's cases for you in parallel."],
 ];
 
 const renderedTexts = async (directory: string, render?: (text: string) => string) => {
@@ -789,18 +789,18 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["af346d56453d40246872599683f72c7c645c6c7fcbc5046ab62570dd3cd0ac96", "core"],
-    ["cbf9d84d1cdc1a192ec07df90bf99192a72c7b03c0aefb89096f4f0b5bf6ef27", "search"],
+    ["a14f1b62b31578845bd7646b77876ace7a242a666f8d116bd8cad3447836e95f", "core"],
+    ["fe1283cbe9de49c475065da5c44f55bddafb854a141f9151b2c8d54a8dae749b", "search"],
     ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
-    ["48ba91768a4c1cbb8d6d325bb6b3ef41182bcbdf8097db014391137e29fb7f7d", "testing"],
-    ["fc4707b0cd5692efe8cc9b96be4ec88b1f8807451348056eb13dfc3d88486b0f", "pagination"],
+    ["e12b81c44319ecfb5d4a6fd6dccdb0576127cbf337eb40cb131aa13e99e6a622", "testing"],
+    ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
     ["3c9a5f4e12e33f5d10758225f0a233f98f9504fce618108fc93a52b5933e0048", "records"],
-    ["7e39ab2d515b817c3d42070922a575f6d3cd5b8427d3c97a4af151cec7a32656", "forms"],
+    ["12b198d6503ef35853f9ff42aefefe641dc3b59c8b2a3e5a1424aabb4f6af2f4", "forms"],
     ["482a1233b82951350ebb66f373a56667a47e37796a70a62ff84a6dd6c3abbc7a", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["5e3017df8368f31f52d925062ca0d7f24f2a8badffd8da1589ba9c7860e27b7a", "caller-input"],
-    ["3c11e86df509740394a8913710175dbdb364a84afbd2cd755ea19f676be6e0db", "publication"],
-    ["65366fa94b5d4203fa00724566b5f509fff2ebf8536bc388b62ad8ba0d8e2e0c", "workspace/AGENTS.md"],
+    ["c2dd673571bee73706a5b392926b0b9edcd9860fd20104789c353573b72cc9f6", "publication"],
+    ["a0d3eb391c301814d9bbf38ace731a4d280ebe2ca86c748962baaf4d291552ed", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
