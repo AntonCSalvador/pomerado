@@ -258,9 +258,9 @@ const keyTerms = (
  * A key body after its prefix, read as far as its characters run, so no key loses its tail. A
  * key written in the body that the body could not read whole is read whole by its own rule:
  *
- * - A random body is never cut, since its first part may not be random alone. After a separator
- *   it reads such a key that needs no random body into itself (`sk-…-whsec_…+…`), and
- *   `isProviderKey` accepts a match that holds a key.
+ * - A random body is never cut, since its first part may not be random alone. At each word start
+ *   in it, its start or after a separator, it reads such a key that needs no random body into
+ *   itself (`sk-…-whsec_…+…`), and `isProviderKey` accepts a match that holds a key.
  * - Any other body, at each word start in it, reads in a key whose prefix it reads but whose
  *   body it does not (`xoxb-…-sk-…_…`). A separator ends it only before a key whose prefix it
  *   cannot read (`whsec_…/ghp_…`), so both keys are found and masked whole. Read `within` another
@@ -281,7 +281,7 @@ function bodyLoop(shape: KeyShape, within: KeyShape = shape): string {
       true,
       shape,
     );
-    return held === "" ? all : `(?:${word}|${separator}(?:${held})?)*`;
+    return held === "" ? all : `(?:${wordStart}(?:${held})|${word}|${separator})*`;
   }
   const take = keyTerms(
     (inner, prefix) => reads(body, prefix) && widerBody(inner, shape),

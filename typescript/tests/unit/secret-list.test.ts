@@ -167,6 +167,24 @@ describe("a key whose body holds another key's shape", () => {
     expect(redactDiagnosticText(text)).toBe("key [redacted_token] end");
   });
 
+  it.each([
+    [
+      "after a Slack token hyphen",
+      `${fake("xoxa-", "AAAAAAAAAA-")}${fake("sk-", fake("whsec_", "ABCDEFGH12+/ijklmnopqrstuv=="))}`,
+    ],
+    [
+      "at the start of a Slack token body",
+      fake(
+        "xoxb-",
+        fake("sk-proj-", fake("whsec_", "xJEj5VQ/KmMOLFb+Qa2tmsqp3mjmiafEpvucV6SaTSl9T1cB1yacewg4j")),
+      ),
+    ],
+  ])("reads in a signing secret that starts a model key body, %s", (_, key) => {
+    const text = `key ${key} end`;
+    expect(providerKeys(text)).toEqual([key]);
+    expect(redactDiagnosticText(text)).toBe("key [redacted_token] end");
+  });
+
   it("reads a long run of key shapes in time that grows with its length, not its square", () => {
     const fastest = (text: string) => {
       let best = Number.POSITIVE_INFINITY;
