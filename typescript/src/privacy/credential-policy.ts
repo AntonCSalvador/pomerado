@@ -185,31 +185,120 @@ export const isFreeTextSchemeCredential = (scheme: string, value: string): boole
 export const isRandomKeyBody = (value: string): boolean =>
   (/[A-Z]/u.test(value) && (value.match(/[0-9]/gu) ?? []).length >= 3) || hasRandomRun(value, 16);
 
-/** Every provider key at its shortest: one of a shape's prefixes and the fewest body characters. */
-const shortestKeys = credentialPolicy.providerKeys
-  .map(({ prefixes, body, minBody }) => `(?:${alternation(prefixes)})[${body}]{${String(minBody)}}`)
-  .join("|");
+type KeyShape = (typeof credentialPolicy.providerKeys)[number];
+const isRandomShape = (shape: KeyShape): boolean => "random" in shape && shape.random;
+/** A body's separators: its characters other than letters, digits and `_` (`-`, or `+/=`). */
+const separatorsOf = (body: string) => body.replace(/A-Z|a-z|0-9|_/gu, "");
+/** Words as one regular-expression term: the word itself, or a group of alternatives. */
+const oneOf = (words: readonly string[]) =>
+  words.length === 1 ? escapeRegExp(words[0] ?? "") : `(?:${alternation(words)})`;
 /**
- * A key body: its characters, at least `minBody` of them. A `-`, `+`, `/` or `=` joins the body
- * only where no provider key follows it, so a body never runs into a key written straight after
- * it (`whsec_…/ghp_…`), which is found on its own.
+ * A character class, written with `\w` and `\d` where they fit, which keeps the pattern short:
+ * `matchAll` copies a pattern on every call, at a cost that grows with its length.
  */
-const bodyPattern = (body: string, minBody: number) => {
-  // A body's characters are letters, digits and `_`, then any separators.
-  const separators = body.replace(/A-Z|a-z|0-9|_/gu, "");
-  if (separators === "") return `[${body}]{${String(minBody)},}`;
-  const word = body.slice(0, body.length - separators.length);
-  const separator = `[${separators.replace(/[-\]^]/gu, "\\$&")}](?!${shortestKeys})`;
-  return `(?:[${word}]|${separator}){${String(minBody)},}`;
+const characters = (body: string) => {
+  const short = body.replace("A-Za-z0-9_", "\\w").replace("0-9", "\\d");
+  return short === "\\w" ? short : `[${short}]`;
+};
+const escapedClass = (text: string) => characters(text.replace(/[-\]^\\]/gu, "\\$&"));
+/** Whether a body's characters cover every character of `text`. */
+const reads = (body: string, text: string) => new RegExp(`^[${body}]*$`, "u").test(text);
+const printable = Array.from({ length: 95 }, (_, offset) => String.fromCharCode(32 + offset));
+
+/**
+ * `isRandomKeyBody` over a body's whole run of characters, as a lookahead at its start. A body of
+ * only letters and digits, at least 16 long, is one run, so it is random when it holds a digit.
+ */
+const randomBodyCheck = (body: string, minBody: number) => {
+  const others = (body.includes("_") ? "_" : "") + separatorsOf(body);
+  if (others === "" && minBody >= 16) return "(?=[A-Za-z]*\\d)";
+  const runStart = others === "" ? "" : `(?:[A-Za-z\\d]*${escapedClass(others)})*?`;
+  const any = characters(body);
+  return `(?:(?=${any}*?[A-Z])(?=(?:${any}*?\\d){3})|(?=${runStart}(?=[A-Za-z\\d]{16})[A-Za-z]*\\d))`;
+};
+
+/**
+ * The keys that `outer`'s body could not read whole after one of its separators: a prefix holds a
+ * character the body lacks (`whsec_…/ghp_…`), or the key's own body does (`xoxb-…-sk-…_…`). Each
+ * is checked as `isProviderKey` checks a match: its length, and a random body where its shape
+ * needs one. A random body only takes in keys that need no random body. `whole` reads each key to
+ * the end of its body. Prefixes with the same checks share one alternative.
+ */
+const unreadableKeys = (outer: KeyShape, whole: boolean) => {
+  const prefixesByCheck = new Map<string, string[]>();
+  for (const inner of credentialPolicy.providerKeys) {
+    if (isRandomShape(outer) && isRandomShape(inner)) continue;
+    const body = characters(inner.body);
+    const random = isRandomShape(inner) ? randomBodyCheck(inner.body, inner.minBody) : "";
+    const check = `(?=${body}{${String(inner.minBody)}})${random}`;
+    const rest = whole ? `${body}+` : "";
+    const wider = printable.some((c) => reads(inner.body, c) && !reads(outer.body, c));
+    const stops = `(?=${body}*?(?!${characters(outer.body)})${body})`;
+    for (const prefix of inner.prefixes) {
+      const unread = !reads(outer.body, prefix);
+      if (!unread && !wider) continue;
+      const key = unread ? `${check}${rest}` : `${check}${stops}${rest}`;
+      prefixesByCheck.set(key, [...(prefixesByCheck.get(key) ?? []), prefix]);
+    }
+  }
+  return [...prefixesByCheck].map(([check, prefixes]) => `${oneOf(prefixes)}${check}`).join("|");
+};
+
+/**
+ * A key body: at least `minBody` of its characters, read as far as they run, so no key loses its
+ * tail. A `-`, `+`, `/` or `=` ends the body only before a key the body could not read whole, so
+ * both keys are found and masked whole (`whsec_…/ghp_…`). Any other key shape after a separator
+ * is more of the same key (`sk-proj-…-bl_…_…`). A part shorter than `minBody` before such a key
+ * still counts on its own wherever the body's characters, read through every separator, run
+ * `minBody` long.
+ *
+ * A random body is never cut, since its first part may not be random alone. It reads a key it
+ * could not read whole into itself, and `isProviderKey` accepts a match that holds a key.
+ */
+const bodyPattern = (shape: KeyShape) => {
+  const { body, minBody } = shape;
+  const separators = separatorsOf(body);
+  const unreadable = separators === "" ? "" : unreadableKeys(shape, isRandomShape(shape));
+  if (unreadable === "") return `${characters(body)}{${String(minBody)},}`;
+  const reach = `(?=${characters(body)}{${String(minBody)}})`;
+  const word = characters(body.slice(0, body.length - separators.length));
+  const separator = escapedClass(separators);
+  return isRandomShape(shape)
+    ? `${reach}(?:${word}|${separator}(?:${unreadable})?)*`
+    : `${reach}(?:${word}|${separator}(?!${unreadable}))*`;
 };
 const providerShapes = credentialPolicy.providerKeys.flatMap((shape) =>
-  shape.prefixes.map((prefix) => ({ prefix, random: "random" in shape && shape.random })),
+  shape.prefixes.map((prefix) => ({ prefix, random: isRandomShape(shape) })),
 );
-// One alternative per shape, its prefixes in list order, keeps the pattern short: `matchAll` copies
-// a pattern on every call, at a cost that grows with its length.
-const providerKeySource = `(?<![A-Za-z0-9_])(?:${credentialPolicy.providerKeys
-  .map(({ prefixes, body, minBody }) => `(?:${alternation(prefixes)})${bodyPattern(body, minBody)}`)
+/**
+ * A word start: no letter, digit or `_` before the key. Before a letter, digit or `_`, which every
+ * listed prefix starts with, `\b` is that same boundary, and the engine reads it faster.
+ */
+const wordStart = credentialPolicy.providerKeys.every(({ prefixes }) =>
+  prefixes.every((prefix) => /^\w/u.test(prefix)),
+)
+  ? "\\b"
+  : "(?<!\\w)";
+// One alternative per shape, its prefixes in list order, keeps the pattern short.
+const providerKeySource = `${wordStart}(?:${credentialPolicy.providerKeys
+  .map((shape) => `${oneOf(shape.prefixes)}${bodyPattern(shape)}`)
   .join("|")})`;
+/**
+ * A key that needs no random body, written after a separator of a random body (`sk-…-xoxb-…`).
+ * The random body reads it as its own, so a match that holds one is a key.
+ */
+const heldKey = new RegExp(
+  `${escapedClass(
+    credentialPolicy.providerKeys
+      .filter(isRandomShape)
+      .map(({ body }) => separatorsOf(body))
+      .join(""),
+  )}(?:${credentialPolicy.providerKeys
+    .filter((shape) => !isRandomShape(shape))
+    .map(({ prefixes, body, minBody }) => `${oneOf(prefixes)}${characters(body)}{${String(minBody)}}`)
+    .join("|")})`,
+  "u",
+);
 
 /**
  * Provider API keys, by prefix and body, starting at a word boundary. Each match
@@ -218,11 +307,15 @@ const providerKeySource = `(?<![A-Za-z0-9_])(?:${credentialPolicy.providerKeys
  */
 export const providerKeyPattern = (): RegExp => new RegExp(providerKeySource, "gu");
 
-/** Whether a `providerKeyPattern` match is a key rather than a slug or an identifier. */
+/**
+ * Whether a `providerKeyPattern` match is a key rather than a slug or an identifier. A random
+ * shape's match is a key when its body is random or it holds a key that needs no random body.
+ */
 export const isProviderKey = (match: string): boolean => {
   const shape = providerShapes.find((candidate) => match.startsWith(candidate.prefix));
   return (
-    shape !== undefined && (!shape.random || isRandomKeyBody(match.slice(shape.prefix.length)))
+    shape !== undefined &&
+    (!shape.random || isRandomKeyBody(match.slice(shape.prefix.length)) || heldKey.test(match))
   );
 };
 

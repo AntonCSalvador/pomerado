@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   awsAccessKeyIdPattern,
+  credentialPolicy,
   isCredentialAssignmentKey,
   isProviderKey,
+  isRandomKeyBody,
   providerKeyPattern,
 } from "../../src/privacy/credential-policy.js";
 import { publicationBlockFeedback } from "../../src/mint/publication-block.js";
@@ -61,6 +63,167 @@ describe("keys written one after another", () => {
     expect(`use ${key} now`.match(providerKeyPattern())?.[0]).toBe(key);
   });
 });
+
+/** The provider keys a text holds, as `providerKeyPattern` and `isProviderKey` find them. */
+const providerKeys = (text: string) =>
+  [...text.matchAll(providerKeyPattern())].map((match) => match[0]).filter(isProviderKey);
+
+// A key body that can hold `-` can also hold another key's shape after it. That shape is the
+// rest of the same key unless the body could not read it whole, so the key stays one key and
+// none of it is left readable.
+describe("a key whose body holds another key's shape", () => {
+  const model = fake("sk-proj-", "AbCdEf0123456789XyZwQq-");
+  it.each([
+    ["an analytics key shape", `${model}${fake("bl_", "Q1w2E3r4T5y6U7i8O9p0As_tail-Rest0123456789")}`],
+    ["a GitHub token shape", `${model}${fake("ghp_", "Q1w2E3r4T5y6U7i8O9p0As_tail-Rest0123456789")}`],
+    ["a model key slug", `${model}${fake("sk-", "hynix-ddr5-memory-kit-2026x")}`],
+    ["a short body before it", fake("sk-proj-", "AbC12-bl_Q1w2E3r4T5y6U7i8O9p0As_tail")],
+    ["a slug after it", fake("sk-proj-", "A1B2C3D4E5F6G7H8-sk-onboarding-step-for-2026")],
+    [
+      "a Slack token shape",
+      `${fake("sk-ant-", "api03-Ab0123456789cdEFghIJ-")}${fake("xoxb-", "1234567890-abcdEFGH_tail_secret")}`,
+    ],
+  ])("keeps a key holding %s as one key, masked whole", (_, key) => {
+    const text = `key ${key} end`;
+    expect(providerKeys(text)).toEqual([key]);
+    expect(redactDiagnosticText(text)).toBe("key [redacted_token] end");
+  });
+
+  it.each([
+    ["an analytics key shape", fake("bl_", "abcdefghijklmnopqrstu")],
+    ["an analytics personal key shape", fake("phx_", "abcdefghijklmnopqrstuvwx")],
+  ])("refuses a short key followed by %s as one key", (_, shape) => {
+    const key = `${fake("sk-", "A1B2C3D4E5F6G7H8-")}${shape}`;
+    const text = `const key = "${key}";`;
+    expect(providerKeys(text)).toEqual([key]);
+    expect(providerKeyRefusal("src/tool.mjs", text)?.publicationBlock).toMatchObject({
+      check: "provider_credential",
+      line: 1,
+      column: 14,
+    });
+  });
+
+  it("still finds two keys where the first body could not read the second", () => {
+    const signing = fake("whsec_", "FAKEsyntheticSigning0000");
+    const github = fake("ghp_", "FAKEsynthetic0000abcdefghi");
+    const text = `${signing}/${github} ok`;
+    expect(providerKeys(text)).toEqual([signing, github]);
+    expect(redactDiagnosticText(text)).toBe("[redacted_token]/[redacted_token] ok");
+  });
+
+  it("masks a short Slack token shape written straight before a GitHub token", () => {
+    const github = fake("ghp_", "FAKEsynthetic0000abcdefghi");
+    const text = `x ${fake("xoxb-", "abcdef")}-${github} y`;
+    expect(redactDiagnosticText(text)).toBe("x [redacted_token]-[redacted_token] y");
+  });
+
+  it("masks a model key slug that holds a Slack token", () => {
+    const text = `see ${fake("sk-", "onboarding-step-for-twenty-")}${fake("xoxb-", "1234567890")} ok`;
+    expect(redactDiagnosticText(text)).toBe("see [redacted_token] ok");
+  });
+
+  it("starts a key at the same word start as a letter, digit or underscore lookbehind", () => {
+    const pattern = providerKeyPattern();
+    const lookbehind = new RegExp(
+      pattern.source.replace(/^\\b/u, "(?<![A-Za-z0-9_])"),
+      pattern.flags,
+    );
+    expect(lookbehind.source).not.toBe(pattern.source);
+    const key = fake("ghp_", "FAKEsynthetic0000abcdefghi");
+    for (const before of ["", " ", "-", "/", "é", "ſ", "K", "_", "a", "0", "\ud800"]) {
+      const text = `${before}${key} ${before}${fake("xoxb-", "FAKE0000012345")}`;
+      const starts = (found: RegExp) => [...text.matchAll(found)].map((match) => match.index);
+      expect(starts(pattern)).toEqual(starts(lookbehind));
+    }
+  });
+
+  it("takes a signing secret with base64 padding into the key before it", () => {
+    const key = `${fake("sk-", "A1B2C3D4E5F6G7H8IJKL-")}${fake("whsec_", "ABCDEFGH12345678+abc/def=")}`;
+    expect(redactDiagnosticText(`x ${key} y`)).toBe("x [redacted_token] y");
+  });
+});
+
+// Every body read to its last character, each key checked as `isProviderKey` checks it: a key
+// found this way is masked whole by the policy's own pattern too. Only the one separator between
+// two keys written back to back stays, as above.
+describe("masking never falls below a body read to its last character", () => {
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const shapes = credentialPolicy.providerKeys.flatMap((shape) =>
+    shape.prefixes.map((prefix) => ({ prefix, shape })),
+  );
+  const wholeBodies = new RegExp(
+    `(?<![A-Za-z0-9_])(?:${shapes
+      .map(({ prefix, shape }) => `${escape(prefix)}[${shape.body}]{${String(shape.minBody)},}`)
+      .join("|")})`,
+    "gu",
+  );
+  const wholeBodyKey = (match: string) => {
+    const found = shapes.find(({ prefix }) => match.startsWith(prefix));
+    return (
+      found !== undefined &&
+      (!("random" in found.shape) || isRandomKeyBody(match.slice(found.prefix.length)))
+    );
+  };
+  const spans = (text: string, pattern: RegExp, keep: (match: string) => boolean) =>
+    [...text.matchAll(pattern)]
+      .filter((match) => keep(match[0]))
+      .map((match) => ({ start: match.index, end: match.index + match[0].length }));
+
+  // Key shapes written together with separators, lengths around each minimum.
+  let seed = 7919;
+  const next = () => {
+    seed ^= seed << 13;
+    seed >>>= 0;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    seed >>>= 0;
+    return seed / 4294967296;
+  };
+  const pick = <T>(items: readonly T[]): T => items[Math.floor(next() * items.length)] as T;
+  const alphanumeric = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const sets = [
+    alphanumeric,
+    `${alphanumeric}-_`,
+    `${alphanumeric}+/=`,
+    `${alphanumeric}-`,
+    `${alphanumeric}_`,
+    "abcdefghijklmnopqrstuvwxyz",
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+  ];
+  const prefixes = shapes.map(({ prefix }) => prefix);
+  const text = () => {
+    let written = pick(["", " ", "-", "/"]);
+    const parts = 2 + Math.floor(next() * 5);
+    for (let part = 0; part < parts; part += 1) {
+      if (part > 0) written += pick(["-", "-", "-", "+", "/", "=", "_", " "]);
+      const set = pick(sets);
+      written += pick(prefixes);
+      for (let length = Math.floor(next() * 34); length > 0; length -= 1) written += pick([...set]);
+    }
+    return written;
+  };
+
+  it("masks every character the whole-body form masks, on 4,000 texts", () => {
+    const less: string[] = [];
+    for (let count = 0; count < 4000; count += 1) {
+      const written = text();
+      const mine = spans(written, providerKeyPattern(), isProviderKey);
+      const masked = new Set(mine.flatMap(({ start, end }) => range(start, end)));
+      const joint = (index: number) =>
+        "-+/=".includes(written.charAt(index)) &&
+        mine.some(({ end }) => end === index) &&
+        mine.some(({ start }) => start === index + 1);
+      const lost = spans(written, wholeBodies, wholeBodyKey)
+        .flatMap(({ start, end }) => range(start, end))
+        .filter((index) => !masked.has(index) && !joint(index));
+      if (lost.length > 0) less.push(written);
+    }
+    expect({ texts: less.length, first: less.slice(0, 3) }).toEqual({ texts: 0, first: [] });
+  });
+});
+
+const range = (start: number, end: number) =>
+  Array.from({ length: end - start }, (_, offset) => start + offset);
 
 // The local publication precheck refuses a hard-coded provider key, naming the file and where.
 describe("providerKeyRefusal", () => {
