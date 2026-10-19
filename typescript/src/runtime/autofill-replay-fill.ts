@@ -14,6 +14,7 @@ import {
   isSecret,
   recordStep,
   registeredSecretIn,
+  screenSubmit,
   submitFilled,
 } from "./autofill-state.js";
 import { Unanswered } from "./login-field-asks.js";
@@ -249,9 +250,7 @@ export const correctReplayExtras = <
     }
     const retryStep: AutofillStep = {
       fields,
-      ...(previous.popup === undefined ? {} : { popup: previous.popup }),
-      ...(previous.submit === undefined ? {} : { submit: previous.submit }),
-      ...(previous.submitKey === undefined ? {} : { submitKey: previous.submitKey }),
+      ...screenSubmit(previous),
     };
     const inspected = yield* hooks.inspect(retryStep);
     if ("outcome" in inspected) return "extra_rejected" as const;

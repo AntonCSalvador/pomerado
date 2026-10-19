@@ -139,7 +139,7 @@ interface AutofillRecordedStep {
    */
   readonly fields: readonly (AutofillField & { readonly identity?: ControlIdentity })[];
   readonly submit?: string;
-  /** The key pressed in the last field to submit its form, on a form with no submit control. */
+  /** The key the host pressed in the last field to submit its form, on a form with no submit. */
   readonly submitKey?: AutofillRecipeStep["submitKey"];
   readonly submittedBy?: "host" | "minter";
   /** A two-factor method choice's recorded methods. */
@@ -149,6 +149,13 @@ interface AutofillRecordedStep {
   /** The page the step ran on, origin and path only. */
   readonly page: string;
 }
+
+/** A screen's popup and how it submits, which a step rebuilt for that screen keeps. */
+export const screenSubmit = (screen: Pick<AutofillStep, "popup" | "submit" | "submitKey">) => ({
+  ...(screen.popup === undefined ? {} : { popup: screen.popup }),
+  ...(screen.submit === undefined ? {} : { submit: screen.submit }),
+  ...(screen.submitKey === undefined ? {} : { submitKey: screen.submitKey }),
+});
 
 /** A recorded screen as the minter reads it back: without what only the signed-in check uses. */
 export const withoutIdentity = (step: AutofillRecordedStep): AutofillRecordedStep => ({

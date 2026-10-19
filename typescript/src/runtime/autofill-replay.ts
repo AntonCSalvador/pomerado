@@ -8,7 +8,7 @@ import type {
   AutofillStep,
 } from "../destinations/autofill-step.js";
 import { refusalEvidence } from "../destinations/autofill-refusal-evidence.js";
-import { isIdentifier, submittedLoginProof } from "./autofill-state.js";
+import { isIdentifier, screenSubmit, submittedLoginProof } from "./autofill-state.js";
 import type { AutofillLogin } from "./autofill-values.js";
 import {
   type AutofillReplayInput,
@@ -65,9 +65,7 @@ const screenFor = <E extends YieldableError, V extends string, L extends Autofil
     // Each identifier field takes the kind this run's login holds that it accepts.
     const step: AutofillStep = replay.resolve({
       fields: recorded.fields,
-      ...(recorded.popup === undefined ? {} : { popup: recorded.popup }),
-      ...(recorded.submit === undefined ? {} : { submit: recorded.submit }),
-      ...(recorded.submitKey === undefined ? {} : { submitKey: recorded.submitKey }),
+      ...screenSubmit(recorded),
     });
     if (recorded.methods === undefined) return step;
     // The choice screen shows before a method is picked; its first option finds it.
@@ -327,9 +325,7 @@ const retryCode = <E extends YieldableError, V extends string, L extends Autofil
     if (typeof fields === "string") return fields;
     const retryStep: AutofillStep = {
       fields,
-      ...(shown.popup === undefined ? {} : { popup: shown.popup }),
-      ...(shown.submit === undefined ? {} : { submit: shown.submit }),
-      ...(shown.submitKey === undefined ? {} : { submitKey: shown.submitKey }),
+      ...screenSubmit(shown),
     };
     const inspected = yield* input.hooks.inspect(retryStep);
     if ("outcome" in inspected) return "none" as const;
