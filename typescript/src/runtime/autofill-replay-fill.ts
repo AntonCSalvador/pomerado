@@ -17,6 +17,7 @@ import {
   submitFilled,
 } from "./autofill-state.js";
 import { Unanswered } from "./login-field-asks.js";
+import { credentialUnavailable } from "./autofill-fresh-values.js";
 import type { ReplaySession } from "./autofill-replay-session.js";
 import type { RejectedMarker } from "../destinations/autofill-recipe.js";
 import type { AutofillLogin } from "./autofill-values.js";
@@ -57,6 +58,12 @@ const recordFilledValues = <E extends YieldableError, V extends string, L extend
   if (codeAgain === "rejected" && step.fields.some((field) => field.slot === "code"))
     retryState.codeAttempts.current += 1;
 };
+/**
+ * A code the step could not get after the site refused one ends as that refusal, unless the host
+ * could not read a code it keeps for the login at all (`credentialUnavailable`), which is its own.
+ */
+const codeRejectedAgain = (codeAgain: "rejected" | undefined, unanswered: Unanswered) =>
+  codeAgain === "rejected" && unanswered.cause !== credentialUnavailable;
 /** Admission preserves each replay's unchanged-secret cap and the sign-in's code correction cap. */
 const retryRefusal = <E extends YieldableError, V extends string, L extends AutofillLogin>(
   session: ReplaySession<E, V, L>,
@@ -137,7 +144,7 @@ export const runReplayStep = <E extends YieldableError, V extends string, L exte
     if (resolved instanceof Unanswered)
       if (corrected.size > 0) return "extra_rejected";
       else
-        return codeAgain === "rejected"
+        return codeRejectedAgain(codeAgain, resolved)
           ? "code_rejected"
           : yield* input.failures.unanswered(resolved.cause, resolved.field);
     // The kinds the fields were sent as: an answer to a field that accepts several decides.

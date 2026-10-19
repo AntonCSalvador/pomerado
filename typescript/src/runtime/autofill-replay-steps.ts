@@ -404,10 +404,10 @@ export const shownAgain = <E>(
   });
 
 /**
- * Whether a recorded screen's planned refill of `slot` holds now: the screen lists it
- * (`planned`, its recipe step's `refills`), it went out once at most so far, and the screen also
- * asks for a second factor this replay has not sent, as a site that wants the password entered
- * again with a one-time code does. A screen asking for it again any other way is a rejection.
+ * Whether a recorded screen's planned refill of `slot` holds now: the screen lists it (`planned`,
+ * its recipe step's `refills`), it went out once at most so far, and the screen also asks for a
+ * second factor this replay has not sent, as a site that wants the password entered again with a
+ * one-time code does. A screen asking for it again any other way is a rejection.
  */
 const plannedRefill = (
   step: AutofillStep,
@@ -416,7 +416,7 @@ const plannedRefill = (
   maySent: ReadonlySet<AutofillSecret>,
   refilled: ReadonlySet<AutofillSecret>,
 ) =>
-  planned.includes(slot) &&
+  planned.some((each) => each === slot) &&
   !refilled.has(slot) &&
   step.fields.some(
     (field) => isSecondFactor(field.slot) && isSecret(field.slot) && !maySent.has(field.slot),

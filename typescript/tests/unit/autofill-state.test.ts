@@ -4,6 +4,7 @@ import { checkAutofillSignedIn } from "../../src/destinations/autofill-step.js";
 import type { AutofillSignInState } from "../../src/runtime/autofill-state.js";
 import {
   armStep,
+  reasksPassword,
   recordStep,
   settleMinterSubmit,
   submitFilled,
@@ -225,4 +226,23 @@ it("records no naming of a control that carries a registered secret", async () =
   );
   expect(scripts.join("\n")).toContain("6 digits");
   expect(scripts.join("\n")).not.toContain(copied);
+});
+
+it("marks a screen as asking for the password again only beside a second factor no earlier screen took", () => {
+  const page = "https://login.example.test/password";
+  const screen = (...slots: ("password" | "code")[]) => ({
+    page,
+    fields: slots.map((slot) => ({ selector: `#${slot}`, slot })),
+  });
+  const lateCode = screen("password", "code");
+  const open = state();
+  open.steps.push(screen("password"));
+  expect(reasksPassword(open, lateCode, ["password"])).toBe(true);
+  // No refill of the password, a screen without a code, or a sign-in that is not open.
+  expect(reasksPassword(open, lateCode, [])).toBe(false);
+  expect(reasksPassword(open, screen("password"), ["password"])).toBe(false);
+  expect(reasksPassword(undefined, lateCode, ["password"])).toBe(false);
+  // A code already went out on an earlier screen: a run's replay would refuse the refill.
+  open.steps.push(screen("code"));
+  expect(reasksPassword(open, lateCode, ["password"])).toBe(false);
 });

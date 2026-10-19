@@ -13,7 +13,7 @@ import type {
   IdentifierKind,
   SecretSlot,
 } from "../destinations/autofill-step.js";
-import type { AutofillRecipeStep } from "../destinations/autofill-recipe.js";
+import { type AutofillRecipeStep, isSecondFactor } from "../destinations/autofill-recipe.js";
 import type { ControlIdentity } from "../destinations/autofill-page-code.js";
 import { report, type SignInReportContext } from "./sign-in-telemetry.js";
 
@@ -144,6 +144,8 @@ interface AutofillRecordedStep {
   readonly submittedBy?: "host" | "minter";
   /** A two-factor method choice's recorded methods. */
   readonly methods?: AutofillRecipeStep["methods"];
+  /** The password an earlier screen took that this one asked for again beside a second factor. */
+  readonly refills?: AutofillRecipeStep["refills"];
   /** The page the step ran on, origin and path only. */
   readonly page: string;
 }
@@ -367,6 +369,35 @@ export const armStep = (
   Effect.forEach(step.fields, (_, index) =>
     namedControl(inspection.screen?.fields[index], secretIn),
   ).pipe(Effect.map((identities) => armScreened(state, step, inspection, values, identities)));
+
+/**
+ * Whether a screen of the open sign-in (`open`, none for a sign-in it starts or a successor's
+ * restart) asks for the password an earlier screen of it took, as its fill refills (`refills`),
+ * beside a second factor none of its earlier screens took, as a site that wants the password
+ * re-entered with a one-time code does: the recipe records the refill there, and only there a
+ * run's replay makes it.
+ */
+export const reasksPassword = (
+  open: AutofillSignInState | undefined,
+  step: AutofillStep,
+  refills: readonly AutofillSlot[],
+) => {
+  const earlier = (which: (slot: AutofillSlot) => boolean) =>
+    open?.steps.some((taken) => taken.fields.some((field) => which(field.slot))) === true;
+  return (
+    refills.includes("password") &&
+    step.fields.some((field) => isSecondFactor(field.slot)) &&
+    earlier((slot) => slot === "password") &&
+    !earlier(isSecondFactor)
+  );
+};
+
+/** Marks the screen just armed as asking for the password again (`reasksPassword`). */
+export const noteRefill = (state: AutofillSignInState) => {
+  const armed = state.steps.at(-1);
+  if (armed !== undefined)
+    state.steps[state.steps.length - 1] = { ...armed, refills: ["password"] };
+};
 
 /**
  * Records what a fill did once it returns: a field it did not fill is not held as filled, nor a

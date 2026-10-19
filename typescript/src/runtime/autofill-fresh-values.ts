@@ -4,6 +4,12 @@ import { bareCode, Unanswered, type makeLoginFieldAsk } from "./login-field-asks
 import type { AutofillLogin, AnsweredLoginField } from "./autofill-values.js";
 
 /**
+ * A code the host keeps for the login that it could not read, as when the store that keeps it is
+ * down: the step ends as that outage, which may pass, never as the site's refusal.
+ */
+export const credentialUnavailable = "credential_unavailable";
+
+/**
  * Host-written, never model text: why the owner is asked for a code again. None says the site
  * sent a new code, since nothing tells the host it did.
  */
