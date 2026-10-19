@@ -22,6 +22,7 @@ describe("makeRunSecrets", () => {
     ],
     ["trimmed and form-encoded", "correct++horse%09battery"],
     ["collapsed and URL-encoded", "correct%20horse%20battery"],
+    ["base64-encoded", Buffer.from(secret).toString("base64")],
   ])("redacts a secret %s", (_, shown) => {
     expect(registered().redact(`before ${shown} after`)).toBe("before [private] after");
     expect(Either.isLeft(Effect.runSync(Effect.either(registered().assertAbsent(shown))))).toBe(
@@ -159,6 +160,13 @@ describe("carries", () => {
     expect(carries(secrets, ["ada@example.test", "correct horse battery"], [body])).toBe(false);
     expect(carries(secrets, ["unregistered-value"], ["unregistered-value"])).toBe(false);
     expect(carries(secrets, [], [body])).toBe(false);
+  });
+
+  it("decodes each valid escape run of a request, even beside an invalid one", () => {
+    const secrets = login();
+    expect(
+      carries(secrets, ["correct horse battery"], ["pass=%63orrect%20horse+battery&bad=%E0"]),
+    ).toBe(true);
   });
 
   it("counts a short code only where it stands as a token", () => {

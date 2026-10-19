@@ -751,3 +751,58 @@ describe("advisory checks of the declared schemas", () => {
     expect(lintOutput({ cabin: "economy", title: "A" }, { outputSchema })).toEqual([]);
   });
 });
+
+// A value in another notation than its field declares: a date field holding a timestamp or a
+// site's wording, or one status written two ways in one list.
+describe("output notation checks", () => {
+  const dated = contractJsonSchema(
+    Schema.Struct({
+      due: Schema.String.annotations({ jsonSchema: { format: "date" } }),
+      updated: Schema.String.annotations({ jsonSchema: { format: "date-time" } }),
+    }),
+  );
+
+  it("flags a date field holding anything but YYYY-MM-DD, and a timestamp not in ISO 8601", () => {
+    expect(
+      checksOf({ due: "2026-03-14T00:00:00Z", updated: "Mar 14, 2026 3:05 PM" }, { outputSchema: dated }),
+    ).toEqual(["due format_mismatch", "updated format_mismatch"]);
+    expect(checksOf({ due: "14/03/2026", updated: "2026-03-14" }, { outputSchema: dated })).toEqual([
+      "due format_mismatch",
+      "updated format_mismatch",
+    ]);
+  });
+
+  it("leaves dates and timestamps in their declared form, and a field that declares no format, alone", () => {
+    for (const updated of ["2026-03-14T15:05:00Z", "2026-03-14T15:05:00.250-07:00", "2026-03-14T15:05+05:30"])
+      expect(checksOf({ due: "2026-03-14", updated }, { outputSchema: dated })).toEqual([]);
+    expect(checksOf({ due: "Mar 14, 2026" })).toEqual([]);
+  });
+
+  it("flags a list field whose values differ only by letter case", () => {
+    const rows = [
+      { number: "1001", status: "paid" },
+      { number: "1002", status: "Paid" },
+      { number: "1003", status: "draft" },
+    ];
+    expect(checksOf({ invoices: rows })).toEqual(["invoices[].status case_variant"]);
+    expect(lintOutput({ invoices: rows }, { samples: true })[0]).toMatchObject({
+      path: "invoices[].status",
+      check: "case_variant",
+      count: 1,
+      sample: "Paid",
+      blocking: false,
+    });
+    // A list of strings already reports such a pair as a repeated entry.
+    expect(checksOf({ tags: ["urgent", "Urgent"] })).toEqual(["tags[] duplicate_entries"]);
+  });
+
+  it("leaves values in one notation, and long text, alone", () => {
+    const rows = [
+      { status: "paid", memo: "Paid in full by card on arrival at the front desk" },
+      { status: "paid", memo: "paid in full by card on arrival at the front desk" },
+      { status: "draft", memo: "Awaiting approval" },
+    ];
+    expect(checksOf({ invoices: rows })).not.toContain("invoices[].status case_variant");
+    expect(checksOf({ invoices: rows })).not.toContain("invoices[].memo case_variant");
+  });
+});

@@ -50,7 +50,6 @@ it("loads modular skill references and keeps auth discovery outside managed logi
     "auth",
     "testing",
     "pagination",
-    "records",
     "forms",
     "writes",
     "cart",
@@ -730,7 +729,7 @@ it("has a write confirm from its own commit request, and read back only when tha
   const texts = await renderedTexts("typescript/authoring");
   const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    '- Prefer confirming the write from its commit request. Keep the click on the final commit control, such as Save, Send, Submit, Book or Pay, in its own step. In the same call as that click, wait for the site\'s response to the request it sends, matched by the method and path the session saw carry the commit on the site, and by its body where the body shows the caller\'s values, as `references/write-readback.ts` does. Wait too for every way the page can answer with `waitForOutcome`, listing the site\'s error or validation message first. The write went through when that response is 2xx or 3xx, a body the call can read shows no error, and the page shows no error or validation message after it. A 201 whose Location names the new record went through as soon as it arrives, with no wait for the page. A 200 whose body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says the work is queued, went through too; return the site\'s own status word for it in the output. Then read what the output promises from that response or from the page the commit left, match it to the caller\'s values, and call `verified()` with no argument just before returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page, such as a list, a history or an account screen, only to prove the write: a commit that went through, with the new record\'s id, already proves it. When a commit step returned without calling `verified()` and its `stateChangingRequests` list the commit request with a 2xx or 3xx status, prefer confirming it in the next step from the page as it stands. Make no execute call after `verified()`: a later call reopens the effect. After the confirming step, further `act` steps are refused.',
+    '- Prefer confirming the write from its commit request. Keep the click on the final commit control, such as Save, Send, Submit, Book or Pay, in its own step. In the same call as that click, wait for the site\'s response to the request it sends, matched by the method and path the session saw carry the commit on the site, and by its body where the body shows the caller\'s values, as `references/write-readback.ts` does. Wait too for every way the page can answer with `waitForOutcome`, listing the site\'s error or validation message first. The write went through when that response is 2xx or 3xx, a body the call can read shows no error, and the page shows no error or validation message after it. A 201 whose Location names the new record went through as soon as it arrives, with no wait for the page. A 200 whose body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says the work is queued, went through too; return that in the output as a status in the core notation, such as `queued`, with the site\'s own word in a `status_label` field. Then read what the output promises from that response or from the page the commit left, match it to the caller\'s values, and call `verified()` with no argument just before returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page, such as a list, a history or an account screen, only to prove the write: a commit that went through, with the new record\'s id, already proves it. When a commit step returned without calling `verified()` and its `stateChangingRequests` list the commit request with a 2xx or 3xx status, prefer confirming it in the next step from the page as it stands. Make no execute call after `verified()`: a later call reopens the effect. After the confirming step, further `act` steps are refused.',
   );
   // Every case the request cannot settle keeps a read-back.
   expect(text("writes")).toContain(
@@ -789,18 +788,17 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["a14f1b62b31578845bd7646b77876ace7a242a666f8d116bd8cad3447836e95f", "core"],
+    ["96af1b0d060d1eaabc0056b9563c092d21c0b4f455cc0308f10ea73959e708ba", "core"],
     ["fe1283cbe9de49c475065da5c44f55bddafb854a141f9151b2c8d54a8dae749b", "search"],
-    ["ac66bcd6e97b1126cd643bbaee17f1333decc5af5273748060a07b0b82f2b99c", "auth"],
+    ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
     ["51fa575e15e88f8087eb4e4c25b8a79a684de0453e1dff7e8e7246dde202dab6", "testing"],
     ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
-    ["3c9a5f4e12e33f5d10758225f0a233f98f9504fce618108fc93a52b5933e0048", "records"],
     ["12b198d6503ef35853f9ff42aefefe641dc3b59c8b2a3e5a1424aabb4f6af2f4", "forms"],
-    ["482a1233b82951350ebb66f373a56667a47e37796a70a62ff84a6dd6c3abbc7a", "writes"],
+    ["9c8d7256bd2f53cec0b11f7f6cf25a07fe9b87837938ca78dc8f8867e843aba0", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["5e3017df8368f31f52d925062ca0d7f24f2a8badffd8da1589ba9c7860e27b7a", "caller-input"],
-    ["c2dd673571bee73706a5b392926b0b9edcd9860fd20104789c353573b72cc9f6", "publication"],
-    ["a0d3eb391c301814d9bbf38ace731a4d280ebe2ca86c748962baaf4d291552ed", "workspace/AGENTS.md"],
+    ["e425e194933160e1094a5d5cecd917bcff31015ce6f506d4bda8383797aa6bad", "caller-input"],
+    ["9ca946a431fb56aa842d5c8d94e44077fdfca6a7f7adb1b8a3085066ac85cc42", "publication"],
+    ["715d0de541f81e1abb1afb702f9c094fb611ea43be57dbb20556a73394afb0c5", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
@@ -819,10 +817,10 @@ it("renders the pinned standalone input-feedback instructions", () => {
       ]),
     ),
   ).toStrictEqual([
-    ["aba44b16df36914a1d988881085b9b43e4d6e0570e0a68423318eecd7abb4cbc", "read, 1 left"],
-    ["bad5f0878c5ecce40c209c1f5e3bd0dac6422c9e42fb0a857c0281e99c6e88eb", "read, 0 left"],
-    ["acf24b4205a7e37c6cfab1f19421d36f26a385bbc7bcaaf8a2799ef29fc77d5e", "write, 1 left"],
-    ["fa380b552c8ddec278fc6d2de4f613a37459d2f9cbf3c9393fe94251ee71511a", "write, 0 left"],
+    ["10bfff2324305b9608cd2a153a0b90e8c6e28383d4f32d7bf09d10ec23479705", "read, 1 left"],
+    ["31cd716b81eca4aeb91fd2997f5cbcc6f110071b4488eab16435b184d3fae43a", "read, 0 left"],
+    ["95f8842b93f08b7e92092f5f5e8e2996688a587763299560caa770f7fe4828d8", "write, 1 left"],
+    ["971c876f338e973bce199c666d750ceaf1808d88911f7e5cbe87bb69c7433ec1", "write, 0 left"],
   ]);
 });
 

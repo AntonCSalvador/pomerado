@@ -1,991 +1,303 @@
-import { Clock, Duration, Effect, type Scope } from "effect";
-import type { SignInMethodChoice } from "../destinations/autofill-contracts.js";
-import type {
-  AutofillInspection,
-  AutofillRefusal,
-  AutofillSignedIn,
-  AutofillSlot,
-  AutofillStep,
-  AutofillStepRequest,
-  SecretSlot,
-} from "../destinations/autofill-step.js";
+import { Data, Effect } from "effect";
+import type { AutofillPopup } from "../destinations/autofill-contracts.js";
+import type { AutofillSignedInCheck } from "../destinations/autofill-step.js";
+import { type MarkerSettle, settledMarkerCheck } from "../destinations/marker-settle.js";
 import {
   decodeSignInRecipe,
-  isIdentifier,
-  makeSentTracker,
-  openSignInRecord,
-  provesLogin,
-  type SecretMatcher,
+  type SignInBrowser,
   type SignInLogin,
   type SignInRecipe,
-  type SignInRecipeStep,
-  type SignInValueHooks,
 } from "../destinations/sign-in-recipe.js";
 import type { CredentialRejectedField, WebsiteCredentials } from "./authentication.js";
-import { sameSite } from "./same-site.js";
-import { markerCantTell } from "./session-sign-in.js";
+import {
+  askCredentialCorrection,
+  correctedReplayCredentials,
+  makeAutofillRetryState,
+  resetAutofillRetryState,
+} from "./autofill-correction.js";
+import { replayAutofillRecipe } from "./autofill-replay.js";
+import type {
+  AutofillReplayOutcome,
+  AutofillReplayTiming,
+  AutofillRetryState,
+} from "./autofill-replay-steps.js";
+import type { ReplayWorkspace } from "./autofill-replay-workspace.js";
+import type { AutofillHooks, SecretBroker } from "./autofill-state.js";
+import { typedValues } from "./autofill-values.js";
+import { logicalRejectedField } from "./autofill-rejection.js";
+import type { InputAsker } from "./input-request.js";
+import { makeRunLogin } from "./run-login.js";
 import { trustedUrl } from "./sign-in-origins.js";
-import {
-  admitScreenOrigin,
-  entryNamesAddress,
-  pinnedWorkspaceOrigin,
-  recordedScreenPage,
-  signedInCheckOrigin,
-  workspaceHost,
-  workspaceRelation,
-  workspaceToPin,
-  type SignedInCheckContext,
-} from "./workspace-origin.js";
-import {
-  askOne,
-  correctReplayExtras,
-  defaultReplayTiming,
-  emptyRetryFields,
-  landingSettleMs,
-  makeReplayScreenWait,
-  offScreens,
-  pickMethod,
-  recipeSteps,
-  runReplayStep,
-  shownAgain,
-  SignInRunFailed,
-  stillOff,
-  valuesNeeded,
-  type OffScreens,
-  type ReplayScreenPages,
-  type SignInReplayBrowser,
-  type SignInReplayInput,
-  type SignInReplayOutcome,
-  type SignInReplayTiming,
-} from "./sign-in-replay-steps.js";
-import type { WorkspaceOriginEvent } from "./sign-in-replay-steps.js";
-import {
-  correctRejectedLogin,
-  logicalRejectedField,
-  makeReplayRetryState,
-  makeRunLogin,
-  makeSignInValues,
-  recordedRejections,
-  type ReplayRetryState,
-} from "./sign-in-values.js";
+import { entryNamesAddress, pinnedWorkspaceOrigin, workspaceRelation } from "./workspace-origin.js";
 
-export { SignInRunFailed } from "./sign-in-replay-steps.js";
-export type {
-  SignInReplayBrowser,
-  SignInReplayOutcome,
-  WorkspaceOriginEvent,
-} from "./sign-in-replay-steps.js";
+// A run's sign-in on the local host: the shared replay with the local browser, login and asks.
 
-const originOf = (page: string | undefined) => URL.parse(page ?? "")?.origin;
+const spoken = (reason: string | undefined) => (reason ?? "login").replaceAll("_", " ");
+const runFailureMessages = {
+  CredentialsRejected: (reason: string | undefined) =>
+    `The website rejected the ${spoken(reason)} given for this sign-in, and the run sends it no more. Run the tool again with the right value.`,
+  NeedsInput: () =>
+    "The sign-in needs an answer that was not given, so the run stopped before the tool ran.",
+  RecipeFailed: (reason: string | undefined) =>
+    `The saved sign-in no longer matches the website (${spoken(reason)}). Build the tool again to record its sign-in.`,
+  MissingRecipe: (reason: string | undefined) =>
+    `The tool's saved sign-in can't be read (${spoken(reason)}), so the tool doesn't run signed out. Build the tool again.`,
+} as const;
+/** Advice for a reason that is no fault of the recipe or of a value given. */
+const reasonMessages = new Map([
+  [
+    "workspace_unverified",
+    "The sign-in opened a workspace of the website that this login had not signed in to, so nothing was typed and the run stopped before the tool ran. Sign out of the website in this browser, or clear its data for the site, then run the tool again.",
+  ],
+  [
+    "entry_page_unavailable",
+    "The sign-in page didn't load, so the run stopped before the tool ran. Check that the website is reachable, then run the tool again.",
+  ],
+]);
+
+/** Why a run could not sign in, value-free. The run fails with it and never runs signed out. */
+export class SignInRunFailed extends Data.TaggedError("SignInRunFailed")<{
+  /**
+   * `CredentialsRejected`: the site rejected a value given for the sign-in, once its corrections
+   * ran out or for a value that is never corrected. `NeedsInput`: a question the sign-in needs
+   * went unanswered. `RecipeFailed`: the recorded sign-in no longer matches the site, or its
+   * entry page did not load. `MissingRecipe`: the integration's recipe cannot be read.
+   */
+  readonly code: "CredentialsRejected" | "NeedsInput" | "RecipeFailed" | "MissingRecipe";
+  /** A finite reason: the rejected field, the replay's reason, or why the recipe is unreadable. */
+  readonly reason?: string;
+}> {
+  override get message() {
+    return reasonMessages.get(this.reason ?? "") ?? runFailureMessages[this.code](this.reason);
+  }
+}
+
+/** The browser a run's sign-in replays on: the recorder's, which also opens and reads markers. */
+export interface SignInReplayBrowser<E> extends SignInBrowser<E> {
+  /** Opens the recipe's entry page on the run's tab. */
+  readonly open: (url: string) => Effect.Effect<void, E>;
+  /** Whether a recorded rejection marker shows on its screen's page, never what it says. */
+  readonly markerVisible: (
+    selector: string,
+    page: string,
+    popup?: AutofillPopup,
+  ) => Effect.Effect<boolean, E>;
+  /**
+   * Clears the browser's data for the site, once, after a replay found another workspace's
+   * sign-in before this login sent anything (`workspace_unverified`). A host without it fails
+   * the run at the first such refusal.
+   */
+  readonly clearSiteData?: () => Effect.Effect<void, E>;
+}
 
 /**
- * Where one replay's sign-in may run besides the recorded exact pages: the recipe's workspace
- * relation when it is valid for the run's site, the login's pinned workspace origin, the
- * workspace origin this replay admitted, and the slots it ran on exact-origin screens.
+ * A private workspace event: `relearned` when this replay admitted another workspace than the
+ * pinned one, `unrecognized_sibling` when it refused a live screen on another host of the site.
+ * Each names an origin, so a host keeps it private and reports a refusal only by its role.
  */
-const makeReplayWorkspace = <E>(input: SignInReplayInput<E>) => {
-  const { siteOrigin } = input;
-  const relation =
-    siteOrigin === undefined ? undefined : workspaceRelation(input.recipe, siteOrigin);
-  const workspace = {
-    siteOrigin,
-    relation,
-    pinned:
-      siteOrigin === undefined
-        ? undefined
-        : pinnedWorkspaceOrigin(siteOrigin, relation, input.workspaceOrigin),
-    /** The workspace origin this replay admitted, which replaces the pinned one for it. */
-    candidate: undefined as string | undefined,
-    /**
-     * The slots of the fields this replay ran on exact-origin screens shown on their own recorded
-     * origin, never on the pinned workspace.
-     */
-    exactSlots: new Set<AutofillSlot>(),
-    /** What the latest passing signed-in check knew when it chose where to run. */
-    verified: undefined as SignedInCheckContext | undefined,
-  };
-  const current = () => workspace.candidate ?? workspace.pinned;
-  const screens: ReplayScreenPages = {
-    pageOf: (step) => recordedScreenPage(step, current()),
-    // A live page may be a workspace screen on the replay's workspace origin, or, before it has
-    // one, on any workspace host: origin admission decides before anything is typed there.
-    matches: (step, page) => {
-      if (step.origin !== "workspace") return page === step.page;
-      const at = URL.parse(page);
-      if (at === null || at.pathname !== step.page) return false;
-      const origin = current();
-      if (origin !== undefined) return at.origin === origin;
-      return (
-        siteOrigin !== undefined &&
-        relation !== undefined &&
-        workspaceHost(siteOrigin, relation.parent, at.origin)
-      );
-    },
-  };
-  return { workspace, screens };
-};
+export type WorkspaceOriginEvent =
+  | { readonly kind: "relearned"; readonly from: string; readonly to: string }
+  | { readonly kind: "unrecognized_sibling"; readonly origin: string };
 
-/** One replay's state: what its fills sent, the screens it ran and the rejections it saw. */
-const makeReplaySession = <E>(input: SignInReplayInput<E>) => {
-  const steps = recipeSteps(input.recipe);
-  const { workspace, screens } = makeReplayWorkspace(input);
-  const record = openSignInRecord();
-  /** Every secret a submit may have sent, which this replay never fills again past its allowance. */
-  const maySent = new Set<SecretSlot>();
-  const tracker = makeSentTracker(
-    () => record,
-    input.carries,
-    (slots) => {
-      for (const slot of slots) maySent.add(slot);
-    },
-  );
-  const sent = {
-    maySent,
-    heard: tracker.heard,
-    sequence: tracker.sequence,
-    settled: tracker.settled,
-    /** A request the page sent carried this value; read once `settled`. */
-    seenSent: (slot: AutofillSlot) => record.submittedSlots.has(slot),
-  };
-  const { retry } = input;
-  const rejectedCodes = new Set(retry.rejectedValues.code ?? []);
-  let rejectedFields: readonly AutofillSlot[] = [];
-  const recordRejected = (fields: readonly AutofillSlot[]) => {
-    rejectedFields = fields;
-    for (const field of fields) {
-      const logical = logicalRejectedField(field, retry.primary.kind);
-      const value = retry.lastFilled[logical];
-      if (value === undefined) continue;
-      (retry.rejectedValues[logical] ??= new Set()).add(value);
-      if (logical === "code") rejectedCodes.add(value);
-    }
-  };
-  const observeRejections = Effect.gen(function* () {
-    // A workspace screen's markers are read on the replay's workspace origin.
-    const resolved = steps.map((step) => ({ ...step, page: screens.pageOf(step) }));
-    const observed = yield* recordedRejections(input.browser.markerVisible, resolved);
-    if (observed !== "unavailable") recordRejected(observed);
-    return observed;
-  });
-  const progress = {
-    anythingSent: false,
-    chosen: undefined as SignInMethodChoice | undefined,
-    ran: [] as AutofillStep[],
-    /** The password or code a retry filled a second time, which is never filled again. */
-    refilled: new Set<SecretSlot>(),
-    /** The steps whose page may have sent what they filled itself, before the host clicked. */
-    pageSent: new Set<AutofillStep>(),
-  };
-  const outcome = (reason: string): SignInReplayOutcome => ({
-    outcome: progress.anythingSent ? "unclear" : "unsent",
-    reason,
-    ...(rejectedFields.length === 0 ? {} : { rejectedFields }),
-  });
-  // The marker as the current page shows it; only the full check opens the account page.
-  const onPage = { selector: input.recipe.signedIn.selector, urlPath: input.recipe.signedIn.urlPath };
-  const checkHere = input.browser.confirm(onPage, steps, steps);
-  /** Whether a request carried a slot `which` takes that this replay filled on an exact screen. */
-  const exactSent = (which: (slot: AutofillSlot) => boolean) =>
-    [...workspace.exactSlots].some((slot) => which(slot) && record.submittedSlots.has(slot));
-  /**
-   * The recipe's check, for a recipe with a workspace relation on the origin the check belongs on
-   * (`signedInCheckOrigin`): `openPath` opens there, and a passing check records it.
-   */
-  const confirmSignedIn = (indicator: AutofillSignedIn) =>
-    Effect.gen(function* () {
-      const { relation, siteOrigin } = workspace;
-      if (relation === undefined || siteOrigin === undefined)
-        return yield* input.browser.confirm(indicator, steps, steps);
-      yield* sent.settled;
-      const context = (current: string | undefined): SignedInCheckContext => ({
-        siteOrigin,
-        relation,
-        pinned: workspace.pinned,
-        candidate: workspace.candidate,
-        current,
-        credentialsSent: exactSent(provesLogin),
-      });
-      const before =
-        indicator.openPath === undefined ? undefined : context(originOf((yield* checkHere).url));
-      const opens = before === undefined ? undefined : signedInCheckOrigin(before);
-      const check = yield* input.browser.confirm(indicator, steps, steps, opens);
-      workspace.verified = check.signedIn ? (before ?? context(originOf(check.url))) : undefined;
-      return check;
-    });
-  /**
-   * A signed-in outcome, with the workspace origin the host pins to the login, if any: only one
-   * this login's own sign-in explains (`workspaceToPin`).
-   */
-  const signedIn = (alreadySignedIn: boolean): SignInReplayOutcome => {
-    const pin = workspace.verified === undefined ? undefined : workspaceToPin(workspace.verified);
-    return {
-      outcome: "signed_in",
-      alreadySignedIn,
-      ...(pin === undefined ? {} : { workspaceOrigin: pin }),
-    };
-  };
-  return {
-    input,
-    steps,
-    record,
-    sent,
-    retry,
-    rejectedCodes,
-    progress,
-    outcome,
-    observeRejections,
-    recordRejected,
-    onPage,
-    checkHere,
-    workspace,
+/** What the local host masks: each value a sign-in types, and a text checked for one. */
+export interface RunSignInSecrets {
+  readonly register: (value: string) => void;
+  readonly assertAbsent: (text: string) => Effect.Effect<void, unknown>;
+}
+
+/** A browser call that failed, carried through the shared replay to the run as it failed. */
+class ReplayBrowserFailed<E> extends Data.TaggedError("ReplayBrowserFailed")<{
+  readonly error: E;
+}> {}
+
+type ReplayFailure<E> = SignInRunFailed | ReplayBrowserFailed<E>;
+
+/**
+ * The shared replay's page hooks over the local browser: `check` reads the marker once, `confirm`
+ * waits for a marker drawn late (`settledMarkerCheck`), and a read's sign-in may end on a page that
+ * can't tell (`confirmCantTell`). An entry page that does not load fails `entry_page_unavailable`.
+ */
+const replayHooks = <E>(
+  browser: SignInReplayBrowser<E>,
+  allowCantTell: boolean,
+  settle: MarkerSettle | undefined,
+): AutofillHooks<ReplayFailure<E>> => {
+  const failed = (error: E) => new ReplayBrowserFailed({ error });
+  const checkOn: AutofillHooks<ReplayFailure<E>>["confirm"] = (
+    indicator,
+    _identifiers,
     screens,
-    exactSent,
-    confirmSignedIn,
-    signedIn,
-  };
-};
-export type ReplaySession<E> = ReturnType<typeof makeReplaySession<E>>;
-
-/** A submitted username or password screen that shows again is rejection evidence for it. */
-const returnedCredential = <E>(session: ReplaySession<E>) =>
-  Effect.gen(function* () {
-    const previous = session.progress.ran.at(-1);
-    if (previous === undefined || previous.fields.some((field) => field.slot === "code"))
-      return undefined;
-    yield* session.sent.settled;
-    const field =
-      previous.fields.find((one) => one.slot === "password") ??
-      previous.fields.find((one) => isIdentifier(one.slot));
-    if (field === undefined || !session.sent.seenSent(field.slot)) return undefined;
-    const returned = yield* session.input.browser.inspect({
-      fields: [field],
-      ...(previous.popup === undefined ? {} : { popup: previous.popup }),
-    });
-    if ("outcome" in returned) return undefined;
-    session.recordRejected([field.slot]);
-    return field.slot === "password" ? ("password_rejected" as const) : ("username_rejected" as const);
-  });
-
-/** The rejection evidence on the page now, read before waiting for a later screen. */
-const screenRejection = <E>(
-  session: ReplaySession<E>,
-  extras: (observed: readonly AutofillSlot[]) => ReturnType<typeof correctReplayExtras<E>>,
-) =>
-  Effect.gen(function* () {
-    const observed = yield* session.observeRejections;
-    if (observed === "unavailable") return "ambiguous_combined_rejection" as const;
-    const extra = yield* extras(observed);
-    if (extra !== undefined) return extra;
-    const marked = observed[0];
-    if (marked !== undefined && marked !== "code")
-      return marked === "password" ? ("password_rejected" as const) : ("username_rejected" as const);
-    return yield* returnedCredential(session);
-  });
-
-/**
- * Whether this run's values went out cleanly: every identifier and password or code field the
- * replay filled was carried by a request the page sent, and no rejection marker shows.
- */
-const sentCleanly = <E>(session: ReplaySession<E>) =>
-  Effect.gen(function* () {
-    yield* session.sent.settled;
-    const required = session.progress.ran
-      .flatMap((step) => step.fields)
-      .filter((field) => isIdentifier(field.slot) || provesLogin(field.slot));
-    if (required.some((field) => !session.record.submittedSlots.has(field.slot))) return false;
-    const rejected = yield* session.observeRejections;
-    return rejected !== "unavailable" && rejected.length === 0;
-  });
-
-/** The sign-in check after this run's values went out cleanly: the recipe's check passes. */
-const verifySignIn = <E>(session: ReplaySession<E>) => (indicator: AutofillSignedIn) =>
-  Effect.gen(function* () {
-    if (!(yield* sentCleanly(session))) return false;
-    return (yield* session.confirmSignedIn(indicator)).signedIn;
-  });
-
-/**
- * Whether the replay, its values sent cleanly and no security question shown again, ended on a
- * page that can't tell (`markerCantTell`), such as an account picker the site shows before the
- * marker: it counts as signed in.
- */
-const endedCantTell = <E>(session: ReplaySession<E>) =>
-  Effect.gen(function* () {
-    if (!(yield* sentCleanly(session))) return false;
-    const answers = new Set(["private_answer"] as const);
-    const ran = session.progress.ran;
-    if ((yield* shownAgain(session.input.browser, ran, answers, "private_answer")) !== undefined)
-      return false;
-    return markerCantTell(yield* session.checkHere, session.input.recipe);
-  });
-
-
-const makeReplay = <E>(input: SignInReplayInput<E>) => {
-  const session = makeReplaySession(input);
-  const run = (
-    asked: AutofillStep,
-    inspection: Parameters<typeof runReplayStep<E>>[2],
-    codeAgain?: "rejected",
-    explicitCodeRejection = false,
-    corrected: ReadonlySet<AutofillSlot> = new Set(),
-    planned: readonly SecretSlot[] = [],
+    challengeScreens,
+    at,
   ) =>
-    runReplayStep(session, asked, inspection, codeAgain, explicitCodeRejection, corrected, planned);
-  const extras = (observed: readonly AutofillSlot[]) => correctReplayExtras(session, run, observed);
-  const resolve = (request: AutofillStepRequest) => input.values.resolve(request, input.credentials);
+    settledMarkerCheck(
+      (shown) =>
+        browser
+          .confirm(shown, screens, challengeScreens ?? screens, at?.origin)
+          .pipe(Effect.mapError(failed)),
+      indicator,
+      settle,
+    );
   return {
-    session,
-    /** The run holds no login yet: this replay is its value-free sign-in check. */
-    valueFree: input.credentials === undefined,
-    /** The recorded screens' pages as this replay resolves them now. */
-    pages: () => new Set(session.steps.map(session.screens.pageOf)),
-    /**
-     * The recorded screens' origins as this replay resolves them now, where an unrecorded code
-     * screen may be (`unrecordedCode`).
-     */
-    recordedOrigins: () =>
-      new Set(session.steps.flatMap((step) => originOf(session.screens.pageOf(step)) ?? [])),
-    awaitScreen: makeReplayScreenWait(
-      input,
-      session.progress,
-      input.timing,
-      resolve,
-      () => screenRejection(session, extras),
-      session.screens,
-    ),
-    runStep: run,
-    verify: verifySignIn(session),
-    endedCantTell: endedCantTell(session),
-    correctExtras: extras,
-    resolve,
-    shownAgain: (slot: SecretSlot) =>
-      shownAgain(input.browser, session.progress.ran, session.sent.maySent, slot),
-  };
-};
-type Replay<E> = ReturnType<typeof makeReplay<E>>;
-
-/** The recorded screen as it runs now: a method choice clicks the method the owner picks. */
-const screenFor = <E>(
-  input: SignInReplayInput<E>,
-  replay: Replay<E>,
-  recorded: SignInRecipeStep,
-  until: number,
-  later: readonly SignInRecipeStep[],
-) =>
-  Effect.gen(function* () {
-    // Each identifier field takes the kind this run's login holds that it accepts.
-    const step: AutofillStep = replay.resolve({
-      fields: recorded.fields,
-      ...(recorded.popup === undefined ? {} : { popup: recorded.popup }),
-      ...(recorded.submit === undefined ? {} : { submit: recorded.submit }),
-      ...(recorded.submitKey === undefined ? {} : { submitKey: recorded.submitKey }),
-    });
-    if (recorded.methods === undefined) return step;
-    // The choice screen shows before a method is picked; its first option finds it.
-    const popup = recorded.popup === undefined ? {} : { popup: recorded.popup };
-    const probe = { fields: [], submit: recorded.methods[0]?.selector ?? "", ...popup };
-    const alternatives = recorded.methods
-      .slice(1)
-      .map((method) => ({ fields: [], submit: method.selector, ...popup }));
-    const currentPage = replay.session.screens.pageOf(recorded);
-    const shown = yield* replay.awaitScreen(probe, until, currentPage, later, alternatives);
-    if (typeof shown === "string" || "outcome" in shown.found) return shown;
-    // Picking a method may send a code: a value-free replay stops before it.
-    if (replay.valueFree) return valuesNeeded;
-    const picked = yield* pickMethod(input.hooks.ask, input.site, recorded.methods);
-    replay.session.progress.chosen = picked.method;
-    return { fields: [], submit: picked.selector, ...popup };
-  });
-
-/** An approval the owner completes off the page, after picking a push method. */
-const confirmPush = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
-  askOne(input.hooks.ask, {
-    id: "approved",
-    type: "confirm",
-    prompt: `Approve the sign-in request ${input.site} sent you, then confirm here.`,
-  }).pipe(
-    Effect.map((approved) =>
-      approved?.type === "confirm" && approved.value.confirmed
-        ? ("continue" as const)
-        : replay.session.outcome("push_declined"),
-    ),
-  );
-
-/**
- * Whether a live screen on `page` may run the recorded screen: on the recorded screen's own
- * origin, or under the recipe's workspace relation on this login's workspace
- * (`admitScreenOrigin`). Returns the replay's outcome when it may not, else undefined. A host that
- * names no site origin admits only the recorded origin, and no workspace screen.
- */
-const admitOrigin = <E>(replay: Replay<E>, recorded: SignInRecipeStep, page: string) =>
-  Effect.gen(function* () {
-    const { session } = replay;
-    const { workspace } = session;
-    const live = originOf(page);
-    if (workspace.siteOrigin === undefined || live === undefined)
-      return recorded.origin !== "workspace" && live === originOf(recorded.page)
-        ? undefined
-        : session.outcome("screen_origin_changed");
-    // A workspace screen, or an exact screen off its own origin and the pinned one, asks whether
-    // the identifier already went out.
-    const asks =
-      recorded.origin === "workspace" ||
-      (live !== originOf(recorded.page) && live !== workspace.pinned);
-    if (asks) yield* session.sent.settled;
-    const admission = admitScreenOrigin(
-      {
-        siteOrigin: workspace.siteOrigin,
-        relation: workspace.relation,
-        pinned: workspace.pinned,
-        candidate: workspace.candidate,
-        identifierSent: asks && session.exactSent(isIdentifier),
-      },
-      recorded,
-      live,
-    );
-    const heard = session.input.onWorkspaceEvent ?? (() => {});
-    if (admission.admitted) {
-      if (admission.learned !== undefined) {
-        if (workspace.pinned !== undefined && workspace.pinned !== admission.learned)
-          heard({ kind: "relearned", from: workspace.pinned, to: admission.learned });
-        workspace.candidate = admission.learned;
-      }
-      return undefined;
-    }
-    if (admission.sibling) heard({ kind: "unrecognized_sibling", origin: live });
-    return session.outcome(admission.reason);
-  });
-
-/** Waits for a resolved step's screen, and admits it only on an origin `admitOrigin` allows. */
-const awaitRecordedScreen = <E>(
-  replay: Replay<E>,
-  step: AutofillStep,
-  recorded: SignInRecipeStep,
-  until: number,
-  later: readonly SignInRecipeStep[],
-) =>
-  Effect.gen(function* () {
-    const currentPage = replay.session.screens.pageOf(recorded);
-    const shown = yield* replay.awaitScreen(step, until, currentPage, later);
-    if (typeof shown === "string")
-      return shown === "signed_in" || shown === "skipped" ? shown : replay.session.outcome(shown);
-    if ("outcome" in shown.found) return refusedScreen(replay, shown.found);
-    // The screen must sit on the recorded screen's own origin, or this login's own workspace, not
-    // only on the same site: another tenant's sign-in on a shared domain would pass the site check.
-    const refused = yield* admitOrigin(replay, recorded, shown.found.page);
-    if (refused !== undefined) return refused;
-    return { step, inspection: shown.found };
-  });
-
-/** A recorded screen the host refused or never found: the replay ends with its reason. */
-const refusedScreen = <E>(replay: Replay<E>, refusal: AutofillRefusal) =>
-  replay.session.outcome(refusal.reason);
-
-/** Resolves and admits a recorded screen before anything is filled into it. */
-const inspectRecordedScreen = <E>(
-  input: SignInReplayInput<E>,
-  replay: Replay<E>,
-  recorded: SignInRecipeStep,
-  until: number,
-  later: readonly SignInRecipeStep[],
-) =>
-  Effect.gen(function* () {
-    const step = yield* screenFor(input, replay, recorded, until, later);
-    if (typeof step === "string")
-      return step === "signed_in" || step === "skipped" ? step : replay.session.outcome(step);
-    if ("found" in step)
-      return "outcome" in step.found
-        ? refusedScreen(replay, step.found)
-        : replay.session.outcome("screen_changed");
-    return yield* awaitRecordedScreen(replay, step, recorded, until, later);
-  });
-
-/** Fills a recorded screen whose live controls and origin passed inspection. */
-const runScreen = <E>(
-  input: SignInReplayInput<E>,
-  replay: Replay<E>,
-  recorded: SignInRecipeStep,
-  until: number,
-  later: readonly SignInRecipeStep[],
-) =>
-  Effect.gen(function* () {
-    const inspected = yield* inspectRecordedScreen(input, replay, recorded, until, later);
-    if (typeof inspected === "string" || "outcome" in inspected) return inspected;
-    const { step } = inspected;
-    let { inspection } = inspected;
-    const { session } = replay;
-    // What an exact-origin screen sends on its own recorded origin is what lets the site move
-    // this login to its workspace; the same screen admitted on the pinned workspace counts for
-    // nothing here.
-    if (recorded.origin !== "workspace" && originOf(inspection.page) === originOf(recorded.page))
-      for (const field of step.fields) session.workspace.exactSlots.add(field.slot);
-    // The screen shows and needs the login: a value-free replay stops before anything is sent.
-    if (replay.valueFree && (recorded.approval !== undefined || step.fields.length > 0))
-      return session.outcome(valuesNeeded);
-    if (recorded.approval !== undefined) {
-      yield* session.sent.settled;
-      if (![...session.record.submittedSlots].some(isIdentifier))
-        return session.outcome("identifier_not_submitted");
-      if (inspection.page !== session.screens.pageOf(recorded))
-        return session.outcome("screen_changed");
-      const answer = yield* askOne(input.hooks.ask, {
-        id: "approved",
-        type: "confirm",
-        prompt:
-          recorded.approval === "email_link"
-            ? `Open the sign-in link ${input.site} emailed you, then confirm here.`
-            : `Approve the sign-in request ${input.site} sent to your device, then confirm here.`,
-      });
-      if (answer?.type !== "confirm" || !answer.value.confirmed)
-        return session.outcome("approval_declined");
-      return "continue" as const;
-    }
-    for (;;) {
-      const failed = yield* replay.runStep(
-        step,
-        inspection,
-        undefined,
-        false,
-        undefined,
-        recorded.refills,
-      );
-      if (failed === undefined) break;
-      // A fieldless step whose submit the page kept disabled typed and clicked nothing, so it
-      // waits for its screen again within the screen's own wait. A step with fields ends: the
-      // page still wants something besides them.
-      if (
-        failed !== "submit_stayed_disabled" ||
-        step.fields.length > 0 ||
-        (yield* Clock.currentTimeMillis) >= until
-      )
-        return session.outcome(failed);
-      const shown = yield* awaitRecordedScreen(replay, step, recorded, until, later);
-      if (typeof shown === "string" || "outcome" in shown) return shown;
-      inspection = shown.inspection;
-    }
-    // An approval happens off the page: the owner confirms it, then the screens go on.
-    if (session.progress.chosen === "push" && recorded.methods !== undefined)
-      return yield* confirmPush(input, replay);
-    return "continue" as const;
-  });
-
-/** The recorded screens in order, each waited for at most `stepWaitMs`. */
-const runScreens = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
-  Effect.gen(function* () {
-    const steps = replay.session.steps;
-    for (const [index, recorded] of steps.entries()) {
-      const now = yield* Clock.currentTimeMillis;
-      const ran = yield* runScreen(
-        input,
-        replay,
-        recorded,
-        now + input.timing.stepWaitMs,
-        steps.slice(index + 1),
-      );
-      if (ran === "signed_in") return undefined;
-      if (ran !== "continue" && ran !== "skipped") return ran;
-    }
-    return undefined;
-  });
-
-/**
- * Waits, bounded, for the marker to show on the current page. A recipe that checks on an account
- * page stops waiting once the page left the recorded screens and stayed put a moment.
- */
-const awaitIndicator = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
-  Effect.gen(function* () {
-    const until = (yield* Clock.currentTimeMillis) + input.timing.stepWaitMs;
-    let off: OffScreens | undefined;
-    while (true) {
-      const now = yield* Clock.currentTimeMillis;
-      if (now >= until) return false;
-      const check = yield* replay.session.checkHere;
-      if (check.signedIn) return true;
-      off = stillOff(off, offScreens(replay.pages(), check.url), now);
-      if (
-        input.recipe.signedIn.openPath !== undefined &&
-        off !== undefined &&
-        now - off.since >= landingSettleMs
-      )
-        return false;
-      yield* Effect.sleep(Duration.millis(input.timing.pollMs));
-    }
-  });
-
-/** Words in a field's name or id that alone mark a one-time code. */
-const oneTimeCodeWords = ["otp", "totp", "2fa", "mfa"];
-/** Words in a field's name or id that mark a one-time code only on a short numeric box. */
-const codeWords = ["code", "verification"];
-/**
- * Words in a field's name, id or autocomplete that mark some other value, which win over the
- * words above: the one list to add such a word to.
- */
-const otherWords = [
-  "password",
-  "email",
-  "username",
-  "search",
-  "zip",
-  "postal",
-  "post",
-  "phone",
-  "promo",
-  "coupon",
-  "discount",
-  "gift",
-  "voucher",
-  "referral",
-  "recovery",
-  "backup",
-  "captcha",
-  "security",
-  "confirmation",
-  "access",
-  "company",
-  "country",
-  "card",
-  "cvv",
-  "cvc",
-  "csc",
-  "pin",
-  "pincode",
-  "redeem",
-  "area",
-  "year",
-];
-/**
- * Words of `otherWords` that count only as a word of their own, so "pin" rules out pinCode,
- * card_pin and cardPin but not otpInput or spinner. A word ends at the start or end, a non-letter,
- * or a change from lower to upper case. "pincode" and "PINCode" hold no such word, so "pincode"
- * counts anywhere.
- */
-const wholeOtherWords = ["pin"];
-
-/** Whether an unmarked field's name, id or autocomplete holds one of `wholeOtherWords`. */
-const namesWholeOtherWord = (field: AutofillInspection["screen"]["fields"][number]) =>
-  field.autocomplete?.toLowerCase() !== "one-time-code" &&
-  [field.name, field.id, field.autocomplete].some((value) =>
-    (value ?? "")
-      .split(/[^A-Za-z]+|(?<=[a-z])(?=[A-Z])/u)
-      .some((word) => wholeOtherWords.includes(word.toLowerCase())),
-  );
-
-/**
- * A one-time-code field the recipe never recorded and its form's submit, matched
- * case-insensitively on attributes alone. A field marked `autocomplete="one-time-code"` is one
- * whatever its name, and a page with one matches only it. On a page with none, a text, number or
- * phone-digits input is one when its name or id holds `oneTimeCodeWords`, or holds `codeWords` on
- * a short numeric box (`inputmode="numeric"`, or a number or phone input, with a `maxlength` of 4
- * to 8), unless its name, id or autocomplete holds `otherWords` or its autocomplete starts with
- * `tel` or `cc-`. A false match types a code where none belongs, so it matches narrowly. The
- * selector leaves `wholeOtherWords` to `namesWholeOtherWord`, which CSS cannot tell apart.
- */
-const unrecordedCodeStep = ((): AutofillStep => {
-  const anyOf = (selectors: readonly string[]) => selectors.join(", ");
-  const named = (words: readonly string[]) =>
-    anyOf(words.flatMap((word) => [`[name*="${word}" i]`, `[id*="${word}" i]`]));
-  const marked = 'input[autocomplete="one-time-code" i]';
-  const shortNumeric = [
-    `:is(${anyOf(['[inputmode="numeric" i]', '[type="number" i]', '[type="tel" i]'])})`,
-    `:is(${anyOf([4, 5, 6, 7, 8].map((length) => `[maxlength="${length}"]`))})`,
-  ].join("");
-  const typed = anyOf([":not([type])", '[type="text" i]', '[type="number" i]', '[type="tel" i]']);
-  const substrings = otherWords.filter((word) => !wholeOtherWords.includes(word));
-  const codeLike = [
-    `input:is(${typed})`,
-    `:is(${named(oneTimeCodeWords)}, :is(${named(codeWords)})${shortNumeric})`,
-    `:not(${anyOf([
-      named(substrings),
-      ...substrings.map((word) => `[autocomplete*="${word}" i]`),
-      '[autocomplete^="tel" i]',
-      '[autocomplete^="cc-" i]',
-    ])})`,
-  ].join("");
-  const unmarkedPage = `:root:not(:has(${marked}))`;
-  const submit = `:is(${anyOf([
-    'button[type="submit" i]',
-    'input[type="submit" i]',
-    "button:not([type])",
-  ])})`;
-  return {
-    fields: [{ selector: `${marked}, ${unmarkedPage} ${codeLike}`, slot: "code" }],
-    submit: `form:has(${marked}) ${submit}, ${unmarkedPage} form:has(${codeLike}) ${submit}`,
-  };
-})();
-
-/**
- * Whether a field of `step`, a screen this replay submitted, may still show: only a field the page
- * no longer has (`not_found`) is gone.
- */
-const stillShows = <E>(browser: SignInReplayBrowser<E>, step: AutofillStep) =>
-  Effect.exists(step.fields, (field) =>
-    browser
-      .inspect({ fields: [field], ...(step.popup === undefined ? {} : { popup: step.popup }) })
-      .pipe(Effect.map((found) => !("outcome" in found) || found.reason !== "not_found")),
-  );
-
-/** A probed code screen: its page and its field's id, name and label. */
-const codeScreenOf = (inspection: AutofillInspection) => {
-  const field = inspection.screen.fields[0];
-  return JSON.stringify([
-    inspection.page,
-    field?.id ?? null,
-    field?.name ?? null,
-    field?.label ?? null,
-  ]);
-};
-
-/**
- * A code screen the recipe never recorded, looked for after its screens only while no code may
- * have gone out, on a recorded screen's origin or a sign-in origin off the site. So it looks once:
- * its code goes out, or the full check decides. The screen this replay last submitted still showing
- * is the site's answer to it, such as a password screen shown again or a refused recovery code, so
- * no code goes into it. The code comes as a recorded code screen's does: a saved value, else the
- * owner's answer. `ran` once it was filled and submitted, else why it stopped: a code typed but
- * not sent never reads as signed in. `none` when none shows, or when the fill typed nothing, which
- * leaves the sign-in as it was for the full check.
- */
-const unrecordedCode = <E>(replay: Replay<E>, probe: { screen?: string | undefined }) =>
-  Effect.gen(function* () {
-    const { input, sent, record, progress } = replay.session;
-    if (sent.maySent.has("code")) return "none" as const;
-    const inspected = yield* input.browser.inspect(unrecordedCodeStep);
-    if ("outcome" in inspected) return "none" as const;
-    // A configured sign-in origin counts only off the site: an origin of the site holds its account
-    // pages too, so it counts only where a recorded screen ran.
-    const at = URL.parse(inspected.page);
-    const signInOrigin =
-      at !== null &&
-      (replay.recordedOrigins().has(at.origin) ||
-        (input.browser.authenticationOrigins.includes(at.origin) &&
-          !sameSite(inspected.siteOrigin, at)));
-    if (!signInOrigin) return "none" as const;
-    const field = inspected.screen.fields[0];
-    if (field !== undefined && namesWholeOtherWord(field)) return "none" as const;
-    const submitted = progress.ran.at(-1);
-    if (submitted !== undefined && (yield* stillShows(input.browser, submitted)))
-      return "none" as const;
-    probe.screen = codeScreenOf(inspected);
-    const before = progress.ran.length;
-    const failed = yield* replay.runStep(unrecordedCodeStep, inspected);
-    if (failed === undefined) return "ran" as const;
-    const typed = record.pending.has("code") || record.submittedSlots.has("code");
-    if (sent.maySent.has("code") || typed) return failed;
-    progress.ran.splice(before);
-    return "none" as const;
-  });
-
-/**
- * A code screen that came back: the owner gives a new code, never one the site rejected. The
- * screen decides the rest: every other password or code field it shows empty is filled again,
- * and a field that still holds a value is left as it is. A password goes out at most twice. A
- * code its page may have sent itself (`page`) came back refused only once a request carried it.
- */
-const retryCode = <E>(
-  input: SignInReplayInput<E>,
-  replay: Replay<E>,
-  probedScreen: string | undefined,
-) =>
-  Effect.gen(function* () {
-    const { session } = replay;
-    const observed = yield* session.observeRejections;
-    if (observed === "unavailable") return "ambiguous_combined_rejection";
-    const extra = yield* replay.correctExtras(observed);
-    if (extra !== undefined) return extra;
-    const rejected = observed[0];
-    if (rejected === "password") return "password_rejected";
-    if (rejected !== undefined && rejected !== "code") return "username_rejected";
-    const shown = yield* replay.shownAgain("code");
-    if (shown === undefined) return "none" as const;
-    // A probed code screen shows again only where it was found: a code field elsewhere is the
-    // site's next screen, not a refusal of the code it took.
-    if (probedScreen !== undefined) {
-      const here = yield* input.browser.inspect({
-        fields: shown.fields,
-        ...(shown.popup === undefined ? {} : { popup: shown.popup }),
-      });
-      if ("outcome" in here || codeScreenOf(here) !== probedScreen) return "none" as const;
-    }
-    // A code screen whose page may have sent the code itself shows a refusal only once a request
-    // carried that code: a page that only seemed to move on sent nothing, and a new code asked
-    // then would say the site refused one it never got.
-    if (session.progress.pageSent.has(shown)) {
-      yield* session.sent.settled;
-      const { record } = session;
-      if (record.proofCarried !== true || record.pending.has("code")) return "none" as const;
-    }
-    session.recordRejected([...observed, "code"]);
-    const fields = yield* emptyRetryFields(input.browser, shown, rejected === "code");
-    if (typeof fields === "string") return fields;
-    const retryStep: AutofillStep = {
-      fields,
-      ...(shown.popup === undefined ? {} : { popup: shown.popup }),
-      ...(shown.submit === undefined ? {} : { submit: shown.submit }),
-      ...(shown.submitKey === undefined ? {} : { submitKey: shown.submitKey }),
-    };
-    const inspected = yield* input.browser.inspect(retryStep);
-    if ("outcome" in inspected) return "none" as const;
-    return (
-      (yield* replay.runStep(retryStep, inspected, "rejected", rejected === "code")) ??
-      ("retried" as const)
-    );
-  });
-
-/** Nothing was sent and the marker shows: the session was already signed in. */
-const alreadySignedIn = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
-  replay
-    .verify(input.recipe.signedIn)
-    .pipe(
-      Effect.map(
-        (signedIn): SignInReplayOutcome =>
-          signedIn
-            ? replay.session.signedIn(true)
-            : replay.session.outcome("indicator_not_visible"),
-      ),
-    );
-
-/**
- * The full check for a recipe that checks on the landing page, else why the replay did not sign
- * in: `private_answer_rejected` when the security question's screen shows again after its answer
- * went out, `password_rejected` when a request carried the password and the site showed its field
- * again, and the recipe's own failure for a password screen after a submit that may not have sent
- * it (`password_screen_again`) or any other failed check. A page that can't tell, with no
- * password screen again, signs in when the sign-in allows it (`allowCantTell`, a read's).
- */
-const lastCheck = <E>(input: SignInReplayInput<E>, replay: Replay<E>, opened: boolean) =>
-  Effect.gen(function* () {
-    const { session } = replay;
-    if (!opened && (yield* replay.verify(input.recipe.signedIn)))
-      return replay.session.signedIn(false);
-    if ((yield* replay.shownAgain("private_answer")) !== undefined)
-      return session.outcome("private_answer_rejected");
-    if ((yield* replay.shownAgain("password")) === undefined)
-      return input.allowCantTell === true && (yield* replay.endedCantTell)
-        ? session.signedIn(false)
-        : session.outcome("sign_in_check_failed");
-    yield* session.sent.settled;
-    const submitted = session.sent.seenSent("password");
-    if (submitted) session.recordRejected(["password"]);
-    return session.outcome(submitted ? "password_rejected" : "password_screen_again");
-  });
-
-/**
- * After the screens, the recipe's own check decides: the marker on the page, a code screen
- * answered again first, else one the recipe never recorded (`unrecordedCode`), then the full
- * check, which may open the account page.
- */
-const settle = <E>(input: SignInReplayInput<E>, replay: Replay<E>) =>
-  Effect.gen(function* () {
-    const probe: { screen?: string | undefined } = {};
-    while (true) {
-      const shown = yield* awaitIndicator(input, replay);
-      if (!replay.session.progress.anythingSent) return yield* alreadySignedIn(input, replay);
-      if (shown && (yield* replay.verify(replay.session.onPage)))
-        return replay.session.signedIn(false);
-      // The full check opens the account page first when the recipe names one.
-      const opens = input.recipe.signedIn.openPath !== undefined;
-      if (opens && (yield* replay.verify(input.recipe.signedIn)))
-        return replay.session.signedIn(false);
-      const code = yield* retryCode(input, replay, probe.screen);
-      if (code === "retried" || code === "extra_retried") continue;
-      if (code !== "none") return replay.session.outcome(code);
-      const unrecorded = yield* unrecordedCode(replay, probe);
-      if (unrecorded === "ran") continue;
-      if (unrecorded !== "none") return replay.session.outcome(unrecorded);
-      return yield* lastCheck(input, replay, opens);
-    }
-  });
-
-/**
- * Replays a published sign-in recipe on the run's browser: it opens the entry page, finds and
- * judges each recorded screen (one visible match, its frame and form on the site or a configured
- * sign-in origin, on the recorded screen's own origin), fills and submits it, then checks the
- * recipe's marker, answering first a code screen the recipe never recorded, looked for once
- * (`unrecordedCode`). A password or code goes out at most twice, any other secret once, a visible
- * rejection stops before another fill, and only a request the page sent carrying a value counts
- * as sending it. The page's requests are heard only while it runs.
- */
-export const replaySignInRecipe = <E>(
-  input: SignInReplayInput<E>,
-): Effect.Effect<SignInReplayOutcome, E | SignInRunFailed, Scope.Scope> =>
-  Effect.gen(function* () {
-    const replay = makeReplay(input);
-    const stopHearing = input.browser.onRequest(replay.session.sent.heard);
-    yield* Effect.addFinalizer(() => Effect.sync(stopHearing));
-    // An entry page that does not load fails the sign-in, value-free, before anything is typed.
-    yield* input.browser
-      .open(input.entryUrl)
-      .pipe(
-        Effect.mapError(
-          () => new SignInRunFailed({ code: "RecipeFailed", reason: "entry_page_unavailable" }),
+    inspect: (step) => browser.inspect(step).pipe(Effect.mapError(failed)),
+    // One-character code boxes take the code one character each, as the host types it.
+    fill: (input) => browser.fill({ ...input, values: typedValues(input.step, input.values) }),
+    check: (indicator, screens, challengeScreens, at) =>
+      browser.confirm(indicator, screens, challengeScreens ?? screens, at?.origin).pipe(
+        Effect.catchAll(() =>
+          Effect.succeed<AutofillSignedInCheck>({ signedIn: false, failed: "page_unavailable" }),
         ),
-      );
-    const stopped = yield* runScreens(input, replay);
-    return stopped ?? (yield* settle(input, replay));
-  });
+      ),
+    confirm: checkOn,
+    open: (url) =>
+      browser
+        .open(url)
+        .pipe(
+          Effect.mapError(
+            () => new SignInRunFailed({ code: "RecipeFailed", reason: "entry_page_unavailable" }),
+          ),
+        ),
+    markerVisible: (selector, screenPage, popup) =>
+      browser.markerVisible(selector, screenPage, popup).pipe(Effect.mapError(failed)),
+    ...(allowCantTell ? { confirmCantTell: () => Effect.void } : {}),
+  };
+};
 
-/** A field the site rejected that a correction may name, as a run reports it. */
-const isRejectedField = (slot: AutofillSlot): slot is CredentialRejectedField =>
-  slot !== "private_answer";
+/** The local masking as the shared replay's broker. */
+const replayBroker = (secrets: RunSignInSecrets): SecretBroker => ({
+  register: (entry) => Effect.sync(() => secrets.register(entry.value)),
+  registeredSecretMatches: (text) =>
+    Effect.either(secrets.assertAbsent(text)).pipe(
+      Effect.map((found) => (found._tag === "Left" ? [found.left] : [])),
+    ),
+});
 
 /**
- * What a replay that did not sign in with the login leads to: the owner's correction of a
- * rejected username or password, or the run's failure. A rejected code, secondary field or
- * security answer is never corrected here, and any other reason means the recipe no longer
- * matches the site.
+ * Where the replay may sign in besides the recorded exact pages, for a recipe whose workspace
+ * relation is valid for the run's site: the login's pinned workspace origin, and the events that
+ * name the workspace hosts it admitted or refused.
  */
-const afterRejection = <E>(
-  replayed: Exclude<SignInReplayOutcome, { readonly outcome: "signed_in" }>,
+const replayWorkspace = <E>(
+  recipe: SignInRecipe,
+  siteOrigin: string,
+  pinnedOrigin: string | undefined,
+  onEvent: ((event: WorkspaceOriginEvent) => void) | undefined,
+): ReplayWorkspace<E> | undefined => {
+  const relation = workspaceRelation(recipe, siteOrigin);
+  if (relation === undefined) return undefined;
+  const pinned = pinnedWorkspaceOrigin(siteOrigin, relation, pinnedOrigin);
+  let known = pinned;
+  return {
+    siteOrigin,
+    parent: relation.parent,
+    pinned,
+    observe: (event) =>
+      Effect.sync(() => {
+        if (event.kind === "refused")
+          onEvent?.({ kind: "unrecognized_sibling", origin: event.origin });
+        else if (known !== undefined && known !== event.origin)
+          onEvent?.({ kind: "relearned", from: known, to: event.origin });
+        if (event.kind !== "refused") known = event.origin;
+      }),
+  };
+};
+
+const rejected = (field: string) =>
+  new SignInRunFailed({ code: "CredentialsRejected", reason: field });
+
+type Correct = (
+  field: CredentialRejectedField,
   held: WebsiteCredentials,
-  retry: ReplayRetryState,
-  login: SignInLogin<E>,
+  triesLeft: number,
+) => Effect.Effect<WebsiteCredentials, SignInRunFailed>;
+
+/**
+ * A corrected login for the rejected `fields` of `held`, at most twice per field, saying how many
+ * tries are left; a correction that repeats a rejected value is asked again within those tries.
+ */
+const correctedLogin = (
+  fields: readonly CredentialRejectedField[],
+  held: WebsiteCredentials,
+  retryState: AutofillRetryState,
+  correct: Correct,
+) =>
+  askCredentialCorrection({
+    fields,
+    credentials: held,
+    rejectedValues: {
+      username: (retryState.rejectedValues.username ??= new Set()),
+      password: (retryState.rejectedValues.password ??= new Set()),
+    },
+    correctionRequests: retryState.correctionRequests,
+    reject: rejected,
+    ask: (triesLeft) =>
+      correct(fields[0] ?? "password", held, triesLeft).pipe(
+        Effect.map((credentials) => ({ credentials })),
+      ),
+  }).pipe(Effect.map((corrected) => correctedReplayCredentials(held, corrected.credentials)));
+
+/**
+ * The part of `held` an earlier sign-in of this run had rejected, which no sign-in types again
+ * until a sign-in verifies.
+ */
+const rejectedBefore = (
+  held: WebsiteCredentials,
+  retryState: AutofillRetryState,
+): CredentialRejectedField | undefined => {
+  if (held.password !== undefined && retryState.rejectedValues.password?.has(held.password))
+    return "password";
+  return retryState.rejectedValues.username?.has(held.username) ? "username" : undefined;
+};
+
+/**
+ * A replay that did not sign in with the login: a rejected username or password asks for a
+ * corrected login, at most twice per field, saying how many tries are left, and never sends a
+ * rejected value again; any other reason fails the run.
+ */
+const afterRejection = (
+  replayed: Exclude<AutofillReplayOutcome, { readonly outcome: "signed_in" }>,
+  held: WebsiteCredentials,
+  retryState: AutofillRetryState,
+  correct: Correct,
 ) =>
   Effect.gen(function* () {
-    const rejected = (field: string) =>
-      new SignInRunFailed({ code: "CredentialsRejected", reason: field });
     const { reason } = replayed;
     if (reason === "code_rejected") return yield* rejected("code");
     if (reason === "extra_rejected")
       return yield* rejected(replayed.rejectedFields?.[0] ?? "password");
-    if (reason === "private_answer_rejected") return yield* rejected("private_answer");
-    // A security question that changed before its answer was typed needs the new one answered.
-    if (reason === "question_changed")
-      return yield* new SignInRunFailed({ code: "NeedsInput", reason });
     if (reason !== "password_rejected" && reason !== "username_rejected")
       return yield* new SignInRunFailed({ code: "RecipeFailed", reason });
-    const observed = (
-      replayed.rejectedFields ?? [reason === "username_rejected" ? "username" : "password"]
-    ).filter(isRejectedField);
+    const observed = replayed.rejectedFields ?? [
+      reason === "username_rejected" ? "username" : "password",
+    ];
     const paired = observed.filter(
       (field) =>
-        field === "password" || logicalRejectedField(field, retry.primary.kind) === "username",
+        field === "password" ||
+        logicalRejectedField(field, held.primaryIdentifierKind) === "username",
     );
-    const field = paired[0] ?? observed[0] ?? "password";
-    if (paired.length === 0) return yield* rejected(field);
-    return yield* correctRejectedLogin({
-      fields: paired,
-      retry,
-      ask: () => login.correct(field, held),
-      reject: rejected,
-    });
+    if (paired.length === 0) return yield* rejected(observed[0] ?? "password");
+    return yield* correctedLogin(paired, held, retryState, correct);
   });
 
+/** Why a value the sign-in needed was not given, as the run reports it. */
+const unanswered = (_cause: unknown, field?: string) =>
+  new SignInRunFailed({ code: "NeedsInput", reason: field ?? "sign_in_value" });
+
 /**
- * Signs a run in with the integration's recipe before its operation runs. It first replays
- * without values and asks nothing when the session already shows signed in. Otherwise it reads
- * the login once (`login`), replays with it, asking for any code, date of birth, ZIP or security
- * answer the screens need (`values`), and corrects a rejected username or password at most twice
- * per field, never sending a rejected value again. Values stay in memory for the run. A recipe it
- * cannot read fails `MissingRecipe`, and an entry page off the site fails before anything opens,
- * as does, for a recipe with a workspace relation, one whose query or fragment names another
- * address (`entryNamesAddress`).
+ * Signs a run in with the integration's recipe before its operation runs, on the shared replay. It
+ * first replays without values and asks nothing when the session already shows signed in.
+ * Otherwise it reads the login once (`login`), replays with it, asking the owner (`ask`) for any
+ * code, date of birth, ZIP or security answer the screens need, and corrects a rejected username
+ * or password at most twice per field, never sending a rejected value again, in this sign-in or in
+ * a later one sharing its `retryState`. Values stay in memory for the run. A recipe it cannot read fails `MissingRecipe`, and an entry page off the site fails
+ * before anything opens, as does, for a recipe with a workspace relation, one whose query or
+ * fragment names another address (`entryNamesAddress`).
  *
  * A recipe with a workspace relation may sign in on the login's own workspace host
  * (`workspaceOrigin`, the one pinned to the login, or one this run learns), and the result names
- * the workspace origin to pin, only one this login's own sign-in explains (`workspaceToPin`). A
- * replay that finds another workspace's sign-in before this login sent anything
- * (`workspace_unverified`) clears the site's data and starts again once, when the browser can,
- * and otherwise fails the run.
+ * the workspace origin to pin, only one this login's own sign-in explains. A replay that finds
+ * another workspace's sign-in before this login sent anything (`workspace_unverified`) clears the
+ * site's data and starts again once, when the browser can, and otherwise fails the run.
  */
 export const signInForRun = <E>(input: {
   readonly recipe: SignInRecipe;
@@ -993,19 +305,28 @@ export const signInForRun = <E>(input: {
   readonly browser: SignInReplayBrowser<E>;
   /** The owner's login; a login question left unanswered fails the run `NeedsInput`. */
   readonly login: SignInLogin<unknown>;
-  readonly values: SignInValueHooks<E>;
-  readonly carries: SecretMatcher;
+  /** Asks the owner for what the screens need besides the login. */
+  readonly ask: InputAsker;
+  /** Masks each value the sign-in types before any screen can send it. */
+  readonly secrets: RunSignInSecrets;
   /** The site as a question names it. */
   readonly site: string;
   /** The site the run is authorized for, which the entry page must be on. */
   readonly siteOrigin: string;
-  readonly timing?: SignInReplayTiming;
+  readonly timing?: AutofillReplayTiming;
+  /** How long a check waits for a marker drawn late; `markerSettle` unless a test shortens it. */
+  readonly markerSettle?: MarkerSettle;
   /** The login's pinned workspace origin, ignored unless it passes `workspaceHost`. */
   readonly workspaceOrigin?: string;
   /** Hears each replay's private workspace events. */
   readonly onWorkspaceEvent?: (event: WorkspaceOriginEvent) => void;
-  /** Whether a page that can't tell signs it in, as a read's may (see `replaySignInRecipe`). */
+  /** Whether a page that can't tell signs it in, as a read's may. */
   readonly allowCantTell?: boolean;
+  /**
+   * The values the site rejected and the corrections asked, kept across the sign-ins of one run;
+   * a new one by default. A verified sign-in clears it.
+   */
+  readonly retryState?: AutofillRetryState;
 }): Effect.Effect<
   { readonly alreadySignedIn: boolean; readonly workspaceOrigin?: string },
   E | SignInRunFailed
@@ -1021,47 +342,74 @@ export const signInForRun = <E>(input: {
     const relation = workspaceRelation(recipe, input.siteOrigin);
     if (relation !== undefined && entryNamesAddress(input.entryUrl, relation.parent))
       return yield* new SignInRunFailed({ code: "RecipeFailed", reason: "entry_names_address" });
-    const unanswered = () => new SignInRunFailed({ code: "NeedsInput", reason: "login" });
-    const login: SignInLogin<SignInRunFailed> = {
-      held: input.login.held,
-      values: input.login.values.pipe(Effect.mapError(unanswered)),
-      correct: (field, held) => input.login.correct(field, held).pipe(Effect.mapError(unanswered)),
-    };
-    const runLogin = yield* makeRunLogin(login);
-    const retry = makeReplayRetryState();
-    const values = makeSignInValues(input.values, input.site);
+    const loginUnanswered = () => new SignInRunFailed({ code: "NeedsInput", reason: "login" });
+    const runLogin = yield* makeRunLogin({
+      held: input.login.held(),
+      passwordless: false,
+      read: input.login.values.pipe(Effect.mapError(loginUnanswered)),
+      register: () => Effect.void,
+    });
+    const correct = (field: CredentialRejectedField, held: WebsiteCredentials, triesLeft: number) =>
+      input.login.correct(field, held, triesLeft).pipe(Effect.mapError(loginUnanswered));
+    const retryState = input.retryState ?? makeAutofillRetryState();
+    const hooks = replayHooks(input.browser, input.allowCantTell === true, input.markerSettle);
+    const broker = replayBroker(input.secrets);
+    const given = { current: {} };
     let held = runLogin.held();
     let cleared = false;
     while (true) {
+      // A login an earlier sign-in of this run had rejected is corrected before anything is typed.
+      const before = held === undefined ? undefined : rejectedBefore(held, retryState);
+      if (held !== undefined && before !== undefined) {
+        held = yield* correctedLogin([before], held, retryState, correct);
+        runLogin.hold(held);
+      }
+      const workspace = replayWorkspace<ReplayFailure<E>>(
+        recipe,
+        input.siteOrigin,
+        input.workspaceOrigin,
+        input.onWorkspaceEvent,
+      );
       const replayed = yield* Effect.scoped(
-        replaySignInRecipe({
+        replayAutofillRecipe({
           recipe,
-          browser: input.browser,
+          hooks,
           entryUrl: input.entryUrl,
           credentials: held,
-          values,
-          hooks: input.values,
-          carries: input.carries,
+          retryState,
+          ask: input.ask,
+          answers: { given },
+          broker,
           site: input.site,
-          retry,
-          timing: input.timing ?? defaultReplayTiming,
-          siteOrigin: input.siteOrigin,
-          ...(input.workspaceOrigin === undefined
-            ? {}
-            : { workspaceOrigin: input.workspaceOrigin }),
-          ...(input.onWorkspaceEvent === undefined
-            ? {}
-            : { onWorkspaceEvent: input.onWorkspaceEvent }),
-          ...(input.allowCantTell === true ? { allowCantTell: true } : {}),
+          correlation: undefined,
+          emit: () => Effect.void,
+          failures: {
+            unanswered,
+            unavailable: (_operation, detail) =>
+              new SignInRunFailed({
+                code: "NeedsInput",
+                reason:
+                  typeof detail.context?.["check"] === "string"
+                    ? detail.context["check"]
+                    : "sign_in_value",
+              }),
+          },
+          sent: { current: false },
+          ...(workspace === undefined ? {} : { workspace }),
+          ...(input.timing === undefined ? {} : { timing: input.timing }),
         }),
+      ).pipe(
+        Effect.catchTag("ReplayBrowserFailed", (failure) => Effect.fail(failure.error)),
       );
-      if (replayed.outcome === "signed_in")
+      if (replayed.outcome === "signed_in") {
+        resetAutofillRetryState(retryState);
         return {
           alreadySignedIn: replayed.alreadySignedIn,
           ...(replayed.workspaceOrigin === undefined
             ? {}
             : { workspaceOrigin: replayed.workspaceOrigin }),
         };
+      }
       // Another workspace's sign-in before this login sent anything: leftover cookies or a link.
       // The site's data is cleared and the entry reopened once; a second refusal fails the run.
       if (replayed.reason === "workspace_unverified") {
@@ -1077,7 +425,7 @@ export const signInForRun = <E>(input: {
         held = yield* runLogin.values;
         continue;
       }
-      held = yield* afterRejection(replayed, held, retry, login);
+      held = yield* afterRejection(replayed, held, retryState, correct);
       runLogin.hold(held);
     }
   });

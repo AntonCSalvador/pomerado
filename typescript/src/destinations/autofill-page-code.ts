@@ -9,6 +9,36 @@ import { submissionGuardCode } from "./autofill-submission-guard.js";
 import { pageControlsCode } from "./page-controls.js";
 
 /**
+ * Page code: where each code field sits among its screen's one-character boxes, as
+ * `Described.codeBox` says, else null. A box is a visible, enabled, editable text input whose
+ * `maxlength` is 1; the screen is the field's form, or its document or shadow root outside one. A
+ * field that is no box, or a screen with fewer than two, has none. Attributes only, never a value.
+ */
+const codeBoxesCode = `const codeBoxes = [];
+for (const [index, field] of fields.entries()) {
+  if (!codeSlots[index]) {
+    codeBoxes.push(null);
+    continue;
+  }
+  const codeBox = await field.locator.evaluate((element) => {
+    const textTypes = ["", "text", "tel", "number", "password", "search"];
+    const box = (control) => {
+      if (control.tagName !== "INPUT" || control.maxLength !== 1) return false;
+      if (!textTypes.includes((control.getAttribute("type") ?? "").toLowerCase())) return false;
+      if (control.disabled || control.readOnly) return false;
+      const rect = control.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && control.checkVisibility({ visibilityProperty: true });
+    };
+    if (!box(element)) return null;
+    const screen = element.form ?? element.getRootNode();
+    const boxes = Array.from(screen.querySelectorAll("input")).filter(box);
+    const at = boxes.indexOf(element);
+    return boxes.length < 2 || at < 0 ? null : { box: at + 1, of: boxes.length };
+  }, undefined, { timeout: ${elementReadMs} }).catch(() => null);
+  codeBoxes.push(codeBox);
+}`;
+
+/**
  * Page code: the step's controls and visible native and ARIA actions, for the host and Guardian.
  * The page keeps the controls as found, with every form destination as found, under `observed`.
  */
@@ -28,8 +58,12 @@ for (const frame of primary.frames()) {
     buttons.push(words ?? "(unlabelled button)");
   }
 }
+${codeBoxesCode}
 return {
-  fields: fields.map(({ target, described }) => ({ target, described })),
+  fields: fields.map(({ target, described }, index) => ({
+    target,
+    described: codeBoxes[index] === null ? described : { ...described, codeBox: codeBoxes[index] },
+  })),
   submit: submit === null ? null : { target: submit.target, described: submit.described },
   located,
   buttons,
@@ -90,6 +124,11 @@ export type AutofillFillCall =
       readonly fieldGet: readonly boolean[];
       /** Only look: a call that finds the step's fields clicks nothing and answers `none`. */
       readonly look?: true;
+      /**
+       * The step's code boxes, by field index: its code fields the host typed one character each,
+       * when it typed two or more. Each must still hold exactly one character before the click.
+       */
+      readonly codeBoxes?: readonly number[];
       /**
        * Read the page's alerts just before the click, waiting at most `alertsBeforeMs`, so the
        * answer counts the new ones after it (`newAlerts`); a read that runs out counts nothing.
@@ -168,7 +207,33 @@ if (check !== null) {
     return { checked: false, url: primary.url() };
   }
 }
+${call.kind === "submit" && call.look !== true ? codeBoxesHoldCode(call.codeBoxes ?? []) : ""}
 ${fillCallBody(call)}`;
+
+/**
+ * Page code for the submit call of a step the host submits, whose code the host typed across
+ * several one-character boxes (`boxes`, by field index): before the host clicks, each holds
+ * exactly one character, so a box a widget emptied or filled twice as the host typed the next never
+ * goes out as part of a code. Lengths only, never a value; a box it cannot read counts as wrong.
+ * The first that does not fails the check, with its index (`field`).
+ */
+const codeBoxesHoldCode = (boxes: readonly number[]) =>
+  boxes.length === 0
+    ? ""
+    : `if (!readsOnly) {
+  for (const index of ${JSON.stringify(boxes)}) {
+    const field = fields[index];
+    if (field === undefined) continue;
+    const holdsOne = await field.locator
+      .evaluate(
+        (element) => typeof element.value === "string" && Array.from(element.value).length === 1,
+        undefined,
+        { timeout: ${elementReadMs} },
+      )
+      .catch(() => false);
+    if (!holdsOne) return { checked: false, field: index, url: primary.url() };
+  }
+}`;
 
 /**
  * Page code for the submit call of a step with fields and no submit, once every field is typed and
@@ -464,6 +529,7 @@ ${fill === undefined ? "" : documentStartCode}
 const observed = ${JSON.stringify(observed)};
 const selectors = ${JSON.stringify(step.fields.map((field) => field.selector))};
 const questionSelectors = ${JSON.stringify(step.fields.map((field) => field.slot === "private_answer" ? field.questionSelector ?? null : null))};
+const codeSlots = ${JSON.stringify(step.fields.map((field) => field.slot === "code"))};
 const fields = [];
 for (let index = 0; index < selectors.length; index++) {
   const found = await locate(selectors[index], questionSelectors[index]);
