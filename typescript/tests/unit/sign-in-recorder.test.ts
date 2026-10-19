@@ -619,6 +619,24 @@ it("refuses a signed-in check holding [private] before it reads the page", async
   expect(host.confirmed).toEqual([]);
 });
 
+it.each([
+  ["path", { urlPath: "/accounts/[private]" }],
+  ["account page", { selector: "#account-menu", openPath: "/accounts/[private]/settings" }],
+])("refuses a signed-in check whose %s holds [private] before it reads the page", async (_, check) => {
+  const host = harness({ held: account });
+  const result = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(identifierAndPassword, undefined, Effect.void);
+      const refused = yield* recorder.step({ signedIn: check }, undefined, Effect.void);
+      expect(recorder.published()).toBeUndefined();
+      return refused;
+    }),
+  );
+  expect(result.verified).toBeUndefined();
+  expect(result.result).toMatchObject({ signedIn: false, failed: "indicator_holds_identity" });
+  expect(host.confirmed).toEqual([]);
+});
+
 it("refuses a password screen before any identifier screen while the build holds no login", async () => {
   const host = harness();
   const result = await host.run((recorder) => recorder.step(passwordOnly, undefined, Effect.void));
