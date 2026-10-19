@@ -1,4 +1,4 @@
-import { Data, Effect } from "effect";
+import { Data, Duration, Effect, Fiber, Option, TestClock, TestContext } from "effect";
 import { expect, it } from "vitest";
 import type { AutofillRecipe } from "../../src/destinations/autofill-recipe.js";
 import type { AutofillStep } from "../../src/destinations/autofill-step.js";
@@ -6,8 +6,10 @@ import { replayAutofillRecipe } from "../../src/runtime/autofill-replay.js";
 import type { AutofillHooks } from "../../src/runtime/autofill-state.js";
 
 // A saved session whose site shows a page of its own at the login address, with no sign-in form,
-// no marker and no redirect: before the first screen's wait ends, the recipe's account page
-// decides. A wait after a recorded click never reopens the entry, since that would lose the click.
+// no marker and no redirect. No check of the session opens the recipe's account page: a read's
+// value-free check ends on that login entry as one that can't tell once it stayed put, and the
+// operation that runs next decides. A browser that started empty, a sign-in that follows a read of
+// the page signed out, a write, or a wait after a recorded click waits for its screen instead.
 
 class TestFailure extends Data.TaggedError("TestFailure")<{ readonly code: string }> {}
 
@@ -21,11 +23,20 @@ const target = {
   editable: true,
   control: "text" as const,
 };
+const pollMs = 50;
 
 /** A site signed in already, whose login address shows its public page. */
-const replay = async (steps: AutofillRecipe["steps"]) => {
+const replay = async (
+  steps: AutofillRecipe["steps"],
+  options: {
+    readonly read?: boolean;
+    readonly startedEmpty?: boolean;
+    readonly readSignedOut?: boolean;
+  } = {},
+) => {
   const opened: string[] = [];
   const confirmed: (string | undefined)[] = [];
+  const events: unknown[] = [];
   const isLogIn = (step: AutofillStep) => step.submit === "#log-in" && step.fields.length === 0;
   const hooks: AutofillHooks<TestFailure> = {
     open: (url) =>
@@ -56,6 +67,8 @@ const replay = async (steps: AutofillRecipe["steps"]) => {
       ),
     fill: () =>
       Effect.succeed({ outcome: "filled" as const, fields: [], submit: "clicked" as const, url: login }),
+    ...(options.read === true ? { confirmCantTell: () => Effect.void } : {}),
+    ...(options.startedEmpty === undefined ? {} : { startedEmpty: options.startedEmpty }),
   };
   const recipe: AutofillRecipe = {
     version: 2,
@@ -63,28 +76,41 @@ const replay = async (steps: AutofillRecipe["steps"]) => {
     signedIn: { selector: "#identity", openPath: "/account" },
   };
   const outcome = await Effect.runPromise(
-    replayAutofillRecipe({
-      recipe,
-      hooks,
-      entryUrl: login,
-      credentials: undefined,
-      ask: () => Effect.dieMessage("Unexpected question"),
-      broker: {
-        register: () => Effect.void,
-        registeredSecretMatches: () => Effect.succeed([]),
-      },
-      site: "example.test",
-      correlation: undefined,
-      emit: () => Effect.void,
-      failures: {
-        unanswered: () => new TestFailure({ code: "Unanswered" }),
-        unavailable: () => new TestFailure({ code: "Unavailable" }),
-      },
-      timing: { stepWaitMs: 60, pollMs: 5 },
-      sent: { current: false },
-    }).pipe(Effect.scoped),
+    Effect.gen(function* () {
+      const running = yield* Effect.fork(
+        replayAutofillRecipe({
+          recipe,
+          hooks,
+          entryUrl: login,
+          credentials: undefined,
+          ...(options.readSignedOut === undefined ? {} : { readSignedOut: options.readSignedOut }),
+          ask: () => Effect.dieMessage("Unexpected question"),
+          broker: {
+            register: () => Effect.void,
+            registeredSecretMatches: () => Effect.succeed([]),
+          },
+          site: "example.test",
+          correlation: undefined,
+          emit: (event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+          failures: {
+            unanswered: () => new TestFailure({ code: "Unanswered" }),
+            unavailable: () => new TestFailure({ code: "Unavailable" }),
+          },
+          timing: { stepWaitMs: 5_000, pollMs },
+          sent: { current: false },
+        }).pipe(Effect.scoped),
+      );
+      for (let polls = 0; polls < 1_000; polls++) {
+        if (Option.isSome(yield* Fiber.poll(running))) break;
+        yield* TestClock.adjust(Duration.millis(pollMs));
+      }
+      return yield* Fiber.join(running);
+    }).pipe(Effect.provide(TestContext.TestContext)),
   );
-  return { outcome, opened, confirmed };
+  return { outcome, opened, confirmed, events };
 };
 
 const passwordScreen = {
@@ -93,16 +119,33 @@ const passwordScreen = {
   submit: "#go",
 };
 
-it("signs a saved session in by the account page when the login address shows no screen", async () => {
-  const { outcome, opened, confirmed } = await replay([passwordScreen]);
-  expect(outcome).toEqual({ outcome: "signed_in", alreadySignedIn: true });
+it("ends a read's value-free check on a login entry with no form or marker as can't tell, opening no account page", async () => {
+  const { outcome, opened, confirmed, events } = await replay([passwordScreen], { read: true });
+  expect(outcome).toEqual({ outcome: "signed_in", alreadySignedIn: true, cantTell: true });
+  expect(events).toContainEqual({ stage: "skipped", reason: "cant_tell_entry" });
   expect(opened).toEqual([login]);
-  expect(confirmed).toEqual(["/account"]);
+  expect(confirmed).toEqual([]);
 });
+
+it.each([
+  ["in a browser that started empty", { read: true, startedEmpty: true }],
+  ["in the sign-in that follows a read of the page signed out", { read: true, readSignedOut: true }],
+  ["for a write", { read: false }],
+] as const)(
+  "waits for the first screen on such a login entry %s, opening no account page",
+  async (_, options) => {
+    const { outcome, opened, confirmed, events } = await replay([passwordScreen], options);
+    expect(outcome).toMatchObject({ outcome: "unsent" });
+    expect(events).not.toContainEqual({ stage: "skipped", reason: "cant_tell_entry" });
+    expect(opened).toEqual([login]);
+    expect(confirmed).toEqual([]);
+  },
+);
 
 it("never checks the account page once a recorded click ran, so the entry is not reopened", async () => {
   const logIn = { page: login, fields: [], submit: "#log-in" };
-  const { outcome, opened } = await replay([logIn, passwordScreen]);
+  const { outcome, opened, confirmed } = await replay([logIn, passwordScreen], { read: true });
   expect(outcome).toMatchObject({ outcome: "unsent" });
   expect(opened).toEqual([login]);
+  expect(confirmed).toEqual([]);
 });

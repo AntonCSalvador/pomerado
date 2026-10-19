@@ -163,8 +163,12 @@ const makeReplaySession = <E extends YieldableError, V extends string, L extends
     ran: [] as AutofillStep[],
     /** The password or code a retry filled a second time, which is never filled again. */
     refilled: new Set<AutofillSecret>(),
-    /** The saved session's account-page check passed while a screen's wait sent nothing. */
+    /** A screen's wait that sent nothing found the session signed in, or can't tell. */
     alreadySignedIn: false,
+    /** The first screen's wait ended on a login entry that can't tell (`entryCantTell`). */
+    entryCantTell: false,
+    /** A screen went while the host filled it, which sent nothing (`screenGoneUnsent`). */
+    screenGone: false,
     /** The vendor of a challenge behind a screen that never showed, which the gate could not clear. */
     challenge: undefined as V | undefined,
     /**
@@ -193,7 +197,7 @@ const makeReplaySession = <E extends YieldableError, V extends string, L extends
     ...(rejectedFields.length === 0 ? {} : { rejectedFields }),
     ...(progress.challenge === undefined ? {} : { challenge: progress.challenge }),
   });
-  // The marker as the current page shows it; the account page check navigates, so only the end runs it.
+  // The marker as the current page shows it, read once; the end's check lets the page settle.
   const onPage = { selector: recipe.signedIn.selector, urlPath: recipe.signedIn.urlPath };
   // This replay's own screens, as its inspections named their controls, are the sign-in whose
   // recorded challenges count: the recipe holds no control's naming.
@@ -364,7 +368,7 @@ const verifySignIn =
   });
 
 /**
- * Where the signed-in check of a tool with a workspace relation opens its account page, and the
+ * Where the signed-in check of a tool with a workspace relation reads the site's marker, and the
  * workspace origin its passing check pins: the host this replay admitted; else the page's own
  * host when it passes the gates and the login has none pinned, it is the pinned one, or this
  * replay sent the login on the shared sign-in (the site moved the workspace); else the pinned
@@ -441,7 +445,6 @@ export const makeReplay = <E extends YieldableError, V extends string, L extends
         onScreens: (page) => input.recipe.steps.some((step) => session.matchesRecorded(page, step)),
         matches: session.matchesRecorded,
       },
-      Effect.suspend(() => verifySignIn(session)(input.recipe.signedIn)),
     ),
     runStep: run,
     verify: verifySignIn(session),
