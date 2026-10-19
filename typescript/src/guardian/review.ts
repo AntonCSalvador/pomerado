@@ -136,6 +136,12 @@ export const GuardianDecision = Schema.Struct({
   reason: Schema.optional(Schema.suspend(() => PublicationReason)),
   findings: Schema.optional(Schema.Array(Schema.suspend(() => PublicationFinding))),
   /**
+   * A publication review's input design findings about choices on the site's sign-in pages, in
+   * the host's sign-in recipe, which a temporary exception sets aside until such choices become
+   * declared sign-in inputs (`decodePublicationDecision`). Reported, never blocking.
+   */
+  excusedSignInChoices: Schema.optional(Schema.Array(Schema.suspend(() => PublicationFinding))),
+  /**
    * A publication denial's one short sentence its caller may read: why the tool was not
    * published, in plain words, apart from the private rationale. Other kinds have none.
    */
