@@ -52,6 +52,16 @@ export const GuardianRefusal = Schema.Literal(...guardianRefusals);
 export type GuardianRefusal = typeof GuardianRefusal.Type;
 
 /**
+ * A host fact an execution refusal may rest on, which the host checks against its own record:
+ * `retry_permission`, that the step may not run again; `committed_write`, that the step would
+ * commit a listed write again. A refusal whose ground the host's record contradicts, retry
+ * permission when trusted_execution_context.repeatableRead is true or a committed write for a
+ * step the review labels a read, is sent back once in the same review and is never final.
+ */
+export const guardianRefusalGrounds = ["retry_permission", "committed_write"] as const;
+export type GuardianRefusalGround = (typeof guardianRefusalGrounds)[number];
+
+/**
  * Input findings are feedback for the minter; they never block a publication on their own.
  * `example_input` is the host's own check that each key of an intent-derived example's input is
  * a schema input, never Guardian's.

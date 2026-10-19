@@ -15,6 +15,7 @@ import {
   runOutcomeRetry,
   runnerVerified,
   unconfirmedWrite,
+  unenteredWrite,
   validatedWriteNeeds,
   writeStatusOf,
   type RunEvidence,
@@ -80,6 +81,31 @@ describe("commit evidence", () => {
     { evidence: "unreported", refusal: "commit_unreported" },
   ] as const)("refuses a repeat after $evidence with $refusal", ({ evidence, refusal }) => {
     expect(commitRetryRefusal(evidence)).toBe(refusal);
+  });
+});
+
+describe("a write that entered none of its declared commit steps", () => {
+  const notSent = { name: "save", state: "not_sent" } as const;
+  it.each([
+    { case: "every declared mark unsent", effect: "may_have_dispatched", marks: [notSent], unentered: true },
+    {
+      case: "several declared marks, all unsent",
+      effect: "may_have_dispatched",
+      marks: [notSent, { name: "place-order", state: "not_sent" }],
+      unentered: true,
+    },
+    {
+      case: "one mark entered",
+      effect: "may_have_dispatched",
+      marks: [notSent, { name: "place-order", state: "sent" }],
+      unentered: false,
+    },
+    { case: "no declared marks", effect: "may_have_dispatched", marks: [], unentered: false },
+    { case: "no readable report", effect: "may_have_dispatched", marks: undefined, unentered: false },
+    { case: "nothing dispatched", effect: "not_started", marks: [notSent], unentered: false },
+    { case: "a recorded confirmation", effect: "verified", marks: [notSent], unentered: false },
+  ] as const)("is $unentered with $case", ({ effect, marks, unentered }) => {
+    expect(unenteredWrite(effect, marks)).toBe(unentered);
   });
 });
 
