@@ -147,7 +147,6 @@ const harness = (options: Options = {}) => {
           ? { signedIn: false, failed: "challenge_form_visible", url: `${origin}/account` }
           : { signedIn: true, url: `${origin}/account` };
       }),
-    onRequest: () => () => {},
     authenticationOrigins: [],
     open: () => Effect.void,
     markerVisible: (selector: string) => Effect.succeed(shown.has(selector)),
@@ -1067,7 +1066,6 @@ it("judges a later build's first screen as typed into once an earlier build type
       keyboard: { insertText: () => Effect.fail(new Error("Insertion reply lost")) },
       siteOrigin: origin,
       authenticationOrigins: [],
-      onRequest: () => () => {},
       typing,
     });
   const step = {

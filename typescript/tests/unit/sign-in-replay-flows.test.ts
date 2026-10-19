@@ -5,7 +5,7 @@ import type {
   AutofillSignedInCheck,
   AutofillStepReport,
 } from "../../src/destinations/autofill-step.js";
-import type { SignInRecipe, SignInRequest } from "../../src/destinations/sign-in-recipe.js";
+import type { SignInRecipe } from "../../src/destinations/sign-in-recipe.js";
 import { makeInputAsker } from "../../src/inputs/callback.js";
 import { makeRunSecrets } from "../../src/inputs/secrets.js";
 import type { InputAnswers, Question } from "../../src/runtime/input-request.js";
@@ -38,8 +38,6 @@ interface FillReply {
   readonly kept?: readonly string[];
   /** The fill's own report, in place of a filled screen whose submit was clicked. */
   readonly report?: AutofillStepReport;
-  /** The page sent nothing, whatever the report says: no request goes out. */
-  readonly unheard?: true;
 }
 interface SiteScript {
   /** Each page's visible controls, by page name. */
@@ -62,7 +60,6 @@ const scriptedSite = (script: SiteScript) => {
   };
   const trace: string[] = [];
   const fills: { readonly page: string; readonly values: readonly string[] }[] = [];
-  const listeners = new Set<(request: SignInRequest) => void>();
   const at = (page: string) => `${origin}/${page}`;
   const go = (page: string) => {
     state.page = page;
@@ -132,22 +129,6 @@ const scriptedSite = (script: SiteScript) => {
           submit: "clicked",
           url: at(reply.next ?? page),
         };
-        // A clicked submit posts the screen's form; a page that sent the values itself sends them
-        // from its own script.
-        if (
-          reply.unheard !== true &&
-          report.outcome === "filled" &&
-          (report.submit === "clicked" || report.submit === "page")
-        )
-          for (const listener of [...listeners])
-            listener({
-              url: at(page),
-              method: "POST",
-              body: new URLSearchParams(values.map((value, index) => [`field${index}`, value])).toString(),
-              ...(report.submit === "page"
-                ? { channel: "http" as const, resourceType: "fetch" }
-                : { channel: "navigation" as const, frame: "main" as const, resourceType: "document" }),
-            });
         if (reply.signIn === true) state.signedIn = true;
         if (reply.next !== undefined) go(reply.next);
         state.markers = new Set(reply.markers ?? []);
@@ -164,10 +145,6 @@ const scriptedSite = (script: SiteScript) => {
           ? { signedIn: true, url: at(state.page) }
           : { signedIn: false, failed: "indicator_not_visible", url: at(state.page) };
       }),
-    onRequest: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
     authenticationOrigins: [],
     open: (url) =>
       Effect.sync(() => {
@@ -845,7 +822,7 @@ it("takes a code screen that sent its code itself and shows its box again as a r
         ? signedLogin(values)
           ? { next: "code" }
           : {}
-        : { report: sentByPage("code"), unheard: true },
+        : { report: sentByPage("code") },
   });
   const { result, prompts } = await signIn(recipe(loginStep, pageSentStep), fake);
   expect(result).toEqual(Either.left(new SignInRunFailed({ code: "CredentialsRejected", reason: "code" })));

@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { Request } from "playwright";
 import { Effect } from "effect";
 import { localSignInLogin, makeSignInBrowser } from "../../src/standalone/authentication.js";
 import { makeInputAsker } from "../../src/inputs/callback.js";
@@ -9,7 +8,6 @@ import {
   type AutofillSignedIn,
 } from "../../src/destinations/autofill-step.js";
 import type { CredentialKeyboard } from "../../src/destinations/credential-keyboard.js";
-import type { SignInRequest } from "../../src/destinations/sign-in-recipe.js";
 import type { SignInStep } from "../../src/mint/contracts.js";
 import { makeSignInRecorder } from "../../src/mint/sign-in-recorder.js";
 import type { InputAsker } from "../../src/runtime/input-request.js";
@@ -18,23 +16,6 @@ import { expectNotCarried, hostKeyboard, hostPage } from "./autofill-host-page.j
 
 // The local host's sign-in on a page: its recorder fills each screen with the build's login, and
 // asks for each private answer.
-
-/** Each request `page` sends, as the executor reports it, until the returned function stops it. */
-const pageRequests = (page: Page) => (listener: (request: SignInRequest) => void) => {
-  const heard = (request: Request) => {
-    const document = request.isNavigationRequest();
-    listener({
-      url: request.url(),
-      method: request.method(),
-      body: request.postData(),
-      channel: document ? "navigation" : "http",
-      ...(document ? { frame: request.frame() === page.mainFrame() ? "main" : "sub" } : {}),
-      resourceType: request.resourceType(),
-    });
-  };
-  page.on("request", heard);
-  return () => page.off("request", heard);
-};
 
 /** The login the build gives when a screen first needs it: one credential question's answer. */
 const login = { username: "owner@bank.example.test", password: "synthetic-password" };
@@ -56,7 +37,6 @@ const localSignIn = async (
     keyboard: keyboard ?? (await hostKeyboard(page)).keyboard,
     siteOrigin: site,
     authenticationOrigins: [],
-    onRequest: pageRequests(page),
     typing: { typed: false },
   });
   const owner: InputAsker = (request, bounds) =>
@@ -520,7 +500,6 @@ test("a run's replay asks the private answer on every run, from the question its
           keyboard,
           siteOrigin: site,
           authenticationOrigins: [],
-          onRequest: pageRequests(page),
           typing: { typed: false },
         }),
         login: localSignInLogin({ ask, register: secrets.register, siteOrigin: site }),
@@ -563,7 +542,6 @@ test("the local rejection marker check reads only whether a marker shows, on the
     keyboard: (await hostKeyboard(page)).keyboard,
     siteOrigin: site,
     authenticationOrigins: [],
-    onRequest: pageRequests(page),
     typing: { typed: false },
   });
   const shows = (selector: string, screen = `${site}/login`, popup?: { opener: "primary"; origin: string }) =>

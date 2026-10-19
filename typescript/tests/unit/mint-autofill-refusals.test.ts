@@ -80,7 +80,6 @@ const recorderOn = (page: AutofillPage, keyboard: CredentialKeyboard) =>
       keyboard,
       siteOrigin: site,
       authenticationOrigins: [],
-      onRequest: () => () => {},
       typing: { typed: false },
     }),
     login: {

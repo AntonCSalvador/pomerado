@@ -239,7 +239,6 @@ export const mintState = (
           keyboard: browser.keyboard,
           siteOrigin: siteOrigin,
           authenticationOrigins,
-          onRequest: browser.onRequest,
           typing: session.signInTyping,
         });
         // The site as the owner's questions name it: its host, without `www.`.
