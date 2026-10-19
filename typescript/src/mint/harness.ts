@@ -67,6 +67,7 @@ import {
   taskUpdateForReview,
   type PendingTaskUpdate,
   type TaskChange,
+  type TaskUpdateConfirmer,
 } from "../guardian/task-update.js";
 import { siteDomain } from "../runtime/same-site.js";
 import { validateSignedInMarker } from "../destinations/signed-in-marker.js";
@@ -3311,6 +3312,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const maintenanceConfirmer = (
         dependencies.taskUpdateConfirmer?.() ?? Effect.succeed("none" as const)
       ).pipe(
+        // A host outside the type, such as a script returning another word, names nobody.
+        Effect.map((confirmer): TaskUpdateConfirmer =>
+          confirmer === "owner" || confirmer === "owner_request" ? confirmer : "none",
+        ),
         Effect.catchAll((error) =>
           reportFailure(error, {
             component: "mint",
@@ -3327,7 +3332,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       let newBuildAskedAt: number | undefined;
       /** Guardian's review of a confirmed update, then the host's application of an allowed one. */
-      const reviewAndApplyTaskUpdate = (submitted: TaskUpdateRequest) =>
+      const reviewAndApplyTaskUpdate = (
+        submitted: TaskUpdateRequest,
+        /** The confirmer the gate already asked the host about, so one update asks once. */
+        asked?: TaskUpdateConfirmer,
+      ) =>
         Effect.gen(function* () {
           const review = dependencies.reviewTaskUpdate;
           const apply = dependencies.applyTaskUpdate;
@@ -3354,7 +3363,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               // Who can confirm, as the host says; a change that only adds or tightens output
               // fields reaches review even when nobody can.
               ...(request.mode === "maintenance"
-                ? { maintenance: { confirmer: yield* maintenanceConfirmer } }
+                ? { maintenance: { confirmer: asked ?? (yield* maintenanceConfirmer) } }
                 : {}),
               // So Guardian knows a site change here can only be a new build.
               ...(dependencies.siteMoveUnsupported === true
@@ -3850,7 +3859,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               kind: "host_live_tests",
               status: "no_cursor",
               instruction:
-                "A next_page case needs an input field named cursor (or page_token) and an output field such as next_cursor, both strings or numbers, in the tool's schemas. Add them, or drop next_page. Nothing was executed.",
+                "A next_page case needs the list fields in the tool's schemas: the string input cursor and output next_cursor, which listInputFields and listOutputFields from pomerado/runtime give. Add them, or drop next_page. Nothing was executed.",
             });
           const digest = yield* stepDigest(request.entrypoint);
           if (digest === undefined)
@@ -5762,11 +5771,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       );
                     const refusal = taskUpdateRefusal(submitted);
                     if (refusal !== undefined) return taskUpdateAnswer("update_refused", refusal);
+                    let askedConfirmer: TaskUpdateConfirmer | undefined;
                     if (request.mode === "maintenance" && !keepsContract(submitted)) {
                       // Only the tool's owner confirms a change that takes from the registered
                       // contract; adding or tightening an output field takes nothing away.
                       const confirmer = yield* maintenanceConfirmer;
-                      if (confirmer === "none")
+                      askedConfirmer = confirmer;
+                      if (confirmer !== "owner" && confirmer !== "owner_request")
                         return taskUpdateAnswer("update_refused", {
                           reason: "owner_unavailable",
                           instruction:
@@ -5807,7 +5818,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         instruction:
                           "confirmedBy names questions the caller has not answered in this build, so nothing confirms the update and nothing changed. Ask the caller with request_input, then call mint_update again naming the questions they answered.",
                       });
-                    return yield* reviewAndApplyTaskUpdate(submitted);
+                    return yield* reviewAndApplyTaskUpdate(submitted, askedConfirmer);
                   }).pipe(
                     Effect.catchIf(
                       (error) => error.code === "ReviewUnavailable",

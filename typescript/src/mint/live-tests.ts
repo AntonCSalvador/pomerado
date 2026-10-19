@@ -217,26 +217,23 @@ const objectFields = (raw: unknown): readonly Field[] => {
   });
 };
 
-const cursorInputName = /^(?:cursor|page_?token|next_?cursor|continuation(?:_?token)?)$/iu;
-const cursorOutputName =
-  /^(?:next_?cursor|cursor|next_?page_?token|page_?token|continuation(?:_?token)?)$/iu;
-const scalarCursor = (field: Field) =>
-  field.types.length > 0 &&
-  field.types.every((type) => type === "string" || type === "integer" || type === "number");
+/** A field whose every type is a string, the only type the host's list cursor takes. */
+const stringField = (field: Field) =>
+  field.types.length > 0 && field.types.every((type) => type === "string");
 
 /**
- * The cursor a paged list takes and returns: string or number fields only, so a boolean such as
- * `has_next_page` is never read as one.
+ * The cursor a paged list takes and returns: the runtime's `cursor` input and `next_cursor` output
+ * (`listInputFields` and `listOutputFields`), both strings. Tools never make or read a cursor of
+ * their own, so a continuation under another name, such as `page_token`, or of another type is
+ * never read as one, and neither is a boolean such as `has_next_page`.
  */
 export const cursorPairOf = (inputSchema: unknown, outputSchema: unknown): CursorPair | undefined => {
   const input = objectFields(inputSchema).find(
-    (field) => cursorInputName.test(field.name) && scalarCursor(field),
+    (field) => field.name === "cursor" && stringField(field),
   );
-  const outputs = objectFields(outputSchema).filter(
-    (field) => cursorOutputName.test(field.name) && scalarCursor(field),
+  const output = objectFields(outputSchema).find(
+    (field) => field.name === "next_cursor" && stringField(field),
   );
-  const output =
-    outputs.find((field) => /next/iu.test(field.name)) ?? outputs.find(() => true);
   return input === undefined || output === undefined
     ? undefined
     : { inputField: input.name, outputField: output.name };

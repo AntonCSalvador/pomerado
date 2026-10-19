@@ -33,6 +33,19 @@ describe("cursorPairOf", () => {
     expect(cursorPairOf(input, output)).toEqual({ inputField: "cursor", outputField: "next_cursor" });
   });
 
+  it("reads only the runtime's string cursor and next_cursor, never a continuation of the tool's own", () => {
+    const results = { results: { type: "array" } };
+    for (const [input, output] of [
+      [{ page_token: { type: "string" } }, { next_page_token: { type: "string" } }],
+      [{ continuation: { type: "string" } }, { continuation_token: { type: "string" } }],
+      [{ cursor: { type: "string" } }, { cursor: { type: "string" } }],
+      [{ next_cursor: { type: "string" } }, { next_cursor: { type: "string" } }],
+      [{ cursor: { type: "integer" } }, { next_cursor: { type: "integer" } }],
+      [{ cursor: { type: "string" } }, { next_cursor: { type: "number" } }],
+    ] as const)
+      expect(cursorPairOf(object(input), object({ ...results, ...output }))).toBeUndefined();
+  });
+
   it("finds no cursor when only a boolean says there is a next page", () => {
     const output = object({ results: { type: "array" }, has_next_page: { type: "boolean" } });
     const input = object({ query: { type: "string" }, page_token: { type: "boolean" } });
