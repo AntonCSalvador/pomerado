@@ -104,6 +104,8 @@ export interface RecordedSignInStep {
   readonly submittedBy?: "host" | "minter" | undefined;
   /** A two-factor method choice's recorded methods. */
   readonly methods?: AutofillStep["methods"];
+  /** The secrets an earlier screen took that this one asks for again with a second factor. */
+  readonly refills?: SignInRecipeStep["refills"];
   /** The page the step ran on, origin and path only. */
   readonly page: string;
 }
@@ -147,6 +149,7 @@ const inStepOrder = (step: SignInRecipeStep): SignInRecipeStep => ({
             : { questionSelector: field.questionSelector }),
         },
   ),
+  ...(step.refills === undefined ? {} : { refills: step.refills }),
   ...(step.submit === undefined ? {} : { submit: step.submit }),
   ...(step.submitKey === undefined ? {} : { submitKey: step.submitKey }),
   ...(step.submittedBy === undefined ? {} : { submittedBy: step.submittedBy }),

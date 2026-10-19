@@ -328,7 +328,9 @@ const makeReplay = <E>(input: SignInReplayInput<E>) => {
     codeAgain?: "rejected",
     explicitCodeRejection = false,
     corrected: ReadonlySet<AutofillSlot> = new Set(),
-  ) => runReplayStep(session, asked, inspection, codeAgain, explicitCodeRejection, corrected);
+    planned: readonly SecretSlot[] = [],
+  ) =>
+    runReplayStep(session, asked, inspection, codeAgain, explicitCodeRejection, corrected, planned);
   const extras = (observed: readonly AutofillSlot[]) => correctReplayExtras(session, run, observed);
   const resolve = (request: AutofillStepRequest) => input.values.resolve(request, input.credentials);
   return {
@@ -539,7 +541,14 @@ const runScreen = <E>(
       return "continue" as const;
     }
     for (;;) {
-      const failed = yield* replay.runStep(step, inspection);
+      const failed = yield* replay.runStep(
+        step,
+        inspection,
+        undefined,
+        false,
+        undefined,
+        recorded.refills,
+      );
       if (failed === undefined) break;
       // A fieldless step whose submit the page kept disabled typed and clicked nothing, so it
       // waits for its screen again within the screen's own wait. A step with fields ends: the

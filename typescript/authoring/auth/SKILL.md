@@ -289,6 +289,11 @@ Flows vary. A login may be passwordless (identifier, then a code or a link), ask
 password, offer several code methods, or ask you to approve on another device. Record every screen
 the sign-in shows, a code screen included: the tool's runs replay only the screens you recorded and
 never look for another, so a run that meets a screen you did not record requests sign-in repair.
+Some sites answer the password with a screen that asks for it again together with a one-time
+code, the password field empty beside the code field: map that screen as one `signInStep` with
+both fields. The host fills the password there once more, records that the screen asks for it
+again, and each run enters it with the code on that screen alone. A screen that asks for the
+password again without a code is no such screen: treat it as a possible rejection.
 When an observed screen asks the caller to follow an email link or approve on another device,
 submit `signInStep: { approval: "email_link" }` or `{ approval: "device" }`, with the same popup
 relation if that screen is in the popup. The host asks the caller through a protected confirmation
