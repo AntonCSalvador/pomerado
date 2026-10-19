@@ -33,18 +33,25 @@ Design it as soon as you know the page and its inputs, and run it once the examp
 
 - Set every optional input and filter the example left unset, together, in one case. Take each
   value from what the site shows: an option in the page's own picker or filter panel, or a value
-  in the example's own output rows, chosen so rows still come back with every filter applied: a
-  status one of those rows has, a date range around their dates, a price ceiling above one row's
-  price, a category the page lists. Never a person's, account's or record's name, number, code or
+  in the example's own output rows. Choose each value so it excludes something: at least one row
+  the example returned, or the site shows unfiltered, fails it, while some rows still pass every
+  filter. A status that only some of those rows have, a date range that leaves out one row's
+  date, a price ceiling below one row's price and above another's, a category the page lists
+  beside others. A value every example row already satisfies proves nothing: a tool that ignores
+  that filter passes anyway. Never a person's, account's or record's name, number, code or
   email, which Guardian refuses as a private identifier: list such a filter under `notTested`
   unless the caller's own input supplied its value.
-- Expect `result`, and say in `purpose` which row field shows each input applied. After it runs,
-  read its full output (`live_tests` action `plan`, naming the case) and check that every
-  returned row satisfies every input it set, such as each row's status the one asked for, each
-  date inside the range and each price under the ceiling, and that the tool read each input back
-  as the site applied it. A row that does not is a bug in the tool: fix the code, never the case.
+- Expect `result`, and say in `purpose`, for each input, the row field that shows it applied and
+  an example row it excludes. After it runs, read its full output (`live_tests` action `plan`,
+  naming the case) and check that every returned row satisfies every input it set, such as each
+  row's status the one asked for, each date inside the range and each price under the ceiling;
+  that the rows it excludes are absent, so the rows differ from the example's; and that the tool
+  read each input back as the site applied it. A row that breaks a filter, or a result no
+  different from the example's, is a bug in the tool: fix the code, never the case.
 - When the tool returns a list and the example did not run page two, set `next_page: true` on
   this case, so it runs page two through the cursor page one returned, under the same filters.
+  Check that page two holds rows page one did not and that they still satisfy every filter. The
+  host fails a page two whose rows were all on page one already.
 - Add a second case only for inputs that cannot be satisfied together: options of one control
   that exclude each other, filters that together leave no rows, or an input that opens a page
   with a different structure (other fields or sections). Never one case per input.
@@ -104,7 +111,9 @@ run no batch before then. Aim for a handful of cases, not dozens:
   cases rather than one probe at a time, so they're reviewed together.
 
 A blank or over-long value of a free-text input needs no live case: the input schema refuses it
-before the site is touched (core skill), and publication reads that schema. So does a value
+before the site is touched, so bound every free-text input there, non-empty and with a
+`maxLength` no longer than the site's own field takes (core skill), and
+publication reads that schema. So does a value
 outside an enum input. A free-text value the tool matches against the site's own list, such as
 a store name, that the site does not list at all (`invalid_input`, with the page's choices
 listed) can be the made-up value of the no-results case. An input is covered by a

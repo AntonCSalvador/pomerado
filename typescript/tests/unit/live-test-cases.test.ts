@@ -81,6 +81,32 @@ describe("judgeCase", () => {
     expect(judge("empty", { results: [{}] })).toMatchObject({ verdict: "fail", got: "results (1)" });
   });
 
+  // A cursor the tool ignores reloads page one: page two then repeats its rows.
+  it("fails a page two that only repeats page one's rows, and passes one that moves on", () => {
+    const results = { field: "results" };
+    const paged = (first: unknown, second: unknown) => ({
+      ...completed(first),
+      followUp: { status: "completed" as const, output: second },
+    });
+    const page = (...names: string[]) => ({ results: names.map((name) => ({ name, price: 1 })) });
+    const reordered = { results: [{ price: 1, name: "b" }, { price: 1, name: "a" }] };
+    expect(judgeCase({ expect: "result" }, paged(page("a", "b"), reordered), results)).toMatchObject({
+      verdict: "fail",
+      got: "results (2)",
+    });
+    // A subset of page one's rows is a repeat too.
+    expect(judgeCase({ expect: "result" }, paged(page("a", "b"), page("b")), results).verdict).toBe("fail");
+    // A page two that holds one new row moves on, though the list shifted by a row.
+    expect(judgeCase({ expect: "result" }, paged(page("a", "b"), page("b", "c")), results).verdict).toBe(
+      "pass",
+    );
+    // An empty page two is judged as before, and a details read has no list to compare.
+    expect(judgeCase({ expect: "result" }, paged(page("a"), page()), results).verdict).toBe("fail");
+    expect(
+      judgeCase({ expect: "result" }, paged({ title: "a" }, { title: "a" }), undefined).verdict,
+    ).toBe("pass");
+  });
+
   it("judges a details record by its values, never by its empty lists", () => {
     const record = { title: "Lamp", price: 10, images: [], variants: [] };
     expect(judgeCase({ expect: "result" }, completed(record), undefined).verdict).toBe("pass");

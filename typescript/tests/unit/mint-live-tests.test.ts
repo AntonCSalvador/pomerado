@@ -1254,6 +1254,69 @@ it("counts a signed-in read's test inputs across live_tests and execute", async 
   ]);
 });
 
+// A takeover keeps a signed-in read's count: an input that ran before it runs again for free, and a
+// third distinct input stays refused.
+it("keeps a signed-in read's counted inputs across a takeover", async () => {
+  const { host, batches } = liveTestHost({});
+  const checkpoints: { agent: MintAgentSnapshot; harness: MintHarnessSnapshot }[] = [];
+  const files = {
+    "src/tool.ts": toolSource,
+    "src/sign-in.ts": toolSource,
+    "test/cases.json": JSON.stringify({ ...combined, cases: [...combined.cases, thirdCase] }),
+  };
+  const before = checkpointingMinter(
+    (index) =>
+      [
+        call("execute", signInStep, "sign_in"),
+        call("execute", example, "example"),
+        call("live_tests", { ...runAll, cases: ["every-filter", "other-sort"] }, "run"),
+      ][index] ?? prose(),
+  );
+  const first = await fixture(() => prose(), {
+    model: before.model,
+    liveTests: host,
+    deadline: Deadline.after(30 * 60_000),
+    reviewAndExecute: signingIn,
+    agentRecovery: {
+      save: (agent, harness) =>
+        Effect.sync(() => {
+          checkpoints.push({ agent, harness });
+        }),
+    },
+  }, read);
+  await writeWorkspace((first.workspace as unknown as { root: string }).root, files);
+  await first.run().catch(() => undefined);
+  const saved = checkpoints.find((checkpoint) => (checkpoint.harness.liveTests ?? []).length > 0);
+  if (saved === undefined) throw new Error("No checkpoint with live test results");
+  // The checkpoint round-trips as a stored one does.
+  const stored = Schema.decodeUnknownSync(MintHarnessSnapshot)(
+    JSON.parse(JSON.stringify(saved.harness)),
+  );
+
+  const after = checkpointingMinter(
+    (index) =>
+      [
+        call("live_tests", { ...runAll, cases: ["every-filter"] }, "again"),
+        call("live_tests", { ...runAll, cases: ["third"] }, "third"),
+      ][index] ?? prose(),
+  );
+  const second = await fixture(() => prose(), {
+    model: after.model,
+    liveTests: host,
+    deadline: Deadline.after(30 * 60_000),
+    reviewAndExecute: signingIn,
+    agentRecovery: { initial: { agent: saved.agent, harness: stored }, save: () => Effect.void },
+  }, read);
+  await writeWorkspace((second.workspace as unknown as { root: string }).root, files);
+  await second.run().catch(() => undefined);
+  expect(statuses(resultOf(after.requests[1], "again"))).toEqual({ "every-filter": "pass" });
+  expect(resultOf(after.requests[2], "third")).toMatchObject({ status: "limit" });
+  expect(batches.map((batch) => batch.cases.map((testCase) => testCase.id))).toEqual([
+    ["every-filter", "other-sort"],
+    ["every-filter"],
+  ]);
+});
+
 // A host on the contract before signed-in batches never declares them, and would run a signed-in
 // read's cases on new browsers with no session: such a read keeps proving its tool with its example.
 it("runs no live tests for a signed-in read on a host that does not support signed-in batches", async () => {

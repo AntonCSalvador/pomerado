@@ -454,6 +454,26 @@ const resultShape = (output: unknown, list: PrimaryList | undefined) => {
   return { empty: false, got: "a result" };
 };
 
+/** A list read's rows in an output, or undefined when it holds no such list. */
+const rowsOf = (output: unknown, list: PrimaryList): readonly unknown[] | undefined => {
+  const items = list.field === undefined ? output : isRecord(output) ? output[list.field] : undefined;
+  return Array.isArray(items) ? items : undefined;
+};
+
+/**
+ * Whether a list's page two holds rows and every one of them was already on page one, as when the
+ * tool ignored the cursor and read page one again. A page two with one new row moves on.
+ */
+const repeatsPageOne = (run: LiveTestCaseRun, list: PrimaryList | undefined) => {
+  if (list === undefined || run.outcome.status !== "completed") return false;
+  if (run.followUp?.status !== "completed") return false;
+  const first = rowsOf(run.outcome.output, list);
+  const second = rowsOf(run.followUp.output, list);
+  if (first === undefined || second === undefined || second.length === 0) return false;
+  const seen = new Set(first.map(canonical));
+  return second.every((row) => seen.has(canonical(row)));
+};
+
 const inconclusiveDetail: Readonly<Record<LiveTestInconclusiveReason, string>> = {
   challenge: "The site challenged this browser; the host stopped the case. It does not count against the tool.",
   host: "The browser or the host failed, not the tool. Run the case again.",
@@ -499,7 +519,13 @@ export const judgeCase = (
       if (testCase.expect === "result")
         return shape.empty
           ? { ...base, verdict: "fail", detail: `${page}Expected results, but the tool returned ${shape.got}.` }
-          : { ...base, verdict: "pass" };
+          : repeatsPageOne(run, list)
+            ? {
+                ...base,
+                verdict: "fail",
+                detail: `${page}Every row page 2 returned was already on page 1: the tool read page 1 again instead of the page the cursor names. Fix how the tool applies its cursor.`,
+              }
+            : { ...base, verdict: "pass" };
       if (testCase.expect === "empty")
         return shape.empty
           ? { ...base, verdict: "pass" }
