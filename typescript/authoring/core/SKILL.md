@@ -169,9 +169,15 @@ input or a question at run time. When a caller could reasonably want another val
 with `defaultedInput(schema, answeredValue)` from the runtime, an optional input whose published
 schema shows that default and whose run gets it when the caller leaves it out, and say in its
 description that it defaults to what the owner chose; keep it fixed with no input only where
-varying it would be unsafe or meaningless. A write asks
+varying it would be unsafe or meaningless. A choice that changes what the caller buys or pays,
+or whether the action can be cancelled or refunded, such as a paid add-on, a rate, fare or plan
+tier, a refundable option, shipping speed, how much of a balance to pay, the payment method or
+the delivery address, never takes one owner's answer as its default: it stays a required input
+or a declared question, and only declining it, turning it off or the option that adds no cost
+and keeps the action cancellable may be its optional input's default. A write asks
 before its first commit step: after one, until `verified()`, the runtime refuses every question
-but a code the site asks for at that step (caller-input skill). An input that tailors the answer on a read is the
+but a code the site asks for at that step and one declared `afterCommit` because the site first
+offers it past a saved step (caller-input skill). An input that tailors the answer on a read is the
 exception: it is optional unless the task can't run without it (below).
 
 - The code works for every value the schema accepts. Never let the schema promise what

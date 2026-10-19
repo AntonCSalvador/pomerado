@@ -157,6 +157,15 @@ already asked for, or to solve a CAPTCHA.
      string passed to `fill`, `type` or `pressSequentially` or a field of a request to this
      site (core skill); the published script never holds a handle and asks for the value
      with `ask` instead.
+   - `afterCommit: true`, on any of these: a write may ask it after it entered a commit
+     step and before `verified()`. Ask every question before the first commit mark where
+     the page lets you, reading options in a step that saves nothing. Declare `afterCommit`
+     only for a question whose options or fields the site first shows past a saved step,
+     such as the delivery slots for the cart that step filled, or the card fields of a
+     payment step that comes after a saved checkout step. Never declare it for a value the
+     input could carry, a choice the owner settled, or anything the page shows before the
+     mark: the runtime refuses any other question after a mark (`AskedAfterCommit`), and
+     publication review refuses an `afterCommit` it cannot back from the captures.
    - For a payment card the checkout requires, ask for every part its card form shows
      at once, in one request with one `secret` question for each part: `card_number`,
      `card_expiry`, `card_cvc` and `billing_postal_code`. Those handles go only into a
@@ -220,9 +229,9 @@ on it.
 - `AskedAfterCommit`: a write asked after it entered a commit step (`enteringCommit`) and
   before `verified()` confirmed the write, so the site may already hold part of the write, such
   as a saved draft, while the caller decides.
-  Nobody is asked. Only a one-time or authenticator code the site asks for at that step may
-  be asked after it. Ask every other question before the first commit step, or take the value
-  from the input.
+  Nobody is asked. Only a one-time or authenticator code the site asks for at that step, or a
+  question declared `afterCommit` (above), may be asked after it. Ask every other question,
+  card questions included, before the first commit step, or take the value from the input.
 
 Let these failures end the run. Never catch one to pick a default, the first option or
 a guessed value. For a write, ask before its first commit step, so an unanswered question

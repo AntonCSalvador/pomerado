@@ -318,10 +318,12 @@ when a caller could reasonably want another value, make it an optional input who
 answered value (`defaultedInput`, .agents/core/SKILL.md) and say so in its description; keep it
 fixed, with no input, only where varying it would be unsafe or meaningless. Never make it a
 required input or a question the tool asks when it runs. An answer that gives only this run's
-value, such as which customer or date, is this run's input. A paid add-on, the payment method and
-the delivery address stay an input or a declared question for every caller: an answer may default
-one to declining or off, never to accepting, keeping or choosing one
-(.agents/writes/SKILL.md). No request or answer authorizes made-up values:
+value, such as which customer or date, is this run's input. A choice that changes what the
+caller buys or pays, or whether the action can be cancelled or refunded, such as a paid add-on, a
+rate or plan tier, shipping speed, the payment method or the delivery address, stays a required
+input or a declared question for every caller: an answer may default it only to declining, off
+or the option that adds no cost, never to accepting, keeping or choosing one
+(.agents/core/SKILL.md, .agents/writes/SKILL.md). No request or answer authorizes made-up values:
 words such as synthetic, sample or test data settle no value or choice. A caller that wants
 invented values supplies them itself, as its answers to your questions. Guardian denies a live
 step that types or submits a value none of those supplied, naming the field. Signed out,

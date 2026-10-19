@@ -24,15 +24,24 @@ import {
 const Prompt = ConfirmQuestion.fields.prompt;
 const Selections = Schema.Int.pipe(Schema.between(0, 50));
 
+/**
+ * Marks a question a write may ask after it entered a commit step and before `verified()`: one
+ * the site first offers past a saved step, such as the delivery slots for the cart that step
+ * filled or the card fields of a checkout's payment step. Publication review judges each one.
+ */
+const AfterCommit = Schema.optional(Schema.Literal(true));
+
 export const ScriptQuestionDeclaration = Schema.Union(
   Schema.Struct({
     type: Schema.Literal("choice"),
     prompt: Prompt,
     allowOther: Schema.optional(Schema.Boolean),
+    afterCommit: AfterCommit,
   }),
   Schema.Struct({
     type: Schema.Literal("multi_choice"),
     prompt: Prompt,
+    afterCommit: AfterCommit,
     /** At least one when absent. */
     minSelections: Schema.optional(Selections),
     /** Every offered option when absent; never more than the page offers. */
@@ -42,17 +51,20 @@ export const ScriptQuestionDeclaration = Schema.Union(
     type: Schema.Literal("text"),
     prompt: Prompt,
     maxLength: TextQuestion.fields.maxLength,
+    afterCommit: AfterCommit,
   }),
   Schema.Struct({
     type: Schema.Literal("confirm"),
     prompt: Prompt,
     followUp: ConfirmQuestion.fields.followUp,
+    afterCommit: AfterCommit,
   }),
   Schema.Struct({
     type: Schema.Literal("secret"),
     prompt: Prompt,
     secretKind: SecretQuestion.fields.secretKind,
     maxLength: SecretQuestion.fields.maxLength,
+    afterCommit: AfterCommit,
   }),
   // The pre-unification shape, `{ prompt }`, kept for published revisions: a single choice.
   Schema.Struct({ prompt: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(500)) }),
@@ -133,13 +145,16 @@ export const askedQuestionIds = (asked: unknown): readonly string[] =>
 
 /**
  * A question a write may still ask after a commit step: a code the site sends or asks for at that
- * step, such as one that confirms the submission, which no earlier question could ask for.
+ * step, such as one that confirms the submission, or one its contract declares `afterCommit`,
+ * whose options or fields the site first offers past a saved step. No earlier question could ask
+ * for either.
  */
 export const askableAfterCommit = (declaration: ScriptQuestionDeclaration | undefined) =>
   declaration !== undefined &&
   "type" in declaration &&
-  declaration.type === "secret" &&
-  (declaration.secretKind === "one_time_code" || declaration.secretKind === "totp");
+  (declaration.afterCommit === true ||
+    (declaration.type === "secret" &&
+      (declaration.secretKind === "one_time_code" || declaration.secretKind === "totp")));
 
 /** A commit mark's name as the message may carry it: a short identifier, never a runtime value. */
 const markName = /^[A-Za-z][A-Za-z0-9_-]{0,47}$/u;
@@ -152,7 +167,7 @@ const markName = /^[A-Za-z][A-Za-z0-9_-]{0,47}$/u;
 export const askedAfterCommit = (id: string, step: string) =>
   new ScriptInputFailure({
     code: "AskedAfterCommit",
-    message: `${questionIdPattern.test(id) ? `Script question ${id}` : "A script question"} was asked after the commit step ${markName.test(step) ? `${step} ` : ""}was entered, so the site may already hold part of this write. Ask every question before the first enteringCommit, or take the value from the input; until verified() confirms the write, only a code the site sends at that step may be asked.`,
+    message: `${questionIdPattern.test(id) ? `Script question ${id}` : "A script question"} was asked after the commit step ${markName.test(step) ? `${step} ` : ""}was entered, so the site may already hold part of this write. Ask every question before the first enteringCommit, or take the value from the input; until verified() confirms the write, only a code the site sends at that step, or a question the contract declares afterCommit, may be asked.`,
   });
 
 /** What each asked question needs at ask time: the page's options for a choice, else nothing. */
@@ -168,8 +183,8 @@ export type AskSpecOf<Declaration> = Declaration extends {
  * choice, given for another type, duplicated, too many, or selection bounds they cannot meet.
  * `AskedAfterCommit`: a write asked once one of its commit steps was entered and before
  * `verified()` confirmed it, so the site may already hold part of the write while the caller
- * decides; only a code the site sends at that
- * step may be asked then. The others mean the question could not be asked or its answer could
+ * decides; only a code the site sends at that step, or a question declared `afterCommit`, may
+ * be asked then. The others mean the question could not be asked or its answer could
  * not be used.
  *
  * `message`, when set, names the declared question, the option that stopped it by its number

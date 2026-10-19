@@ -140,9 +140,9 @@ export interface KernelOperationContext<
    * its code. It throws `ScriptInputFailure` when no usable answer comes, such as `NoResponse`.
    * A card question's answer is a card handle for `fillCard`, never the card itself. Once the
    * script entered a commit step (`enteringCommit`), and until `verified()` confirms the write,
-   * it asks only for a one-time or authenticator code the site asks for at that step and refuses
-   * anything else as `AskedAfterCommit`, asking nobody: ask every other question before the first
-   * commit step.
+   * it asks only for a one-time or authenticator code the site asks for at that step, or a
+   * question the contract declares `afterCommit`, and refuses anything else as
+   * `AskedAfterCommit`, asking nobody: ask every other question before the first commit step.
    */
   readonly ask: ScriptAsk<Questions>;
   /** Asks one declared question and returns its answer itself, not one answer per id. */
@@ -245,7 +245,7 @@ type Declared = ScriptQuestionDeclarations[string];
  * How far a run's write has come, as its questions see it: the first commit step the script
  * entered since its write was last confirmed (`verified`), live or offline, and the questions its
  * contract declares. While a step is entered and unconfirmed, a question other than a code the
- * site asks for is refused (`askedAfterCommit`).
+ * site asks for or one declared `afterCommit` is refused (`askedAfterCommit`).
  */
 interface WriteProgress {
   entered: string | undefined;

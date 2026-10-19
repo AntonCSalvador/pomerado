@@ -149,6 +149,16 @@ describe("asksAsDeclared", () => {
   });
 });
 
+it("reads a question declared afterCommit from a draft", () => {
+  const source = operation(
+    `{name:"book",input:Schema.Unknown,output:Schema.Unknown,questions:{slot:{type:"choice",prompt:"Which delivery slot should I book?",afterCommit:true}}}`,
+  );
+  expect(draftQuestionDeclarationFailure("src/tool.mjs", source)).toBeUndefined();
+  expect(draftQuestionDeclarations("src/tool.mjs", source)).toEqual({
+    slot: { type: "choice", prompt: "Which delivery slot should I book?", afterCommit: true },
+  });
+});
+
 describe("a local operation's questions", () => {
   const asking = operation(
     `{name:"ask_note",input:Schema.Unknown,output:Schema.Unknown,questions:{note:{type:"text",prompt:"Which note should I keep?"}}}`,
@@ -267,6 +277,13 @@ describe("card questions in a script", () => {
 describe("a question asked after a commit mark", () => {
   const questions = {
     line_kind: { type: "choice", prompt: "Which kind of line should I add?" },
+    slot: { type: "choice", prompt: "Which delivery slot should I book?", afterCommit: true },
+    card: {
+      type: "secret",
+      secretKind: "card_number",
+      prompt: "Card number?",
+      afterCommit: true,
+    },
     code: {
       type: "secret",
       secretKind: "one_time_code",
@@ -351,6 +368,30 @@ describe("a question asked after a commit mark", () => {
       expect(result.left.message).toMatch(/^A script question was asked after the commit step was entered/u);
       for (const said of ["Ada", "4242"]) expect(result.left.message).not.toContain(said);
     }
+  });
+
+  // Options a saved step first shows, such as the delivery slots for the cart it filled, can only
+  // be asked after that step: the contract declares such a question afterCommit, where the
+  // publication review reads it.
+  it("asks a question its contract declares afterCommit, once a step entered its mark", async () => {
+    const { result, asked } = await run(
+      write(
+        `async ({ ask, enteringCommit }) => { enteringCommit("save_draft"); const slot = (await ask({ slot: { options: [{ value: "am", label: "Morning" }] } })).slot; const card = (await ask(["card"])).card; return { slot, card: card.length > 0 }; }`,
+      ),
+    );
+    expect(Either.isRight(result) && result.right.output).toEqual({ slot: "am", card: true });
+    expect(asked.map((request) => request.questions[0]?.id)).toEqual(["slot", "card"]);
+  });
+
+  it("still refuses an undeclared question asked beside one declared afterCommit", async () => {
+    const { result, asked } = await run(
+      write(
+        `async ({ ask, enteringCommit }) => { enteringCommit("save_draft"); return await ask({ slot: { options: [{ value: "am", label: "Morning" }] }, line_kind: ${lineOptions} }); }`,
+      ),
+    );
+    expect(asked).toEqual([]);
+    expect(Either.isLeft(result) && result.left).toMatchObject({ code: "AskedAfterCommit" });
+    if (Either.isLeft(result)) expect(result.left.message).toContain("line_kind");
   });
 
   it("asks again once verified() confirmed the write, which is then whole", async () => {
