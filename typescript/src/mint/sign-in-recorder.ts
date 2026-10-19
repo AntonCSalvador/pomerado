@@ -55,7 +55,12 @@ import {
   refusedRefill,
   settleMinter,
 } from "./autofill-filled.js";
-import { identityRefusal, maskedMethodRefusal, stepIdentityRefusal } from "./autofill-guards.js";
+import {
+  identityNotices,
+  identityRefusal,
+  maskedMethodRefusal,
+  stepIdentityRefusal,
+} from "./autofill-guards.js";
 import {
   ambiguousRecoveredCode,
   codeAskedAgain,
@@ -130,6 +135,26 @@ const entryOf = (url: string | undefined) => {
   parsed.hash = "";
   return parsed.href;
 };
+
+/**
+ * Whether a recorded selector or check holds `[private]`, the mask the local minter sees in place
+ * of every value it was given (`inputs/secrets.ts`). It stands for this account's identity or a
+ * secret, and would publish with the tool; the shared guards match values and other masks.
+ */
+const holdsMask = (text: string | undefined) => text?.toLowerCase().includes("[private]") === true;
+
+/** The index of a screen's first recorded selector that holds the mask, or -1. */
+const maskedSelector = (step: Extract<SignInStep, { readonly fields: unknown }>) =>
+  [
+    ...(step.rejectedMarkers ?? []).map((marker) => marker.selector),
+    ...step.fields.flatMap((field) =>
+      "questionSelector" in field && field.questionSelector !== undefined
+        ? [field.selector, field.questionSelector]
+        : [field.selector],
+    ),
+    ...(step.submit === undefined ? [] : [step.submit]),
+    ...(step.methods ?? []).map((option) => option.selector),
+  ].findIndex(holdsMask);
 
 /** A host call that failed, as the build's failure. */
 const unavailable = (
@@ -253,11 +278,16 @@ export const makeSignInRecorder = (input: {
   /** Every screen the build filled, and where the current sign-in's start. */
   const screens: AutofillScreens[number][] = [];
   let signInStart = 0;
+  /** The recorded markers the page showed right after the latest screen's submit, until the next. */
+  let afterSubmit:
+    | { readonly open: AutofillSignInState; readonly slots: readonly CredentialRejectedField[] }
+    | undefined;
 
   const close = () => {
     h.autofillSignIn.current = undefined;
     entry = undefined;
     codeTyped = false;
+    afterSubmit = undefined;
   };
 
   /**
@@ -367,6 +397,11 @@ export const makeSignInRecorder = (input: {
       settleMinter(h, h.autofillSignIn.current);
       const masked = maskedMethodRefusal(h, request);
       if (masked !== undefined) return shown(yield* masked);
+      const holding = maskedSelector(request);
+      if (holding !== -1)
+        return shown(
+          yield* refusedStep(h, "selector_names_contact", holding, identityNotices.selectors),
+        );
       let held = login.held();
       step = values.resolve(request, held);
       if (step.fields.some((field) => field.slot === "password") && heldPasswordRejected(h))
@@ -429,6 +464,7 @@ export const makeSignInRecorder = (input: {
       const reasked = reasksPassword(open, step, refills);
       yield* armStep(state, step, inspected, filled, secretIn);
       if (reasked) noteRefill(state);
+      afterSubmit = undefined;
       const report = yield* hooks.fill({ step, values: filled, inspection: inspected });
       settleAutofillValues(h, step, previous, report);
       screens.push(screenOf(step, inspected));
@@ -442,6 +478,19 @@ export const makeSignInRecorder = (input: {
       if (maySend(report)) {
         state.mayHaveSent = true;
         addFilledSecrets(h, submitFilled(state).filter(isSecret));
+        // A site's message can be gone before the minter reports it, so the recorded markers
+        // that show right after the submit count too, until the next screen.
+        if (
+          h.autofillSignIn.current === state &&
+          state.steps.some((recorded) => (recorded.rejectedMarkers ?? []).length > 0)
+        ) {
+          const seen = yield* recordedRejections(
+            state.hooks,
+            state.steps.map(recipeStep),
+            h.reportCorrelation,
+          );
+          afterSubmit = { open: state, slots: seen === "unavailable" ? [] : seen };
+        }
       }
       const refusal = typingRefusal(step, report);
       if (refusal !== undefined)
@@ -516,7 +565,7 @@ export const makeSignInRecorder = (input: {
       };
     });
 
-  /** The recorded error markers of the open sign-in that the page shows now. */
+  /** The recorded error markers of the open sign-in that the page shows now or showed right after the latest submit. */
   const visibleRejections = (requestedSlot: CredentialRejectedField) =>
     Effect.gen(function* () {
       const open = h.autofillSignIn.current;
@@ -530,7 +579,8 @@ export const makeSignInRecorder = (input: {
         return yield* unavailable("autofill.rejection_marker", {
           context: { requestedSlot, steps: open.steps.length },
         });
-      return observed;
+      const seenAfterSubmit = afterSubmit?.open === open ? afterSubmit.slots : [];
+      return [...new Set([...observed, ...seenAfterSubmit])];
     });
 
   /**
@@ -659,6 +709,14 @@ export const makeSignInRecorder = (input: {
         )
       )
         return shown(yield* unsubmitted(h, open));
+      if ([indicator.selector, indicator.urlPath, indicator.openPath].some(holdsMask))
+        return shown(
+          result({
+            signedIn: false,
+            failed: "indicator_holds_identity",
+            nextStep: identityNotices.indicator,
+          }),
+        );
       const named = identityRefusal(h, open, indicator);
       if (named !== undefined) return shown(named);
       const { refusal } = markerRefusalFor(indicator, input.signedOutPages(), signInPaths(open));

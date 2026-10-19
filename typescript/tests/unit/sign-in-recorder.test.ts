@@ -62,6 +62,8 @@ interface Options {
   readonly approve?: boolean;
   /** The selectors that show on the page now, which a rejection's marker names. */
   readonly visible?: readonly string[];
+  /** A selector the page shows once the first fill clicked its submit, as a site's message does. */
+  readonly toast?: string;
   /** The pages the build saw signed out. */
   readonly signedOutPages?: readonly SignedOutSnapshot[];
   /** How many checks the page answers before it draws the marker. */
@@ -86,6 +88,8 @@ const harness = (options: Options = {}) => {
     Object.entries(options.answers ?? {}).map(([id, values]) => [id, [...values]]),
   );
   let hidden = options.lateMarker ?? 0;
+  /** The selectors the page shows now; a test takes one away as the site's message goes. */
+  const shown = new Set(options.visible ?? []);
   const inspect = (step: AutofillStep) =>
     Effect.sync((): AutofillInspection => {
       let box = 0;
@@ -118,6 +122,7 @@ const harness = (options: Options = {}) => {
       Effect.sync(() => {
         filled.push({ step, values: [...values] });
         given.push(values);
+        if (options.toast !== undefined && filled.length === 1) shown.add(options.toast);
         return (
           options.report?.(step) ?? {
             outcome: "filled" as const,
@@ -145,8 +150,7 @@ const harness = (options: Options = {}) => {
     onRequest: () => () => {},
     authenticationOrigins: [],
     open: () => Effect.void,
-    markerVisible: (selector: string) =>
-      Effect.succeed(options.visible?.includes(selector) === true),
+    markerVisible: (selector: string) => Effect.succeed(shown.has(selector)),
   };
   const ask: InputAsker = (request) =>
     Effect.sync(() => {
@@ -192,7 +196,7 @@ const harness = (options: Options = {}) => {
   /** Runs `use` with the recorder. */
   const run = <A, E>(use: (made: typeof recorder) => Effect.Effect<A, E>) =>
     Effect.runPromise(use(recorder));
-  return { run, asked, logins, filled, given, reviewed, confirmed };
+  return { run, asked, logins, filled, given, reviewed, confirmed, shown };
 };
 
 const identifierAndPassword: SignInStep = {
@@ -475,10 +479,54 @@ it("refuses an indicator, a selector or a page that names the account, typing no
   );
 });
 
-it("refuses a selector holding the placeholder the minter saw for a password, not one holding [private]", async () => {
+/** What the minter reads when a recorded selector names the account. */
+const selectorsNotice =
+  'A screen\'s selectors and submit publish with the tool, so they never name this account\'s username, email, phone or account number (such as a "Continue as …" button or a data attribute holding it). Name each control by its role, label or a stable attribute, and send the step again.';
+
+it("refuses a recorded selector holding [private], the mask the minter sees for every value it was given, typing nothing", async () => {
   const host = harness({ held: account });
   await host.run((recorder) =>
     Effect.gen(function* () {
+      // The page said "No account found for [private]", and the minter recorded that as the
+      // username's error.
+      const marker = yield* recorder.step(
+        {
+          ...identifierAndPassword,
+          rejectedMarkers: [{ slot: "username", selector: "text=No account found for [private]" }],
+        },
+        undefined,
+        Effect.void,
+      );
+      expect(marker.result).toEqual({
+        step: { outcome: "refused", reason: "selector_names_contact", target: 0 },
+        nextStep: selectorsNotice,
+      });
+      for (const step of [
+        { fields: [{ selector: "#user", accepts: ["username"] }], submit: "#go-[private]" },
+        {
+          fields: [
+            {
+              selector: "#answer",
+              slot: "private_answer",
+              questionSelector: "text=Hello [private]",
+            },
+          ],
+          submit: "#next",
+        },
+        {
+          fields: [],
+          submit: "#send",
+          methods: [{ method: "email", selector: "text=Email [private]" }],
+        },
+      ] satisfies SignInStep[]) {
+        const refused = yield* recorder.step(step, undefined, Effect.void);
+        expect(refused.result).toMatchObject({
+          step: { outcome: "refused", reason: "selector_names_contact" },
+        });
+      }
+      expect(host.filled).toEqual([]);
+      expect(host.reviewed).toEqual([]);
+      // The placeholders another host's minter sees are refused by the shared guard as before.
       const placeholder = yield* recorder.step(
         {
           fields: [{ selector: "#user", accepts: ["username"] }],
@@ -491,14 +539,29 @@ it("refuses a selector holding the placeholder the minter saw for a password, no
         step: { outcome: "refused", reason: "selector_names_contact" },
       });
       expect(host.filled).toEqual([]);
-      const other = yield* recorder.step(
-        { fields: [{ selector: "#user", accepts: ["username"] }], submit: "#go-[private]" },
+    }),
+  );
+});
+
+it("refuses a signed-in check holding [private] before it reads the page", async () => {
+  const host = harness({ held: account });
+  const result = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(identifierAndPassword, undefined, Effect.void);
+      return yield* recorder.step(
+        { signedIn: { selector: "text=Hi [private]" } },
         undefined,
         Effect.void,
       );
-      expect(other.report).toMatchObject({ outcome: "filled" });
     }),
   );
+  expect(result.result).toEqual({
+    signedIn: false,
+    failed: "indicator_holds_identity",
+    nextStep:
+      "The signed-in check names this account's own identity, which publishes with the tool and fails for every other login. Name a marker every signed-in account shows, such as a sign-out control or the account menu, never the account's name, email or number, then inspect read-only and correct the sign-in steps from the page's evidence.",
+  });
+  expect(host.confirmed).toEqual([]);
 });
 
 it("refuses a password screen before any identifier screen while the build holds no login", async () => {
@@ -664,6 +727,38 @@ it("takes no verdict on a reported rejection no recorded marker shows, and asks 
     nextStep:
       "No recorded error marker for the password shows on the page, so the host neither marks the login nor asks its owner. If the page shows the site's error for that field, send that screen's signInStep again with the error as its rejectedMarkers, then report the rejection again. Otherwise explore read-only to see the page, then inspect read-only and correct the sign-in steps from the page's evidence.",
   });
+  expect(host.logins).toEqual([]);
+});
+
+it("takes a rejected password whose recorded marker showed right after the host's submit, though it went before the report", async () => {
+  const host = harness({
+    toast: "#wrong-password",
+    corrections: [{ ...account, password: "corrected-password" }],
+  });
+  const result = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(markedLogin, undefined, Effect.void);
+      // The site's message showed for a few seconds and went before the minter reported it.
+      host.shown.clear();
+      return yield* recorder.step(rejectedPassword, undefined, Effect.void);
+    }),
+  );
+  expect(result.result).toMatchObject({ corrected: true });
+  expect(host.logins).toEqual(["missing_credentials", "invalid_credentials:password:2"]);
+});
+
+it("keeps the markers it read right after a submit only until the next screen", async () => {
+  const host = harness({ held: account, toast: "#wrong-password" });
+  const result = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(markedLogin, undefined, Effect.void);
+      host.shown.clear();
+      // The next screen's submit showed no error, so the earlier message no longer counts.
+      yield* recorder.step(passwordOnly, undefined, Effect.void);
+      return yield* recorder.step(rejectedPassword, undefined, Effect.void);
+    }),
+  );
+  expect(result.result).toMatchObject({ rejected: false, reason: "no_rejection_marker" });
   expect(host.logins).toEqual([]);
 });
 

@@ -9,6 +9,13 @@ import { type AutofillHost, autofillRecovery, refusedStep, result } from "./auto
 
 type Host = AutofillHost;
 
+/** What the minter reads when a recorded selector, or a signed-in check, names this account. */
+export const identityNotices = {
+  selectors:
+    "A screen's selectors and submit publish with the tool, so they never name this account's username, email, phone or account number (such as a \"Continue as …\" button or a data attribute holding it). Name each control by its role, label or a stable attribute, and send the step again.",
+  indicator: `The signed-in check names this account's own identity, which publishes with the tool and fails for every other login. Name a marker every signed-in account shows, such as a sign-out control or the account menu, never the account's name, email or number, ${autofillRecovery}.`,
+} as const;
+
 /** The login's identifiers this sign-in knows: the held login's and the owner's answers. */
 const identityValues = (
   h: Host,
@@ -58,7 +65,7 @@ export const identityRefusal = (h: Host, open: AutofillSignInState, indicator: A
     ? result({
         signedIn: false,
         failed: "indicator_holds_identity",
-        nextStep: `The signed-in check names this account's own identity, which publishes with the tool and fails for every other login. Name a marker every signed-in account shows, such as a sign-out control or the account menu, never the account's name, email or number, ${autofillRecovery}.`,
+        nextStep: identityNotices.indicator,
       })
     : undefined;
 
@@ -105,12 +112,7 @@ export const stepIdentityRefusal = (
   ];
   const named = selectors.findIndex((selector) => namesIdentity(selector, values));
   if (named !== -1)
-    return refusedStep(
-      h,
-      "selector_names_contact",
-      named,
-      "A screen's selectors and submit publish with the tool, so they never name this account's username, email, phone or account number (such as a \"Continue as …\" button or a data attribute holding it). Name each control by its role, label or a stable attribute, and send the step again.",
-    );
+    return refusedStep(h, "selector_names_contact", named, identityNotices.selectors);
   // An address may carry a value percent-encoded, such as an email's `@` as `%40`.
   const encoded = values.map((value) => encodeURIComponent(value).toLowerCase());
   if (namesIdentity(page, [...values, ...encoded]))
