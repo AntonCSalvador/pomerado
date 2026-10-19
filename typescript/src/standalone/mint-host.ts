@@ -106,6 +106,7 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
         Effect.mapError(askError),
       ),
     recordBuildEffect: (effect) => Effect.sync(() => context.setBuildEffect(effect)),
+    entryNavigation: context.entryNavigation,
     reviewTaskUpdate: (candidate) =>
       context.reviewTaskUpdate(candidate).pipe(
         Effect.map((result) => ({ ...result.decision, reviewId: result.reviewId })),
@@ -219,6 +220,9 @@ export const mintRequest = (
       );
       if (context.buildEffect === undefined) return asked;
     }
+    // The request's page loads before the build's run, never during the effect question, so the
+    // run's first request says how it loaded and a first step that does not reset starts there.
+    yield* state.start.enter;
     const outcome = yield* runMint({ ...mintRequest, effect: context.buildEffect }).pipe(
       Effect.provideService(MintServices, mintDependencies(state, publicationDecisions)),
     );
