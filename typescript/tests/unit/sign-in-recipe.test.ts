@@ -212,6 +212,10 @@ describe("decodeSignInRecipe", () => {
       }),
     ]),
     [
+      "a version 5 recipe with a key this host does not know",
+      JSON.stringify({ version: 5, signInOrigins: ["https://id.example.net"], steps, signedIn }),
+    ],
+    [
       "a version 4 recipe with a key this host does not know",
       JSON.stringify({ version: 4, signInOrigins: ["https://id.example.net"], steps, signedIn }),
     ],

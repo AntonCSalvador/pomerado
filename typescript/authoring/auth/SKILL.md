@@ -178,8 +178,6 @@ attribute.
   its evidenced role, label or stable selector and purpose. The host clicks it, waiting a few
   seconds for the page to enable it, and never clicks it while it is disabled. A screen that advances by itself (the identifier fills and the password field
   appears by itself) names none; unrelated links or buttons on that page do not need a submit.
-- `submitKey: "Enter"`, in place of `submit`: a code or password screen whose form has no submit
-  control and submits on Enter. The host presses Enter in the step's last field.
   A two-factor method choice ("Text me a code", "Use my authenticator app") fills no field: list
   every method the screen offers in `methods` (`sms`, `call`, `email`, `totp`, `push` or
   `recovery_code` for "use a backup code", each with
@@ -187,6 +185,8 @@ attribute.
   method order above. The tool's runs pick again from that list. A method's selector
   publishes with the tool, so it never names the masked phone number or address the option shows
   (such as `***-1234`): use the method's own words or a stable attribute.
+- `submitKey: "Enter"`, in place of `submit`: a code or password screen whose form has no submit
+  control and submits on Enter. The host presses Enter in the step's last field.
 - Every selector and submit you send publishes with the tool, as does each screen's page address.
   None may name this account's username, email or phone: not a "Continue as …" button's text, a
   data attribute holding it, or a placeholder for it. Name a control by its role, label or a stable

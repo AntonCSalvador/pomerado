@@ -32,7 +32,7 @@ return {
   submit: submit === null ? null : { target: submit.target, described: submit.described },
   located,
   buttons,
-  ...(submitKey === null ? {} : { keySubmit: { submitControls: submit.submitControls } }),
+  ...(submitKey === null || submit === null ? {} : { keySubmit: { submitControls: submit.submitControls } }),
   ...(popupTargetId === undefined ? {} : { popupTargetId }),
   url: primary.url(),
 };`;
