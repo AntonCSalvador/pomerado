@@ -14,7 +14,7 @@ composes its script from what happened (the `writes` skill). A read tests what i
 did not exercise with a few combined live cases (the `testing` skill): a read signed out runs a
 handful, and a signed-in read one combined case that sets the optional inputs its example left
 unset, two distinct inputs at most. A write proves its tool with its act session; it never reads
-the `testing` skill or designs further tests, and checks its HTTP version once, against that run.
+the `testing` skill or designs further tests<!-- pomerado:section core.write-http-check -->.
 The scope follows what the tool is now, not what the build started as: a read that becomes a
 write, in a new build or a repair, keeps to the one run from then on, a read that signs in keeps
 to the signed-in bound from then on, and a repair that rebuilds a signed-in tool or a write as a
@@ -646,7 +646,7 @@ On a hosted browser each Playwright call is a remote round trip, and each awaite
 its own, so a read costs its number of calls, not its navigations. Read every field a page needs in
 one `evaluate`, `readRows` or snapshot per page, never one locator call per field or a probe per
 element. Prefer values the list page already holds, in its rows or its embedded data, or the
-site's own data request (http-mcp skill), to opening each record's page. When the tool must open
+site's own data request<!-- pomerado:section core.data-request-reference -->, to opening each record's page. When the tool must open
 each record's detail page, keep each to a few calls (open, wait, one read), and consider whether
 the request is better served as two tools, a search and a details read by identifier; say so in
 `coverage`.
