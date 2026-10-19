@@ -89,6 +89,10 @@ export interface TableApp {
   readonly noSummary?: boolean;
   /** While a page loads, its rows are replaced by placeholder rows without ids. */
   readonly skeleton?: boolean;
+  /** While a page loads, its rows are removed and a spinner shows instead. */
+  readonly clearRows?: boolean;
+  /** Previous and Next are bare arrows, with no label. */
+  readonly arrowsOnly?: boolean;
 }
 
 export const tableApp = (options: TableApp) => `<!doctype html>
@@ -187,9 +191,9 @@ export const tableApp = (options: TableApp) => `<!doctype html>
           '<li title="Next Page" style="display: inline-block" class="ant-pagination-next' + (nextOff ? " ant-pagination-disabled" : "") + '" aria-disabled="' + nextOff + '" data-go="' + (current + 1) + '"><button class="ant-pagination-item-link" type="button"' + (nextOff ? " disabled" : "") + '><span class="anticon" style="display: inline-block; width: 14px; height: 14px"></span></button></li></ul>';
       case "bootstrap-js":
         return '<nav aria-label="Page navigation"><ul class="pagination">' +
-          '<li class="page-item' + (prevOff ? " disabled" : "") + '"><a class="page-link" href="#" data-go="' + (current - 1) + '">Previous</a></li>' +
+          '<li class="page-item' + (prevOff ? " disabled" : "") + '"><a class="page-link" href="#" data-go="' + (current - 1) + '">' + (config.arrowsOnly ? "‹" : "Previous") + "</a></li>" +
           gaps({ gap: '<li class="page-item disabled"><span class="page-link">…</span></li>', page: (n) => '<li class="page-item' + (n === current ? " active" : "") + '"' + (n === current ? ' aria-current="page"' : "") + '><a class="page-link" href="#" data-go="' + n + '">' + n + "</a></li>" }) +
-          '<li class="page-item' + (nextOff ? " disabled" : "") + '"><a class="page-link" href="#" aria-label="Next" data-go="' + (current + 1) + '"><span aria-hidden="true">&raquo;</span></a></li></ul></nav>';
+          '<li class="page-item' + (nextOff ? " disabled" : "") + '"><a class="page-link" href="#"' + (config.arrowsOnly ? "" : ' aria-label="Next"') + ' data-go="' + (current + 1) + '">' + (config.arrowsOnly ? "›" : '<span aria-hidden="true">&raquo;</span>') + "</a></li></ul></nav>";
       default:
         return '<div class="pager"><button data-go="' + (current - 1) + '"' + (prevOff ? " disabled" : "") + '>Previous</button> <span>Page ' + current + '</span> <button data-go="' + (current + 1) + '"' + (nextOff ? " disabled" : "") + ">Next</button></div>";
     }
@@ -206,6 +210,8 @@ export const tableApp = (options: TableApp) => `<!doctype html>
     tbody.setAttribute("aria-busy", "true");
     for (const control of document.querySelectorAll("[data-go]")) control.setAttribute("aria-disabled", "true");
     if (config.identicalReload) renderRows(visibleRows());
+    if (config.clearRows) tbody.innerHTML = "";
+    if (config.clearRows) document.querySelector("#info").textContent = "Loading…";
     if (config.skeleton) tbody.innerHTML = Array.from({ length: size }, () => '<tr class="skeleton"><td class="name"></td></tr>').join("");
     await fetch("/api/wait?ms=" + delay);
     current = Math.min(Math.max(1, target), pages());

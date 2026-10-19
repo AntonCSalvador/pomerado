@@ -137,6 +137,11 @@ test.describe("pages that load in other ways", () => {
     expect(result).toMatchObject({ rows: records(28), duplicates: 0, totalResults: 28 });
   });
 
+  test("rows removed while a page loads, with only page numbers and an arrow to step by", async ({ page }) => {
+    const result = await table(page, { style: "bootstrap-js", total: 40, pageSize: 10, delays: [200], clearRows: true, arrowsOnly: true });
+    expect(result).toMatchObject({ rows: records(40), stoppedBy: "end", hasMore: false, totalResults: 40 });
+  });
+
   test("a table inside a frame is stepped through the frame's own controls", async ({ page }) => {
     await serve(page, (url) =>
       url.pathname === "/frame"
@@ -262,6 +267,11 @@ test.describe("finding and stopping", () => {
       `after: "R012", until: (row) => row.key === "R027"`,
     );
     expect(result).toMatchObject({ rows: records(14, 13), stoppedBy: "until", hasMore: true });
+  });
+
+  test("a walk that resumes after a row past the first rows of a long page reads the rest of it", async ({ page }) => {
+    const result = await table(page, { style: "datatables", total: 50, pageSize: 25 }, `after: "R015", limit: 5`);
+    expect(result).toMatchObject({ rows: records(5, 16), stoppedBy: "limit", hasMore: true });
   });
 
   test("a walk stops at its step bound and says more follow", async ({ page }) => {
@@ -532,6 +542,20 @@ test.describe("lists that grow", () => {
     await expect(page.locator("#facets > li")).toHaveCount(2);
   });
 
+  test("a growing list stopped by find or a limit says rows remain", async ({ page }) => {
+    await loadMoreList(page, { total: 15, batch: 5, ending: "removed" });
+    const result = await runPager(
+      page,
+      `const pager = listPager({ ${listSpec()} });
+       const found = await pager.find((row) => row.key === "R014");
+       return { found: { row: found.row, hasMore: found.hasMore }, limited: await listPager({ ${listSpec()} }).collect({ limit: 13 }) };`,
+    );
+    expect(result).toMatchObject({
+      found: { row: { key: "R014" }, hasMore: true },
+      limited: { rows: records(13), hasMore: true, stoppedBy: "limit" },
+    });
+  });
+
   test("a collect stops at its limit without another click", async ({ page }) => {
     await loadMoreList(page, { total: 30, batch: 8, ending: "removed" });
     expect(await collect(page, listSpec(), "limit: 5")).toMatchObject({ rows: records(5), hasMore: true, steps: 0 });
@@ -733,5 +757,60 @@ test.describe("readList through the pager, one call per page", () => {
     const { rows: _second, ...secondFields } = pageOf(records(15, 16), true, 57);
     expect(first).toEqual({ records: named(records(15)), ...firstFields });
     expect(second).toEqual({ records: named(records(15, 16)), ...secondFields });
+  });
+});
+
+test.describe("readList through the pager on lists that show no control", () => {
+  test("a 'Load more' list short enough to show no control is one page", async ({ page }) => {
+    await loadMoreList(page, { total: 5, batch: 8, ending: "removed" });
+    const tool = readerTool("append", `rows: page.locator("#rows > li")`, `await page.goto(${JSON.stringify(`${origin}/`)});`);
+    const first = await runExample(page, tool, { limit: 10 }, { siteOrigin: origin, list: {}, deadlineMs: 40_000 });
+    expect(Either.getOrThrow(first.result)).toEqual(pageOf(records(5), false, null));
+  });
+
+  test("an empty 'Load more' list answers with no rows", async ({ page }) => {
+    await serve(page, () => `<ul id="rows"></ul><p id="none">No rooms match</p>`);
+    await page.goto(`${origin}/`);
+    const tool = readerTool(
+      "append",
+      `rows: page.locator("#rows > li"), empty: page.locator("#none")`,
+      `await page.goto(${JSON.stringify(`${origin}/`)});`,
+    );
+    const first = await runExample(page, tool, { limit: 10 }, { siteOrigin: origin, list: {}, deadlineMs: 40_000 });
+    expect(Either.getOrThrow(first.result)).toEqual(pageOf([], false, null));
+  });
+
+  test("a scrolled list named as such pages through two calls", async ({ page }) => {
+    const panel = () => `<div id="panel" style="height: 200px; overflow-y: auto"><ul id="rows"></ul><div id="sentinel" style="height: 1px"></div></div>
+      <script>
+        let shown = 0;
+        const add = async () => {
+          if (shown >= 24) return;
+          await fetch("/api/wait?ms=60");
+          const until = Math.min(24, shown + 8);
+          for (; shown < until; shown += 1)
+            document.querySelector("#rows").insertAdjacentHTML("beforeend", '<li data-id="R' + String(shown + 1).padStart(3, "0") + '" style="height: 30px"><span class="name">Record ' + (shown + 1) + "</span></li>");
+        };
+        new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) add(); }, { root: document.querySelector("#panel") })
+          .observe(document.querySelector("#sentinel"));
+      </script>`;
+    await serve(page, panel);
+    const tool = readerTool("scroll", `rows: page.locator("#rows > li")`, `await page.goto(${JSON.stringify(`${origin}/`)});`);
+    const { first, second } = await twoCalls(page, tool, "list_rows", 10);
+    expect(first).toEqual(pageOf(records(10), true, null));
+    expect(second).toEqual(pageOf(records(10, 11), true, null));
+  });
+
+  test("pages whose URL parameter counts from zero are reached by number on a later call", async ({ page }) => {
+    const all = records(30);
+    await serve(page, (url) => {
+      const index = Number(url.searchParams.get("page") ?? "0");
+      const next = (index + 1) * 10 < all.length ? `<a href="/zero?page=${index + 1}">Next</a>` : `<span class="disabled">Next</span>`;
+      return `${rowsHtml(all.slice(index * 10, index * 10 + 10))}<div class="pager">${index > 0 ? `<a href="/zero?page=${index - 1}">Previous</a>` : ""}${next}</div>`;
+    });
+    const tool = readerTool("next_link", `rows: page.locator("#rows > tr")`, `await page.goto(${JSON.stringify(`${origin}/zero`)});`);
+    const { first, second } = await twoCalls(page, tool, "list_rows", 15);
+    expect(first).toEqual(pageOf(records(15), true, null));
+    expect(second).toEqual(pageOf(records(15, 16), false, null));
   });
 });

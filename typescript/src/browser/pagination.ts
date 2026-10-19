@@ -185,15 +185,12 @@ const pagerScanInPage = (rowElements, args) => {
       const parent = element.parentElement?.tagName === "LI" ? element.parentElement.parentElement : element.parentElement;
       if (parent instanceof Element && parent !== document.body) candidates.add(parent);
     }
-    // Once this pager found the list's pager, a farther one is another list's.
     const found = [...candidates]
       .filter((element) => !inRow(element))
       .map((element) => ({ element, records: recordsIn(element) }))
       .filter((entry) => pagingRecords(entry.records))
-      .map((entry) => ({ ...entry, distance: distance(entry.element, listElement) }))
-      .filter((entry) => args.reach?.controls === undefined || entry.distance <= args.reach.controls);
+      .map((entry) => ({ ...entry, distance: distance(entry.element, listElement) }));
     const nearest = Math.min(...found.map((entry) => entry.distance));
-    if (Number.isFinite(nearest) && found.length > 0) store.reach = { ...store.reach, controls: nearest };
     // Containers inside a nearer one hold the same controls; duplicates at the same distance, such
     // as a pager above the list and one below it, are both kept.
     const chosen = found.filter((entry) => entry.distance === nearest);
@@ -227,14 +224,18 @@ const pagerScanInPage = (rowElements, args) => {
     record.href = record.plain ? null : hrefOf(record.element);
   }
 
-  // A link to the page already shown, such as a last page's "Last" arrow, is no way on.
+  // A page number or bare double arrow that links to the page already shown, such as a last
+  // page's "Last" arrow, is no way on. A worded Next may be a script control whose link is the
+  // page itself, so it keeps its own state.
   const here = (() => {
     const target = new URL(location.href);
     target.hash = "";
     target.searchParams.sort();
     return target.href;
   })();
-  for (const record of records) if (record.href !== null && record.href === here && !record.plain) record.disabled = true;
+  for (const record of records)
+    if (record.href !== null && record.href === here && !record.plain && (record.kind === "number" || record.rank <= 1))
+      record.disabled = true;
   const pick = (kind) => {
     const all = records.filter((record) => record.kind === kind && record.visible);
     delete store[kind];
@@ -298,7 +299,11 @@ const pagerScanInPage = (rowElements, args) => {
     }
   }
   store.numbers = [...numbers.values()].filter((entry) => entry.enabled).map((entry) => ({ n: entry.n, element: entry.element }));
-  const currentNumbers = [...numbers.values()].filter((entry) => entry.current).map((entry) => entry.n);
+  // A page input, such as "[ 2 ] of 5", names the current page even beside other plain numbers.
+  const inputs = numberRecords.filter((record) => record.plain && record.element.tagName === "INPUT");
+  const currentNumbers = inputs.length === 1
+    ? [inputs[0].n]
+    : [...numbers.values()].filter((entry) => entry.current).map((entry) => entry.n);
   const namedCurrent = named("current")?.find(shown);
   const currentText = namedCurrent === undefined
     ? undefined
@@ -315,7 +320,7 @@ const pagerScanInPage = (rowElements, args) => {
     }
     return null;
   };
-  const urlPage = param(["page", "p", "pg", "paged", "pagenum", "page_number", "pageNumber", "pageIndex", "pageNo", "currentPage"], /^\d{1,6}$/);
+  const urlPage = param(["page", "p", "pg", "paged", "pagenum", "page_number", "pageNumber", "pageNo", "currentPage"], /^\d{1,6}$/);
   const urlOffset = param(["offset", "start", "skip", "from", "first"], /^\d{1,9}$/);
   const urlCursor = param(["cursor", "after", "before", "page_token", "pageToken", "next_token", "continuation", "token"], /^\S{1,512}$/);
 
@@ -504,7 +509,7 @@ const pagerGrowing = (mechanism) => mechanism === "append" || mechanism === "scr
 
 // What a look says about the page: its number, from the current page control, the author's
 // indicator, a "Page 2 of 10" text or the URL's own page parameter.
-const pagerPageOf = (look) => {
+const pagerPageOf = (look, urlBase) => {
   const fromText = (text) => {
     const match = /^\D*?(\d{1,6})\D*$/.exec(String(text ?? ""));
     return match === null ? null : Number(match[1]);
@@ -515,9 +520,13 @@ const pagerPageOf = (look) => {
   if (parsed.page !== undefined) return parsed.page;
   const summary = pagerParseSummary(look.summary);
   if (summary.page !== undefined) return summary.page;
-  if (look.urlPage !== null) return Number(look.urlPage.value);
+  // The URL's page parameter counts only once a step showed whether it counts from 0 or 1.
+  if (look.urlPage !== null && urlBase !== undefined) return Number(look.urlPage.value) + urlBase;
   return null;
 };
+
+// Defaults a reader sets before the author's listPager call, such as the mechanism the tool names.
+let pagerDefaults = {};
 
 const listPager = (spec) => {
   if (spec === null || typeof spec !== "object") throw new TypeError("listPager needs { rows, key }");
@@ -525,7 +534,7 @@ const listPager = (spec) => {
     throw new TypeError("listPager needs rows, a locator for every row of the list");
   if (spec.key === undefined) throw new TypeError("listPager needs key, the field that identifies a row");
   const mechanisms = ["auto", "pages", "next_link", "append", "scroll", "offset"];
-  const configured = spec.mechanism ?? "auto";
+  const configured = spec.mechanism ?? pagerDefaults.mechanism ?? "auto";
   if (!mechanisms.includes(configured))
     throw new TypeError("listPager's mechanism is one of " + mechanisms.join(", "));
   const keySpec = typeof spec.key === "string" ? { selector: spec.key }
@@ -565,8 +574,11 @@ const listPager = (spec) => {
   // page and a segment carries it as its link.
   let urlPaged = false;
   let lastStepStalled = false;
-  // How far from the list its own pager and "Load more" sit, once a look found them.
+  // How far from the list its own "Load more" sits, once a look found it.
   let reach = {};
+  // What the URL's page parameter adds to give the page number: 1 when it counts from 0, 0 when
+  // from 1, unknown until a value of 0 or a step from the first page shows it.
+  let urlBase;
 
   const look = async () => {
     for (const [name, locator] of namedLocators)
@@ -576,7 +588,8 @@ const listPager = (spec) => {
     const seen = await spec.rows.evaluateAll(pagerScanInPage, { token, key: keySpec, reach });
     if (seen.reach !== null) reach = { ...reach, ...seen.reach };
     const result = { ...seen, url: page.url() };
-    result.page = hooks.pageNumber === undefined ? pagerPageOf(result) : await hooks.pageNumber(result);
+    if (result.urlPage !== null && Number(result.urlPage.value) === 0) urlBase = 1;
+    result.page = hooks.pageNumber === undefined ? pagerPageOf(result, urlBase) : await hooks.pageNumber(result);
     result.parsed = hooks.readTotal === undefined ? pagerParseSummary(result.summary)
       : { ...pagerParseSummary(result.summary), ...hooks.readTotal(result.summary) };
     return result;
@@ -852,14 +865,30 @@ const listPager = (spec) => {
   };
   // One step on from the list as it stands, then the first count rows: for a growing list, of
   // the whole list.
+  // A step from the first page to a URL that names a page shows how its parameter counts.
+  const learnUrlBase = (before, after) => {
+    if (urlBase !== undefined || after.urlPage === null) return;
+    const value = Number(after.urlPage.value);
+    if (before.urlPage === null && (before.page ?? 1) === 1 && (value === 1 || value === 2)) urlBase = 2 - value;
+  };
+  // options.from: the page the caller last read, which the step goes on from; when the browser
+  // shows another page, the pager goes back to it first.
   const next = async (count, options = {}) => {
-    const before = await look();
+    let before = await look();
+    if (Number.isInteger(options.from) && before.page !== null && before.page !== options.from) {
+      await moveTo(options.from, before);
+      before = await look();
+    }
     const mechanism = mechanismOf(before);
     if (mechanism === "offset") throw pagerFailure("pager_no_control", "the list is on one page");
     const growing = pagerGrowing(mechanism);
     const step = await awaitStep(stepAction(before, mechanism), before, growing);
     lastStepStalled = !step.moved;
     if (step.seen.url !== before.url) urlPaged = true;
+    if (step.moved) {
+      learnUrlBase(before, step.seen);
+      step.seen.page = hooks.pageNumber === undefined ? pagerPageOf(step.seen, urlBase) : step.seen.page;
+    }
     if (!step.moved && !growing) {
       // The control led nowhere: the rows did not change once the page went quiet.
       const seen = step.seen;
@@ -872,7 +901,11 @@ const listPager = (spec) => {
   // nearest shown number toward it, else Next or Previous, one step at a time.
   const goToPage = async (target, count) => {
     if (!Number.isInteger(target) || target < 1) throw new TypeError("pager.goToPage needs a page number from 1");
-    let seen = await look();
+    await moveTo(target, await look());
+    return read(count);
+  };
+  const moveTo = async (target, from) => {
+    let seen = from;
     let current = seen.page ?? 1;
     for (let steps = 0; current !== target; steps += 1) {
       if (steps >= Math.max(limits.maxSteps, target)) throw pagerFailure("pager_page_unreachable", "page " + target + " is more than " + steps + " steps away");
@@ -899,10 +932,13 @@ const listPager = (spec) => {
       const step = await awaitStep(action, seen, false);
       if (!step.moved) throw pagerFailure("pager_page_unreachable", "the step toward page " + target + " changed nothing");
       if (step.seen.url !== seen.url) urlPaged = true;
-      seen = await look();
+      const after = await look();
+      if (landing === 2) learnUrlBase(seen, after);
+      seen = after;
+      seen.page = hooks.pageNumber === undefined ? pagerPageOf(seen, urlBase) : seen.page;
       current = seen.page ?? landing;
     }
-    return read(count);
+    return seen;
   };
   // A growing list after steps "Load more" clicks or scrolls from the list as it stands.
   const replay = async (steps, count) => {
@@ -919,9 +955,9 @@ const listPager = (spec) => {
     return read(count);
   };
   // Walks the list from where it stands, collecting each row once, until limit rows, a row until
-  // names, the list's end, maxSteps steps or the time left runs out. Rows a later page shows
-  // again are dropped and mark the list changed; a step that shows only rows already collected
-  // stops the walk, since the list went back.
+  // names, the list's end, maxSteps steps or the time left runs out. It reads the rest of a page
+  // before it steps past it. Rows a later page shows again are dropped and mark the list changed;
+  // a step that shows only rows already collected stops the walk, since the list went back.
   const walk = async (options, match) => {
     const limit = options.limit ?? Infinity;
     const maxSteps = options.maxSteps ?? limits.maxSteps;
@@ -935,16 +971,24 @@ const listPager = (spec) => {
     let steps = 0;
     let stoppedBy;
     let found = null;
-    let segment = await read(Math.max(1, Math.min(pageRows, limit === Infinity ? pageRows : limit + 1)));
+    const firstCount = skipping || limit === Infinity ? pageRows : Math.min(pageRows, limit + 1);
+    let segment = await read(Math.max(1, firstCount));
     const growing = pagerGrowing(segment.mechanism);
+    // Whether the walk began at the list's first row, so that reaching its end counted it all.
+    const fromTop = (segment.page ?? 1) === 1 && (segment.range?.from ?? 1) <= 1;
     let siteTotal = segment.totalResults;
     let lastIndex = 0;
+    let freshCount = 0;
+    // Rows this page already gave, when the walk reads more of it.
+    let pageKeys = new Set();
     // A page's likely size for the next read: the last page's, or a growing step's added rows.
     let pageSize = segment.rows.length;
     while (stoppedBy === undefined) {
-      const fresh = growing ? segment.rows.filter((row) => !keys.has(row.key)) : segment.rows;
+      const fresh = segment.rows.filter((row) => !pageKeys.has(row.key) && !(growing && keys.has(row.key)));
+      freshCount = fresh.length;
       let added = 0;
       for (const [index, row] of fresh.entries()) {
+        pageKeys.add(row.key);
         if (keys.has(row.key)) {
           duplicates += 1;
           listChanged = true;
@@ -978,11 +1022,22 @@ const listPager = (spec) => {
       if (stoppedBy !== undefined) break;
       lastIndex = fresh.length;
       if (segment.totalResults !== null) siteTotal = segment.totalResults;
-      if (rows.length >= limit && !segment.more && !segment.hasNext) {
+      const needed = skipping || rows.length < limit;
+      // The rest of this page comes before the next one.
+      if (segment.more && needed) {
+        const before = segment.rows.length;
+        const again = await read(Math.max(before + 1, Math.min(before + pageRows, before * 2 + 1)));
+        if (again.rows.length > before) {
+          segment = again;
+          continue;
+        }
+        segment = { ...again, more: false };
+      }
+      if (!needed && !segment.more && !segment.hasNext) {
         stoppedBy = "end";
         break;
       }
-      if (rows.length >= limit) {
+      if (!needed) {
         stoppedBy = "limit";
         break;
       }
@@ -1007,14 +1062,15 @@ const listPager = (spec) => {
       const before = segment.rows.length;
       const ask = growing ? Math.min(before + pageRows, (limit === Infinity ? pageRows : limit) + keys.size + 1) : pageRows;
       segment = await next(Math.max(1, ask), pageSize >= 1 ? { expect: growing ? before + pageSize : pageSize } : {});
+      if (!growing) pageKeys = new Set();
       if (segment.rows.length > 0) pageSize = growing ? Math.max(1, segment.rows.length - before) : segment.rows.length;
       steps += 1;
     }
-    const restOfPage = lastIndex < (growing ? segment.rows.filter((row) => !keys.has(row.key)).length : segment.rows.length);
+    const restOfPage = lastIndex < freshCount;
     const hasMore = stoppedBy === "end" ? false
       : stoppedBy === "stalled" ? segment.hasNext || (siteTotal !== null && siteTotal > rows.length)
       : restOfPage || segment.more || segment.hasNext || stoppedBy === "repeated";
-    const ended = stoppedBy === "end" && !listChanged && options.after === undefined;
+    const counted = stoppedBy === "end" && !listChanged && fromTop && options.after === undefined;
     return {
       rows,
       found,
@@ -1023,10 +1079,10 @@ const listPager = (spec) => {
       steps,
       listChanged,
       duplicates,
-      // Once the walk saw the whole list unchanged, its own count is the total; a site total that
-      // disagrees is reported beside it.
-      totalResults: ended ? rows.length : siteTotal,
-      ...(ended && siteTotal !== null && siteTotal !== rows.length ? { siteTotal, totalMismatch: true } : {}),
+      // Once the walk saw the whole list unchanged from its first row, its own count is the total;
+      // a site total that disagrees is reported beside it.
+      totalResults: counted ? rows.length : siteTotal,
+      ...(counted && siteTotal !== null && siteTotal !== rows.length ? { siteTotal, totalMismatch: true } : {}),
       ...(segment.page === undefined ? {} : { page: segment.page }),
       mechanism: segment.mechanism,
     };
@@ -1103,8 +1159,9 @@ const listPager = (spec) => {
  * collapse into one), and each can be named instead: `list`, `controls`, `next`, `previous`,
  * `pageLinks`, `current`, `loadMore`, `summary`, `pageSize`, `scroller`, `empty` (the site's no
  * results message), `end` (its end-of-list mark) and `loading`. `mechanism` is `pages`,
- * `next_link`, `append`, `scroll` or `offset`, or `auto` (the default) to choose from the controls
- * each look finds. `hooks` replace one judgement each: `step(mechanism, look)` the action,
+ * `next_link`, `append`, `scroll` or `offset`, or `auto` to choose from the controls each look
+ * finds; the default is `pagerDefaults.mechanism`, which `pagedListReader` sets to the tool's, else
+ * `auto`. `hooks` replace one judgement each: `step(mechanism, look)` the action,
  * `hasNext(look, mechanism)`, `pageNumber(look)`, `readTotal(text)` (fields merged over the
  * parsed summary) and `echo()` (a value each segment carries, such as the query the page shows).
  * `siteDomain`, `stableMs`, `unchangedMs`, `noProgressMs`, `timeout` and `maxSteps` bound it.
@@ -1195,9 +1252,10 @@ export interface PagedListOptions<Row> {
 }
 
 /**
- * A `readList` reader whose site actions are the pager's: `open` starts the list (`start`), then
- * opens the position's link and checks it shows the same list, else goes to its page number, or
- * replays its steps; `more` reads again without acting; `next` takes one step. A growing list keeps
+ * A `readList` reader whose site actions are the pager's: `open` opens the position's link and
+ * checks it shows the same page, else starts the list (`start`) and goes to its page number, or
+ * replays its steps; `more` reads again without acting; `next` takes one step on from the segment
+ * it is given. A growing list keeps
  * every row it read before, so rows a virtual list dropped while it scrolled stay in order.
  */
 export const pagedListReader = <Row>(
@@ -1205,8 +1263,16 @@ export const pagedListReader = <Row>(
 ): ListReader<Row, PagerSegment<Row>> => {
   const growing = options.mechanism === "append" || options.mechanism === "scroll";
   const run = async (body: string): Promise<PagerSegment<Row>> => {
-    const answer = await options.execute(`${waitCode}\n${paginationCode}\n${options.setup}\n${body}`);
+    // The tool's mechanism is the pager's default, so a list that shows no control yet (a short
+    // or empty one) still pages the way the tool named.
+    const answer = await options.execute(
+      `${waitCode}\n${paginationCode}\npagerDefaults = ${JSON.stringify({ mechanism: options.mechanism })};\n${options.setup}\n${body}`,
+    );
     const raw = Schema.decodeUnknownSync(RawSegment)(answer);
+    if (raw.mechanism !== options.mechanism)
+      throw new TypeError(
+        `The pager read the list as ${raw.mechanism}, not the ${options.mechanism} the tool names; remove mechanism from listPager or name the same one`,
+      );
     const { rows, ...rest } = raw;
     return {
       ...rest,
@@ -1260,6 +1326,17 @@ export const pagedListReader = <Row>(
       const kept = segment.href === undefined || again.href !== undefined ? again : { ...again, href: segment.href };
       return merged(segment, kept);
     },
-    next: async (segment, count) => merged(segment, await run(`return await pager.next(${String(count)});`)),
+    // On from the segment readList read last: the pager goes back to its page first when the
+    // browser shows another, such as after readList read an earlier page. A step that led nowhere
+    // ends the reads, so readList never counts the same page twice.
+    next: async (segment, count) => {
+      const back =
+        growing || segment.page !== undefined || segment.href === undefined
+          ? ""
+          : `if (page.url() !== ${JSON.stringify(segment.href)}) await page.goto(${JSON.stringify(segment.href)}, { waitUntil: "domcontentloaded", timeout: waitLimits.navigation });\n`;
+      const from = growing || segment.page === undefined ? "" : `, { from: ${String(segment.page)} }`;
+      const after = await run(`${back}return await pager.next(${String(count)}${from});`);
+      return merged(segment, after.stalled === true && !growing ? { ...after, hasNext: false } : after);
+    },
   };
 };
