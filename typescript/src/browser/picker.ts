@@ -193,7 +193,7 @@ const pickerPageCode = String.raw`(element, args) => {
     '[aria-busy="true"], [role=progressbar]:not([aria-valuenow]):not([aria-valuetext]), [class*="loading" i], [class*="spinner" i], [class*="searching" i], [class*="skeleton" i]';
   // Whole status lines, so an option such as "Loading Dock B" stays an option.
   const statusText =
-    /^(no (results?|matches|options|items|records|data|suggestions)( found)?|nothing (found|matches)|loading( results| options)?|searching|(please )?(enter|type) .{0,40}|type to search|start typing.{0,40}|\d+ results? (are |is )?available)[.!\u2026]*$/i;
+    /^(no (results?|matches|options|items|records|data|suggestions)( found)?|nothing (found|matches)|loading( results| options)?|searching|please (enter|type) .{0,40}|(enter|type) (at least )?\d+ (or more )?(characters?|letters?)|type to search|start typing.{0,40}|\d+ results? (are |is )?available)[.!\u2026]*$/i;
   const loadingText = /^(loading|searching)( results| options)?[.!\u2026]*$/i;
   const excluded =
     /(^|[\s_-])(group|header|heading|separator|divider|no-?results?|no-?options|no-?matches|no-?data|empty|loading|searching|optgroup|placeholder|footer|message)([\s_-]|$)/i;
@@ -570,11 +570,14 @@ const pickerWanted = (wanted) => {
 };
 // The site's own requests a picker's action caused: xhr, fetch and documents to the page's site
 // (any host when the page has none) that started within causedMs of the action, counted until
-// they end or for the inflight budget. A request repeating an earlier one exactly (same method,
-// URL and body), such as a heartbeat or poller, is the page's own and never counts.
+// they end or for the inflight budget. A poll, one request (same method, URL and body) started
+// four times or more at a steady interval, such as a heartbeat, is the page's own and never
+// counts. A pick's own repeats, such as a save sent again on a refill or a query typed again,
+// are too few to look steady, so they always count.
 const pickerNetwork = (page, causedMs) => {
   const entries = [];
-  const keys = new Set();
+  const starts = new Map();
+  const polls = new Set();
   const siteOf = (host) => {
     const labels = host.split(".");
     if (labels.length <= 2 || /^\d+$/.test(labels.at(-1))) return host;
@@ -596,8 +599,14 @@ const pickerNetwork = (page, causedMs) => {
   const onRequest = (request) => {
     if (!["xhr", "fetch", "document"].includes(request.resourceType()) || !firstParty(request.url())) return;
     const key = request.method() + " " + request.url() + " " + String(request.postData() ?? "").slice(0, 2048);
-    const entry = { at: Date.now(), endAt: null, repeat: keys.has(key) };
-    keys.add(key);
+    const at = Date.now();
+    const times = [...(starts.get(key) ?? []), at].slice(-4);
+    starts.set(key, times);
+    if (times.length === 4) {
+      const gaps = [times[1] - times[0], times[2] - times[1], times[3] - times[2]];
+      if (Math.min(...gaps) >= 50 && Math.max(...gaps) - Math.min(...gaps) <= Math.max(...gaps) / 2) polls.add(key);
+    }
+    const entry = { at, endAt: null, key };
     entries.push(entry);
     byRequest.set(request, entry);
   };
@@ -609,7 +618,7 @@ const pickerNetwork = (page, causedMs) => {
   page.on("request", onRequest);
   page.on("requestfinished", onDone);
   page.on("requestfailed", onDone);
-  const caused = (since) => entries.filter((entry) => !entry.repeat && entry.at >= since && entry.at <= since + causedMs);
+  const caused = (since) => entries.filter((entry) => !polls.has(entry.key) && entry.at >= since && entry.at <= since + causedMs);
   return {
     inflight: (since) => caused(since).filter((entry) => entry.endAt === null && Date.now() - entry.at < pickerLimits.inflight).length,
     // When the action's last caused request started or ended, or 0.

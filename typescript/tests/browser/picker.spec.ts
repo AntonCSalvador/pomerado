@@ -695,3 +695,20 @@ button.addEventListener("click", () => { list.hidden = false; button.setAttribut
     result: { picked: false, reason: "option_ambiguous", matches: ["Ana Silva [c3]", "Ana Silva [c150]"] },
   });
 });
+
+test("pickValue waits for a refill's own save and reports a choice the page reverts again", async ({ page }) => {
+  // The save takes longer than the hold window, and the same save is sent again on the refill.
+  await serve(page, gridEditor("always"), () => ({ delayMs: 500, body: {} }));
+  expect(await call(page, `return await pickValue(page.getByLabel("Owner"), "Casey Ng", { ...fast, refills: 1 });`)).toEqual({
+    error: "not_committed",
+  });
+  await expect(page.getByLabel("Owner")).toHaveValue("Avery Lee");
+});
+
+test("pickValue keeps options whose names start like a prompt", async ({ page }) => {
+  await serve(page, dropdown([["a", "Type A"], ["b", "Type B"], ["m", "Enter manually"], ["o", "Other"]]).replace(/ data-value="[a-z]"/g, ""));
+  expect(await call(page, `return await pickValue(page.getByRole("button", { name: "Customer" }), "Type B", fast);`)).toMatchObject({
+    result: { picked: true, label: "Type B", rank: "exact" },
+  });
+  await expect(page.getByRole("button", { name: "Customer" })).toHaveText("Type B");
+});
