@@ -85,10 +85,12 @@ answers `{ success, result, error, stderr }`. Throw
   can also answer with a removed or not-found page: name it, and throw `InvalidInput` with the
   page's own words and `field`, never a readiness timeout. The waits paragraph below shows how to
   paste `waitCode` and call it. Prefer no fixed pauses unless necessary.
-- Wait for results again only after a step that changed the page or should have, such as a click,
-  fill or navigation that loads new results. Never wait again on a page no step changed since the
-  last wait: after closing a panel without picking anything, after skipping a control already in
-  the requested state, or once more at the end.
+- Wait for a change (`waitForChange`, or a settle of your own) only after a step that changed the
+  page or should have, such as a click, fill or navigation that loads new results. Skip it when no
+  step changed the page since the last wait, such as after closing a panel without picking
+  anything or skipping a control already in the requested state. The values you return still get
+  their one `waitForRows` or `waitForValues` after the last change, which passes at once on a
+  settled page.
 - `waitForOutcome` already waited for its answer, so prefer no extra wait for that same answer after it.
 - Check the null case if possible. Make sure the tool handles a lookup or filter that matches
   nothing.
@@ -101,9 +103,10 @@ pomerado:section core.execute-calls:end -->
 - Console logs do not work. Return what you need to see.
 - When a challenge appears, call `await waitPastChallenge({ ready })`. `ready` is code that
   returns true once the page is usable. It throws `ChallengeFailure` if the page stays blocked.
-  Wait for the page's expected content first, and check for a challenge only when that content
-  is missing, such as after a wait for it failed; never probe for one on every readiness poll,
-  since each probe is a round trip.
+  Naming a challenge the build saw as one answer of the same `waitForOutcome` that waits for the
+  expected content, as `references/navigation.ts` does, is right and costs nothing extra. Avoid a
+  separate challenge probe or call on every pass of a polling loop of your own, and never wait out
+  a timeout and swallow it to probe for a challenge.
 - Never repeat a call that may have run.
 - When the site itself refuses a caller's value, such as a past date, an unknown airport code
   or a party size over its limit, throw `new errors.InvalidInput(message, { field })` saying why,
@@ -587,7 +590,8 @@ that depends on them:
    wait for the values that depend on it with `waitForChange`, passing that step as `action`:
    changed, or confirmed unchanged once the page's loading sign came and went; a value read
    before the page updates belongs to the previous choice. A choice already in the requested
-   state needs no step and no wait. Compare text read back with the caller's value normalized, or for a proper noun with
+   state needs no step and no wait. Compare text read back with the caller's value normalized,
+   or for a proper noun with
    the option it matched: ignore case, accents, repeated whitespace and punctuation such as
    curly quotes, periods and hyphens, never exact case-sensitive equality, since a page may
    echo a query or name in
@@ -602,9 +606,10 @@ that depends on them:
    them. Return a group's offered options as a list when the page shows them without extra
    clicks, as a record page shows its variants, or when the caller asks (search skill).
 
-An optional choice the caller leaves unset keeps the page's default: never open or set its
-control for it; read it once where the page already shows it, in its state or data, with no
-click and no wait, and return it as applied. A control you could not find, open or read throws `OperationFailure`, never
+An optional choice the caller leaves unset keeps the page's default: never set its control.
+Read the default from the page's state or data where it shows, with no wait; otherwise one open,
+read and close of its control is allowed; otherwise return null and say why in the description.
+Return it as applied. A control you could not find, open or read throws `OperationFailure`, never
 `InvalidInput`.
 
 <!-- pomerado:section core.host-ownership:start
@@ -657,14 +662,18 @@ the requested operation.
 On a hosted browser each Playwright call is a remote round trip, and each awaited call waits for
 its own, so a read costs its number of calls, not its navigations. Read every field a page needs in
 one `evaluate`, `readRows` or snapshot per page, never one locator call per field or a probe per
-element. Prefer the page's own structured data, its embedded JSON or the data response it renders
-from (http-mcp skill), to its rendered cards when it holds the same fields for the same records,
-and check on the example that it matches what the page shows. Read the rendered page for a value
-that exists only after client-side rendering, or that the page computes where you see it, such as
-a total. Prefer values the list page already holds to opening each record's page. When the tool
-must open each record's detail page, keep each to a few calls (open, wait, one read), and consider whether
+element. Prefer values the list page already holds, in its rows or its embedded data, or the
+site's own data request (http-mcp skill), to opening each record's page. When the tool must open
+each record's detail page, keep each to a few calls (open, wait, one read), and consider whether
 the request is better served as two tools, a search and a details read by identifier; say so in
 `coverage`.
+Prefer the page's own structured data, its embedded JSON or the data response it renders from,
+to its rendered cards when it holds the same fields for the same records, and check on the
+example that it matches what the page shows. Embedded JSON holds the page as first rendered:
+after an in-page change, such as a filter that reloads the list without a navigation, read that
+change's data response or the rendered rows, never the initial JSON. Read the rendered page for
+a value that exists only after client-side rendering, or that the page computes where you see
+it, such as a total.
 Budgets: navigation 30 s for the document to commit; a click, fill or other action 5 s, taken
 only on an element a wait has shown ready. After a navigation commits or an action returns, the
 page gets 8 s without progress to show one of the answers you named, and up to 30 s while it
@@ -693,8 +702,9 @@ only observes: do not repeat `goto`, reload, login, submission or another action
 inside it. Preserve site/path and account guards while waiting.
 Wait for the values you will return, not for their containers or the rest of the page. A record
 is ready when each value you return is filled in and reads the same on two looks
-(`waitForValues`): two consecutive identical reads, the first included, and only after a step
-that changed the page. A list is ready when the rows you return, the first `limit` from the page's
+(`waitForValues`): two consecutive identical reads, the first included. Call it after a step
+that changed the page, and never again on a page nothing changed since. A list is ready when
+the rows you return, the first `limit` from the page's
 position (pagination skill), have their identifier and the values the request needs, filled in
 and reading the same twice (`waitForRows`); keeping every result row means every row up to that
 page size. A slot that is present but empty, a skeleton, `aria-busy` or reading "Loading…" is

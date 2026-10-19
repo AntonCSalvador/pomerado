@@ -51,8 +51,8 @@ inputs use (see "Apply and read back").
 On every run, set each input the site has a control for through that control, through the
 results URL when the site's URL reliably carries it (`AGENTS.md`, "Work through the page's own
 controls"), or through the data request the site itself uses for it when the control is
-unreliable (testing skill), never by filtering the returned rows, then read it back from the
-site's committed state: the applied-filter chips, the selected sort, an option the site shows selected, or the results header.
+unreliable (testing skill), never by filtering the returned rows, then read it back from the site's committed state: the
+applied-filter chips, the selected sort, an option the site shows selected, or the results header.
 A URL naming the input does not show it applied. When a filter did not apply, the tool throws
 `OperationFailure` naming it, so the run fails and the tool gets repaired; it never returns
 unfiltered results as filtered.
@@ -70,8 +70,9 @@ Then read the choice back where the page shows it: an applied chip, the selected
 header, or the reopened panel when nothing else shows it. A follow-up choice that will reload the
 results anyway can wait for that reload instead. Close a drawer or panel you opened with its own
 close control or Escape, and check it closed. After the last step that changed the results, wait
-for the rows you return with `waitForChange`, as the core skill says; when no step changed them
-since the last wait, read them without waiting again.
+for that change with `waitForChange`, then read the rows you return with `waitForRows`, which
+passes at once on a settled page (core skill). Skip another `waitForChange` or settle when no step
+changed the results since the last one.
 
 ## Location
 
@@ -83,7 +84,8 @@ the store picker, the ZIP or postal-code box, the delivery or pickup choice, and
 beside "use current location". Decline the browser's location permission when the site asks;
 declining often reveals a manual ZIP field. Read the applied location back and always return
 it, as `applied_store` or `applied_zip`, the site's default included when the caller gave none.
-A store missing from the site's picker throws `InvalidInput` with `field` and `available`, the stores it offers, and so do a store and a ZIP that exclude each
+A store missing from the site's picker throws `InvalidInput` with `field` and `available`, the
+stores it offers, and so do a store and a ZIP that exclude each
 other. When the site still won't apply the caller's location, or says it does not serve it,
 return the results it did show with the applied location beside the caller's and the site's
 message, never as the caller's location's results. A filter or sort the page resets stays strict:
@@ -114,7 +116,8 @@ go in their own list or are left out, never mixed into the results, and return e
 card that stands for a group of variants, such as "6 flavors" or "3 colors", says so in its own
 fields, such as a variant count, and that its link opens one member of the group. Check that the
 page's echo of the query, such as a results heading, matches it normalized, or for a proper noun
-fuzzily, never with exact case-sensitive equality. A search
+fuzzily, never with exact case-sensitive equality, except a query the site says it corrected or
+rewrote (below). A search
 that applied every input and got the site's no-results message returns an empty list, never an
 error.
 
@@ -141,12 +144,11 @@ what its inputs need:
   "Only with `include: ["filters"]`". When the page already shows the groups without a click,
   the tool may return those, and says they are the visible ones.
 - Skip a step whose result the page already shows, such as a location, store or sort that is
-  already the caller's, and its wait: wait for the results again only after a step that changed
-  them or should have (core skill).
+  already the caller's, and the change wait that would follow it (core skill).
 - When results depend on state the site sets only in the page, such as a store, a run may set it
   through the page's controls and then read the results with the page's own data request in the
-  same session (http-mcp skill, "Location, store and dates"), especially when that is faster
-  than waiting for the cards.
+  same session (`page.evaluate(() => fetch(...))`, core skill), especially when that is faster
+  than waiting for the cards. Read the applied location back from the page or that answer.
 - Never wait for the page's `load` event, for network idle, or for rows and content you will not
   return.
 - Fetch a per-result extra the cards lack, such as availability, in one batched request when the

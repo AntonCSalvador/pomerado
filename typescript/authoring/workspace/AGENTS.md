@@ -173,10 +173,11 @@ When the controls flow lands on a URL the site produced, and two runs with diffe
 which parts of it carry which input, such as the query, dates, guests or party size, sort,
 filters, a location the URL itself carries or a record's own identifier route, the tool enters
 at that URL with the caller's values in those parts when the mapping is reliable and clear: each
-part's valid values are known, such as a sort or filter whose values become the input's enum, or
-a query the site encodes as typed. Otherwise it uses the page's controls. It builds that URL with `URLSearchParams` for a query part or
-`encodeURIComponent` for a path part and every other part copied as the site wrote it, once the
-build checked that it gives the same answer as the controls. At run time it reads every input
+part's valid values are known and readable in the URL, such as a sort or filter whose values
+become the input's enum, or a query the site encodes as typed. An opaque filter code still comes
+only from a link the page produced in this run (below). Otherwise it uses the page's controls.
+It builds that URL with `URLSearchParams` for a query part or `encodeURIComponent` for a path
+part and every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input
 back from the page, and when the landing is not an answer it named or a read-back differs, it
 runs the controls flow once instead, in a named function such as `throughControls`
 (`references/navigation.ts`). Never guess a parameter, never iterate on URL variants, and take an
@@ -200,13 +201,16 @@ HTTP version (`src/tool-http.mjs`), which may build its requests from the caller
 site shows, such as the date picker, selected time, party size, passengers, cabin, applied
 filters, sort and selected options, and refuse a mismatch: the tool throws `InputNotApplied`
 (.agents/core/SKILL.md) and never returns results for an input that did not apply; a control
-the tool could not find or read is `OperationFailure`. Four cases
+the tool could not find or read is `OperationFailure`. Five cases
 return results with what applied instead: a number on a scale the site steps returns its applied
 bound, a filter group the page disables for the results is reported as not offered, a value
 the page's choices do not hold returns the rows of a broader choice that covers it
 (.agents/search/SKILL.md), and an input that tailors the answer, such as a location, that the
 site still won't apply returns what the site showed with the applied value beside the caller's
-(.agents/core/SKILL.md, "Inputs that tailor the answer"). Echoed input, a
+(.agents/core/SKILL.md, "Inputs that tailor the answer"), and a search query the site corrected or
+rewrote, such as a spelling fix, returns the site's results with the query it searched as
+`applied_query` and `query_corrected` true, never silently (.agents/search/SKILL.md). Echoed
+input, a
 URL the tool built, a URL parameter, a box checked before the site applied it or the option's
 name elsewhere on the page does not show an input applied; read the site's committed state, such
 as the applied chip, the selected control or the results' own state, and compare its text with

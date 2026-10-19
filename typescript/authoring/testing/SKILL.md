@@ -176,8 +176,9 @@ page. Then change the expectation to what the site shows, and name that capture 
 `purpose` and in `coverage`; review accepts the change only against it. Before you run again,
 fix everything the batch revealed: read every failure and every output, and batch as many fixes
 as you can into one edit rather than one fix per run. Then rerun the failing cases and every case
-the fixes can touch, all of them together in one batch named in `cases`, on each version you
-ship in the same round. Each batch waits on its slowest case and its own review, so aim for few
+the fixes can touch, all of them together in one batch named in `cases`, in the same round on
+each version you ship whose source the fixes changed; a version you stopped fixing and will not
+ship needs none. Each batch waits on its slowest case and its own review, so aim for few
 rounds; the cases that passed run again once after your last edit. A
 run that returns partly filled results, or passes only when run again, is missing a wait for
 content: fix the wait, not the retry, then run that input again a few times.
@@ -233,9 +234,7 @@ may limit how many. A signed-in read's inputs there count toward the same two.
 
 Test the HTTP version, `src/tool-http.mjs`, the same way as `src/tool.mjs`: run the same cases as
 a batch on it with `live_tests` entrypoint `src/tool-http.mjs`, in parallel, and fix it until
-every case passes on it (http-mcp skill). Run its batch in the same round as the Playwright
-version's, after the same fixes, rather than finishing one version first. It need not wait for
-the Playwright version to pass: when every
+every case passes on it (http-mcp skill). It need not wait for the Playwright version: when every
 case passes on the HTTP version, run the example on it and publish `http` alone, even while a case
 still fails on the Playwright version. Each version keeps its own result for each case: a batch on
 one never replaces or stales the other's, and `plan` shows the results of the entrypoint you name.
