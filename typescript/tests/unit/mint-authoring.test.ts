@@ -819,10 +819,10 @@ it("renders the pinned standalone input-feedback instructions", () => {
       ]),
     ),
   ).toStrictEqual([
-    ["aba44b16df36914a1d988881085b9b43e4d6e0570e0a68423318eecd7abb4cbc", "read, 1 left"],
-    ["bad5f0878c5ecce40c209c1f5e3bd0dac6422c9e42fb0a857c0281e99c6e88eb", "read, 0 left"],
-    ["acf24b4205a7e37c6cfab1f19421d36f26a385bbc7bcaaf8a2799ef29fc77d5e", "write, 1 left"],
-    ["fa380b552c8ddec278fc6d2de4f613a37459d2f9cbf3c9393fe94251ee71511a", "write, 0 left"],
+    ["26b53239bde35350bc88dc584fa69fddde12db5b0aae5b5053cdd80279f50b4b", "read, 1 left"],
+    ["cb45ab082464bd0cf11c02b0dd6b5a5a62e8b0e4420393eceafe7793326c9d1f", "read, 0 left"],
+    ["f5b9e26570746eb670ad261bcfeacd42c7131646c969258ee940de90527c93e9", "write, 1 left"],
+    ["0929e3fa7b78c3aa95dc64e79b586cccb6f596dcbfe051b3d43d17413da55bf6", "write, 0 left"],
   ]);
 });
 
