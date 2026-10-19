@@ -486,6 +486,11 @@
       "import": "./dist/typescript/src/privacy/url-spans.js",
       "default": "./dist/typescript/src/privacy/url-spans.js"
     },
+    "./core/privacy/value-forms": {
+      "types": "./dist/typescript/src/privacy/value-forms.d.ts",
+      "import": "./dist/typescript/src/privacy/value-forms.js",
+      "default": "./dist/typescript/src/privacy/value-forms.js"
+    },
     "./core/registry/issues": {
       "types": "./dist/typescript/src/registry/issues.d.ts",
       "import": "./dist/typescript/src/registry/issues.js",
