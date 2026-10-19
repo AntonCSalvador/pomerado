@@ -34,6 +34,12 @@ export interface PublicationScope {
    * one.
    */
   readonly references?: readonly { readonly path: string; readonly byteLength: number }[];
+  /**
+   * Small files of `files` the host sends in the request, so the review needs no turn to read
+   * them: each by its path, exactly as `read_source` returns it, a JSON file parsed and any other
+   * as its text.
+   */
+  readonly inline?: readonly { readonly path: string; readonly content: unknown }[];
 }
 
 /**

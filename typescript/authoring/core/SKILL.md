@@ -15,7 +15,9 @@ did not exercise with a few combined live cases (the `testing` skill): a read si
 handful, and a signed-in read one combined case that sets the optional inputs its example left
 unset, two distinct inputs at most. A write proves its tool with its act session; it never reads
 the `testing` skill or designs further tests<!-- pomerado:section core.write-http-check -->.
-The scope follows what the tool is now, not what the build started as: a read that becomes a
+That forbids running the write again or testing it live, not writing checks: a write's script
+checks its own result, and its read-back and comparison are checked offline over what the session
+read (the `writes` skill). The scope follows what the tool is now, not what the build started as: a read that becomes a
 write, in a new build or a repair, keeps to the one run from then on, a read that signs in keeps
 to the signed-in bound from then on, and a repair that rebuilds a signed-in tool or a write as a
 read signed out tests it as one. Credentials and

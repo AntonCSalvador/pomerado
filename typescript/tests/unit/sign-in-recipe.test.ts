@@ -20,6 +20,21 @@ const steps = [
 ] as const;
 const signedIn = { selector: "#account-menu" };
 
+/** A version 1 recipe whose last step types a code split across `count` one-character boxes. */
+const boxedCodeRecipe = (count: number) => ({
+  version: 1,
+  steps: [
+    ...steps,
+    {
+      page: "https://example.test/login/code",
+      fields: Array.from({ length: count }, (_, at) => ({ selector: `#otp-${at + 1}`, slot: "code" })),
+      submit: "#verify",
+      submittedBy: "host",
+    },
+  ],
+  signedIn,
+});
+
 describe("decodeSignInRecipe", () => {
   it.each([
     ["version 1", { version: 1, steps, signedIn }],
@@ -127,8 +142,16 @@ describe("decodeSignInRecipe", () => {
         signedIn,
       },
     ],
+    ["version 1 with a code split across 7 one-character boxes", boxedCodeRecipe(7)],
+    ["version 1 with a code split across 8 one-character boxes", boxedCodeRecipe(8)],
   ])("reads %s", (_name, recipe) => {
     expect(decodeSignInRecipe(JSON.stringify(recipe))).toEqual(recipe);
+  });
+
+  it("refuses a step with more fields besides its code boxes than a screen holds", () => {
+    const fields = Array.from({ length: 7 }, (_, at) => ({ selector: `#f-${at}`, slot: "zip" }));
+    const recipe = { version: 1, steps: [{ page: "https://example.test/login", fields }], signedIn };
+    expect(decodeSignInRecipe(JSON.stringify(recipe))).toBe("invalid");
   });
 
   it("refuses a version it does not know, so a run never drops what that version adds", () => {

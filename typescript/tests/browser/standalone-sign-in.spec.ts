@@ -155,9 +155,10 @@ const toolResult = (requests: readonly ModelRequest[], callId: string) => {
 };
 /**
  * Answers the login question with the shop account, a correction with a new password, a code
- * question with the shop's code and any other with the account's username, and confirms a notice.
+ * question with the shop's code, or `code`, and any other with the account's username, and
+ * confirms a notice.
  */
-const answers = (asked: InputRequest[]) =>
+const answers = (asked: InputRequest[], code = shopCode) =>
   makeInputAsker((request) =>
     Effect.sync(() => {
       asked.push(request);
@@ -176,7 +177,7 @@ const answers = (asked: InputRequest[]) =>
                   saveLogin: false,
                 }
               : question.id === "code"
-                ? shopCode
+                ? code
                 : shopAccount.username,
         ]),
       );
@@ -577,6 +578,120 @@ test("a local build whose code screen has six one-character boxes sends back a s
     expect(shop.state.codeMatches).toEqual([true, true]);
   });
 });
+
+// A code screen that splits a longer code across more one-character boxes than a sign-in step's
+// other fields may number, whose form posts each box as its own field. The step that names every
+// box decodes, is reviewed with each box's place, asks for the code once, types a digit in each
+// box, counts the code as sent once the form posts the boxes, publishes a recipe that names every
+// box, and a run in a new session signs in through the same boxes.
+for (const count of [7, 8])
+  test(`a local build whose code screen has ${count} one-character boxes signs in through a step that names all ${count}, and a run in a new session signs in through them`, async () => {
+    test.info().annotations.push({
+      type: "slow",
+      description: `Original SDKs, Chromium, a scripted build with a password and a ${count}-box code screen, then a run`,
+    });
+    test.setTimeout(90_000);
+    await withShop(async (shop, endpoint) => {
+      const code = "4829135706".slice(0, count);
+      shop.state.loginCode = true;
+      shop.state.codeBoxes = count;
+      shop.state.code = code;
+      const places = Array.from({ length: count }, (_, at) => at + 1);
+      const boxes = places.map((box) => ({ selector: `#code-${box}`, slot: "code" }));
+      const mintRequests: ModelRequest[] = [];
+      const minter = provider((request, index) => {
+        const steps: Output[] = [
+          patch,
+          [signInFields()],
+          [signInStep({ fields: boxes, submit: "button" }, "every_box")],
+          [signInStep({ signedIn: { selector: "#account" } }, "signed_in")],
+          [execute("example", {}, "example")],
+        ];
+        if (index < steps.length) return steps[index] ?? [];
+        if (index > steps.length) return [message("Built.")];
+        const receipt = objects(request.input)
+          .filter((item) => typeof item["executionId"] === "string")
+          .at(-1);
+        if (receipt === undefined) throw new Error("No execution receipt to finish with");
+        return [
+          call("finish_build", {
+            intent: "Return the account reader",
+            entrypoint: "src/tool.mjs",
+            executionId: receipt["executionId"],
+            metadata: { name: "read_account", description: "Read whether the account shows" },
+            coverage: "One live example, signed in",
+          }),
+        ];
+      }, mintRequests);
+      const signInSource = (review: { reads: readonly Readonly<Record<string, unknown>>[] }) => {
+        const read = review.reads.find((value) => value["path"] === "operation/sign-in-step.json");
+        return typeof read?.["source"] === "string"
+          ? (JSON.parse(read["source"]) as {
+              step: { fields: { slot?: string }[] };
+              screen: { fields: { codeBox?: { box: number; of: number } }[] };
+            })
+          : undefined;
+      };
+      const reviewer = recordingGuardian({ decide: () => "allow" });
+      const asked: InputRequest[] = [];
+      const request = { url: `${shop.origin}/account`, intent: "Read the account", input: {} };
+      const built = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const service = yield* createPomerado({
+              browser: { endpoint },
+              minterProvider: minter,
+              guardianProvider: reviewer.provider,
+              outcomeReviewerProvider: quietReviewer,
+              ask: answers(asked, code),
+              timeoutMs: 30_000,
+            });
+            return yield* service.mint({ ...request, url: `${shop.origin}/login`, effect: "read" });
+          }),
+        ),
+      );
+      expect(built.build, JSON.stringify(built)).toBe("published");
+      if (built.artifact === undefined) throw new Error(JSON.stringify(built));
+      // Guardian reviewed the code screen once, with every box, each with its place among them.
+      const codeReviews = reviewer.reviews
+        .map(signInSource)
+        .filter((reviewed) => reviewed?.step.fields.some((field) => field.slot === "code"));
+      expect(codeReviews).toHaveLength(1);
+      expect(codeReviews[0]?.screen.fields.map((field) => field.codeBox)).toEqual(
+        places.map((box) => ({ box, of: count })),
+      );
+      // One login, one code, one code post with the whole code.
+      expect(reasons(asked)).toEqual(["missing_credentials", "code"]);
+      expect(shop.state.codeMatches).toEqual([true]);
+      expect(built.artifact.signIn).toEqual({
+        recipe: {
+          version: 1,
+          steps: [
+            ...loginRecipe(shop.origin).steps,
+            {
+              page: `${shop.origin}/two-factor`,
+              fields: boxes,
+              submit: "button",
+              submittedBy: "host",
+            },
+          ],
+          signedIn: { selector: "#account" },
+        },
+        entryUrl: `${shop.origin}/login`,
+      });
+      expect(JSON.stringify(mintRequests)).not.toContain(code);
+      const runAsked: InputRequest[] = [];
+      const output = await runInNewSession(
+        endpoint,
+        answers(runAsked, code),
+        built.artifact as MintArtifact,
+        request.url,
+      );
+      expect(output).toEqual(Either.right({ signedIn: true }));
+      expect(reasons(runAsked)).toEqual(["missing_credentials", "code"]);
+      expect(shop.state.codeMatches).toEqual([true, true]);
+    });
+  });
 
 // A cancel at the terminal is the owner's choice to stop, not a question left unanswered: a
 // signed-out build ends at once instead of going on without the answer.
