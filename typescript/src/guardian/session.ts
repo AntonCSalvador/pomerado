@@ -50,6 +50,11 @@ export interface GuardianSessionOptions {
    * another continuing session, such as the outcome reviewer's, names its own work.
    */
   readonly interruption?: { readonly toolResult: string; readonly continuation: string };
+  /**
+   * A note for a restored conversation, such as why its build stopped and resumed: added once,
+   * as a message before the next request, and kept in the history like any other item.
+   */
+  readonly resumeNote?: string;
 }
 
 const guardianInterruption = {
@@ -230,6 +235,8 @@ const continuationProvider = ({
 
 export const makeGuardianSession = (options: GuardianSessionOptions) => {
   const permit = Effect.unsafeMakeSemaphore(1);
+  /** The resume note, until a request carries it. */
+  let resumeNote = options.resumeNote;
   /** Compactions this process made or observed; each replaces the context Guardian sees. */
   let compactions = 0;
   let current: GuardianSessionSnapshot = options.initial ?? {
@@ -432,6 +439,10 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
         if (current.incomplete && !continuing) {
           closeInterruptedReview(items, options.interruption ?? guardianInterruption);
         }
+        // The conversation holds the note from here on, even when this save fails.
+        if (resumeNote !== undefined)
+          items.push({ role: "user", type: "message", content: resumeNote });
+        resumeNote = undefined;
         items.push({ role: "user", type: "message", content: request });
         yield* save(items, true);
         return items;

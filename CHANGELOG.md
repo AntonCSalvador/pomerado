@@ -142,6 +142,10 @@
 
 ### Other changes
 
+- A host may suspend a build on an unanswered question and resume it later. All three hooks are optional, and a host that supplies none keeps today's behavior.
+  - `MintDependencies.suspendUnanswered` is offered each question whose silence would end the build as `no_response`, as an `UnansweredQuestion`: `step` (`question`, `sign_in` or `execution`), `requestId` and `executionId` when known, and `possibleCommit`. Never a question handed back to the minter as no answer, and never one the owner cancelled. When the host answers `suspended`, the run stops at once with no outcome: the call that asked never returns, so the minter's checkpoint keeps it started, no further model call starts, and the run ends interrupted, which `attemptFinished` reports as `interrupted`. `not_suspended` or a failure ends the build as `no_response`.
+  - `agentRecovery.initial.resumeMessage`, and the same field on `MintAgentRecovery` that a model run's recovery receives, is told to the restored minter once, as a user message before its next model call. A saved model response replays first, with its tool calls rejoined through `recoverTool`, and the message follows their results. A trace record with phase `continuation` and reason `resume_message` marks where it went.
+  - `GuardianSessionOptions.resumeNote` is added once to a restored Guardian conversation, as a message before its next request.
 - The authoring guidance asks for faster tools, fewer test rounds and fewer owner questions, without weakening any check:
   - The core and search skills wait for a change only after a step that changed the page or should have, and skip a second change wait when nothing changed; the values a tool returns still get their one `waitForRows` or `waitForValues`, and a value settles on two consecutive identical reads. A choice already in the requested state gets no step, and an unset optional one is read from the page where it shows.
   - A challenge the build saw is named as one answer of the same `waitForOutcome`, never probed separately on every pass of a home-made loop or after a swallowed timeout.
