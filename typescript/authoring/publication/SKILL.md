@@ -134,7 +134,9 @@ first:
   - every applied filter or option is read back from the page as the value the site applied,
     such as the chosen option's label, never `true` ("Applied without readback");
   - a requested value the site does not offer throws `InvalidInput` with the site's choices, and
-    one the page ignored throws `InputNotApplied` unless it tailors the answer (core skill); with
+    one the page ignored throws `InputNotApplied` unless it tailors the answer (core skill) or is
+    a search query the site corrected, returned with `applied_query` and `query_corrected` (search
+    skill); with
     no results a sort has nothing to apply, so return the empty result ("Unapplied supplied
     input");
   - a free-text place, name or venue that matches several of the site's options lists them for

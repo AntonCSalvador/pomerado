@@ -788,17 +788,17 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["96af1b0d060d1eaabc0056b9563c092d21c0b4f455cc0308f10ea73959e708ba", "core"],
-    ["fe1283cbe9de49c475065da5c44f55bddafb854a141f9151b2c8d54a8dae749b", "search"],
+    ["8b79f447a4db2b130336b97eb6443e8f327a0a60f0d6d5a9ebb670549ec8aca4", "core"],
+    ["79b30bbf3224c9adf634809e240b5f7ec0dfa7e2dfe2e2d710a8403ce03ff2da", "search"],
     ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
-    ["ef72ab62d32a584450f8bde93fd2bb07dc9f94484dd6cb2cf8d041cf8e05f7a7", "testing"],
+    ["8859f44b4b82f6813ae4d010f9ff947f89642c22fa70e334bc6e77b95a2e0e5a", "testing"],
     ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
     ["12b198d6503ef35853f9ff42aefefe641dc3b59c8b2a3e5a1424aabb4f6af2f4", "forms"],
     ["9c8d7256bd2f53cec0b11f7f6cf25a07fe9b87837938ca78dc8f8867e843aba0", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["e425e194933160e1094a5d5cecd917bcff31015ce6f506d4bda8383797aa6bad", "caller-input"],
-    ["9ca946a431fb56aa842d5c8d94e44077fdfca6a7f7adb1b8a3085066ac85cc42", "publication"],
-    ["715d0de541f81e1abb1afb702f9c094fb611ea43be57dbb20556a73394afb0c5", "workspace/AGENTS.md"],
+    ["a3a3b9de15fe58391adc4e5185e4bff3fa7f01a95b89a9cc6a87852f749d346e", "caller-input"],
+    ["e3f1bf2ec18dc6285b34e01ed9c3b95ba8d3cf41e2a8eb0a7cdd3540b6948848", "publication"],
+    ["5be527946d4fe2b81b8292c0d503ead67e271ee47a4b50106e3402414379065c", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
