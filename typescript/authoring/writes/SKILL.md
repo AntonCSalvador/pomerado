@@ -219,8 +219,8 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   number, its own reference or the values entered), and every field the caller asked
   for that the view shows agrees (the read before the commit already checked what you
   entered). Sites reformat what they save, such as line breaks, spaces and dates in the
-  viewer's format, so compare text after the commit with `sameText`, as before it (the core
-  skill's Confirm step). Compare a chosen option's value only where the
+  viewer's format, so compare text after the commit with `readBackMatches`, as before it (the
+  core skill's Confirm step). Compare a chosen option's value only where the
   view shows that value; otherwise compare the label it shows. When the write changed state
   that already existed, the same read is also the after read of the before-and-after
   comparison, which runs after `verified()` ("Check the read-back"). Write each read-back step
@@ -311,10 +311,10 @@ the caller asked for, in the form the site saves it.
   compare the read-back by ID, never a label against an ID. Return the reference as
   `{ id, label }` (records skill). Do not drop a reference field only because the site saves an
   ID: the lookup is the fix. When the site shows no ID and offers no list to resolve one, compare
-  the label the read-back shows with the caller's, normalized as above. When neither can tell,
-  ask the owner in the build's one bundled `request_input` question, or follow the rules above:
-  never call `verified()` on a read-back that cannot tell, and publish the write `unverifiable`
-  when no read-back can.
+  the label the read-back shows with the caller's through `readBackMatches`, as above. When
+  neither can tell, ask the owner in the build's one bundled `request_input` question, or follow
+  the rules above: never call `verified()` on a read-back that cannot tell, and publish the write
+  `unverifiable` when no read-back can.
 - When the write changed state that already existed, check that every field the input sets
   now matches it. For every other field, flag only a change the session's own confirmed write
   did not make too. The session read the record before and after that write: a field the site

@@ -206,9 +206,9 @@ exception: it is optional unless the task can't run without it (below).
   or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime`
   matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or
   hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one
-  with a word added or dropped. Prefer it for confirming the pick, so the read-back agrees with
-  the choice, but not for choosing from a list, where a short label can match a longer name it
-  isn't, such as UK for Ukraine.
+  with a word added or dropped. Prefer `readBackMatches`, which builds on it, for confirming the
+  pick, so the read-back agrees with the choice, but not for choosing from a list, where a short
+  label can match a longer name it isn't, such as UK for Ukraine.
   When more than one option matches, list them for the caller instead of picking one.
 - On a write, every choice the session met is an input, costly choices included, and any
   other option, such as a seat, is an optional input, as the writes skill says ("Compose and
@@ -532,11 +532,12 @@ that depends on them:
    wait for the values that depend on it with `waitForChange`, passing that step as `action`:
    changed, or confirmed unchanged once the page's loading sign came and went; a value read
    before the page updates belongs to the previous choice. A choice already in the requested
-   state needs no step and no wait. Compare text read back with `sameText(shown, wanted)` from
-   `pomerado/runtime`, `wanted` being the option the tool picked from the site's list when it
+   state needs no step and no wait. Compare text read back with `readBackMatches(shown, wanted)`
+   from `pomerado/runtime`, `wanted` being the option the tool picked from the site's list when it
    picked one, and the caller's value otherwise. It ignores case, accents, spacing,
    apostrophes, and periods, commas and hyphens between letters, and accepts a word the page
-   shortened, such as St for Saint. Prefer it over
+   shortened, such as St for Saint, as `sameText` does. It also accepts text that holds the
+   wanted words in another order or among other words, scored with BM25. Prefer it over
    exact equality, since a page may echo a query or name in its own case or short form, and
    prefer comparing numbers, dates and amounts as values. When the page kept another value
    after the tool's bounded retries, throw
