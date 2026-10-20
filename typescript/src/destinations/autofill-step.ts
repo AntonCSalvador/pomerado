@@ -193,9 +193,10 @@ const Described = Schema.Struct({
    */
   questionUnread: Schema.optional(Schema.Literal(true)),
   /**
-   * A code field that is one of the screen's one-character boxes (an input whose `maxlength` is 1),
-   * when the screen shows two or more: its place among them (`box`, from 1) and how many it shows
-   * (`of`). Inspection-only, never a recipe value; see `codeBoxesRefusal`.
+   * A code field that is one of the screen's one-character boxes (an input whose `maxlength` is 1,
+   * or one with no `maxlength` that the page's script limits, among like inputs in one parent
+   * element), when the screen shows two or more: its place among them (`box`, from 1) and how many
+   * it shows (`of`). Inspection-only, never a recipe value; see `codeBoxesRefusal`.
    */
   codeBox: Schema.optional(Schema.Struct({ box: Schema.Number, of: Schema.Number })),
 });
