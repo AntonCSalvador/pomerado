@@ -212,6 +212,8 @@ const clickPlace = async ({ kernel, sessionId, errors }: Context, checkedTotal: 
       if ((await place.count()) !== 1) return { failure: "review_missing" };
       ${readTotal}
       if (total_minor !== ${JSON.stringify(checkedTotal)}) return { failure: "total_changed" };
+      // The fields the review shows just before the click: one of them flagged after it proves nothing.
+      const before = await visibleFieldLabels(review);
       // The confirmation, or the review again with a field it flagged. Anything else fails the wait.
       const confirmation = page.getByRole("status", { name: "Order confirmation", exact: true });
       const answer = await waitForOutcomeResult(
@@ -219,9 +221,9 @@ const clickPlace = async ({ kernel, sessionId, errors }: Context, checkedTotal: 
         { action: () => place.click({ noWaitAfter: true, timeout: 5000 }), deadline: Date.now() + 30000 },
       );
       if (answer.outcome === "flagged") {
-        // Only a review whose every flag is a required field left empty proves the click saved
-        // nothing. Any other flag may be the site's answer to a saved order.
-        const blocked = await blockingRequiredFields(review);
+        // Only a review whose every flag is a required field the click showed, left empty, proves
+        // the click saved nothing. Any other flag may be the site's answer to a saved order.
+        const blocked = await blockingRequiredFields(review, before);
         return blocked === null ? { failure: "not_confirmed" } : { blocked: blocked.fields };
       }
       const number = /^Order (ORD-[0-9]+)/.exec(await confirmation.innerText())?.[1];

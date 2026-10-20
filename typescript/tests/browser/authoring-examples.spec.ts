@@ -1574,6 +1574,99 @@ test("write-session example leaves the order unsent when nobody answers the fiel
   expect(orders).toEqual([]);
 });
 
+/**
+ * Review pages whose Place order click does save, by a fetch, and then leave a field flagged
+ * that was already on the page before the click: an app that clears its form for the next order
+ * (`reset`), a form that skips the browser's check and has a stray `required` on an optional field
+ * (`novalidate`), and a field the page flagged before the click while the confirmation is slow
+ * (`processing`). The confirmation shows only later.
+ */
+const savingReviewSite = async (
+  page: Page,
+  origin: string,
+  orders: string[],
+  variant: "reset" | "novalidate" | "processing",
+) => {
+  await page.route(`${origin}/**`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname === "/checkout")
+      return route.fulfill({
+        contentType: "text/html",
+        body: `<form aria-label="Checkout" method="get" action="/checkout/review">
+          <label>Item<input name="item"></label><label>Quantity<input name="quantity"></label>
+          <label><input type="checkbox" name="giftWrap"> Gift wrap</label>
+          <button>Continue</button>
+        </form>`,
+      });
+    if (url.pathname === "/checkout/review") {
+      const item = url.searchParams.get("item") ?? "";
+      const quantity = url.searchParams.get("quantity") ?? "1";
+      const field = {
+        reset: `<label>Contact email<input type="email" name="email" required value="sam@example.com"></label>`,
+        novalidate: `<label>Company<input name="company" required></label>`,
+        processing: `<label>Delivery instructions<input name="instructions" aria-required="true" aria-invalid="true"></label>`,
+      }[variant];
+      const confirm = (delay: number) => `setTimeout(() => {
+            const shown = document.createElement("p");
+            shown.setAttribute("role", "status");
+            shown.setAttribute("aria-label", "Order confirmation");
+            shown.textContent = "Order " + number + " is placed.";
+            document.body.append(shown);
+          }, ${delay});`;
+      const saved = {
+        reset: `form.querySelector("[name=email]").value = ""; ${confirm(800)}`,
+        novalidate: confirm(400),
+        processing: `document.body.insertAdjacentHTML("beforeend", "<p>Processing your order</p>"); ${confirm(4000)}`,
+      }[variant];
+      return route.fulfill({
+        contentType: "text/html",
+        body: `<p aria-label="Item">${item}</p><p aria-label="Order total">$${(Number(quantity) * 12.5).toFixed(2)}</p>
+          <form aria-label="Review" ${variant === "novalidate" ? "novalidate" : ""}>
+          <input type="hidden" name="item" value="${item}"><input type="hidden" name="quantity" value="${quantity}">
+          ${field}<button>Place order</button></form>
+          <script>
+            const form = document.forms[0];
+            form.addEventListener("submit", async (event) => {
+              event.preventDefault();
+              const answer = await fetch("/orders", { method: "POST", body: new URLSearchParams(new FormData(form)) });
+              const number = await answer.text();
+              ${saved}
+            });
+          </script>`,
+      });
+    }
+    if (url.pathname === "/orders" && request.method() === "POST") {
+      orders.push(new URLSearchParams(request.postData() ?? "").get("item") ?? "");
+      return route.fulfill({ contentType: "text/plain", body: `ORD-${1000 + orders.length}` });
+    }
+    return route.fulfill({ status: 404, body: "Not found" });
+  });
+};
+
+for (const variant of ["reset", "novalidate", "processing"] as const)
+  test(`write-session example never clicks again when a field on the page before the click is flagged after it (${variant})`, async ({
+    page,
+  }) => {
+    const origin = "https://shop.example.invalid";
+    const orders: string[] = [];
+    await savingReviewSite(page, origin, orders, variant);
+    await page.goto("about:blank");
+    const asked: InputRequest[] = [];
+    const saved = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+      siteOrigin: origin,
+      answer: (request) => {
+        asked.push(request);
+        return { extra_field: "an answer" };
+      },
+    });
+    // The flagged field was there before the click, so nothing proves the click saved nothing.
+    expect(orders).toEqual(["lamp"]);
+    expect(asked).toEqual([]);
+    expect(saved.commits).toEqual([{ name: "place-order", state: "sent" }]);
+    expect(failure(saved.result)).toMatchObject({ _tag: "OperationFailure", message: "not_confirmed" });
+  });
+
 test("write-session example refuses a total over the caller's limit before its commit mark", async ({
   page,
 }) => {

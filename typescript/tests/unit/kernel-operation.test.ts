@@ -1103,7 +1103,7 @@ describe("browser calls while the host signs in", () => {
 // with a required field flagged empty, marks that step unsent again, so the run reports it as
 // never sent; a step that may have saved never goes back.
 describe("a commit step whose click saved nothing", () => {
-  it("reads unsent again only when this run entered it from unsent and nothing confirmed it since", async () => {
+  it("reads unsent again once, only when this run entered it from unsent and nothing confirmed it since", async () => {
     const journal = await Effect.runPromise(makeEffectJournal);
     const revert = (name: string) =>
       Effect.runSync(Effect.either(journal.notCommitted?.(name) ?? Effect.die("no notCommitted")));
@@ -1118,15 +1118,24 @@ describe("a commit step whose click saved nothing", () => {
       { name: "save-details", state: "sent" },
       { name: "place-order", state: "not_sent" },
     ]);
-    // A step never entered, or already back, stays as it is.
-    expect(revert("place-order")).toEqual(Either.right(undefined));
-    // Entered twice without going back between, the second click may have saved.
-    Effect.runSync(journal.enteringCommit("place-order"));
-    Effect.runSync(journal.enteringCommit("place-order"));
-    expect(revert("place-order")).toEqual(
-      Either.left(expect.objectContaining({ _tag: "CommitAlreadySent", name: "place-order" })),
+    // A step goes back once a run: asked again, even while it reads unsent, it refuses.
+    const refused = Either.left(
+      expect.objectContaining({ _tag: "CommitAlreadySent", name: "place-order" }),
     );
+    expect(revert("place-order")).toEqual(refused);
+    // Entered again and refused again, the second click may have saved, and it stays sent.
+    Effect.runSync(journal.enteringCommit("place-order"));
+    expect(revert("place-order")).toEqual(refused);
     expect(commits()).toContainEqual({ name: "place-order", state: "sent" });
+    // A step never entered stays as it is.
+    expect(revert("confirm-terms")).toEqual(Either.right(undefined));
+    // Entered twice without going back between, the second click may have saved.
+    const twice = await Effect.runPromise(makeEffectJournal);
+    Effect.runSync(twice.enteringCommit("place-order"));
+    Effect.runSync(twice.enteringCommit("place-order"));
+    expect(Effect.runSync(Effect.either(twice.notCommitted?.("place-order") ?? Effect.void))).toEqual(
+      refused,
+    );
     // A confirmed step saved, even once a later call reopens it.
     const confirmedJournal = await Effect.runPromise(makeEffectJournal);
     Effect.runSync(confirmedJournal.enteringCommit("place-order"));

@@ -166,8 +166,27 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
   <label>Card number<input name="n12" required></label>
   <label>Password<input name="n13" required></label>
   <label>Number on card<input name="cardNumber" required></label>
+  <label>Card #<input name="n14" required></label>
+  <label>Credit card<input name="n15" required></label>
+  <label>Card verification value<input name="n16" required></label>
+  <label>CVN<input name="n17" required></label>
+  <label>CID<input name="n18" required></label>
+  <label>OTP<input name="n19" required></label>
+  <label>SMS code<input name="n20" required></label>
+  <label>Authentication code<input name="n21" required></label>
+  <label>6-digit code<input name="n22" required></label>
+  <label>Card PIN<input name="n23" required></label>
+  <label>Kartennummer<input name="n24" required></label>
+  <label>Número de tarjeta<input name="n25" required></label>
+  <label>Numéro de carte<input name="n26" required></label>
+  <label>Passwort<input name="n27" required></label>
+  <label>Kennwort<input name="n28" required></label>
+  <label>Contraseña<input name="n29" required></label>
+  <label>Mot de passe<input name="n30" required></label>
   <label>Reference<input name="ref" required readonly></label>
   <label>Card message<input name="note" required></label>
+  <label>PIN code<input name="postal" required></label>
+  <label>Pincode<input name="postal2" required></label>
 </form>`);
   expect(await call(page, `return await unfilledRequiredFields(page.locator("form"));`)).toEqual({
     result: [
@@ -186,16 +205,35 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
         "Card number",
         "Password",
         "Number on card",
+        "Card #",
+        "Credit card",
+        "Card verification value",
+        "CVN",
+        "CID",
+        "OTP",
+        "SMS code",
+        "Authentication code",
+        "6-digit code",
+        "Card PIN",
+        "Kartennummer",
+        "Número de tarjeta",
+        "Numéro de carte",
+        "Passwort",
+        "Kennwort",
+        "Contraseña",
+        "Mot de passe",
       ].map((label) => ({ label, shape: "other", unsupported: true })),
       // A read-only box is not one the caller's answer can go into.
       { label: "Reference", shape: "other", unsupported: true },
-      // A greeting card's message is no card number.
+      // A greeting card's message is no card number, and a PIN code or pincode is a postcode.
       { label: "Card message", shape: "text" },
+      { label: "PIN code", shape: "text" },
+      { label: "Pincode", shape: "text" },
     ],
   });
 });
 
-test("unfilledRequiredFields lists a nested combobox once, merges repeated options and leaves a long list unlisted", async ({
+test("unfilledRequiredFields lists a nested combobox once, refuses repeated options and leaves a long list unlisted", async ({
   page,
 }) => {
   const many = Array.from({ length: 60 }, (_, index) => `<option>Font ${index + 1}</option>`).join("");
@@ -203,20 +241,21 @@ test("unfilledRequiredFields lists a nested combobox once, merges repeated optio
   <div role="combobox" aria-haspopup="listbox" aria-label="Size" aria-required="true" aria-expanded="false">
     <input role="textbox" aria-label="Size" aria-required="true">
   </div>
+  <div role="combobox" aria-haspopup="listbox" aria-label="Strap" aria-expanded="false">
+    <input aria-label="Strap" name="strap" required>
+  </div>
   <label>Colour<select name="colour" required><option value="">Choose</option><option>Red</option><option>Red</option><option>Blue</option></select></label>
+  <label>Nib<select name="nib" required><option value="">Choose</option><option value="s1">Small</option><option value="s2">Small</option></select></label>
   <label>Font<select name="font" required><option value="">Choose</option>${many}</select></label>
 </form>`);
   expect(await call(page, `return await unfilledRequiredFields(page.locator("form"));`)).toEqual({
     result: [
       { label: "Size", shape: "combobox" },
-      {
-        label: "Colour",
-        shape: "select",
-        options: [
-          { value: "Red", label: "Red" },
-          { value: "Blue", label: "Blue" },
-        ],
-      },
+      // A combobox whose own text box carries the required mark.
+      { label: "Strap", shape: "combobox" },
+      // Two options with one label can't be told apart by an answer.
+      { label: "Colour", shape: "select", unsupported: true },
+      { label: "Nib", shape: "select", unsupported: true },
       // Over 50 options: asked as text, and the answer still chooses its option.
       { label: "Font", shape: "select" },
     ],
@@ -225,6 +264,11 @@ test("unfilledRequiredFields lists a nested combobox once, merges repeated optio
     result: { shape: "select" },
   });
   expect(await submitted(page)).toMatchObject({ font: "Font 42" });
+  // Once its text box holds a value, the combobox is filled.
+  await page.locator("[name=strap]").fill("Leather");
+  expect(
+    await call(page, `return (await unfilledRequiredFields(page.locator("form"))).map((field) => field.label);`),
+  ).toEqual({ result: ["Size", "Colour", "Nib"] });
 });
 
 test("fillRequiredField names why it could not fill, never the value", async ({ page }) => {
@@ -260,33 +304,48 @@ test("fillRequiredField names why it could not fill, never the value", async ({ 
 
 /**
  * A review step whose Place order the site refuses until a field it shows only then is filled:
- * after the click the same form stays, with that field flagged empty.
+ * after the click the same form stays, with that field flagged empty. `hidden` holds the fields
+ * the page shows only after the click.
  */
-const blockedReview = (flags: string) => `
+const blockedReview = (hidden: string, shown = "") => `
 <form aria-label="Review">
   <label>Item<input name="item" required value="Fountain pen"></label>
-  ${flags}
+  ${shown}
+  <div id="later" hidden>${hidden}</div>
   <button>Place order</button>
-</form>`;
+</form>
+<script>document.forms[0].addEventListener("submit", (event) => event.preventDefault());</script>`;
 
-test("blockingRequiredFields proves a click saved nothing only when the form's every flag is an empty required field", async ({
+test("blockingRequiredFields proves a click saved nothing only when every flag is a new empty required field", async ({
   page,
 }) => {
   const form = `page.getByRole("form", { name: "Review" })`;
-  const blocking = () => call(page, `return await blockingRequiredFields(${form});`);
-  // The site's script flags the field it revealed, with its message beside it.
+  // The labels the form showed just before the click, then the page as the click left it.
+  const before = () => call(page, `return await visibleFieldLabels(${form});`);
+  const reveal = (flag: string) =>
+    page.evaluate((selector) => {
+      const later = document.querySelector("#later");
+      if (later instanceof HTMLElement) later.hidden = false;
+      for (const field of document.querySelectorAll(selector)) field.setAttribute("aria-invalid", "true");
+    }, flag);
+  const blocking = (labels: unknown) =>
+    call(page, `return await blockingRequiredFields(${form}, ${JSON.stringify(labels)});`);
+  // The site's script shows a field and flags it, with its message beside it.
   await page.setContent(
-    blockedReview(`<label>Delivery phone<input name="phone" aria-invalid="true" aria-describedby="phone-error"></label>
+    blockedReview(`<label>Delivery phone<input name="phone" aria-describedby="phone-error"></label>
     <p id="phone-error">Enter a phone number for the courier</p>`),
   );
-  expect(await blocking()).toEqual({ result: { fields: [{ label: "Delivery phone", shape: "text" }] } });
-  // A framework's class, and the browser's own check after a submit, flag a field too.
+  expect(await before()).toEqual({ result: ["Item"] });
+  await reveal("[name=phone]");
+  expect(await blocking(["Item"])).toEqual({ result: { fields: [{ label: "Delivery phone", shape: "text" }] } });
+  // A framework's class, and the browser's own check after a submit, flag a new field too.
   await page.setContent(
     blockedReview(`<label>Gift wrap<select name="wrap" class="is-invalid"><option value="">Choose</option><option>Paper</option><option>Cloth</option></select></label>
     <label>Delivery note<input name="note" required></label>`),
   );
-  await page.getByRole("button", { name: "Place order" }).click();
-  expect(await blocking()).toEqual({
+  await reveal("[name=none]");
+  await page.locator("#later").evaluate(() => document.forms[0]?.requestSubmit());
+  expect(await blocking(["Item"])).toEqual({
     result: {
       fields: [
         {
@@ -301,26 +360,31 @@ test("blockingRequiredFields proves a click saved nothing only when the form's e
       ],
     },
   });
-  // A flagged value the site refused, beside the empty field, may be the site's answer to a save:
-  // nothing is proven.
+  // A field that was on the page before the click proves nothing once flagged: an app may have
+  // saved and cleared it, or the page flagged it before the click.
+  await page.setContent(blockedReview("", `<label>Contact email<input name="email" aria-invalid="true"></label>`));
+  expect(await before()).toEqual({ result: ["Item", "Contact email"] });
+  expect(await blocking(["Item", "Contact email"])).toEqual({ result: null });
+  // A flagged value the site refused, beside the empty field, may be the site's answer to a save.
   await page.setContent(
-    blockedReview(`<label>Delivery phone<input name="phone" aria-invalid="true"></label>
-    <label>Promo code<input name="promo" value="OLD10" aria-invalid="true"></label>`),
+    blockedReview(`<label>Delivery phone<input name="phone"></label>
+    <label>Promo code<input name="promo" value="OLD10"></label>`),
   );
-  expect(await blocking()).toEqual({ result: null });
+  await reveal("[name=phone], [name=promo]");
+  expect(await blocking(["Item"])).toEqual({ result: null });
   // An empty required field the site never flagged proves nothing about the click.
   await page.setContent(blockedReview(`<label>Delivery phone<input name="phone" required></label>`));
-  expect(await blocking()).toEqual({ result: null });
+  await reveal("[name=none]");
+  expect(await blocking(["Item"])).toEqual({ result: null });
   // A flagged field no answer can go into proves nothing the tool can act on either.
-  await page.setContent(
-    blockedReview(`<label>Card number<input name="card" autocomplete="cc-number" aria-invalid="true"></label>`),
-  );
-  expect(await blocking()).toEqual({ result: null });
+  await page.setContent(blockedReview(`<label>Card number<input name="card" autocomplete="cc-number"></label>`));
+  await reveal("[name=card]");
+  expect(await blocking(["Item"])).toEqual({ result: null });
+  // Without the labels read before the click, it refuses to judge.
+  expect(await call(page, `return await blockingRequiredFields(${form});`)).toEqual({ error: "labels_missing" });
   // The form gone, or shown twice, is no longer the same step.
   await page.setContent(`<p>Order ORD-1001 is placed.</p>`);
-  expect(await blocking()).toEqual({ result: null });
-  await page.setContent(
-    `${blockedReview(`<input aria-label="Delivery phone" aria-invalid="true">`)}${blockedReview("")}`,
-  );
-  expect(await blocking()).toEqual({ result: null });
+  expect(await blocking(["Item"])).toEqual({ result: null });
+  await page.setContent(`${blockedReview("", `<input aria-label="Delivery phone" aria-invalid="true">`)}${blockedReview("")}`);
+  expect(await blocking(["Item"])).toEqual({ result: null });
 });

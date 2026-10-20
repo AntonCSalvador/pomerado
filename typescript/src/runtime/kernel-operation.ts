@@ -182,10 +182,11 @@ export interface KernelOperationContext<
   /**
    * Marks the named commit step unsent again, once the page proved that its click saved nothing:
    * `blockingRequiredFields` returned the fields that stopped it, so the same step still shows,
-   * every field it flagged is a required one left empty, and no confirmation showed. Call it
-   * right after the call that read that, before asking for those fields; then fill them, call
-   * `enteringCommit` again and click once more. A run that ends before that reports the step
-   * unsent. A step this run did not enter from unsent, or one confirmed since, throws
+   * every field it flagged is a required one that appeared with the click and is left empty, and
+   * no confirmation showed. Call it right after the call that read that, before asking for those
+   * fields; then fill them, call `enteringCommit` again and click once more. A run that ends
+   * before that reports the step unsent. It works once per step in a run: a second call for the
+   * same step, a step this run did not enter from unsent, or one confirmed since throws
    * `CommitAlreadySent`, which ends the run with the step still sent. An offline run ignores it.
    */
   readonly notCommitted: (name: string) => void;

@@ -71,8 +71,8 @@ export const CalendarDate = Schema.String.pipe(
  * string, then call its functions with your verified Playwright locators. Every function reads
  * back that the page took the value and throws an Error whose message is a fixed reason, never a
  * value: `date_invalid`, `format_mismatch`, `control_unsupported`, `listbox_missing`,
- * `option_missing`, `option_ambiguous`, `option_disabled`, `field_missing`, `field_ambiguous` or
- * `not_committed`.
+ * `option_missing`, `option_ambiguous`, `option_disabled`, `field_missing`, `field_ambiguous`,
+ * `labels_missing` or `not_committed`.
  *
  * - `formControlShape(control, { timeout }?)`: the control's shape (`FormControlShape`).
  * - `formatDate(iso, format, locale?)`: an ISO `YYYY-MM-DD` date as `format` writes it (see
@@ -94,22 +94,31 @@ export const CalendarDate = Schema.String.pipe(
  *   page order, such as ones it adds once an earlier answer is in. A field counts when it is
  *   visible, enabled, empty and marked `required` or `aria-required="true"`, or flagged invalid
  *   (`aria-invalid="true"`, the `is-invalid` class or the browser's own check after a submit). A
- *   control inside another one, such as a combobox's own text box, counts as that one. Each is
- *   `{ label, shape, options? }`, its label from its `<label for>`, a wrapping label,
- *   `aria-labelledby` or `aria-label`. A text box, select or combobox with a label is supported,
- *   and a select or combobox listing 1 to 50 different options now carries them as
- *   `{ value, label }`, ready for a site-field question. Any other field comes back
- *   `unsupported: true`: a checkbox, a date, a read-only box, one with no label, and a card,
- *   password, one-time code or identity number field, by its `autocomplete` (`cc-…`,
- *   `current-password`, `new-password`, `one-time-code`) or by a label, name or id such as card
- *   number, security code, CVV, SSN, verification code or password.
- * - `blockingRequiredFields(scope, { timeout }?)`: after a click that should have saved or moved
- *   on, whether the page proves the click saved nothing: `{ fields }` when the form still shows,
- *   once, and every control it flagged invalid is an empty required field a site-field question
- *   can ask, as `unfilledRequiredFields` lists them, and `null` otherwise, such as when the form is
- *   gone, nothing is flagged, or a filled or unsupported field is flagged too. Call it only once
- *   the click's wait found no confirmation and the form flagged a field, as a `{ invalid }`
- *   outcome of `waitForOutcomeResult` does.
+ *   control inside another one, such as a combobox's own text box, counts as that one, with its
+ *   required mark, flag and value. Each is `{ label, shape, options? }`, its label from its
+ *   `<label for>`, a wrapping label, `aria-labelledby` or `aria-label`. A text box, select or
+ *   combobox with a label is supported, and a select or combobox listing 1 to 50 options now
+ *   carries them as `{ value, label }`, ready for a site-field question. Any other field comes back
+ *   `unsupported: true`: a checkbox, a date, a read-only box, one with no label, a select or
+ *   combobox with two options of one label, and a card, password, one-time code or identity
+ *   number field, by its `autocomplete` (`cc-…`, `current-password`, `new-password`,
+ *   `one-time-code`) or by a label, name or id such as card number, card #, credit card, security
+ *   code, card verification, CVV, CVN, CID, SSN, verification, authentication or SMS code, OTP, a
+ *   6-digit code, a PIN (not a PIN code, which can be a postcode), password, and a few of their
+ *   German, Spanish and French names.
+ * - `visibleFieldLabels(scope, { timeout }?)`: the labels of every field the form shows now, named
+ *   as `unfilledRequiredFields` names them. Read them in the marked call just before the click, for
+ *   `blockingRequiredFields`.
+ * - `blockingRequiredFields(scope, before, { timeout }?)`: after a click that should have saved or
+ *   moved on, whether the page proves the click saved nothing. `before` is what
+ *   `visibleFieldLabels` read just before the click; without it, it throws `labels_missing`. It
+ *   returns `{ fields }` when the form still shows, once, and every control it flagged invalid is
+ *   an empty required field a site-field question can ask, as `unfilledRequiredFields` lists
+ *   them, that was not on the page before the click. Otherwise it returns `null`, such as when the
+ *   form is gone, nothing is flagged, a filled or unsupported field is flagged too, or a flagged
+ *   field was already showing, which a save may have cleared or the page may have flagged before.
+ *   Call it only once the click's wait found no confirmation and the form flagged a field, as a
+ *   `{ invalid }` outcome of `waitForOutcomeResult` does.
  * - `fillRequiredField(scope, label, answer, { timeout }?)`: fills the one supported field
  *   `unfilledRequiredFields` returned with that label: a text box is filled and read back, a
  *   select or combobox chooses `answer` with `chooseOption`. Returns `{ shape }`.
@@ -361,17 +370,20 @@ const formControlTextTypes = new Set(["", "text", "email", "tel", "url", "number
  * aria-required="true", or flagged invalid by aria-invalid="true", the is-invalid class or the
  * browser's own check after a submit), each with its label, its supported shape or unsupported, a
  * select's or combobox's options when it lists 1 to 50 now, whether the page flagged it, and its
- * control. A control inside another one, such as a combobox's own text box, is that one.
- * With flaggedOnly, only the flagged ones, and a count of the flagged controls that are not empty.
+ * control. A control inside another one, such as a combobox's own text box, is that one, and
+ * its required mark, flag and value count as that one's. Mode "flagged" keeps only the flagged
+ * ones and counts the flagged controls that are not empty; mode "labels" returns the labels of
+ * every visible control instead.
  */
-const formControlRequiredFields = async (scope, timeout, flaggedOnly = false) => {
+const formControlRequiredFields = async (scope, timeout, mode = "required") => {
   const candidates = scope.locator(formControlFieldSelector);
-  const found = await candidates.evaluateAll((elements) => {
+  const found = await candidates.evaluateAll((elements, labelsOnly) => {
     const words = (text) => String(text ?? "").replace(/[\s\u200b]+/g, " ").trim();
     // A card, a password, a one-time code or an identity number goes through the host's own
     // protected forms, never a site-field question.
     const secretTokens = /^(cc-.*|current-password|new-password|one-time-code)$/;
-    const secretWords = /\b(card ?(number|no)|cc ?(number|num)|security ?code|cvv2?|cvc2?|csc|ssn|social security|verification ?code|pass ?word|passcode)\b/i;
+    // A PIN code or pincode is a postcode in some countries, so only a PIN alone counts.
+    const secretWords = /\b(?:card ?(?:number|no)|cc ?(?:number|num)|credit card|card verification|security ?code|cvv2?|cvc2?|csc|cvn|cid|ssn|social security|verification ?code|authentication code|sms ?code|otp|\d[- ]?digit code|pass ?word|passcode|kartennummer|n[uú]mero de tarjeta|num[eé]ro de carte|passwort|kennwort|contrase[nñ]a|mot de passe)\b|\bcard ?#|\bpin\b(?! ?code)/i;
     const spaced = (text) => words(String(text ?? "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\-.[\]]+/g, " "));
     const flagMarks = '[aria-invalid="true"], .is-invalid' +
       (globalThis.CSS?.supports?.("selector(:user-invalid)") ? ", :user-invalid" : "");
@@ -417,28 +429,35 @@ const formControlRequiredFields = async (scope, timeout, flaggedOnly = false) =>
           .filter((option) => option.getAttribute("aria-disabled") !== "true")
           .map((option) => words(option.getAttribute("aria-label") || option.textContent));
       }
-      labels = [...new Set(labels.filter((label) => label !== ""))];
-      return labels.length >= 1 && labels.length <= 50 ? labels.map((label) => ({ value: label, label })) : undefined;
+      labels = labels.filter((label) => label !== "");
+      // Two options with one label can't be told apart by an answer.
+      if (new Set(labels).size < labels.length) return { duplicate: true };
+      return labels.length >= 1 && labels.length <= 50 ? { options: labels.map((label) => ({ value: label, label })) } : {};
     };
+    const shown = (element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
+    const outer = elements.filter((element) => !elements.some((other) => other !== element && other.contains(element)));
+    if (labelsOnly) return { labels: outer.filter(shown).map(nameOf) };
     let flaggedFilled = 0;
     const fields = elements.flatMap((element, index) => {
-      if (elements.some((other) => other !== element && other.contains(element))) return [];
-      const style = getComputedStyle(element);
-      const visible = element.getClientRects().length > 0 && style.visibility !== "hidden";
+      if (!outer.includes(element)) return [];
+      // A combobox's own text box, inside it, carries its required mark, flag and value.
+      const parts = [element, ...elements.filter((other) => other !== element && element.contains(other))];
       const enabled = !element.matches(":disabled") && element.getAttribute("aria-disabled") !== "true";
-      const flagged = element.matches(flagMarks);
-      const required = element.required === true || element.getAttribute("aria-required") === "true" || flagged;
-      if (!visible || !enabled || !required) return [];
-      if (!isEmpty(element)) {
+      const flagged = parts.some((part) => part.matches(flagMarks));
+      const required = flagged || parts.some((part) => part.required === true || part.getAttribute("aria-required") === "true");
+      if (!shown(element) || !enabled || !required) return [];
+      if (!parts.every(isEmpty)) {
         if (flagged) flaggedFilled += 1;
         return [];
       }
       const label = nameOf(element);
       const tokens = (element.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/);
+      const listed = optionsOf(element);
       return [{
         index,
         label,
-        options: optionsOf(element),
+        options: listed.options,
+        duplicate: listed.duplicate === true,
         input: element instanceof HTMLInputElement ? element.type : undefined,
         secret:
           tokens.some((token) => secretTokens.test(token)) ||
@@ -448,15 +467,18 @@ const formControlRequiredFields = async (scope, timeout, flaggedOnly = false) =>
       }];
     });
     return { fields, flaggedFilled };
-  });
+  }, mode === "labels");
+  if (mode === "labels") return found.labels;
   const fields = [];
   for (const field of found.fields) {
-    if (flaggedOnly && !field.flagged) continue;
+    if (mode === "flagged" && !field.flagged) continue;
     const control = candidates.nth(field.index);
     let shape = await formControlShape(control, { timeout });
     if (field.secret || (shape === "text" && ((field.input !== undefined && !formControlTextTypes.has(field.input)) || field.readOnly)))
       shape = "other";
-    const supported = field.label !== "" && (shape === "text" || shape === "select" || shape === "combobox");
+    const supported =
+      field.label !== "" &&
+      (shape === "text" || ((shape === "select" || shape === "combobox") && !field.duplicate));
     fields.push({
       label: field.label,
       shape,
@@ -465,15 +487,21 @@ const formControlRequiredFields = async (scope, timeout, flaggedOnly = false) =>
       control,
     });
   }
-  return flaggedOnly ? { fields, flaggedFilled: found.flaggedFilled } : fields;
+  return mode === "flagged" ? { fields, flaggedFilled: found.flaggedFilled } : fields;
 };
 const unfilledRequiredFields = async (scope, options = {}) =>
   (await formControlRequiredFields(scope, options.timeout ?? 10000)).map(({ control, ...field }) => field);
-const blockingRequiredFields = async (scope, options = {}) => {
+const visibleFieldLabels = async (scope, options = {}) =>
+  formControlRequiredFields(scope, options.timeout ?? 10000, "labels");
+const blockingRequiredFields = async (scope, before, options = {}) => {
+  if (!Array.isArray(before)) throw formControlFailure("labels_missing");
   const timeout = options.timeout ?? 10000;
   if ((await scope.count()) !== 1 || !(await scope.isVisible())) return null;
-  const { fields, flaggedFilled } = await formControlRequiredFields(scope, timeout, true);
-  if (fields.length === 0 || flaggedFilled > 0 || fields.some((field) => field.unsupported)) return null;
+  const { fields, flaggedFilled } = await formControlRequiredFields(scope, timeout, "flagged");
+  // A field the page already showed before the click may have been cleared or flagged by a save.
+  const seen = new Set(before.map(String));
+  if (fields.length === 0 || flaggedFilled > 0 || fields.some((field) => field.unsupported || seen.has(field.label)))
+    return null;
   return { fields: fields.map(({ control, ...field }) => field) };
 };
 const fillRequiredField = async (scope, label, answer, options = {}) => {
