@@ -39,8 +39,11 @@ const identityValues = (
   ].flatMap((value) => (value === undefined || value.length < 3 ? [] : [value.toLowerCase()]));
 };
 
-/** Whether a text names a known identity value, or a placeholder the minter saw for one. */
-const namesIdentity = (text: string, values: readonly string[]) => {
+/**
+ * Whether a text names a known identity value, or one of the shared masks (`[password]`, `[code]`,
+ * `[recovery_code]`). The local `[private]` mask is the local recorder's own check (`holdsMask`).
+ */
+const namesIdentityOrSharedMask = (text: string, values: readonly string[]) => {
   const lower = text.toLowerCase();
   return (
     values.some((value) => lower.includes(value)) ||
@@ -50,7 +53,7 @@ const namesIdentity = (text: string, values: readonly string[]) => {
 
 /** Whether the check names a known identity value, or a placeholder the minter saw for one. */
 const holdsIdentity = (indicator: AutofillSignedIn, values: readonly string[]) =>
-  namesIdentity(
+  namesIdentityOrSharedMask(
     [indicator.selector, indicator.urlPath, indicator.openPath]
       .filter((part) => part !== undefined)
       .join(" "),
@@ -105,12 +108,12 @@ export const stepIdentityRefusal = (
     ...(step.submit === undefined ? [] : [step.submit]),
     ...(step.methods ?? []).map((option) => option.selector),
   ];
-  const named = selectors.findIndex((selector) => namesIdentity(selector, values));
+  const named = selectors.findIndex((selector) => namesIdentityOrSharedMask(selector, values));
   if (named !== -1)
     return refusedStep(h, "selector_names_contact", named, identityNotices.selectors);
   // An address may carry a value percent-encoded, such as an email's `@` as `%40`.
   const encoded = values.map((value) => encodeURIComponent(value).toLowerCase());
-  if (namesIdentity(page, [...values, ...encoded]))
+  if (namesIdentityOrSharedMask(page, [...values, ...encoded]))
     return refusedStep(
       h,
       "page_names_contact",
