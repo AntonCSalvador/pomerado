@@ -81,6 +81,15 @@ export { FileInput, FileOutput, FileRefused, defaultFileLimits } from "../runtim
 export type { FileObject, FileLimits, PlacedFile, ScriptFiles } from "../runtime/files.js";
 export type { FormControlShape } from "./form-controls.js";
 export type {
+  InvalidField,
+  OutcomeEvidence,
+  OutcomeKind,
+  OutcomeKindObservation,
+  OutcomeResult,
+  ReadyBlocker,
+  ReadyResult,
+} from "./action-waits.js";
+export type {
   OutcomeObservation,
   WaitProgress,
   WaitProgressSign,
