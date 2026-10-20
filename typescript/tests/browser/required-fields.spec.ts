@@ -4,8 +4,8 @@ import { formControlsCode } from "../../src/browser/form-controls.js";
 import { makeLocalKernel } from "../../src/testing/local-kernel.js";
 
 // The authoring library's required-field helpers, run as a Kernel call body runs them (`page` in
-// scope) on a local quote form that adds required fields once an earlier answer is in. Chromium
-// must lay the page out: a field counts only while it is visible.
+// scope) on a local checkout form that adds required fields once an earlier answer is in.
+// Chromium must lay the page out: a field counts only while it is visible.
 const call = async (page: Page, body: string) => {
   const answer = await makeLocalKernel(page).browsers.playwright.execute("session-1", {
     timeout_sec: 10,
@@ -22,76 +22,76 @@ const submitted = (page: Page) =>
   });
 
 /**
- * A home insurance quote: answering that the roof was replaced reveals the fields that depend on
- * it, with fields that never count beside them (filled, hidden, disabled or optional).
+ * A checkout: choosing engraving reveals the fields that depend on it, with fields that never
+ * count beside them (filled, hidden, disabled or optional).
  */
-const quoteForm = `
-<form aria-label="Quote">
-  <label for="holder">Policy holder</label><input id="holder" name="holder" required value="Jane Doe">
-  <label for="replaced">Roof replaced</label>
-  <select id="replaced" name="replaced" required><option value="">Choose</option><option>Yes</option><option>No</option></select>
-  <fieldset id="roof" hidden>
-    <label for="year">Year of roof
-      replacement</label><input id="year" name="year" required>
-    <label>Roof material
-      <select name="material" required>
-        <option value="">Choose one</option><option>Asphalt shingle</option><option>Metal</option><option disabled>Thatch</option>
+const checkoutForm = `
+<form aria-label="Checkout">
+  <label for="item">Item</label><input id="item" name="item" required value="Fountain pen">
+  <label for="engraved">Engraving</label>
+  <select id="engraved" name="engraved" required><option value="">Choose</option><option>Yes</option><option>No</option></select>
+  <fieldset id="engraving" hidden>
+    <label for="text">Engraving
+      text</label><input id="text" name="text" required>
+    <label>Engraving style
+      <select name="style" required>
+        <option value="">Choose one</option><option>Script</option><option>Block capitals</option><option disabled>Gothic</option>
       </select>
     </label>
-    <span id="county-name">County</span>
-    <input role="combobox" name="county" aria-labelledby="county-name" aria-required="true" aria-expanded="false" aria-controls="county-list" autocomplete="off">
-    <div role="listbox" id="county-list" hidden><div role="option">Kent</div><div role="option">Essex</div></div>
-    <div role="combobox" aria-haspopup="listbox" aria-label="Roof pitch" aria-required="true" tabindex="0">&#8203;</div>
-    <input aria-label="Previous claims" name="claims" aria-invalid="true">
-    <input type="checkbox" id="confirm" name="confirm" required><label for="confirm">I confirm the details</label>
-    <label for="inspected">Inspection date</label><input type="date" id="inspected" name="inspected" required>
+    <span id="box-name">Gift box</span>
+    <input role="combobox" name="box" aria-labelledby="box-name" aria-required="true" aria-expanded="false" aria-controls="box-list" autocomplete="off">
+    <div role="listbox" id="box-list" hidden><div role="option">Plain</div><div role="option">Velvet</div></div>
+    <div role="combobox" aria-haspopup="listbox" aria-label="Ribbon colour" aria-required="true" tabindex="0">&#8203;</div>
+    <input aria-label="Gift message" name="message" aria-invalid="true">
+    <input type="checkbox" id="terms" name="terms" required><label for="terms">I accept the engraving terms</label>
+    <label for="ready">Ready by</label><input type="date" id="ready" name="ready" required>
     <label for="pin">Account PIN</label><input type="password" id="pin" name="pin" required>
     <input name="unnamed" required>
     <label for="notes">Notes</label><textarea id="notes" name="notes"></textarea>
-    <input aria-label="Agent code" name="agent" required style="display:none">
+    <input aria-label="Store code" name="store" required style="display:none">
     <input aria-label="Branch" name="branch" required disabled>
   </fieldset>
 </form>
 <script>
-  document.querySelector("#replaced").addEventListener("change", (event) => {
-    document.querySelector("#roof").hidden = event.target.value !== "Yes";
+  document.querySelector("#engraved").addEventListener("change", (event) => {
+    document.querySelector("#engraving").hidden = event.target.value !== "Yes";
   });
-  const county = document.querySelector("[role=combobox]");
-  const list = document.querySelector("#county-list");
-  county.addEventListener("click", () => { list.hidden = false; county.setAttribute("aria-expanded", "true"); });
+  const box = document.querySelector("[role=combobox]");
+  const list = document.querySelector("#box-list");
+  box.addEventListener("click", () => { list.hidden = false; box.setAttribute("aria-expanded", "true"); });
   list.addEventListener("click", (event) => {
-    county.value = event.target.closest("[role=option]").textContent;
+    box.value = event.target.closest("[role=option]").textContent;
     list.hidden = true;
-    county.setAttribute("aria-expanded", "false");
+    box.setAttribute("aria-expanded", "false");
   });
 </script>`;
 
-const roofFields = [
+const engravingFields = [
   {
-    label: "Year of roof replacement",
+    label: "Engraving text",
     shape: "text",
   },
   {
-    label: "Roof material",
+    label: "Engraving style",
     shape: "select",
     options: [
-      { value: "Asphalt shingle", label: "Asphalt shingle" },
-      { value: "Metal", label: "Metal" },
+      { value: "Script", label: "Script" },
+      { value: "Block capitals", label: "Block capitals" },
     ],
   },
   {
-    label: "County",
+    label: "Gift box",
     shape: "combobox",
     options: [
-      { value: "Kent", label: "Kent" },
-      { value: "Essex", label: "Essex" },
+      { value: "Plain", label: "Plain" },
+      { value: "Velvet", label: "Velvet" },
     ],
   },
   // A custom dropdown that shows a zero-width space while empty, its listbox not rendered yet.
-  { label: "Roof pitch", shape: "combobox" },
-  { label: "Previous claims", shape: "text" },
-  { label: "I confirm the details", shape: "other", unsupported: true },
-  { label: "Inspection date", shape: "date", unsupported: true },
+  { label: "Ribbon colour", shape: "combobox" },
+  { label: "Gift message", shape: "text" },
+  { label: "I accept the engraving terms", shape: "other", unsupported: true },
+  { label: "Ready by", shape: "date", unsupported: true },
   { label: "Account PIN", shape: "other", unsupported: true },
   { label: "", shape: "text", unsupported: true },
 ];
@@ -99,13 +99,13 @@ const roofFields = [
 test("unfilledRequiredFields finds the required fields an earlier answer revealed, by their labels", async ({
   page,
 }) => {
-  await page.setContent(quoteForm);
-  const form = `page.getByRole("form", { name: "Quote" })`;
-  // Before the tool answers the roof question from its input, that select is the one empty field.
+  await page.setContent(checkoutForm);
+  const form = `page.getByRole("form", { name: "Checkout" })`;
+  // Before the tool answers the engraving question from its input, that select is the one empty field.
   expect(await call(page, `return await unfilledRequiredFields(${form});`)).toEqual({
     result: [
       {
-        label: "Roof replaced",
+        label: "Engraving",
         shape: "select",
         options: [
           { value: "Yes", label: "Yes" },
@@ -114,25 +114,25 @@ test("unfilledRequiredFields finds the required fields an earlier answer reveale
       },
     ],
   });
-  await page.locator("#replaced").selectOption("Yes");
+  await page.locator("#engraved").selectOption("Yes");
   expect(await call(page, `return await unfilledRequiredFields(${form});`)).toEqual({
-    result: roofFields,
+    result: engravingFields,
   });
 });
 
 test("fillRequiredField fills a text field, a select and a combobox by label, and they drop out once filled", async ({
   page,
 }) => {
-  await page.setContent(quoteForm);
-  await page.locator("#replaced").selectOption("Yes");
-  const form = `page.getByRole("form", { name: "Quote" })`;
+  await page.setContent(checkoutForm);
+  await page.locator("#engraved").selectOption("Yes");
+  const form = `page.getByRole("form", { name: "Checkout" })`;
   expect(
     await call(
       page,
       `return [
-        await fillRequiredField(${form}, "Year of roof replacement", "1998"),
-        await fillRequiredField(${form}, "Roof material", "Metal"),
-        await fillRequiredField(${form}, "County", "Essex"),
+        await fillRequiredField(${form}, "Engraving text", "J.D."),
+        await fillRequiredField(${form}, "Engraving style", "Script"),
+        await fillRequiredField(${form}, "Gift box", "Velvet"),
         await unfilledRequiredFields(${form}),
       ];`,
     ),
@@ -141,24 +141,105 @@ test("fillRequiredField fills a text field, a select and a combobox by label, an
       { shape: "text" },
       { shape: "select" },
       { shape: "combobox" },
-      roofFields.filter(({ label }) => !["Year of roof replacement", "Roof material", "County"].includes(label)),
+      engravingFields.filter(({ label }) => !["Engraving text", "Engraving style", "Gift box"].includes(label)),
     ],
   });
-  expect(await submitted(page)).toMatchObject({ year: "1998", material: "Metal", county: "Essex" });
+  expect(await submitted(page)).toMatchObject({ text: "J.D.", style: "Script", box: "Velvet" });
+});
+
+test("unfilledRequiredFields never offers a card, code, password or identity number field as a question", async ({
+  page,
+}) => {
+  // Each is asked by the host's own protected forms, never as a site field, whatever its type.
+  await page.setContent(`<form>
+  <label>Number<input type="tel" name="n1" autocomplete="cc-number" required></label>
+  <label>Code<input type="tel" name="n2" autocomplete="billing cc-csc" required></label>
+  <label>Expiry<input name="n3" autocomplete="cc-exp" required></label>
+  <label>Choose a word<input name="n4" autocomplete="new-password" required></label>
+  <label>Your word<input name="n5" autocomplete="current-password" required></label>
+  <label>Text code<input name="n6" autocomplete="one-time-code" required></label>
+  <label>SSN<input name="n7" required></label>
+  <label>Social security number<input name="n8" required></label>
+  <label>Verification code<input name="n9" required></label>
+  <label>Security code<input name="n10" required></label>
+  <label>CVV<input name="n11" required></label>
+  <label>Card number<input name="n12" required></label>
+  <label>Password<input name="n13" required></label>
+  <label>Number on card<input name="cardNumber" required></label>
+  <label>Reference<input name="ref" required readonly></label>
+  <label>Card message<input name="note" required></label>
+</form>`);
+  expect(await call(page, `return await unfilledRequiredFields(page.locator("form"));`)).toEqual({
+    result: [
+      ...[
+        "Number",
+        "Code",
+        "Expiry",
+        "Choose a word",
+        "Your word",
+        "Text code",
+        "SSN",
+        "Social security number",
+        "Verification code",
+        "Security code",
+        "CVV",
+        "Card number",
+        "Password",
+        "Number on card",
+      ].map((label) => ({ label, shape: "other", unsupported: true })),
+      // A read-only box is not one the caller's answer can go into.
+      { label: "Reference", shape: "other", unsupported: true },
+      // A greeting card's message is no card number.
+      { label: "Card message", shape: "text" },
+    ],
+  });
+});
+
+test("unfilledRequiredFields lists a nested combobox once, merges repeated options and leaves a long list unlisted", async ({
+  page,
+}) => {
+  const many = Array.from({ length: 60 }, (_, index) => `<option>Font ${index + 1}</option>`).join("");
+  await page.setContent(`<form>
+  <div role="combobox" aria-haspopup="listbox" aria-label="Size" aria-required="true" aria-expanded="false">
+    <input role="textbox" aria-label="Size" aria-required="true">
+  </div>
+  <label>Colour<select name="colour" required><option value="">Choose</option><option>Red</option><option>Red</option><option>Blue</option></select></label>
+  <label>Font<select name="font" required><option value="">Choose</option>${many}</select></label>
+</form>`);
+  expect(await call(page, `return await unfilledRequiredFields(page.locator("form"));`)).toEqual({
+    result: [
+      { label: "Size", shape: "combobox" },
+      {
+        label: "Colour",
+        shape: "select",
+        options: [
+          { value: "Red", label: "Red" },
+          { value: "Blue", label: "Blue" },
+        ],
+      },
+      // Over 50 options: asked as text, and the answer still chooses its option.
+      { label: "Font", shape: "select" },
+    ],
+  });
+  expect(await call(page, `return await fillRequiredField(page.locator("form"), "Font", "Font 42");`)).toEqual({
+    result: { shape: "select" },
+  });
+  expect(await submitted(page)).toMatchObject({ font: "Font 42" });
 });
 
 test("fillRequiredField names why it could not fill, never the value", async ({ page }) => {
   await page.setContent(`<form>
-  <label>Year built<input name="built" required></label>
+  <label>Engraving text<input name="text" required></label>
   <label>Owner<input name="first" required></label><label>Owner<input name="second" required></label>
   <label>Postcode<input name="postcode" required></label>
-  <label>Contact by post<input type="checkbox" name="post" required></label>
+  <label>Copies<input type="number" name="copies" required></label>
+  <label>Gift receipt<input type="checkbox" name="receipt" required></label>
 </form>
 <script>
   document.querySelector("[name=postcode]").addEventListener("input", (event) => { event.target.value = ""; });
 </script>`);
   const form = `page.locator("form")`;
-  expect(await call(page, `return await fillRequiredField(${form}, "Year of purchase", "2001");`)).toEqual({
+  expect(await call(page, `return await fillRequiredField(${form}, "Engraving font", "Script");`)).toEqual({
     error: "field_missing",
   });
   expect(await call(page, `return await fillRequiredField(${form}, "Owner", "Sam Roe");`)).toEqual({
@@ -167,8 +248,79 @@ test("fillRequiredField names why it could not fill, never the value", async ({ 
   expect(await call(page, `return await fillRequiredField(${form}, "Postcode", "AB1 2CD");`)).toEqual({
     error: "not_committed",
   });
-  expect(await call(page, `return await fillRequiredField(${form}, "Contact by post", "yes");`)).toEqual({
+  // A number box refuses letters, and Playwright's own error would quote them.
+  expect(await call(page, `return await fillRequiredField(${form}, "Copies", "SECRETVALUE");`)).toEqual({
+    error: "not_committed",
+  });
+  expect(await call(page, `return await fillRequiredField(${form}, "Gift receipt", "yes");`)).toEqual({
     error: "field_missing",
   });
-  expect(await submitted(page)).toEqual({ built: "", first: "", second: "", postcode: "" });
+  expect(await submitted(page)).toEqual({ text: "", first: "", second: "", postcode: "", copies: "" });
+});
+
+/**
+ * A review step whose Place order the site refuses until a field it shows only then is filled:
+ * after the click the same form stays, with that field flagged empty.
+ */
+const blockedReview = (flags: string) => `
+<form aria-label="Review">
+  <label>Item<input name="item" required value="Fountain pen"></label>
+  ${flags}
+  <button>Place order</button>
+</form>`;
+
+test("blockingRequiredFields proves a click saved nothing only when the form's every flag is an empty required field", async ({
+  page,
+}) => {
+  const form = `page.getByRole("form", { name: "Review" })`;
+  const blocking = () => call(page, `return await blockingRequiredFields(${form});`);
+  // The site's script flags the field it revealed, with its message beside it.
+  await page.setContent(
+    blockedReview(`<label>Delivery phone<input name="phone" aria-invalid="true" aria-describedby="phone-error"></label>
+    <p id="phone-error">Enter a phone number for the courier</p>`),
+  );
+  expect(await blocking()).toEqual({ result: { fields: [{ label: "Delivery phone", shape: "text" }] } });
+  // A framework's class, and the browser's own check after a submit, flag a field too.
+  await page.setContent(
+    blockedReview(`<label>Gift wrap<select name="wrap" class="is-invalid"><option value="">Choose</option><option>Paper</option><option>Cloth</option></select></label>
+    <label>Delivery note<input name="note" required></label>`),
+  );
+  await page.getByRole("button", { name: "Place order" }).click();
+  expect(await blocking()).toEqual({
+    result: {
+      fields: [
+        {
+          label: "Gift wrap",
+          shape: "select",
+          options: [
+            { value: "Paper", label: "Paper" },
+            { value: "Cloth", label: "Cloth" },
+          ],
+        },
+        { label: "Delivery note", shape: "text" },
+      ],
+    },
+  });
+  // A flagged value the site refused, beside the empty field, may be the site's answer to a save:
+  // nothing is proven.
+  await page.setContent(
+    blockedReview(`<label>Delivery phone<input name="phone" aria-invalid="true"></label>
+    <label>Promo code<input name="promo" value="OLD10" aria-invalid="true"></label>`),
+  );
+  expect(await blocking()).toEqual({ result: null });
+  // An empty required field the site never flagged proves nothing about the click.
+  await page.setContent(blockedReview(`<label>Delivery phone<input name="phone" required></label>`));
+  expect(await blocking()).toEqual({ result: null });
+  // A flagged field no answer can go into proves nothing the tool can act on either.
+  await page.setContent(
+    blockedReview(`<label>Card number<input name="card" autocomplete="cc-number" aria-invalid="true"></label>`),
+  );
+  expect(await blocking()).toEqual({ result: null });
+  // The form gone, or shown twice, is no longer the same step.
+  await page.setContent(`<p>Order ORD-1001 is placed.</p>`);
+  expect(await blocking()).toEqual({ result: null });
+  await page.setContent(
+    `${blockedReview(`<input aria-label="Delivery phone" aria-invalid="true">`)}${blockedReview("")}`,
+  );
+  expect(await blocking()).toEqual({ result: null });
 });

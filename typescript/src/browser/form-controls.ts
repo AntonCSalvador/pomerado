@@ -92,12 +92,24 @@ export const CalendarDate = Schema.String.pipe(
  *   scrolled when it renders its options as you scroll. Returns `{ shape, label, value }`.
  * - `unfilledRequiredFields(scope, { timeout }?)`: the empty required fields a form shows now, in
  *   page order, such as ones it adds once an earlier answer is in. A field counts when it is
- *   visible, enabled, empty and marked `required`, `aria-required="true"` or
- *   `aria-invalid="true"`. Each is `{ label, shape, options? }`, its label from its `<label for>`,
- *   a wrapping label, `aria-labelledby` or `aria-label`. A text box, select or combobox with a
- *   label is supported, and a select or combobox listing 1 to 50 options now carries them as
- *   `{ value, label }`, ready for a site-field question. Any other field, such as a checkbox, a
- *   date, a password or one-time code, or one with no label, comes back `unsupported: true`.
+ *   visible, enabled, empty and marked `required` or `aria-required="true"`, or flagged invalid
+ *   (`aria-invalid="true"`, the `is-invalid` class or the browser's own check after a submit). A
+ *   control inside another one, such as a combobox's own text box, counts as that one. Each is
+ *   `{ label, shape, options? }`, its label from its `<label for>`, a wrapping label,
+ *   `aria-labelledby` or `aria-label`. A text box, select or combobox with a label is supported,
+ *   and a select or combobox listing 1 to 50 different options now carries them as
+ *   `{ value, label }`, ready for a site-field question. Any other field comes back
+ *   `unsupported: true`: a checkbox, a date, a read-only box, one with no label, and a card,
+ *   password, one-time code or identity number field, by its `autocomplete` (`cc-…`,
+ *   `current-password`, `new-password`, `one-time-code`) or by a label, name or id such as card
+ *   number, security code, CVV, SSN, verification code or password.
+ * - `blockingRequiredFields(scope, { timeout }?)`: after a click that should have saved or moved
+ *   on, whether the page proves the click saved nothing: `{ fields }` when the form still shows,
+ *   once, and every control it flagged invalid is an empty required field a site-field question
+ *   can ask, as `unfilledRequiredFields` lists them, and `null` otherwise, such as when the form is
+ *   gone, nothing is flagged, or a filled or unsupported field is flagged too. Call it only once
+ *   the click's wait found no confirmation and the form flagged a field, as a `{ invalid }`
+ *   outcome of `waitForOutcomeResult` does.
  * - `fillRequiredField(scope, label, answer, { timeout }?)`: fills the one supported field
  *   `unfilledRequiredFields` returned with that label: a text box is filled and read back, a
  *   select or combobox chooses `answer` with `chooseOption`. Returns `{ shape }`.
@@ -160,6 +172,15 @@ const formControlPick = (options, wanted) => {
   return { failure: "option_missing" };
 };
 const formControlSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Playwright's error for a fill the page refused quotes the value, so it becomes the fixed reason. */
+const formControlFill = (control, text, timeout) =>
+  control.fill(text, { timeout }).catch(() => {
+    throw formControlFailure("not_committed");
+  });
+const formControlTypeKeys = (control, keys, timeout) =>
+  control.pressSequentially(keys, { timeout }).catch(() => {
+    throw formControlFailure("not_committed");
+  });
 const formControlChooseNative = async (control, wanted, timeout) => {
   const options = await control.evaluate((select) =>
     Array.from(select.options).map((option, index) => ({
@@ -235,7 +256,7 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
       })
     : null;
   if (listbox === null && editable) {
-    await control.fill(wanted[0], { timeout });
+    await formControlFill(control, wanted[0], timeout);
     typed = true;
   }
   listbox ??= await formControlListbox(control, frame, until, timeout);
@@ -253,7 +274,7 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
     if (picked.failure !== "option_missing" || Date.now() >= until) break;
     // A dropdown that filters as you type shows its options for the typed text.
     if (editable && !typed) {
-      await control.fill(wanted[0], { timeout });
+      await formControlFill(control, wanted[0], timeout);
       typed = true;
       continue;
     }
@@ -309,7 +330,7 @@ const fillDate = async (control, iso, format, options = {}) => {
   const locale = (await frame.evaluate(() => document.documentElement.lang).catch(() => "")) || "en-US";
   if (shape === "date") {
     formatDate(iso, "YYYY-MM-DD");
-    await control.fill(iso, { timeout });
+    await formControlFill(control, iso, timeout);
     if ((await control.inputValue({ timeout })) !== iso) throw formControlFailure("not_committed");
     return { shape };
   }
@@ -319,13 +340,13 @@ const fillDate = async (control, iso, format, options = {}) => {
   }
   if (shape !== "text") throw formControlFailure("control_unsupported");
   const text = formatDate(iso, format, locale);
-  await control.fill(text, { timeout });
+  await formControlFill(control, text, timeout);
   if (formControlSameText(await control.inputValue({ timeout }), text)) return { shape };
   // A masked field rewrites what is filled at once; it takes the date typed key by key, with or
   // without its separators.
   for (const keys of [text, text.replace(/[^\p{L}\p{N}]/gu, "")]) {
-    await control.fill("", { timeout });
-    await control.pressSequentially(keys, { timeout });
+    await formControlFill(control, "", timeout);
+    await formControlTypeKeys(control, keys, timeout);
     if (formControlSameText(await control.inputValue({ timeout }), text)) return { shape };
   }
   throw formControlFailure("not_committed");
@@ -337,13 +358,23 @@ const formControlFieldSelector =
 const formControlTextTypes = new Set(["", "text", "email", "tel", "url", "number", "search"]);
 /**
  * Every visible, enabled, empty control in scope that is marked required (required,
- * aria-required="true", or aria-invalid="true"), each with its label, its supported shape or
- * unsupported, a select's or combobox's options when it lists 1 to 50 now, and its control.
+ * aria-required="true", or flagged invalid by aria-invalid="true", the is-invalid class or the
+ * browser's own check after a submit), each with its label, its supported shape or unsupported, a
+ * select's or combobox's options when it lists 1 to 50 now, whether the page flagged it, and its
+ * control. A control inside another one, such as a combobox's own text box, is that one.
+ * With flaggedOnly, only the flagged ones, and a count of the flagged controls that are not empty.
  */
-const formControlRequiredFields = async (scope, timeout) => {
+const formControlRequiredFields = async (scope, timeout, flaggedOnly = false) => {
   const candidates = scope.locator(formControlFieldSelector);
   const found = await candidates.evaluateAll((elements) => {
     const words = (text) => String(text ?? "").replace(/[\s\u200b]+/g, " ").trim();
+    // A card, a password, a one-time code or an identity number goes through the host's own
+    // protected forms, never a site-field question.
+    const secretTokens = /^(cc-.*|current-password|new-password|one-time-code)$/;
+    const secretWords = /\b(card ?(number|no)|cc ?(number|num)|security ?code|cvv2?|cvc2?|csc|ssn|social security|verification ?code|pass ?word|passcode)\b/i;
+    const spaced = (text) => words(String(text ?? "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\-.[\]]+/g, " "));
+    const flagMarks = '[aria-invalid="true"], .is-invalid' +
+      (globalThis.CSS?.supports?.("selector(:user-invalid)") ? ", :user-invalid" : "");
     // A wrapping label holds the control itself, whose value or options are not its name.
     const labelText = (label) => {
       const copy = label.cloneNode(true);
@@ -386,31 +417,44 @@ const formControlRequiredFields = async (scope, timeout) => {
           .filter((option) => option.getAttribute("aria-disabled") !== "true")
           .map((option) => words(option.getAttribute("aria-label") || option.textContent));
       }
-      labels = labels.filter((label) => label !== "");
+      labels = [...new Set(labels.filter((label) => label !== ""))];
       return labels.length >= 1 && labels.length <= 50 ? labels.map((label) => ({ value: label, label })) : undefined;
     };
-    return elements.flatMap((element, index) => {
+    let flaggedFilled = 0;
+    const fields = elements.flatMap((element, index) => {
+      if (elements.some((other) => other !== element && other.contains(element))) return [];
       const style = getComputedStyle(element);
       const visible = element.getClientRects().length > 0 && style.visibility !== "hidden";
       const enabled = !element.matches(":disabled") && element.getAttribute("aria-disabled") !== "true";
-      const required =
-        element.required === true || element.getAttribute("aria-required") === "true" || element.getAttribute("aria-invalid") === "true";
-      if (!visible || !enabled || !required || !isEmpty(element)) return [];
+      const flagged = element.matches(flagMarks);
+      const required = element.required === true || element.getAttribute("aria-required") === "true" || flagged;
+      if (!visible || !enabled || !required) return [];
+      if (!isEmpty(element)) {
+        if (flagged) flaggedFilled += 1;
+        return [];
+      }
+      const label = nameOf(element);
+      const tokens = (element.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/);
       return [{
         index,
-        label: nameOf(element),
+        label,
         options: optionsOf(element),
         input: element instanceof HTMLInputElement ? element.type : undefined,
-        code: (element.getAttribute("autocomplete") ?? "").split(/\s+/).includes("one-time-code"),
+        secret:
+          tokens.some((token) => secretTokens.test(token)) ||
+          [label, element.getAttribute("name"), element.id].some((text) => secretWords.test(spaced(text))),
         readOnly: element.readOnly === true,
+        flagged,
       }];
     });
+    return { fields, flaggedFilled };
   });
   const fields = [];
-  for (const field of found) {
+  for (const field of found.fields) {
+    if (flaggedOnly && !field.flagged) continue;
     const control = candidates.nth(field.index);
     let shape = await formControlShape(control, { timeout });
-    if (shape === "text" && ((field.input !== undefined && !formControlTextTypes.has(field.input)) || field.code || field.readOnly))
+    if (field.secret || (shape === "text" && ((field.input !== undefined && !formControlTextTypes.has(field.input)) || field.readOnly)))
       shape = "other";
     const supported = field.label !== "" && (shape === "text" || shape === "select" || shape === "combobox");
     fields.push({
@@ -421,10 +465,17 @@ const formControlRequiredFields = async (scope, timeout) => {
       control,
     });
   }
-  return fields;
+  return flaggedOnly ? { fields, flaggedFilled: found.flaggedFilled } : fields;
 };
 const unfilledRequiredFields = async (scope, options = {}) =>
   (await formControlRequiredFields(scope, options.timeout ?? 10000)).map(({ control, ...field }) => field);
+const blockingRequiredFields = async (scope, options = {}) => {
+  const timeout = options.timeout ?? 10000;
+  if ((await scope.count()) !== 1 || !(await scope.isVisible())) return null;
+  const { fields, flaggedFilled } = await formControlRequiredFields(scope, timeout, true);
+  if (fields.length === 0 || flaggedFilled > 0 || fields.some((field) => field.unsupported)) return null;
+  return { fields: fields.map(({ control, ...field }) => field) };
+};
 const fillRequiredField = async (scope, label, answer, options = {}) => {
   const timeout = options.timeout ?? 10000;
   const matched = (await formControlRequiredFields(scope, timeout)).filter((field) => field.label === label && !field.unsupported);
@@ -436,7 +487,7 @@ const fillRequiredField = async (scope, label, answer, options = {}) => {
     await chooseOption(field.control, text, { timeout });
     return { shape: field.shape };
   }
-  await field.control.fill(text, { timeout });
+  await formControlFill(field.control, text, timeout);
   const shown = await field.control.evaluate(
     (element) => ("value" in element ? element.value : element.textContent),
     undefined,

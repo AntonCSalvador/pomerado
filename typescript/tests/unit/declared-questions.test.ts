@@ -272,28 +272,28 @@ describe("card questions in a script", () => {
 });
 
 describe("a site-field question", () => {
-  // A form that adds a required field once earlier answers are in, such as the year of a roof
-  // replacement after the caller said the roof was replaced. Its label comes from the page.
+  // A checkout that adds a required field once earlier answers are in, such as the engraving
+  // text after the caller chose an item that is engraved. Its label comes from the page.
   const declared: ScriptQuestionDeclarations = { note, extra: { type: "site_field" } };
-  const label = "Year of roof replacement";
+  const label = "Engraving text";
   const options = [
-    { value: "Before 2000", label: "Before 2000" },
-    { value: "2000 or later", label: "2000 or later" },
+    { value: "Initials", label: "Initials" },
+    { value: "Full name", label: "Full name" },
   ];
 
   it("asks a text field by the page's label, and a select by its label and options", () => {
     const text = requestFor(declared, { extra: { label } });
     expect(text.questions).toEqual([{ id: "extra", type: "text", prompt: label }]);
     expect(asksAsDeclared(text, declared)).toBe(true);
-    const choice = requestFor(declared, { extra: { label: "Roof material", options } });
+    const choice = requestFor(declared, { extra: { label: "Engraving", options } });
     expect(choice.questions).toEqual([
       {
         id: "extra",
         type: "choice",
-        prompt: "Roof material",
+        prompt: "Engraving",
         options: [
-          { id: "o1", label: "Before 2000" },
-          { id: "o2", label: "2000 or later" },
+          { id: "o1", label: "Initials" },
+          { id: "o2", label: "Full name" },
         ],
       },
     ]);
@@ -326,7 +326,7 @@ describe("a site-field question", () => {
 
   it("is read from a draft's literal declaration", () => {
     const source = operation(
-      `{name:"quote",input:Schema.Unknown,output:Schema.Unknown,questions:{extra:{type:"site_field"}}}`,
+      `{name:"order",input:Schema.Unknown,output:Schema.Unknown,questions:{extra:{type:"site_field"}}}`,
     );
     expect(draftQuestionDeclarations("src/tool.mjs", source)).toEqual({ extra: { type: "site_field" } });
     expect(draftQuestionDeclarationFailure("src/tool.mjs", source)).toBeUndefined();
