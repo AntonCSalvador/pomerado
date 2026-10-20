@@ -173,6 +173,7 @@ const mintDependencies = (state: MintState, publicationDecisions: PublicationDec
       }).pipe(Effect.mapError(mintError)),
     reviewAndExecute: mintExecution(state),
     checkSignedInMarker: (marker) => state.markers.check(marker),
+    signInRefillRefused: () => state.recorder.passwordRefillRefused(),
     liveTests: localLiveTests(state),
     publish: mintPublication(state),
     // The local host keeps no recovery checkpoint; its write completion reads the assessments.
