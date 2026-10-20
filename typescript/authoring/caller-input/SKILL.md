@@ -34,9 +34,12 @@ an input that tailors the answer, which a read returns labeled with the value th
    When the refusal is obvious, start the message with "Caller input error:" so the caller gets
    it at once. It is obvious when the input alone breaks a rule of the task, as above, checked
    before any site action. It is also obvious when the page itself refuses the value in its own
-   words, which the message quotes. Never use that start when the tool's own read found
-   nothing, such as an empty suggestion list, a slider or list that hadn't loaded, or a day a
-   write finds disabled without the page saying why, and prefer not starting a refusal of an
+   words, which the message quotes, or when the site's own lookup of a record's own key, such as
+   an order, ticket or item number, or the site's own link to that record, shows the site's
+   not-found or empty result. Never use that start for a breakage, which goes to repair: a URL
+   the tool built itself, a page whose layout or controls the tool no longer finds, or a lookup,
+   slider or list that hadn't loaded. Nor when a suggestion list or picker offered nothing, or a
+   write finds a day disabled without the page saying why. Prefer not starting a refusal of an
    ambiguous value with it (below).
 3. Throw the error that matches what happened:
    - `InvalidInput`: the caller's value is wrong or the site does not offer it. It breaks a rule

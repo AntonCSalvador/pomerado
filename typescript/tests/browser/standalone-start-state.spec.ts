@@ -279,6 +279,21 @@ const startSite = async () => {
           return;
         }
         visits.push(path);
+        // A page that moved, one the site does not have, and one whose connection the site drops.
+        if (path === "/moved") {
+          response.writeHead(302, { location: "/entry" });
+          response.end();
+          return;
+        }
+        if (path === "/missing") {
+          response.writeHead(404, { "content-type": "text/html; charset=utf-8" });
+          response.end("<title>Not found</title><h1>Not found</h1>");
+          return;
+        }
+        if (path === "/dropped") {
+          response.destroy();
+          return;
+        }
         const signedOutHere =
           path === state.signOutOn && request.headers.cookie?.includes("member=signed") === true;
         if (signedOutHere) {
@@ -386,7 +401,7 @@ const build = (
   site: Site,
   request: {
     readonly url: string;
-    readonly effect: "read" | "write";
+    readonly effect: "read" | "write" | "ask";
     readonly authenticationOrigins?: readonly string[];
   },
   steps: readonly ((request: ModelRequest) => Output)[],
@@ -486,7 +501,7 @@ test("a signed-out build's example starts at the site root with the site data ex
     `${site.origin}/entry`,
   );
   expect(built.build).toBe("published");
-  // The first live step still loads the request's URL. The reset's blank root sends no request,
+  // The request's URL loads before the build starts. The reset's blank root sends no request,
   // so the example and the run each load the root once.
   expect(site.visits).toEqual(["/entry", "/deep", "/", "/"]);
   const [example, run] = site.probes;
@@ -910,6 +925,170 @@ test("a later build in the same session starts its example signed out after an e
   expect(site.probe("later")).toMatchObject({ path: "/", cookies: [], token: null, tabs: 1 });
 });
 
+/** What the build's model was told about the request's page, from one request's input. */
+const entryNotices = (request: ModelRequest) =>
+  objects(request.input).flatMap((item) =>
+    "hostEntryNavigation" in item ? [item["hostEntryNavigation"]] : [],
+  );
+/** What each model request was told about the request's page, and the pages the site served. */
+const watched = (site: Site, steps: readonly ((request: ModelRequest) => Output)[]) => {
+  const seen: { readonly visits: readonly string[]; readonly notices: readonly unknown[] }[] = [];
+  return {
+    seen,
+    steps: steps.map((step) => (request: ModelRequest) => {
+      seen.push({ visits: [...site.visits], notices: entryNotices(request) });
+      return step(request);
+    }),
+  };
+};
+
+test("the request's page loads before the build starts, and its first request says where it landed", async () => {
+  test.setTimeout(90_000);
+  const site = await startSite();
+  const { seen, steps } = watched(site, [
+    () =>
+      patch({
+        "explore/look.mjs": operation("look", probe("explore")),
+        "src/tool.mjs": operation("probe", probe("example")),
+      }),
+    () => [execution("explore", "explore/look.mjs")],
+    () => [execution("example", "src/tool.mjs")],
+    finish,
+  ]);
+  const built = await build(site, { url: `${site.origin}/moved`, effect: "read" }, steps);
+  expect(built.build).toBe("published");
+  const notice = {
+    state: "opened",
+    outcome: "ready",
+    requestedUrl: `${site.origin}/moved`,
+    resolvedUrl: `${site.origin}/entry`,
+    status: 200,
+    instruction: expect.any(String),
+  };
+  // The page had loaded, through its redirect, before the build's first request.
+  expect(seen[0]).toEqual({ visits: ["/moved", "/entry"], notices: [notice] });
+  // The first live step finds it open and loads nothing again; the build is told once.
+  expect(site.visits.slice(0, 2)).toEqual(["/moved", "/entry"]);
+  expect(site.probe("explore")).toMatchObject({ path: "/entry" });
+  expect(seen.at(-1)?.notices).toEqual([notice]);
+});
+
+test("a request's page the site answers with an error status is the build's to read", async () => {
+  test.setTimeout(90_000);
+  const site = await startSite();
+  const { seen, steps } = watched(site, [
+    () => patch({ "explore/look.mjs": operation("look", probe("explore")) }),
+    () => [execution("explore", "explore/look.mjs")],
+    () => [message("Done.")],
+  ]);
+  await build(site, { url: `${site.origin}/missing`, effect: "read" }, steps);
+  expect(seen[0]).toEqual({
+    visits: ["/missing"],
+    notices: [
+      {
+        state: "opened",
+        outcome: "http_error",
+        requestedUrl: `${site.origin}/missing`,
+        resolvedUrl: `${site.origin}/missing`,
+        status: 404,
+        instruction: expect.any(String),
+      },
+    ],
+  });
+  expect(site.probe("explore")).toMatchObject({ path: "/missing" });
+});
+
+test("a request's page that does not load is no failed start: the build runs, and is told", async () => {
+  test.setTimeout(90_000);
+  const site = await startSite();
+  const { seen, steps } = watched(site, [
+    () =>
+      patch({
+        "explore/look.mjs": operation(
+          "look",
+          `await page.goto(${JSON.stringify(`${site.origin}/deep`)});${probe("explore")}`,
+        ),
+      }),
+    () => [execution("explore", "explore/look.mjs")],
+    () => [message("Done.")],
+  ]);
+  await build(site, { url: `${site.origin}/dropped`, effect: "read" }, steps);
+  expect(seen[0]).toEqual({
+    visits: ["/dropped"],
+    notices: [
+      {
+        state: "not_opened",
+        outcome: "failed",
+        requestedUrl: `${site.origin}/dropped`,
+        instruction: expect.any(String),
+      },
+    ],
+  });
+  // The step runs on whatever page the tab shows, and the page is not loaded again.
+  expect(site.visits.slice(0, 2)).toEqual(["/dropped", "/deep"]);
+  expect(site.probe("explore")).toMatchObject({ path: "/deep" });
+});
+
+test("a build that asks its effect first loads the request's page only once the caller answered", async () => {
+  test.setTimeout(90_000);
+  const site = await startSite();
+  const asked: InputRequest[] = [];
+  /** Each model request: whether it is the effect question's, and what it was told and saw. */
+  const seen: {
+    readonly question: boolean;
+    readonly visits: readonly string[];
+    readonly notices: readonly unknown[];
+  }[] = [];
+  const buildSteps = [
+    () => patch({ "explore/look.mjs": operation("look", probe("explore")) }),
+    () => [execution("explore", "explore/look.mjs")],
+  ];
+  const respond = (request: ModelRequest): Output => {
+    const question = objects(request.input).some((item) => "effectQuestion" in item);
+    seen.push({ question, visits: [...site.visits], notices: entryNotices(request) });
+    if (!question) return buildSteps.shift()?.() ?? [message("Done.")];
+    if (seen.filter((entry) => entry.question).length > 1) return [message("Done.")];
+    return [
+      call("request_input", {
+        intent: "Ask whether the build only looks things up",
+        questions: [
+          {
+            id: "effect",
+            type: "choice",
+            prompt: "The tool reports where the page starts. Should it only look?",
+            options: [
+              { id: "read", label: "Only look" },
+              { id: "write", label: "Change the site" },
+            ],
+          },
+        ],
+      }),
+    ];
+  };
+  await build(
+    site,
+    { url: `${site.origin}/entry`, effect: "ask" },
+    Array.from({ length: 8 }, () => respond),
+    undefined,
+    asked,
+  );
+  expect(asked.flatMap(({ questions }) => questions.map(({ id }) => id))).toEqual(["effect"]);
+  // The question's run loads nothing; the build's run starts on the loaded page.
+  const firstOfBuild = seen.findIndex(({ question }) => !question);
+  expect(firstOfBuild).toBeGreaterThan(0);
+  for (const { visits, notices } of seen.slice(0, firstOfBuild)) {
+    expect(visits).toEqual([]);
+    expect(notices).toEqual([]);
+  }
+  expect(seen[firstOfBuild]).toEqual({
+    question: false,
+    visits: ["/entry"],
+    notices: [expect.objectContaining({ state: "opened", outcome: "ready", status: 200 })],
+  });
+  expect(site.visits.slice(0, 1)).toEqual(["/entry"]);
+  expect(site.probe("explore")).toMatchObject({ path: "/entry" });
+});
+
 test("a write session's first step starts at the root with the browser's site data, and the next continues", async () => {
   test.setTimeout(90_000);
   const site = await startSite();
@@ -1042,8 +1221,8 @@ test("a build whose first live step is its example starts at the root", async ()
     () => [execution("example", "src/tool.mjs")],
     finish,
   ]);
-  // The request's URL is never loaded: the reset's root is the first page the site serves.
-  expect(site.visits).toEqual(["/"]);
+  // The request's URL loads before the build starts, then the example's reset loads the root.
+  expect(site.visits).toEqual(["/entry", "/"]);
   expect(site.probe("example")).toMatchObject({ path: "/", cookies: [], tabs: 1 });
 });
 
@@ -1054,7 +1233,8 @@ test("a write build whose first live step is its act starts at the root", async 
     () => patch({ "src/act.mjs": operation("first_step", probe("first")) }),
     () => [execution("act", "src/act.mjs")],
   ]);
-  expect(site.visits).toEqual(["/"]);
+  // The request's URL loads before the build starts, then the act's reset loads the root.
+  expect(site.visits).toEqual(["/entry", "/"]);
   expect(site.probe("first")).toMatchObject({ path: "/", cookies: [], tabs: 1 });
 });
 

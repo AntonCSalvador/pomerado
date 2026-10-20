@@ -27,6 +27,7 @@ import type {
 } from "../runtime/policy-metadata.js";
 import { Context, Data, Schema, type Effect } from "effect";
 import type { SiteAccessDiagnostic } from "./site-access-contracts.js";
+import type { SignInVersionFinding } from "./sign-in-version.js";
 import {
   AutofillPopup,
   AutofillApproval,
@@ -44,6 +45,7 @@ import {
 import type { SandboxSession, SkillDescriptor } from "@openai/agents/sandbox";
 import type { AgentInputItem } from "@openai/agents";
 import type { Deadline } from "../runtime/deadline.js";
+import type { EntryNavigationOutcome } from "../runtime/start-state.js";
 import type { ModelDiagnosticTiming } from "../models/model-diagnostic-timing.js";
 import type { RuntimeRecordInput } from "../models/model-runtime-record.js";
 import type {
@@ -376,6 +378,11 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
     | "login_url_one_time"
     /** The login URL to publish carries a registered credential; refused every time. */
     | "login_url_contains_credential"
+    /**
+     * The sign-in to publish fails the sign-in version check (`checkSignInVersion`);
+     * `publicationFeedback.signInFindings` names each rule and part. Refused every time.
+     */
+    | "sign_in_version_refused"
     /** The name, description, site name or summary to publish carries a registered credential. */
     | "metadata_contains_credential"
     /** The site's integration has no name yet, and the metadata names no `siteName` and `siteSummary`. */
@@ -411,6 +418,8 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
       readonly part: "loginUrl" | "name" | "description" | "siteName" | "siteSummary";
       readonly credentialKinds: readonly string[];
     }[];
+    /** For `sign_in_version_refused`, each rule and the part of the sign-in it refused. */
+    readonly signInFindings?: readonly SignInVersionFinding[];
   };
   /**
    * What the publication gate refused and where, for `source_screening`, `schema_screening`
@@ -652,7 +661,7 @@ export const ExecutionRequest = Schema.Struct({
   testInput: Schema.optional(
     Schema.String.pipe(Schema.minLength(2), Schema.maxLength(16_384)).annotations({
       description:
-        "Only with purpose test and target liveBrowser on a read build: the tool's input you chose, as JSON text, to show the tool works for values other than the caller's, such as another route or passenger count. Public values only. A read signed out runs as many as it needs. A signed-in read runs at most two distinct inputs beyond its example in a build or repair, its combined filter case (testing skill); running one again is free. Where the host offers live_tests, run planned cases in batches with it instead. Omit it to run the caller's input.",
+        "Only with purpose test and target liveBrowser on a read build: the tool's input you chose, as JSON text, to show the tool works for values other than the caller's, such as another route or passenger count. Public values only. A read signed out runs as many as it needs. A signed-in read runs at most four distinct inputs beyond its example in a build or repair (testing skill); running one again is free. Where the host offers live_tests, run planned cases in batches with it instead. Omit it to run the caller's input.",
     }),
   ),
   /** Only on authenticate, and only where the host offers autofill sign-in. */
@@ -1622,6 +1631,38 @@ export type MintEntryNavigation =
       readonly instruction?: string;
     };
 
+/**
+ * The entry state the minter reads, from how the host's load of the caller's page went
+ * (`EntryNavigationOutcome`), or `open_failed` when the host's browser did not open. The caller's
+ * own page URLs are shown to the model exactly as given; they are intentionally not screened or
+ * masked. Undefined until the host has attempted the entry.
+ */
+export const mintEntryNavigation = (
+  entryUrl: string,
+  outcome: EntryNavigationOutcome | "open_failed" | undefined,
+): MintEntryNavigation | undefined => {
+  if (outcome === undefined) return undefined;
+  if (outcome === "open_failed")
+    return { state: "not_opened", outcome: "failed", requestedUrl: entryUrl };
+  if (outcome.outcome === "ready" || outcome.outcome === "http_error")
+    return {
+      state: "opened",
+      outcome: outcome.outcome,
+      requestedUrl: entryUrl,
+      resolvedUrl: outcome.resolvedUrl,
+      redirects: outcome.redirects,
+      status: outcome.status,
+    };
+  return {
+    state: "not_opened",
+    outcome: outcome.outcome,
+    requestedUrl: entryUrl,
+    ...(outcome.outcome === "skipped"
+      ? {}
+      : { resolvedUrl: outcome.resolvedUrl, redirects: outcome.redirects }),
+  };
+};
+
 /** The durable journal of one logical example execution. */
 export interface ExampleJournal {
   readonly record: (evidence: ExecutionEvidence) => Effect.Effect<void, MintFailure>;
@@ -1786,6 +1827,12 @@ export interface MintHarnessSnapshot {
    * it, which ends a blocked report as sign-in unavailable. Optional for the same reason.
    */
   readonly signInUnconfirmed?: true;
+  /**
+   * Every refusal `guardianRefused` stands on is Guardian's of an authenticate step, with no
+   * confirmed sign-in on the current site since, which ends a blocked report that stands on no
+   * host refusal as sign-in unavailable. Optional for the same reason.
+   */
+  readonly signInRefusalOnly?: true;
   readonly destinationEvidenceRefusals: number;
   readonly inputFeedbackRounds: number;
   readonly inputFeedbackPublicTool: boolean;
@@ -1945,6 +1992,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   loginDeclined: Schema.optionalWith(LoginDecline, { exact: true }),
   signInAbandoned: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   signInUnconfirmed: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  signInRefusalOnly: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   destinationEvidenceRefusals: Schema.NonNegativeInt,
   inputFeedbackRounds: Schema.NonNegativeInt,
   inputFeedbackPublicTool: Schema.Boolean,

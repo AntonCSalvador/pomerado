@@ -51,7 +51,9 @@ Sign in first when the site needs it, and always for a cart or checkout
 (.agents/cart/SKILL.md), with the auth skill: read-only `explore` to find the login, then
 `authenticate`. Before the first `act` step you may still explore
 read-only, for example to read the first page's options, but never fill, select,
-add, save or submit anything there.
+add, save or submit anything there, except one made-up key in the site's own format, with a
+serial past any the site lists, per input that takes a record's own key, looked up once in the
+site's own lookup to see what it shows for a key it has no record of (core skill).
 
 Read the path's options with read-only exploration where you can, and settle them before the
 first `act` step where possible: ask with
@@ -175,9 +177,9 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   control, such as Save, Send, Submit, Book or Pay, in its own step. In the same call as
   that click, wait for the site's response to the request it sends, matched by the method
   and path the session saw carry the commit on the site, and by its body where the body
-  shows the caller's values, as `references/write-readback.ts` does. Wait too for every way
-  the page can answer with `waitForOutcome`, listing the site's error or validation message
-  first. The write went through when that response is 2xx or 3xx, a body the call can read
+  shows the caller's values, as `references/write-readback.ts` does: a `{ response }` answer of
+  `waitForOutcomeResult`, beside every way the page can answer, listing the site's error or
+  validation message (`{ invalid: form }`) first. The write went through when that response is 2xx or 3xx, a body the call can read
   shows no error, and the page shows no error or validation message after it. A 201 whose
   Location names the new record went through as soon as it arrives, with no wait for the
   page. A 200 whose

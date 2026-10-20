@@ -20,7 +20,11 @@ import {
   publicationOutputPolicy,
 } from "../../src/guardian/publication.js";
 import { inputFeedbackInstruction } from "../../src/mint/input-feedback.js";
-import { loadAuthoringSkills, loadWorkspaceGuide } from "../../src/mint/skills.js";
+import {
+  type AuthoringOptions,
+  loadAuthoringSkills,
+  loadWorkspaceGuide,
+} from "../../src/mint/skills.js";
 import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
 import { Deadline } from "../../src/runtime/deadline.js";
 import { offlineKernel } from "../support/offline-kernel.js";
@@ -632,9 +636,9 @@ it("keeps the HTTP version passages in host sections", async () => {
         ["core", "or the site's own data request, to opening each record's page."],
         ["search", "it never returns unfiltered results as filtered. When setting one control"],
         ["testing", "builds no offline test suite. It still checks its composed script's read-back"],
-        ["testing", "no no-results case and no edge cases. Publication review reads"],
+        ["testing", "other no-results case and no edge cases. Publication review reads"],
         ["testing", "own controls\"). Either way, read the input back"],
-        ["testing", "count toward the same two. The example uses"],
+        ["testing", "count toward the same four. The example uses"],
         ["writes", "run no live test of it. That rule is about running the write"],
         ["workspace/AGENTS.md", "and your own probes. **Read back every input before returning.**"],
         ["workspace/AGENTS.md", "the request the page sends for the rows, to driving such a filter"],
@@ -778,7 +782,7 @@ it("has a write confirm from its own commit request, and read back only when tha
   const texts = await renderedTexts("typescript/authoring");
   const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    '- Prefer confirming the write from its commit request. Keep the click on the final commit control, such as Save, Send, Submit, Book or Pay, in its own step. In the same call as that click, wait for the site\'s response to the request it sends, matched by the method and path the session saw carry the commit on the site, and by its body where the body shows the caller\'s values, as `references/write-readback.ts` does. Wait too for every way the page can answer with `waitForOutcome`, listing the site\'s error or validation message first. The write went through when that response is 2xx or 3xx, a body the call can read shows no error, and the page shows no error or validation message after it. A 201 whose Location names the new record went through as soon as it arrives, with no wait for the page. A 200 whose body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says the work is queued, went through too; return that in the output as a status in the core notation, such as `queued`, with the site\'s own word in a `status_label` field. Then read what the output promises from that response or from the page the commit left, match it to the caller\'s values, and call `verified()` with no argument just before returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page, such as a list, a history or an account screen, only to prove the write: a commit that went through, with the new record\'s id, already proves it. When a commit step returned without calling `verified()` and its `stateChangingRequests` list the commit request with a 2xx or 3xx status, prefer confirming it in the next step from the page as it stands. Make no execute call after `verified()`: a later call reopens the effect. After the confirming step, further `act` steps are refused.',
+    '- Prefer confirming the write from its commit request. Keep the click on the final commit control, such as Save, Send, Submit, Book or Pay, in its own step. In the same call as that click, wait for the site\'s response to the request it sends, matched by the method and path the session saw carry the commit on the site, and by its body where the body shows the caller\'s values, as `references/write-readback.ts` does: a `{ response }` answer of `waitForOutcomeResult`, beside every way the page can answer, listing the site\'s error or validation message (`{ invalid: form }`) first. The write went through when that response is 2xx or 3xx, a body the call can read shows no error, and the page shows no error or validation message after it. A 201 whose Location names the new record went through as soon as it arrives, with no wait for the page. A 200 whose body reports an error, as GraphQL can, did not go through. A 202, or a 2xx whose body says the work is queued, went through too; return that in the output as a status in the core notation, such as `queued`, with the site\'s own word in a `status_label` field. Then read what the output promises from that response or from the page the commit left, match it to the caller\'s values, and call `verified()` with no argument just before returning. Declare `write: { confirmation: "readback" }`. Prefer not opening another page, such as a list, a history or an account screen, only to prove the write: a commit that went through, with the new record\'s id, already proves it. When a commit step returned without calling `verified()` and its `stateChangingRequests` list the commit request with a 2xx or 3xx status, prefer confirming it in the next step from the page as it stands. Make no execute call after `verified()`: a later call reopens the effect. After the confirming step, further `act` steps are refused.',
   );
   // Every case the request cannot settle keeps a read-back.
   expect(text("writes")).toContain(
@@ -837,19 +841,196 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["43d41e45fcd62396a45ef48c1c7874ca42c62a255e2388301eff6626d67aef9c", "core"],
-    ["78e2235aef1f279b7d43dc96f3625f4aa82cbc7fa0b63a741842d4ad3321e0d7", "search"],
+    ["71266d358734292ecaa03b79d6c2be0f00eb8a6884802d961bf9a6b8a7a54f05", "core"],
+    ["9fe0598c1dc41354e5dbddd42a372c6b628eecd206cf5ea9a3cf0fcbf10a6410", "search"],
     ["7e50c86ea30964f0e3610e090c7bd7d78aac6f59a7f644644c1ad99577d59f5f", "auth"],
-    ["2473cef77a3047634a8b379f260066134e28afd2fcbbb02ac75ad9b3ec8149e1", "testing"],
-    ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
-    ["a8f94638ddf2d5474106eb89a4d96e9deb73420d7236fdffb6cfc756295bdd30", "forms"],
-    ["fa282a2dce486dd4b489ba9140ef63f8f65eecd53c9d131e95401e7bd4edb716", "writes"],
+    ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
+    ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
+    ["62af125c1a868d2d579f2b451509558084883e1c8134f9bcdc0140d82ef92a03", "forms"],
+    ["6a3426b664481c8f215977ec3ea4ef03cafdec29acbd6b0f93ddba23648438b7", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["fdff589fe37de80134fe1f49e58ace38221d3fb360dfc448767228037cc4e25f", "caller-input"],
-    ["273451978361325f0caeaecbca4345421637b9dc61ba9f6a41e96627cb50d385", "publication"],
-    ["d3d9531d7ccca7f79aba7df45618d1a1673e10374f5ec7336cfa3801ddbad099", "workspace/AGENTS.md"],
+    ["13dddd8a8506d196fadad2d5c8eaf74487eb0ad0c667044ee66ce81799774e7a", "caller-input"],
+    ["4334eb48b34d5464550242d55a6c6b75963bcce22c3e5f0090ea1addbe550f47", "publication"],
+    ["ca25d414d25ba51222fbd7014de75173308bc46d6fc237cc527f47837b1992fc", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
+});
+
+/*
+ * The search URL fast path's passages, off and on. Off is the URL guidance as it stood before the
+ * fast path, with the search skill's page-data paragraph kept without its URL clauses. On is the
+ * fast path's text.
+ */
+const urlFastPathPassages = {
+  agents: {
+    off: `When the controls flow lands on a URL the site produced, and two runs with different inputs show
+which parts of it carry which input, such as the query, dates, guests or party size, sort or a
+record's own identifier route, the tool may open that URL with the caller's values in those
+parts, built with \`URLSearchParams\` for a query part or \`encodeURIComponent\` for a path part and
+every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input
+`,
+    on: `When the controls flow lands on a URL the site produced, and two runs with different inputs show
+which parts of it carry which input, such as the query, dates, guests or party size, sort,
+filters, a location the URL itself carries or a record's own identifier route, the tool enters
+at that URL with the caller's values in those parts when the mapping is reliable and clear: each
+part's valid values are known and readable in the URL, such as a sort or filter whose values
+become the input's enum, or a query the site encodes as typed. An opaque filter code still comes
+only from a link the page produced in this run (below). Otherwise it uses the page's controls.
+It builds that URL with \`URLSearchParams\` for a query part or \`encodeURIComponent\` for a path
+part and every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input
+`,
+  },
+  apply: {
+    off: `## Apply and read back
+
+On every run, set each input the site has a control for through that control, or through the URL
+or data request the site itself uses for it when the control is unreliable (testing skill), never
+by filtering the returned rows, then read it back from the site's committed state: the
+`,
+    on: `## Apply and read back
+
+On every run, set each input the site has a control for through that control, through the
+results URL when the site's URL reliably carries it (\`AGENTS.md\`, "Work through the page's own
+controls"), or through the data request the site itself uses for it when the control is
+unreliable (testing skill), never by filtering the returned rows, then read it back from the site's committed state: the
+`,
+  },
+  data: {
+    off: `what its inputs need.
+
+Try the fast path first. While exploring, check whether the page's own data request or embedded
+data carries the result fields. When it does, the default design is: reach the results through
+the page's controls, then read that data in the same session, reading the applied location back
+from the page or that answer. Read rendered rows only when it doesn't. For a data request, prefer
+catching the page's own answer in the same call as the step that sends it
+(\`Promise.all([page.waitForResponse(...), button.click()])\`, core skill). Fetching it in the page
+(\`page.evaluate(() => fetch(...))\`) is fine to speed things up or when that answer can't be
+caught, once the page itself has reached the results, not as the only step.
+
+- The main path`,
+    on: `what its inputs need.
+
+Try the fast path first. While exploring, check whether the results page loads directly by URL
+with the inputs encoded (\`AGENTS.md\`, "Work through the page's own controls"), and whether the
+page's own data request or embedded data carries the result fields. When both hold, the default
+design is: set a location or store through the page's controls first if the URL cannot carry it,
+load the results URL, then read that data in the same session, reading the applied location back
+from the page or that answer. Drive the search form and read rendered rows only when they don't.
+For a data request, prefer catching the page's own answer in the same call as the step that sends
+it (\`Promise.all([page.waitForResponse(...), button.click()])\`, core skill). Fetching it in the
+page (\`page.evaluate(() => fetch(...))\`) is fine to speed things up or when that answer can't be
+caught, once the page itself has reached the results, not as the only step.
+
+- The main path`,
+  },
+} as const;
+
+const loadAuthoring = async (
+  directory: string,
+  render?: (text: string, sectionKey: string) => string,
+  options?: AuthoringOptions,
+) => {
+  const skills = await Effect.runPromise(loadAuthoringSkills(directory, render, options));
+  const guide = await Effect.runPromise(loadWorkspaceGuide(directory, render, options));
+  const search = contents(skills)[skills.findIndex((skill) => skill.name === "search")] ?? "";
+  // Each skill's digest, as the pinned test takes it: comparing the bytes themselves is slow.
+  const digests = skills.map((skill) => [sha256(JSON.stringify(skill)), skill.name] as const);
+  return { digests, guide, search, agents: guide.instructions };
+};
+
+/*
+ * A host turns the search URL fast path on with `searchUrlFastPath`. Off, which is also what
+ * omitting it gives, renders the URL guidance as it stood before; on renders the fast path's
+ * text. Either way the search
+ * skill's page-data paragraph ends with the same data-request sentence, once. Every other file
+ * renders the same either way.
+ */
+const dataRequestSentence =
+  "For a data request, prefer catching the page's own answer in the same call as the step that sends it (`Promise.all([page.waitForResponse(...), button.click()])`, core skill). Fetching it in the page (`page.evaluate(() => fetch(...))`) is fine to speed things up or when that answer can't be caught, once the page itself has reached the results, not as the only step.";
+
+it("renders the search URL fast path only when a host turns it on", async () => {
+  const omitted = await loadAuthoring("typescript/authoring");
+  const off = await loadAuthoring("typescript/authoring", undefined, { searchUrlFastPath: false });
+  const on = await loadAuthoring("typescript/authoring", undefined, { searchUrlFastPath: true });
+  expect(off.digests).toStrictEqual(omitted.digests);
+  expect(off.guide).toStrictEqual(omitted.guide);
+  for (const [mode, shown, hidden] of [
+    [off, "off", "on"],
+    [on, "on", "off"],
+  ] as const) {
+    expect(mode.agents).toContain(urlFastPathPassages.agents[shown]);
+    expect(mode.agents).not.toContain(urlFastPathPassages.agents[hidden]);
+    for (const passage of [urlFastPathPassages.apply, urlFastPathPassages.data]) {
+      expect(mode.search).toContain(passage[shown]);
+      expect(mode.search).not.toContain(passage[hidden]);
+    }
+    expect(mode.search.replace(/\s+/g, " ").split(dataRequestSentence)).toHaveLength(2);
+  }
+  expect(on.guide.files.get("AGENTS.md")).toBe(on.guide.instructions);
+  expect([
+    ...on.digests.filter(([, name]) => name === "search"),
+    [sha256(on.agents), "workspace/AGENTS.md"],
+  ]).toStrictEqual([
+    ["ee7e45fcc9cb8ae5d2969538754841c34d07b20baf12371143e8ad081651fbfb", "search"],
+    ["957b0dd8a40a455582a99b28ee2f487cb6c3aecf165ba25d4bcfe6659aefd9c6", "workspace/AGENTS.md"],
+  ]);
+  expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(
+    off.digests.filter(([, name]) => name !== "search"),
+  );
+  expect([...on.guide.files].filter(([path]) => path !== "AGENTS.md")).toStrictEqual(
+    [...off.guide.files].filter(([path]) => path !== "AGENTS.md"),
+  );
+}, 30_000);
+
+it("renders the search URL fast path in a host's composed text", async () => {
+  const root = await authoringCopy((_path, text) => composeHostText(text));
+  try {
+    const off = await loadAuthoring(root, (text) => text);
+    const on = await loadAuthoring(root, (text) => text, { searchUrlFastPath: true });
+    expect(on.agents).toContain("host text for agents.role");
+    expect(off.agents).toContain(urlFastPathPassages.agents.off);
+    expect(on.agents).toContain(urlFastPathPassages.agents.on);
+    expect(off.search).toContain(urlFastPathPassages.data.off);
+    expect(on.search).toContain(urlFastPathPassages.data.on);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("refuses the search URL fast path when a file lacks one of its passages", async () => {
+  const root = await authoringCopy((path, text) =>
+    path.endsWith(join("search", "SKILL.md"))
+      ? text.replace("Try the fast path first. ", "")
+      : text,
+  );
+  try {
+    expect((await loadAuthoring(root)).search).not.toContain("Try the fast path first.");
+    expect(
+      await Effect.runPromise(
+        Effect.either(loadAuthoringSkills(root, undefined, { searchUrlFastPath: true })),
+      ),
+    ).toMatchObject({ _tag: "Left", left: { code: "Unavailable" } });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("refuses the search URL fast path when the workspace guide lacks its passage", async () => {
+  const root = await authoringCopy((path, text) =>
+    path.endsWith(join("workspace", "AGENTS.md"))
+      ? text.replace("the tool may open that URL", "the tool may load that URL")
+      : text,
+  );
+  try {
+    expect((await loadAuthoring(root)).agents).toContain("the tool may load that URL");
+    expect(
+      await Effect.runPromise(
+        Effect.either(loadWorkspaceGuide(root, undefined, { searchUrlFastPath: true })),
+      ),
+    ).toMatchObject({ _tag: "Left", left: { code: "Unavailable" } });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 /*
