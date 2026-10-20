@@ -154,6 +154,8 @@
 
 ### Other changes
 
+- The `report_blocked` tool description says `site_declined` is for a site that judged the example's own facts, never for a bot check, an access-denied page or another block that came before the site saw the example, which the host ends as an unsolved challenge.
+  - A recorded minter response keyed on the exact `report_blocked` description needs recording again.
 - A tool refuses a record key the site has no record of at once, without a repair. The core skill counts the site's own not-found or empty result for its own lookup of a record's own key, such as an order or ticket number, or for its own link to that record, as an obvious caller input error; a URL the tool built itself, a page whose layout or controls the tool no longer finds, or a lookup that hadn't loaded stays a breakage for repair. A read's no-results case tries one made-up key in the site's own format for such an input and expects `invalid_input`, and a write looks one up among its explores before the session. Guardian's execution policy allows that one made-up key per input, typed only into the site's own lookup, in an explore or as an agent-chosen test input.
   - A recorded Guardian response keyed on the exact policy text needs recording again.
 - A signed-in read runs live tests on up to four distinct inputs in a build or repair, beyond its example (`signedInTestInputLimit` is 4, up from 2), chosen for high value and broad coverage, one of which may be a made-up record key. The testing skill and its catalog description, the workspace guide, the `live_tests` and `testInput` descriptions and Guardian's publication policy say so.
