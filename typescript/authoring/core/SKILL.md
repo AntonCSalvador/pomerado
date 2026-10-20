@@ -237,9 +237,11 @@ exception: it is optional unless the task can't run without it (below).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
   match that accepts the usual forms of the same name, such as a name with or without its
   accents (Abaca for Abacá), a city alone or with its state and country, or a company with
-  or without Ltd. or Inc. Never require an exact match. Prefer `sameText` from
-  `pomerado/runtime` for this match and for confirming it, so the choice and its read-back
-  agree; it also accepts a shortened word, such as St-Jean for Saint-Jean.
+  or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime`
+  matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or
+  hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one
+  with a word added or dropped. Prefer it for those forms and for confirming the pick, so the
+  choice and its read-back agree.
   When more than one option matches, list them for the caller instead of picking one.
 - On a write, every choice the session met is an input: each option on the path,
   add-ons and pre-selected defaults included, except one the request or an answer settled,

@@ -42,13 +42,16 @@ export const foldChoiceText = (text: unknown): string => {
 };
 
 /**
- * Whether two texts name the same thing as a person reads them. Case, accents and other marks,
- * spacing, and punctuation between letters are ignored, and a word written short, such as St for
- * Saint or Blvd for Boulevard, matches the full word when it starts with the same letter, keeps
- * its letters in order and is at most half as long. Both texts need the same number of words in
- * the same order, and a word holding a digit or symbol must be the same word, so 12 never matches
- * 123 and C++ never matches C. Compare numbers, dates and amounts as values instead. It is pure
- * and self-contained, so page code can embed it, as `formControlsCode` does.
+ * Whether `shown`, text read from the page, names what `wanted` names, as a person reads them.
+ * Case, accents on Latin letters, spacing and apostrophes are ignored, and so are periods, commas
+ * and hyphens between letters. A word `shown` writes short, such as St for Saint or Blvd for
+ * Boulevard, matches the full word in `wanted` when it starts with the same letter, keeps its
+ * letters in order and is at most half as long. A short word in `wanted` never matches a longer
+ * one in `shown`, so a wanted Pen never matches a shown Pencil. Both texts need the same number of
+ * words in the same order, and a word holding a digit or another symbol, such as a slash or a
+ * bracket, must be the same word, so 12 never matches 123, C++ never matches C and Blue/Green
+ * never matches Blue Green. Compare numbers, dates and amounts as values instead. It is pure and
+ * self-contained, so page code can embed it, as `formControlsCode` does.
  */
 export const sameText = (shown: string, wanted: string): boolean => {
   const fold = (text: string) => {
