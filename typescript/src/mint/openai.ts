@@ -373,6 +373,17 @@ export const mintCompactionThresholdTokens = 240_000;
 export const mintCompaction = (): ReturnType<typeof compaction> =>
   compaction({ policy: new StaticCompactionPolicy(mintCompactionThresholdTokens) });
 
+/** A skill's page as `read_source` takes it, relative or under `/workspace/`. */
+const skillPagePath = /^(?:\/workspace\/)?\.agents\/([^/]+)\/SKILL\.md$/u;
+
+/**
+ * The note after a compaction, naming the skills the minter read before it. A compaction drops
+ * the pages it read from view, and a model that remembers having read a skill tends to act on
+ * its summary instead of reading the exact rule again.
+ */
+const compactionSkillsNote = (skills: readonly string[]) =>
+  `Host note: your earlier turns were compacted to save context. Before the compaction you read these skills with read_source: ${skills.join(", ")}. Their full text is no longer in view, only a compacted summary of those turns. Re-read any of them with read_source (.agents/<name>/SKILL.md) whenever you need an exact rule${skills.includes("publication") ? ", for example the publication skill before finish_build" : ""}. AGENTS.md still loads every turn.`;
+
 const intentDescription =
   "What this call should accomplish and why, in one or two sentences. A diagnostic declaration only: it grants no authority and does not prove any effect.";
 const Intent = Schema.String.pipe(
@@ -523,6 +534,41 @@ export const makeOpenAIMinter = (
                       );
                     },
                   };
+            const skillNames = turn.skills.map((skill) => skill.name);
+            /** Catalog skills whose page a host read returned in this attempt. */
+            const skillsRead = new Set<string>();
+            const noteSkillRead = (path: string) => {
+              const name = skillPagePath.exec(path)?.[1];
+              if (name !== undefined && skillNames.includes(name)) skillsRead.add(name);
+            };
+            /** The note after a compaction, naming the skills read so far; none when none were. */
+            const skillsReadNote = (): AgentInputItem | undefined => {
+              const read = skillNames.filter((name) => skillsRead.has(name));
+              if (read.length === 0) return undefined;
+              const content = (turn.compactionSkillsNote ?? compactionSkillsNote)(read);
+              return { role: "user", type: "message", content };
+            };
+            /**
+             * Each provider compaction's note, by its item. It is taken once, when the compaction
+             * returns (or, after a takeover, when the input first starts with it), so every later
+             * request sends the same bytes.
+             */
+            const compactionNotes = new Map<string, AgentInputItem | undefined>();
+            const noteFor = (item: {
+              readonly id?: string | undefined;
+              readonly encrypted_content: string;
+            }) => {
+              const key = item.id ?? item.encrypted_content;
+              if (!compactionNotes.has(key)) compactionNotes.set(key, skillsReadNote());
+              return compactionNotes.get(key);
+            };
+            /** The SDK's input, which a provider compaction starts, with that compaction's note. */
+            const afterProviderCompaction = (input: string | AgentInputItem[]) => {
+              const [first, ...rest] = typeof input === "string" ? [] : input;
+              if (first?.type !== "compaction") return input;
+              const note = noteFor(first);
+              return note === undefined ? input : [first, note, ...rest];
+            };
             /** Each call's response and position in it, in the model's order. */
             const placed = new Map<
               string,
@@ -828,7 +874,10 @@ export const makeOpenAIMinter = (
                       path: file.path,
                       ...(fileArguments === undefined ? {} : { arguments: fileArguments }),
                     },
-                  );
+                  ).then((text) => {
+                    noteSkillRead(file.path);
+                    return text;
+                  });
                 const several = args.paths ?? null;
                 if (several === null) {
                   if (args.path === null) throw new MintFailure({ code: "InvalidRequest" });
@@ -1174,6 +1223,7 @@ export const makeOpenAIMinter = (
               ? undefined
               : makeIdleCompaction({
                   watermarkTokens: mintIdleCompactionTokens,
+                  note: skillsReadNote,
                   report: (event) =>
                     turn
                       .runTool(
@@ -1194,8 +1244,11 @@ export const makeOpenAIMinter = (
                     // context of whatever woke it (a recovery save completed by another fiber),
                     // so the call always runs in the context the SDK called from.
                     const inSdkContext = AsyncLocalStorage.snapshot();
-                    // A compaction that ran while the tools ran replaces the prefix it covers.
-                    const input = idle?.view(request.input) ?? request.input;
+                    // A compaction that ran while the tools ran replaces the prefix it covers, and
+                    // its window holds its own note. Otherwise a provider compaction gets one.
+                    const viewed = idle?.view(request.input) ?? request.input;
+                    const input =
+                      viewed === request.input ? afterProviderCompaction(request.input) : viewed;
                     const sent = input === request.input ? request : { ...request, input };
                     // The SDK's client has already retried; an outage it could not get past is
                     // retried here with the same request, within the attempt's deadline.
@@ -1211,7 +1264,11 @@ export const makeOpenAIMinter = (
                         );
                         if (Either.isRight(outcome)) {
                           const response = outcome.right;
-                          yield* reportUsage(response, call, "turn", sent !== request);
+                          yield* reportUsage(response, call, "turn", viewed !== request.input);
+                          // The provider compacted this request: its note names the skills read
+                          // before it, not those this response's calls read next.
+                          for (const item of response.output)
+                            if (item.type === "compaction") noteFor(item);
                           idle?.afterTurn(request, sent, response, (compaction) =>
                             inSdkContext(() => model.getResponse(compaction)).then(
                               async (compacted) => {
@@ -1300,12 +1357,34 @@ export const makeOpenAIMinter = (
             };
             diagnostics?.attach(runner);
             diagnostics?.started(turn.input);
+            /** The host's resume message, until the restored run's next model call carries it. */
+            let resumeMessage =
+              turn.recovery?.initial === undefined ? undefined : turn.recovery.resumeMessage;
+            /** Ends the restored run's first segment once its saved response's calls returned. */
+            let replayTurnLimit: number | undefined;
+            /** `history` followed by the resume message, which then has been delivered. */
+            const withResumeMessage = async (
+              history: AgentInputItem[],
+            ): Promise<AgentInputItem[]> => {
+              const content = resumeMessage;
+              resumeMessage = undefined;
+              replayTurnLimit = undefined;
+              if (content === undefined) return history;
+              await turn.runTool(
+                turn.reportTrace?.({
+                  phase: "continuation",
+                  reason: "resume_message",
+                  modelCalls,
+                }) ?? Effect.void,
+              );
+              return [...history, { role: "user", content }];
+            };
             const runSegment = (
               input: string | AgentInputItem[] | RunState<unknown, typeof agent>,
             ) =>
               runner.run(agent, input, {
                 signal,
-                maxTurns: turnsPerSegment,
+                maxTurns: replayTurnLimit ?? turnsPerSegment,
                 sandbox: { session: turn.session },
               });
             type SegmentResult = Awaited<ReturnType<typeof runSegment>>;
@@ -1314,6 +1393,25 @@ export const makeOpenAIMinter = (
                 turn.recovery?.initial === undefined
                   ? turn.input
                   : await RunState.fromString(agent, turn.recovery.initial.sdkState);
+              if (input instanceof RunState && resumeMessage !== undefined) {
+                if (turn.recovery?.initial?.response === undefined) {
+                  // Restored before a model call: the message follows the restored history.
+                  await archiveBeforeSegment(input);
+                  totalUsage.add(input.usage);
+                  input = await withResumeMessage(input.history);
+                } else {
+                  // The saved response replays first and its calls return. The segment then ends
+                  // before the next model call, which carries the message after their results.
+                  // A response is saved inside its model call, so its turn is still in progress
+                  // and replays as the same turn; a turn not in progress counts as the next one.
+                  // The SDK version is pinned, its declarations name both fields, and the resume
+                  // tests check where the message lands, so an SDK that counts turns otherwise
+                  // fails them.
+                  replayTurnLimit = input._currentTurnInProgress
+                    ? input._currentTurn
+                    : input._currentTurn + 1;
+                }
+              }
               for (;;) {
                 signal.throwIfAborted();
                 if (deadline.remainingMs() <= 0) {
@@ -1341,6 +1439,12 @@ export const makeOpenAIMinter = (
                     totalUsage.add(error.state.usage);
                     diagnostics?.completed(history, totalUsage);
                     return { history };
+                  }
+                  if (replayTurnLimit !== undefined) {
+                    // The restored response's calls returned: the resume message follows them.
+                    totalUsage.add(error.state.usage);
+                    input = await withResumeMessage(history);
+                    continue;
                   }
                   if (modelCalls >= modelCallCapacity || diagnostics?.durabilityFailure())
                     throw error;
@@ -1430,7 +1534,7 @@ export const makeOpenAIMinter = (
                 );
                 await archiveBeforeSegment(result.state);
                 input = [
-                  ...result.history,
+                  ...(await withResumeMessage(result.history)),
                   {
                     role: "user",
                     content:

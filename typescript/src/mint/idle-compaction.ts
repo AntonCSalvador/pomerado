@@ -35,10 +35,15 @@ type IdleCompactionEvent =
  * applies to the first request after it lands. The SDK's history keeps every item; only
  * what is sent changes. A provider compaction (the 240K backstop) starts the SDK's input at
  * its own item, so a window for the old prefix no longer matches and is dropped.
+ *
+ * `note`, when it gives an item, follows the compaction item in the window. It is taken when
+ * the compaction starts, so it describes what came before the compacted request, and the
+ * window keeps the same item on every later request, so their cached prefix holds.
  */
 export const makeIdleCompaction = (options: {
   readonly watermarkTokens: number;
   readonly report: (event: IdleCompactionEvent) => Promise<void>;
+  readonly note?: () => AgentInputItem | undefined;
 }) => {
   const controller = new AbortController();
   let running: Promise<void> | undefined;
@@ -80,6 +85,7 @@ export const makeIdleCompaction = (options: {
       return;
     const original = [...request.input];
     const compacted = { length: original.length, key: key(original) };
+    const note = options.note?.();
     void report({ state: "started", inputTokens: response.usage.inputTokens });
     running = compact({
       ...sent,
@@ -93,7 +99,7 @@ export const makeIdleCompaction = (options: {
           await report({ state: "failed", reason: "no_compaction_item" });
           return;
         }
-        ready = { ...compacted, window: [item] };
+        ready = { ...compacted, window: note === undefined ? [item] : [item, note] };
         await report({ state: "ready" });
       })
       .catch(async () => {

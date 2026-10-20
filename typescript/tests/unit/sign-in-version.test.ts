@@ -6,7 +6,8 @@
 // site or over http, or a workspace step without a workspace relation for the site, passes; a
 // recipe no host reads, such as one with no steps or a workspace page that names a host, passes; a
 // workspace step under a valid relation is refused; a one-time entry URL the host already asked
-// about is refused, for its spent values too.
+// about is refused, for its spent values too; a step page, selector or marker holding the
+// `[private]` mask passes when the caller passes no identity values.
 import { describe, expect, it } from "vitest";
 import {
   checkSignInVersion,
@@ -143,6 +144,26 @@ describe("checkSignInVersion", () => {
       { rule: "page_names_contact", part: "recipe.steps[0].page" },
       { rule: "indicator_holds_identity", part: "recipe.signedIn.selector" },
     ]);
+  });
+
+  it.each([
+    [
+      "a step page",
+      withStep(0, { page: "https://www.example.com/login?email=[private]" }),
+      [{ rule: "page_names_contact", part: "recipe.steps[0].page" }],
+    ],
+    [
+      "a submit",
+      withStep(0, { submit: "text=Continue as [private]" }),
+      [{ rule: "selector_names_contact", part: "recipe.steps[0].submit" }],
+    ],
+    [
+      "a signed-in marker",
+      withMarker({ selector: "text=Hi, [private]", openPath: "/account" }),
+      [{ rule: "indicator_holds_identity", part: "recipe.signedIn.selector" }],
+    ],
+  ] as const)("refuses %s holding the [private] mask", (_name, change, findings) => {
+    expect(checkSignInVersion(input(change))).toEqual(findings);
   });
 
   it("checks the masked pattern past the origin only, so a port is not a number", () => {
