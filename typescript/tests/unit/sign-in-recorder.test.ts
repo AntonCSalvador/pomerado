@@ -384,6 +384,66 @@ it("counts a screen as sent once the minter goes on after the host's click faile
   expect(published?.recipe.steps[0]).toMatchObject({ submittedBy: "minter" });
 });
 
+// A refused step shows the minter went on from the screen before, as a method chooser shows
+// only once the login screen was sent, so that screen's password counts as sent before the
+// refusal. A corrected login then never fills the same password a third time.
+it.each<[string, SignInStep]>([
+  [
+    "masked method",
+    {
+      fields: [],
+      submit: "#sms",
+      methods: [{ method: "sms", selector: "button:has-text('Text ***-***-1234')" }],
+    },
+  ],
+  ["[private] selector", { fields: [], submit: "button:has-text('Continue as [private]')" }],
+])("counts the screen before as sent when a %s step is refused, so a corrected login's third fill of the same password is refused", async (_, refusedStep) => {
+  let fills = 0;
+  const host = harness({
+    held: account,
+    visible: ["#no-account"],
+    corrections: [
+      { ...account, username: "ada-corrected" },
+      { ...account, username: "ada-second" },
+    ],
+    // The host's click fails on the first screen, and goes through on every later one.
+    report: (step) => ({
+      outcome: "filled",
+      fields: step.fields.map((field) => ({ slot: field.slot, status: "filled" as const })),
+      submit: (fills += 1) === 1 ? "failed" : "clicked",
+      url: `${origin}/login`,
+    }),
+  });
+  const login: SignInStep = {
+    ...identifierAndPassword,
+    rejectedMarkers: [{ slot: "username", selector: "#no-account" }],
+  };
+  const rejectedUsername: SignInStep = { rejected: { slot: "username" } };
+  const third = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(login, undefined, Effect.void);
+      const refused = yield* recorder.step(refusedStep, undefined, Effect.void);
+      expect(refused.result).toMatchObject({
+        step: { outcome: "refused", reason: "selector_names_contact" },
+      });
+      for (let round = 0; round < 2; round++) {
+        if (round > 0) yield* recorder.step(login, undefined, Effect.void);
+        const corrected = yield* recorder.step(rejectedUsername, undefined, Effect.void);
+        expect(corrected.result).toMatchObject({ corrected: true });
+      }
+      return yield* recorder.step(login, undefined, Effect.void);
+    }),
+  );
+  // The password went out on two fills, so the third login screen types nothing.
+  expect(third.result).toMatchObject({
+    step: { outcome: "refused", reason: "credential_already_filled" },
+  });
+  expect(host.filled.map(({ values }) => values)).toEqual([
+    [account.username, account.password],
+    ["ada-corrected", account.password],
+  ]);
+});
+
 it("confirms an approval after a sent identifier, records it as version 2, and verifies with it", async () => {
   const host = harness();
   const published = await host.run((recorder) =>
@@ -526,7 +586,7 @@ it("refuses a recorded selector holding [private], the mask the minter sees for 
       }
       expect(host.filled).toEqual([]);
       expect(host.reviewed).toEqual([]);
-      // The placeholders another host's minter sees are refused by the shared guard as before.
+      // The `[password]`, `[code]` and `[recovery_code]` placeholders are refused by the shared guard as before.
       const placeholder = yield* recorder.step(
         {
           fields: [{ selector: "#user", accepts: ["username"] }],
@@ -561,6 +621,24 @@ it("refuses a signed-in check holding [private] before it reads the page", async
     nextStep:
       "The signed-in check names this account's own identity, which publishes with the tool and fails for every other login. Name a marker every signed-in account shows, such as a sign-out control or the account menu, never the account's name, email or number, then inspect read-only and correct the sign-in steps from the page's evidence.",
   });
+  expect(host.confirmed).toEqual([]);
+});
+
+it.each([
+  ["path", { urlPath: "/accounts/[private]" }],
+  ["account page", { selector: "#account-menu", openPath: "/accounts/[private]/settings" }],
+])("refuses a signed-in check whose %s holds [private] before it reads the page", async (_, check) => {
+  const host = harness({ held: account });
+  const result = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(identifierAndPassword, undefined, Effect.void);
+      const refused = yield* recorder.step({ signedIn: check }, undefined, Effect.void);
+      expect(recorder.published()).toBeUndefined();
+      return refused;
+    }),
+  );
+  expect(result.verified).toBeUndefined();
+  expect(result.result).toMatchObject({ signedIn: false, failed: "indicator_holds_identity" });
   expect(host.confirmed).toEqual([]);
 });
 
@@ -926,6 +1004,64 @@ it("asks a code screen of one-character boxes for its code once, types a charact
     host.asked.flatMap((request) => request.questions).filter((question) => question.id === "code"),
   ).toHaveLength(1);
   expect(host.filled.at(-1)?.values).toEqual(["4", "8", "2", "9", "1", "3"]);
+});
+
+it.each([6, 7, 8])("asks a code screen of %i one-character boxes for its code once, types a character in each, and verifies once the host's click sent it", async (count) => {
+  const digits = "4829135706".slice(0, count);
+  const host = harness({ held: account, codeBoxes: count, answers: { code: [digits] } });
+  const boxes: SignInStep = {
+    fields: Array.from({ length: count }, (_, at) => ({ selector: `#otp-${at + 1}`, slot: "code" as const })),
+    submit: "#verify",
+  };
+  const published = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(identifierOnly, undefined, Effect.void);
+      yield* recorder.step(boxes, undefined, Effect.void);
+      const checked = yield* recorder.step(signedIn, undefined, Effect.void);
+      expect(checked).toMatchObject({ verified: true, result: { signedIn: true } });
+      return recorder.published();
+    }),
+  );
+  expect(host.asked.flatMap((r) => r.questions).filter((q) => q.id === "code")).toHaveLength(1);
+  expect(host.filled.at(-1)?.values).toEqual(Array.from(digits));
+  expect(published?.recipe.steps[1]).toEqual({
+    page: `${origin}/login`, fields: boxes.fields, submit: "#verify", submittedBy: "host",
+  });
+});
+
+it.each([7, 8])("keeps a %i-box code unsent when its last box did not fill, so the check does not verify", async (count) => {
+  const digits = "4829135706".slice(0, count);
+  const host = harness({
+    held: account,
+    codeBoxes: count,
+    answers: { code: [digits] },
+    report: (step) => {
+      const codes = step.fields.some((field) => field.slot === "code");
+      return {
+        outcome: "filled",
+        fields: step.fields.map((field, at) => ({
+          slot: field.slot,
+          status: codes && at === step.fields.length - 1 ? ("failed" as const) : ("filled" as const),
+        })),
+        submit: codes ? ("not_attempted" as const) : ("clicked" as const),
+        url: `${origin}/next`,
+      };
+    },
+  });
+  const boxes: SignInStep = {
+    fields: Array.from({ length: count }, (_, at) => ({ selector: `#otp-${at + 1}`, slot: "code" as const })),
+    submit: "#verify",
+  };
+  const checked = await host.run((recorder) =>
+    Effect.gen(function* () {
+      yield* recorder.step(identifierOnly, undefined, Effect.void);
+      yield* Effect.either(recorder.step(boxes, undefined, Effect.void));
+      return yield* Effect.either(recorder.step(signedIn, undefined, Effect.void));
+    }),
+  );
+  expect(host.filled).toHaveLength(2);
+  expect(JSON.stringify(checked)).not.toContain('"verified":true');
+  expect(host.confirmed).toEqual([]);
 });
 
 it("records a private answer's question selector in version 1, never its question or answer", async () => {

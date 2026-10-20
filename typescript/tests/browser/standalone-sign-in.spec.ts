@@ -291,8 +291,9 @@ test("a local build asks for its login once and publishes its sign-in without a 
     expect(asked.map(({ questions }) => questions)).toEqual([[loginQuestion(shop.origin)]]);
     expect(asked[0]?.notice).toBe("Pomerado needs a login for this website to continue.");
     expect(shop.state.loginPosts).toBe(1);
-    // The page's own sign-in request carried the login, so the check verified the sign-in, and
-    // the build publishes its screens and check, value-free, entered from the screen's address.
+    // The host clicked the screen's submit after filling the login, which counts as sending it, so
+    // the check verified the sign-in, and the build publishes its screens and check, value-free,
+    // entered from the screen's address.
     expect(artifact.signIn).toEqual({
       recipe: {
         version: 1,
