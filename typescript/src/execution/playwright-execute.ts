@@ -8,53 +8,16 @@ import {
 } from "../destinations/credential-keyboard.js";
 import { BrowserExecuteResponse, type BrowserExecute } from "../runtime/browser-execution.js";
 import type { HostExecute } from "../runtime/host-execute.js";
+import {
+  NativeWorkerOptions,
+  NativeWorkerReply,
+  NativeWorkerRequest,
+  PlaywrightLibrary,
+} from "./playwright-protocol.js";
 
-export const NativeWorkerRequest = Schema.Union(
-  Schema.Struct({
-    id: Schema.String,
-    kind: Schema.Literal("execute"),
-    code: Schema.String,
-    /**
-     * Values to watch for: the worker answers which ones a typing call delivered, and in which
-     * frame (`typed`).
-     */
-    watch: Schema.optional(Schema.Array(Schema.String)),
-  }),
-  Schema.Struct({
-    id: Schema.String,
-    kind: Schema.Literal("credential"),
-    target: Schema.Struct({
-      targetId: Schema.optional(Schema.String),
-      bindingKey: Schema.String,
-      documentOrigin: Schema.String,
-    }),
-    text: Schema.String,
-  }),
-);
 type WithoutId<A> = A extends { readonly id: string } ? Omit<A, "id"> : never;
 type NativePayload = WithoutId<typeof NativeWorkerRequest.Type>;
-
-export const NativeWorkerReply = Schema.Union(
-  Schema.Struct({
-    kind: Schema.Literal("ready"),
-    targetId: Schema.String,
-    /** The context the worker made and owns; absent for a page it adopted over CDP. */
-    contextId: Schema.optional(Schema.String),
-  }),
-  /** The worker's own connection to a CDP-attached browser closed. */
-  Schema.Struct({ kind: Schema.Literal("disconnected") }),
-  Schema.Struct({ kind: Schema.Literal("response"), id: Schema.String, value: Schema.Unknown }),
-  Schema.Struct({ kind: Schema.Literal("failure"), id: Schema.String, error: Schema.String }),
-);
-export const PlaywrightLibrary = Schema.Literal("playwright", "patchright");
-export type PlaywrightLibrary = typeof PlaywrightLibrary.Type;
-export const NativeWorkerOptions = Schema.Struct({
-  endpoint: Schema.String,
-  startupTimeoutMs: Schema.Number,
-  library: PlaywrightLibrary,
-  /** Attach over CDP and drive the browser's own context, at this page (its first when absent). */
-  cdp: Schema.optional(Schema.Struct({ targetId: Schema.optional(Schema.String) })),
-});
+export type { PlaywrightLibrary };
 
 /**
  * A running Chromium reached through its DevTools websocket, such as one started with
@@ -363,7 +326,9 @@ export const makePlaywrightExecutor = (
     });
     if (options.endpoint !== undefined && options.cdp !== undefined)
       return yield* Effect.fail(new Error("endpoint and cdp cannot both be set"));
-    const library = options.library ?? "playwright";
+    const library = yield* Schema.decodeUnknown(PlaywrightLibrary)(
+      options.library ?? "playwright",
+    ).pipe(Effect.mapError(() => new Error("library must be playwright or patchright")));
     const owner: NativeOwnership = {
       remote: options.endpoint !== undefined || options.cdp !== undefined,
       cleanupTimeoutMs,

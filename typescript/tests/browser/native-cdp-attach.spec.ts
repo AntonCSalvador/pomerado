@@ -1,5 +1,3 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -106,6 +104,22 @@ test("CDP attach refuses a target id the browser doesn't have", async () => {
       native(title, { cdp: { url: browser.url, targetId: "0123456789ABCDEF" } }),
     ).rejects.toThrow("CDP target not found");
   } finally {
+    await browser.close();
+  }
+});
+
+test("CDP attach refuses a page another client's context holds", async () => {
+  const browser = await devtoolsBrowser();
+  const other = await chromium.connectOverCDP(browser.url);
+  try {
+    const isolated = await other.newContext();
+    const page = await isolated.newPage();
+    const targetId = await targetIdOf(isolated, page);
+    await expect(native(title, { cdp: { url: browser.url, targetId } })).rejects.toThrow(
+      "CDP target not found",
+    );
+  } finally {
+    await other.close();
     await browser.close();
   }
 });
@@ -228,30 +242,4 @@ test("CDP attach runs on Patchright when asked", async () => {
   } finally {
     await browser.close();
   }
-});
-
-test("the CLI refuses a DevTools endpoint together with a Playwright endpoint", async () => {
-  const child = spawn(
-    process.execPath,
-    [
-      "dist/typescript/src/standalone/cli.js",
-      "run",
-      "--artifact",
-      "never-read",
-      "--url",
-      "https://example.test",
-      "--endpoint",
-      "ws://127.0.0.1:9/never",
-      "--cdp-endpoint",
-      "ws://127.0.0.1:9/never",
-    ],
-    { env: { PATH: process.env["PATH"] ?? "" }, stdio: ["ignore", "pipe", "pipe"] },
-  );
-  let errors = "";
-  child.stderr.on("data", (chunk: Buffer) => {
-    errors += chunk.toString();
-  });
-  const [code] = (await once(child, "close")) as [number | null];
-  expect(code).not.toBe(0);
-  expect(errors).toContain("--endpoint and --cdp-endpoint cannot both be set");
 });

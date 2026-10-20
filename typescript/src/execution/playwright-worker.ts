@@ -31,7 +31,7 @@ if (import.meta.url.endsWith(".ts"))
         : nextLoad(url, context),
   });
 const { makeCredentialKeyboard } = await import("../destinations/credential-keyboard.js");
-const { NativeWorkerOptions, NativeWorkerRequest } = await import("./playwright-execute.js");
+const { NativeWorkerOptions, NativeWorkerRequest } = await import("./playwright-protocol.js");
 
 const asError = (cause: unknown): Error =>
   cause instanceof Error ? cause : new Error("Native browser worker failed", { cause });
@@ -53,15 +53,25 @@ const identify = (context: BrowserContext, page: Page) =>
 
 /**
  * The page of a CDP-attached browser's own context the worker drives: the one `targetId` names, or
- * with none the context's first page, opened when it has none.
+ * with none the context's first page, opened when it has none. Playwright lists other clients'
+ * contexts' pages under the default context too, so a page whose context the browser reports as
+ * a created one (`Target.getBrowserContexts` lists every context but the default) is never taken:
+ * its cookies and storage are not the ones `context` reads.
  */
-const adoptPage = (context: BrowserContext, targetId: string | undefined) =>
+const adoptPage = (browser: Browser, context: BrowserContext, targetId: string | undefined) =>
   Effect.gen(function* () {
-    if (targetId === undefined)
-      return context.pages()[0] ?? (yield* promise(() => context.newPage()));
-    for (const candidate of context.pages())
-      if ((yield* identify(context, candidate)).targetId === targetId) return candidate;
-    return yield* Effect.fail(new Error("CDP target not found"));
+    const session = yield* promise(() => browser.newBrowserCDPSession());
+    const created = yield* promise(() => session.send("Target.getBrowserContexts")).pipe(
+      Effect.map(({ browserContextIds }) => new Set(browserContextIds)),
+      Effect.ensuring(promise(() => session.detach()).pipe(Effect.orDie)),
+    );
+    for (const candidate of context.pages()) {
+      const target = yield* identify(context, candidate);
+      if (created.has(target.browserContextId)) continue;
+      if (targetId === undefined || target.targetId === targetId) return candidate;
+    }
+    if (targetId === undefined) return yield* promise(() => context.newPage());
+    return yield* Effect.fail(new Error("CDP target not found in the browser's own context"));
   });
 
 /**
@@ -399,7 +409,7 @@ await Effect.runPromise(
     const page =
       attached === undefined
         ? yield* promise(() => context.newPage())
-        : yield* adoptPage(context, attached.targetId);
+        : yield* adoptPage(browser, context, attached.targetId);
     const target = yield* identify(context, page);
     if (attached !== undefined)
       browser.on("disconnected", () => port.postMessage({ kind: "disconnected" }));
