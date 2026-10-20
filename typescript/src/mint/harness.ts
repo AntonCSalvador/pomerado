@@ -3161,7 +3161,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // escalation for missing evidence is not one), unless the host's own guidance names the
         // ending; the minter's reading of its own instructions is none. A host_refused block
         // stands on a host check's refusal the host recorded in this attempt that no later
-        // finish_build got past to Guardian's review. The owner's no to a
+        // finish_build got past to Guardian's review, or on a sign-in whose password the host
+        // fills no more, which it refuses on every screen that needs it. The owner's no to a
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
@@ -3173,6 +3174,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               typeof answer === "object" && "confirmed" in answer && !answer.confirmed,
           );
         const unanswered = noAnswerHandBacks > 0;
+        const hostRefusing = hostRefused || dependencies.signInFillsSpent?.() === true;
         if (reason === "owner_declined" && !ownerRefused)
           return refused(
             "owner_not_declined",
@@ -3183,12 +3185,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "no_question_unanswered",
             "No question went unanswered in this build, so the build has not ended. Use question_unanswered only after a question you asked came back as no answer and the build cannot go on without it.",
           );
-        if (reason === "host_refused" && !hostRefused && hostRefusalPassed)
+        if (reason === "host_refused" && !hostRefusing && hostRefusalPassed)
           return refused(
             "host_refusal_passed",
             "A host check refused a step earlier in this attempt, but a later finish_build got past it, so the build has not ended. Fix the findings the latest refusal names and call finish_build again. Use host_refused only when a host check still refuses a step and nothing left in this attempt can fix it.",
           );
-        if (reason === "host_refused" && !hostRefused)
+        if (reason === "host_refused" && !hostRefusing)
           return refused(
             "host_not_refused",
             "No host check refused a step in this attempt, so the build has not ended. host_refused needs a host check that refused a step the build needs, such as finish_build, a sign-in form or a site change.",

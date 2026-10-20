@@ -32,6 +32,7 @@ import {
   isIdentifier,
   isSecret,
   noteRefill,
+  passwordFillsSpent,
   reasksPassword,
   recordStep,
   registeredSecretIn,
@@ -772,6 +773,8 @@ export const makeSignInRecorder = (input: {
     },
     /** The screens a signed-in check reads now: every screen, and the current sign-in's. */
     screens: () => ({ screens: [...screens], challengeScreens: screens.slice(signInStart) }),
+    /** Whether the sign-in under way filled the password as often as it may. */
+    passwordFillsSpent: () => passwordFillsSpent(h),
     /** The latest verified sign-in, while no later sign-in reached the site; else none. */
     published: (): PublishedSignIn | undefined => {
       if (verified === undefined || verified.signIn !== signIns) return undefined;

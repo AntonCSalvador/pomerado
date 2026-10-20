@@ -256,6 +256,15 @@ export const exhaustedSecret = (h: FilledSecrets, open: boolean, step: AutofillS
   );
 };
 /**
+ * Whether the sign-in under way filled the login's password as often as it may, and none verified
+ * since: every further screen that needs the password is refused (`exhaustedSecret`) until a
+ * sign-in verifies, or a corrected login starts its fills again.
+ */
+export const passwordFillsSpent = (h: FilledSecrets) =>
+  !h.managedAuthenticationComplete.current &&
+  h.autofillSecretsFilled.current.includes("password") &&
+  h.autofillSecretsRefilled.current.includes("password");
+/**
  * Whether a sign-in submitted the login's identifier and its password or code (`submittedSlots`:
  * a submit clicked after the fill, `submitFilled`), or passed a step the owner approves: the proof
  * the host's sign-in needs before its indicator may verify the login, and a replay's
