@@ -162,8 +162,10 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
     "IBAN",
     "Bank account number",
     "Routing number",
+    "Routing transit number",
     "Sort code",
     "Card expiry",
+    "CC exp",
     "Expiration date on card",
     "Expiration (MM/YY)",
     "Valid thru",
@@ -203,6 +205,8 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
   <label>Card number<input name="n12" required></label>
   <label>Password<input name="n13" required></label>
   <label>Number on card<input name="cardNumber" required></label>
+  <label>Expires<input name="ccExpiry" required></label>
+  <label>Ends<input name="cc-exp" required></label>
   <label>Card #<input name="n14" required></label>
   <label>Credit card<input name="n15" required></label>
   <label>Card verification value<input name="n16" required></label>
@@ -246,6 +250,8 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
         "Card number",
         "Password",
         "Number on card",
+        "Expires",
+        "Ends",
         "Card #",
         "Credit card",
         "Card verification value",
@@ -447,6 +453,20 @@ test("blockingRequiredFields proves a click saved nothing only when every flag i
     phone?.setAttribute("aria-invalid", "true");
   });
   expect(await blocking(unnamed)).toEqual({ result: null });
+  await page.setContent(blockedReview("", `<label>Contact phone <input type="tel"></label>`));
+  await page.evaluate(() => {
+    const phone = document.querySelector("[type=tel]");
+    phone?.insertAdjacentText("afterend", " Required");
+    phone?.setAttribute("aria-invalid", "true");
+  });
+  expect(await blocking(unnamed)).toEqual({ result: null });
+  // A named field is known by its name, so one whose label only begins with a label shown before
+  // is a new field.
+  await page.setContent(blockedReview(`<label>Phone extension<input name="phone_ext"></label>`, `<label>Phone<input name="phone" value="555-0100"></label>`));
+  await reveal("[name=phone_ext]");
+  expect(await blocking(["Item", "item", "Phone", "phone"])).toEqual({
+    result: { fields: [{ label: "Phone extension", shape: "text" }] },
+  });
   // A label that only begins with the same letters as one shown before is a new field.
   await page.setContent(blockedReview(`<label>Contactless note<input name="note"></label>`, `<label>Contact<input name="contact" value="Sam"></label>`));
   await reveal("[name=note]");
