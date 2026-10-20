@@ -771,6 +771,18 @@ describe("the publication policy", () => {
     expect(guardianPublicationPolicy).toContain(`\n${publicationLiveTestsPolicy}\n`);
   });
 
+  // A write repair's late check of a caller value is judged even on an unchanged line, as an
+  // exception to judging a repair on the lines it changed. Hosts with their own publication policy
+  // get it with the live tests.
+  it("judges a write repair's late caller-value check on unchanged lines too", () => {
+    const rule =
+      "In a repair of a write, a check of a caller value that can refuse, made after an enteringCommit, is a confirmation finding even on lines the repair did not change.";
+    expect(publicationLiveTestsPolicy).toContain(
+      `Note other doubts about unchanged lines without denying, except a privacy or credential finding. ${rule}`,
+    );
+    expect(guardianPublicationPolicy).toContain(`\n${publicationLiveTestsPolicy}\n`);
+  });
+
   // One case that uses an input covers it, so the review asks for no case per option value.
   // Hosts with their own publication policy get it with the live tests.
   it("counts an input as tested by one case that uses it, not one per value", () => {
