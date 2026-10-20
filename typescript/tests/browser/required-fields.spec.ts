@@ -460,13 +460,44 @@ test("blockingRequiredFields proves a click saved nothing only when every flag i
     phone?.setAttribute("aria-invalid", "true");
   });
   expect(await blocking(unnamed)).toEqual({ result: null });
-  // A named field is known by its name, so one whose label only begins with a label shown before
-  // is a new field.
+  // So may a named one, since a page may rename a field as it flags it. A new field whose label
+  // begins with an old one's is not asked either, which is safe.
   await page.setContent(blockedReview(`<label>Phone extension<input name="phone_ext"></label>`, `<label>Phone<input name="phone" value="555-0100"></label>`));
   await reveal("[name=phone_ext]");
-  expect(await blocking(["Item", "item", "Phone", "phone"])).toEqual({
-    result: { fields: [{ label: "Phone extension", shape: "text" }] },
+  expect(await blocking(["Item", "item", "Phone", "phone"])).toEqual({ result: null });
+  // A combobox whose own text box the page renames, its label marked.
+  await page.setContent(
+    blockedReview("", `<div role="combobox" aria-haspopup="listbox" aria-label="Size" aria-expanded="false"><input aria-label="Size" name="size_1" required value="M"></div>`),
+  );
+  const combobox = ((await before()) as { result: string[] }).result;
+  expect(combobox).toEqual(["Item", "item", "Size", "size_1"]);
+  await page.evaluate(() => {
+    const size = document.querySelector<HTMLInputElement>("[name=size_1]");
+    if (size === null) return;
+    size.value = "";
+    size.name = "size_2";
+    size.setAttribute("aria-invalid", "true");
+    document.querySelector("[role=combobox]")?.setAttribute("aria-label", "Size *");
   });
+  expect(await blocking(combobox)).toEqual({ result: null });
+  // A field whose name and id the page regenerates, its label marked.
+  await page.setContent(
+    blockedReview("", `<label for="f-1">Contact email</label><input type="email" id="f-1" name="f-1" required value="sam@example.com">`),
+  );
+  const regenerated = ((await before()) as { result: string[] }).result;
+  expect(regenerated).toEqual(["Item", "item", "Contact email", "f-1", "f-1"]);
+  await page.evaluate(() => {
+    const email = document.querySelector<HTMLInputElement>("#f-1");
+    const label = document.querySelector<HTMLLabelElement>("label[for=f-1]");
+    if (email === null || label === null) return;
+    email.value = "";
+    email.id = "f-2";
+    email.name = "f-2";
+    label.htmlFor = "f-2";
+    label.textContent = "Contact email *";
+    email.setAttribute("aria-invalid", "true");
+  });
+  expect(await blocking(regenerated)).toEqual({ result: null });
   // A label that only begins with the same letters as one shown before is a new field.
   await page.setContent(blockedReview(`<label>Contactless note<input name="note"></label>`, `<label>Contact<input name="contact" value="Sam"></label>`));
   await reveal("[name=note]");

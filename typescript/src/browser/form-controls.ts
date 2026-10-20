@@ -379,9 +379,9 @@ const formControlTextTypes = new Set(["", "text", "email", "tel", "url", "number
  * select's or combobox's options when it lists 1 to 50 now, whether the page flagged it, and its
  * control. A control inside another one, such as a combobox's own text box, is that one, and
  * its required mark, flag and value count as that one's. Mode "flagged" keeps only the flagged
- * ones, each with its keys (its label and every name and id it and its inner controls carry) and
- * whether it or an inner control carries a name, and counts the flagged controls that are not
- * empty; mode "labels" returns the keys of every visible control instead.
+ * ones, each with its keys (its label and every name and id it and its inner controls carry), and
+ * counts the flagged controls that are not empty; mode "labels" returns the keys of every visible
+ * control instead.
  */
 const formControlRequiredFields = async (scope, timeout, mode = "required") => {
   const candidates = scope.locator(formControlFieldSelector);
@@ -484,7 +484,6 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
         readOnly: element.readOnly === true,
         flagged,
         keys: keysOf(element),
-        named: parts.some((part) => (part.getAttribute("name") ?? "") !== ""),
       }];
     });
     return { fields, flaggedFilled };
@@ -505,7 +504,7 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
       shape,
       ...(supported && shape !== "text" && field.options !== undefined ? { options: field.options } : {}),
       ...(supported ? {} : { unsupported: true }),
-      ...(mode === "flagged" ? { keys: field.keys, named: field.named } : {}),
+      ...(mode === "flagged" ? { keys: field.keys } : {}),
       control,
     });
   }
@@ -521,17 +520,16 @@ const blockingRequiredFields = async (scope, before, options = {}) => {
   if ((await scope.count()) !== 1 || !(await scope.isVisible())) return null;
   const { fields, flaggedFilled } = await formControlRequiredFields(scope, timeout, "flagged");
   // A field the page already showed before the click, by its label, name or id, may have been
-  // cleared or flagged by a save. So may one with no name whose label begins with a label shown
-  // before, as when the page writes its error inside the label, or whose label reads as an error
-  // message. A named field is known by its name.
+  // cleared or flagged by a save. So may one whose label begins with a label shown before, as
+  // when the page writes its error inside the label, or whose label reads as an error message.
   const seen = new Set(before.map(String));
   const extended = (label) =>
     [...seen].some((key) => label.length > key.length && label.startsWith(key) && !/[\p{L}\p{N}]/u.test(label.charAt(key.length)));
   const stale = (field) =>
-    field.keys.some((key) => seen.has(key)) || (!field.named && extended(field.label)) || formControlMessageWords.test(field.label);
+    field.keys.some((key) => seen.has(key)) || extended(field.label) || formControlMessageWords.test(field.label);
   if (fields.length === 0 || flaggedFilled > 0 || fields.some((field) => field.unsupported || stale(field)))
     return null;
-  return { fields: fields.map(({ control, keys, named, ...field }) => field) };
+  return { fields: fields.map(({ control, keys, ...field }) => field) };
 };
 const fillRequiredField = async (scope, label, answer, options = {}) => {
   const timeout = options.timeout ?? 10000;

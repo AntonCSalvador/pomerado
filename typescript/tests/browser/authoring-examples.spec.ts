@@ -1724,6 +1724,29 @@ const savingReviews = {
     afterSave: `const phone = form.querySelector("[type=tel]"); phone.value = ""; phone.setAttribute("aria-invalid", "true");
       phone.parentElement.insertAdjacentHTML("beforeend", '<span class="error">Required</span>'); confirm(1500);`,
   },
+  // A named field the save clears and renames, with an error mark written inside its label.
+  "renamed field's label gains a star": {
+    fields: `<label>Contact email <input type="email" name="email_r1" required value="sam@example.com"></label>`,
+    afterSave: `const email = form.querySelector("[name=email_r1]"); email.value = ""; email.name = "email_r2"; email.setAttribute("aria-invalid", "true");
+      email.parentElement.insertAdjacentHTML("beforeend", '<span class="error">*</span>'); confirm(800);`,
+  },
+  "renamed field's label gains a word": {
+    fields: `<label>Contact email <input type="email" name="email_r1" required value="sam@example.com"></label>`,
+    afterSave: `const email = form.querySelector("[name=email_r1]"); email.value = ""; email.name = "email_r2"; email.setAttribute("aria-invalid", "true");
+      email.parentElement.insertAdjacentHTML("beforeend", '<span class="error">verplicht</span>'); confirm(800);`,
+  },
+  // A field with no name that the save gives one, with an error mark inside its label.
+  "unnamed field gains a name": {
+    fields: `<label>Contact email <input type="email" required value="sam@example.com"></label>`,
+    afterSave: `const email = form.querySelector("[type=email]"); email.value = ""; email.name = "email"; email.setAttribute("aria-invalid", "true");
+      email.parentElement.insertAdjacentHTML("beforeend", '<span class="error">*</span>'); confirm(800);`,
+  },
+  // A field the save mounts again with a new name and id, its label marked.
+  "field mounted again": {
+    fields: `<div id="email-box"><label for="email-a">Contact email</label><input type="email" id="email-a" name="email_a" required value="sam@example.com"></div>`,
+    afterSave: `document.querySelector("#email-box").innerHTML = '<label for="email-b">Contact email *</label><input type="email" id="email-b" name="email_b" required aria-invalid="true">';
+      confirm(800);`,
+  },
   // aria-labelledby that gains the error's id, so its label becomes "Phone is required".
   "error joins the label": {
     fields: `<span id="ph-l">Phone</span><input name="phone" aria-labelledby="ph-l" required value="555-0100">`,
@@ -1743,9 +1766,10 @@ for (const [variant, site] of Object.entries(savingReviews))
     const asked: InputRequest[] = [];
     const saved = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
       siteOrigin: origin,
+      // An answer each flagged field would take, so a wrong question shows as a second order.
       answer: (request) => {
         asked.push(request);
-        return { extra_field: "an answer" };
+        return { extra_field: "sam@example.com" };
       },
     });
     // The flagged field was there before the click, so nothing proves the click saved nothing.
