@@ -362,7 +362,8 @@ const defaultChoice = (type: DialogType): DialogChoice =>
  * observed, its `template` naming where each of this run's values came from, and answers
  * `accept`, which accepts and records it, or `ask`. A judgment that fails or dies counts as
  * `ask`. A popup that cannot be expected, because no step is known or its page is not https, is
- * never judged. The host bounds the judgment's time itself.
+ * never judged. The popup's message is the page's own text, unmasked: a host that sends it
+ * anywhere screens it first. The host bounds the judgment's time itself.
  */
 export const makeRunDialogDecision = <Event extends DialogEvent>(input: {
   readonly readOnly: boolean;
