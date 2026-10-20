@@ -2161,8 +2161,11 @@ export interface MintDependencies {
        * Told to the restored minter once, as a user message before its next model call, such as
        * why it stopped and what may have changed meanwhile. When the snapshot holds a saved model
        * response, that response's tool calls replay first and the message follows their results,
-       * so every call keeps its result. It joins the conversation, so later checkpoints hold it.
-       * The host's own text, sent as written.
+       * so every call keeps its result. The host's own text, sent as written.
+       * It joins the conversation with the next model call, so only checkpoints from that call on
+       * hold it: their `modelCalls` is above the restored snapshot's. A takeover that restores an
+       * earlier checkpoint, such as one written as a replayed call returned, passes it again; one
+       * that restores a later checkpoint must not, or the minter reads it twice.
        */
       readonly resumeMessage?: string;
     };
@@ -2285,7 +2288,8 @@ export interface MintDependencies {
    *   `attemptFinished` reports. A resumed attempt restores `agentRecovery.initial` and rejoins
    *   that call through `agentRecovery.recoverTool`, such as with the answer the owner gave
    *   meanwhile. Recovered evidence that still carries `noResponse` is unanswered again.
-   * - `not_suspended`, or a failure, which is recorded: the build ends as `no_response`.
+   * - `not_suspended`, or a failure, which is recorded: the build ends as `no_response`. So does
+   *   `suspended` when the model run ended while the hook ran, which is recorded too.
    * Absent, every such build ends as `no_response`.
    */
   readonly suspendUnanswered?: (
