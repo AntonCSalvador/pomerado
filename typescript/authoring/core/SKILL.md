@@ -599,8 +599,9 @@ that depends on them:
    before the page updates belongs to the previous choice. A choice already in the requested
    state needs no step and no wait. Compare text read back with `sameText(shown, wanted)` from
    `pomerado/runtime`, `wanted` being the option the tool picked from the site's list when it
-   picked one, and the caller's value otherwise. It ignores case, accents, spacing and
-   punctuation and accepts a word the page shortened, such as St for Saint. Prefer it over
+   picked one, and the caller's value otherwise. It ignores case, accents, spacing,
+   apostrophes, and periods, commas and hyphens between letters, and accepts a word the page
+   shortened, such as St for Saint. Prefer it over
    exact equality, since a page may echo a query or name in its own case or short form, and
    prefer comparing numbers, dates and amounts as values. When the page kept another value
    after the tool's bounded retries, throw
