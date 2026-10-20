@@ -147,8 +147,11 @@ conditional one shows only for some accounts, states or visits, such as a cookie
 one-time promotion or a membership upsell shown only to non-members: check for it, resolve it
 when it shows, and continue without error when it does not, as one outcome beside the page's
 next state. Never wait for it or require it. One the page always opens in answer to an action,
-such as a confirmation dialog a button always opens, may be expected. A pop-up the session met
-once is conditional unless the page shows it always follows that action.
+such as a confirmation dialog a button always opens, may be expected, and the script accepts it
+when it only restates what this run entered or acts on. One that shows something new, such as a
+fee, a consequence beyond the request, another record or a warning about this input, goes to the
+caller as a declared question. A pop-up the session met once is conditional unless the page
+shows it always follows that action.
 
 Type each date-only input and output as the runtime's `CalendarDate`, imported beside
 `formControlsCode`, never a bare `YYYY-MM-DD` pattern, which accepts `2026-02-30`. It checks

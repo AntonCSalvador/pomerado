@@ -846,7 +846,7 @@ it("renders the pinned standalone authoring", async () => {
     ["7e50c86ea30964f0e3610e090c7bd7d78aac6f59a7f644644c1ad99577d59f5f", "auth"],
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
-    ["62af125c1a868d2d579f2b451509558084883e1c8134f9bcdc0140d82ef92a03", "forms"],
+    ["5d6d582812ab26cab6dfbba0f189fa538264f52108e15a48cd52b8fca350d786", "forms"],
     ["6a3426b664481c8f215977ec3ea4ef03cafdec29acbd6b0f93ddba23648438b7", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["13dddd8a8506d196fadad2d5c8eaf74487eb0ad0c667044ee66ce81799774e7a", "caller-input"],
