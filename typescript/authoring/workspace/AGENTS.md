@@ -170,14 +170,10 @@ than the controls, such as a record page at `/items/<id>` instead of crawling a 
 Either way, read the page's identity back from the page and fail if it does not match.
 
 When the controls flow lands on a URL the site produced, and two runs with different inputs show
-which parts of it carry which input, such as the query, dates, guests or party size, sort,
-filters, a location the URL itself carries or a record's own identifier route, the tool enters
-at that URL with the caller's values in those parts when the mapping is reliable and clear: each
-part's valid values are known and readable in the URL, such as a sort or filter whose values
-become the input's enum, or a query the site encodes as typed. An opaque filter code still comes
-only from a link the page produced in this run (below). Otherwise it uses the page's controls.
-It builds that URL with `URLSearchParams` for a query part or `encodeURIComponent` for a path
-part and every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input
+which parts of it carry which input, such as the query, dates, guests or party size, sort or a
+record's own identifier route, the tool may open that URL with the caller's values in those
+parts, built with `URLSearchParams` for a query part or `encodeURIComponent` for a path part and
+every other part copied as the site wrote it, once the build checked that it gives the same answer as the controls. At run time it reads every input
 back from the page, and when the landing is not an answer it named or a read-back differs, it
 runs the controls flow once instead, in a named function such as `throughControls`
 (`references/navigation.ts`). Never guess a parameter, never iterate on URL variants, and take an

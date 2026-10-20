@@ -147,7 +147,8 @@ alone does not establish it.
 
 When an overlay such as a cookie or consent banner covers the target, dismiss it with its
 control that declines optional cookies, such as Reject all or Necessary only, when the banner
-shows one, and otherwise with any of its controls, accept included.
+shows one, and otherwise with any of its controls, accept included. Name that control as `dismiss` of
+`waitForReady` (core skill) to close the banner before the action, and one that opens later.
 
 Decide whether each pop-up, banner or interstitial is conditional or always triggered. A
 conditional one shows only for some accounts, states or visits, such as a cookie banner, a
