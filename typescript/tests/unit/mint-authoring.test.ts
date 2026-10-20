@@ -209,7 +209,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   ["core", "- The code works for every value the schema accepts."],
   [
     "core",
-    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime` matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one with a word added or dropped. Prefer it for those forms and for confirming the pick, so the choice and its read-back agree. When more than one option matches, list them for the caller instead of picking one.",
+    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime` matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one with a word added or dropped. Prefer it for confirming the pick, so the read-back agrees with the choice, but not for choosing from a list, where a short label can match a longer name it isn't, such as UK for Ukraine. When more than one option matches, list them for the caller instead of picking one.",
   ],
   ["core", "Take the site origin from the context's `siteOrigin`."],
   ["core", "The tools and the files you may edit are in `AGENTS.md`."],
@@ -841,7 +841,7 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["927d2562e423d0bddaaf229f10f25801d370258f3e58776cc847d0127fc9ea5e", "core"],
+    ["2a1efbb3a7171e6840baabe28e56fc2b4df6d181c6ee884312184486f2ef763a", "core"],
     ["9fe0598c1dc41354e5dbddd42a372c6b628eecd206cf5ea9a3cf0fcbf10a6410", "search"],
     ["7e50c86ea30964f0e3610e090c7bd7d78aac6f59a7f644644c1ad99577d59f5f", "auth"],
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],

@@ -206,8 +206,9 @@ exception: it is optional unless the task can't run without it (below).
   or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime`
   matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or
   hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one
-  with a word added or dropped. Prefer it for those forms and for confirming the pick, so the
-  choice and its read-back agree.
+  with a word added or dropped. Prefer it for confirming the pick, so the read-back agrees with
+  the choice, but not for choosing from a list, where a short label can match a longer name it
+  isn't, such as UK for Ukraine.
   When more than one option matches, list them for the caller instead of picking one.
 - On a write, every choice the session met is an input, costly choices included, and any
   other option, such as a seat, is an optional input, as the writes skill says ("Compose and

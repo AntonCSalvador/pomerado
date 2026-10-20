@@ -53,7 +53,7 @@ export const foldChoiceText = (text: unknown): string => {
  * number of words in the same order, and a word holding a digit or another symbol, such as a slash
  * or a bracket, must be the same word, so 12 never matches 123, C++ never matches C and Blue/Green
  * never matches Blue Green. Compare numbers, dates and amounts as values instead. It is pure and
- * self-contained, so page code can embed it, as `formControlsCode` does.
+ * self-contained, so page code can embed it.
  */
 export const sameText = (shown: string, wanted: string): boolean => {
   const fold = (text: string) => {
