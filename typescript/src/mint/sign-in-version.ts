@@ -6,7 +6,7 @@ import {
   type SignedOutSnapshot,
 } from "../destinations/signed-in-marker.js";
 import { oneTimeLoginUrlParameters } from "./login-url.js";
-import { namesIdentity, namesMaskedContact } from "./sign-in-guards.js";
+import { namesIdentityOrPrivateMask, namesMaskedContact } from "./sign-in-guards.js";
 import { registrableDomain, sameSite } from "../runtime/same-site.js";
 import { workspaceRelation } from "../runtime/workspace-origin.js";
 
@@ -35,8 +35,8 @@ export interface SignInVersionInput {
    * Identity values the host knows for the account that recorded the version, such as its
    * username, email, phone or account number. No part of a version may name one; none is ever
    * returned. The identity rules apply only to the values a caller passes: a host that no longer
-   * holds them, because it applied the same identity guards to each screen while it recorded the
-   * sign-in, passes none.
+   * holds them, because it applied identity guards of its own to each screen while it recorded
+   * the sign-in, passes none.
    */
   readonly identities?: readonly string[] | undefined;
   /**
@@ -196,8 +196,8 @@ export const checkSignInVersion = (
     // An asked one-time URL's query and fragment hold spent random values, which often have four
     // digits in a row: only its path is read for a masked number.
     namesMaskedContact(input.entryUrlAsked === true ? (entry?.pathname ?? entryPast) : entryPast) ||
-    namesIdentity(entryPast, pageValues) ||
-    namesIdentity(belowDomain(version.entryUrl), values)
+    namesIdentityOrPrivateMask(entryPast, pageValues) ||
+    namesIdentityOrPrivateMask(belowDomain(version.entryUrl), values)
   )
     refuse("page_names_contact", "entryUrl");
   if (signsOut(entryPast)) refuse("sign_out", "entryUrl");
@@ -206,7 +206,7 @@ export const checkSignInVersion = (
   steps.forEach((step, index) => {
     const at = `recipe.steps[${index}]`;
     for (const { part, text } of stepSelectors(step, at)) {
-      if (namesMaskedContact(text) || namesIdentity(text, values))
+      if (namesMaskedContact(text) || namesIdentityOrPrivateMask(text, values))
         refuse("selector_names_contact", part);
       // What a step clicks: its submit and its methods.
       if (/\.(?:submit|methods\[\d+\]\.selector)$/u.test(part) && signsOut(text))
@@ -215,8 +215,8 @@ export const checkSignInVersion = (
     const page = pastOrigin(step.page);
     if (
       namesMaskedContact(page) ||
-      namesIdentity(page, pageValues) ||
-      namesIdentity(belowDomain(step.page), values)
+      namesIdentityOrPrivateMask(page, pageValues) ||
+      namesIdentityOrPrivateMask(belowDomain(step.page), values)
     )
       refuse("page_names_contact", `${at}.page`);
     if (signsOut(page)) refuse("sign_out", `${at}.page`);
@@ -224,7 +224,7 @@ export const checkSignInVersion = (
     if (step.origin === "workspace" ? relation === undefined : !onSite(siteOrigin, step.page))
       refuse("foreign_origin", `${at}.page`);
     if (step.popup !== undefined) {
-      if (namesIdentity(belowDomain(step.popup.origin), values))
+      if (namesIdentityOrPrivateMask(belowDomain(step.popup.origin), values))
         refuse("page_names_contact", `${at}.popup.origin`);
       if (!secure(step.popup.origin)) refuse("insecure_origin", `${at}.popup.origin`);
       if (!onSite(siteOrigin, step.popup.origin)) refuse("foreign_origin", `${at}.popup.origin`);
@@ -240,7 +240,10 @@ export const checkSignInVersion = (
     if (text === undefined) continue;
     const selector = key === "selector";
     const named = selector ? text : pastOrigin(text);
-    if (namesMaskedContact(named) || namesIdentity(named, selector ? values : pageValues))
+    if (
+      namesMaskedContact(named) ||
+      namesIdentityOrPrivateMask(named, selector ? values : pageValues)
+    )
       refuse("indicator_holds_identity", `recipe.signedIn.${key}`);
     // The host opens the account page before it checks the marker.
     if (key === "openPath" && signsOut(named)) refuse("sign_out", "recipe.signedIn.openPath");

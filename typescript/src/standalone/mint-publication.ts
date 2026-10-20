@@ -209,8 +209,8 @@ export const screenedSignIn = <E>(
  * identity values or signed-out pages: it no longer holds the login, and the recorder already
  * applied the identity guards to each screen and compared the marker with the build's signed-out
  * pages as it recorded the sign-in. A login URL, page or popup off the site's registrable domain
- * is refused (`foreign_origin`), on a sign-in origin the build trusted too, and one that is not
- * https (`insecure_origin`).
+ * is refused (`foreign_origin`), on a sign-in origin the request declares in
+ * `authenticationOrigins` too, and one that is not https (`insecure_origin`).
  */
 const signInVersionRefusal = (
   signIn: PublishedSignIn,
