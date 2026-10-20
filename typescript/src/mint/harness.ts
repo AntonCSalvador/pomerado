@@ -1073,7 +1073,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * takeover keeps it, and a move to another site clears it.
        */
       let signInUnconfirmed = recovered?.signInUnconfirmed === true;
-      /** Updates `signInUnconfirmed` once an authenticate ends, by what it did. */
+      /**
+       * Updates `signInUnconfirmed` once an authenticate ends, by what it did; a confirmed sign-in
+       * also clears `signInRefusalOnly`.
+       */
       const noteSignIn = (
         exit: Exit.Exit<ExecutionEvidence, MintFailure>,
         crossedDispatch: boolean,
@@ -1083,8 +1086,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           if (authentication?.state === "authenticated") {
             signInUnconfirmed = false;
             signInRefusalOnly = false;
-          }
-          else if (effect !== "not_sent") signInUnconfirmed = true;
+          } else if (effect !== "not_sent") signInUnconfirmed = true;
           return;
         }
         // One that failed past its dispatch fence may have sent the login, unless it says it
@@ -1155,7 +1157,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       /**
        * Every refusal `guardianRefused` stands on is Guardian's of an authenticate step, and no
        * sign-in on the current site confirmed after it: the build never got past signing in, so a
-       * blocked report that stands only on it ends as sign-in unavailable.
+       * blocked report that stands only on it ends as sign-in unavailable. Once cleared, it stays
+       * cleared for the rest of the attempt: a later refusal of a sign-in leaves `guardianRefused`
+       * standing on the earlier one too, so the report keeps its own ending.
        */
       let signInRefusalOnly = recovered?.signInRefusalOnly === true;
       /**
