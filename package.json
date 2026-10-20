@@ -1020,7 +1020,7 @@
     "prepack": "corepack pnpm build"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.2.0",
+    "@modelcontextprotocol/server": "2.3.0",
     "css-select": "7.0.0",
     "domhandler": "6.0.1",
     "domutils": "4.0.2",
