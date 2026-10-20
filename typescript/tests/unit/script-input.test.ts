@@ -220,3 +220,49 @@ describe("a script question that can't be asked", () => {
     }
   });
 });
+
+describe("a site-field question's label", () => {
+  const declared: ScriptQuestionDeclarations = {
+    extra: { type: "site_field" },
+    pick: { type: "choice", prompt: "Which entry?" },
+  };
+  /** What the script input sends for `asked`, or why it sent nothing. */
+  const sent = (asked: Parameters<ReturnType<typeof makeScriptInput>["ask"]>[0]) => {
+    const requests: InputRequest[] = [];
+    const result = Effect.runSync(
+      Effect.either(
+        makeScriptInput(declared, (request) =>
+          Effect.sync(() => {
+            requests.push(request);
+            const [question] = request.questions;
+            return { extra: question?.type === "choice" ? (question.options[0]?.id ?? "") : "1998" };
+          }),
+        ).ask(asked),
+      ),
+    );
+    return { result, question: requests[0]?.questions[0] };
+  };
+
+  it("asks the page's label as the prompt and returns the answer, or the picked option's value", () => {
+    expect(sent({ extra: { label: "  Year of roof replacement " } })).toEqual({
+      result: Either.right({ extra: "1998" }),
+      question: { id: "extra", type: "text", prompt: "Year of roof replacement" },
+    });
+    const { result } = sent({ extra: { label: "Roof material", options: [{ value: "slate-value", label: "Slate" }] } });
+    expect(result).toEqual(Either.right({ extra: "slate-value" }));
+  });
+
+  it("shortens a label over 256 characters, as it does an option's", () => {
+    const label = "Roof detail ".repeat(30);
+    expect(sent({ extra: { label } }).question?.prompt).toBe(`${label.slice(0, 255)}…`);
+  });
+
+  it("refuses a missing or empty label, and a label on a question that is not a site field", () => {
+    const refused = Either.left(expect.objectContaining({ code: "InvalidOptions" }));
+    expect(sent("extra").result).toEqual(refused);
+    expect(sent({ extra: { label: "   " } }).result).toEqual(refused);
+    expect(
+      sent({ pick: { label: "Roof material", options: [{ value: "a", label: "A" }] } as never }).result,
+    ).toEqual(refused);
+  });
+});

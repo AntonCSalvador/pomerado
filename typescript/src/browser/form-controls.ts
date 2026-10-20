@@ -70,7 +70,8 @@ export const CalendarDate = Schema.String.pipe(
  * string, then call its functions with your verified Playwright locators. Every function reads
  * back that the page took the value and throws an Error whose message is a fixed reason, never a
  * value: `date_invalid`, `format_mismatch`, `control_unsupported`, `listbox_missing`,
- * `option_missing`, `option_ambiguous`, `option_disabled` or `not_committed`.
+ * `option_missing`, `option_ambiguous`, `option_disabled`, `field_missing`, `field_ambiguous` or
+ * `not_committed`.
  *
  * - `formControlShape(control, { timeout }?)`: the control's shape (`FormControlShape`).
  * - `formatDate(iso, format, locale?)`: an ISO `YYYY-MM-DD` date as `format` writes it (see
@@ -88,6 +89,17 @@ export const CalendarDate = Schema.String.pipe(
  *   rank are ambiguous. A custom dropdown is opened, its own listbox found through `aria-controls`
  *   or `aria-owns` (else the one visible listbox), typed into when it filters as you type, and
  *   scrolled when it renders its options as you scroll. Returns `{ shape, label, value }`.
+ * - `unfilledRequiredFields(scope, { timeout }?)`: the empty required fields a form shows now, in
+ *   page order, such as ones it adds once an earlier answer is in. A field counts when it is
+ *   visible, enabled, empty and marked `required`, `aria-required="true"` or
+ *   `aria-invalid="true"`. Each is `{ label, shape, options? }`, its label from its `<label for>`,
+ *   a wrapping label, `aria-labelledby` or `aria-label`. A text box, select or combobox with a
+ *   label is supported, and a select or combobox listing 1 to 50 options now carries them as
+ *   `{ value, label }`, ready for a site-field question. Any other field, such as a checkbox, a
+ *   date, a password or one-time code, or one with no label, comes back `unsupported: true`.
+ * - `fillRequiredField(scope, label, answer, { timeout }?)`: fills the one supported field
+ *   `unfilledRequiredFields` returned with that label: a text box is filled and read back, a
+ *   select or combobox chooses `answer` with `chooseOption`. Returns `{ shape }`.
  */
 export const formControlsCode = String.raw`
 const formControlFailure = (reason) => Object.assign(new Error(reason), { name: "FormControlFailure" });
@@ -327,5 +339,120 @@ const fillDate = async (control, iso, format, options = {}) => {
     if (formControlSameText(await control.inputValue({ timeout }), text)) return { shape };
   }
   throw formControlFailure("not_committed");
+};
+/** The controls a form's field can be, beside the inputs that are buttons or carry no value. */
+const formControlFieldSelector =
+  "input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]), select, textarea, [role=combobox], [role=textbox], [aria-haspopup=listbox], [contenteditable=true]";
+/** Input types that take typed text; a password or a one-time code is never one of them. */
+const formControlTextTypes = new Set(["", "text", "email", "tel", "url", "number", "search"]);
+/**
+ * Every visible, enabled, empty control in scope that is marked required (required,
+ * aria-required="true", or aria-invalid="true"), each with its label, its supported shape or
+ * unsupported, a select's or combobox's options when it lists 1 to 50 now, and its control.
+ */
+const formControlRequiredFields = async (scope, timeout) => {
+  const candidates = scope.locator(formControlFieldSelector);
+  const found = await candidates.evaluateAll((elements) => {
+    const words = (text) => String(text ?? "").replace(/[\s​]+/g, " ").trim();
+    // A wrapping label holds the control itself, whose value or options are not its name.
+    const labelText = (label) => {
+      const copy = label.cloneNode(true);
+      copy.querySelectorAll("input, select, textarea, [role=listbox], [role=combobox], [role=option]").forEach((inner) => inner.remove());
+      return words(copy.textContent);
+    };
+    const nameOf = (element) => {
+      const labels = Array.from(element.labels ?? []);
+      const byFor = labels.find((label) => !label.contains(element));
+      if (byFor) return labelText(byFor);
+      const wrapping = element.closest("label");
+      if (wrapping) return labelText(wrapping);
+      const ids = (element.getAttribute("aria-labelledby") ?? "").split(/\s+/).filter(Boolean);
+      const named = ids.map((id) => element.ownerDocument.getElementById(id)).filter(Boolean);
+      if (named.length > 0) return words(named.map((node) => node.textContent).join(" "));
+      return words(element.getAttribute("aria-label"));
+    };
+    const isEmpty = (element) => {
+      if (element instanceof HTMLInputElement) {
+        if (element.type === "checkbox") return !element.checked;
+        if (element.type === "radio") {
+          const radios = Array.from((element.form ?? element.ownerDocument).querySelectorAll("input[type=radio]"));
+          return !(element.name === "" ? [element] : radios.filter((other) => other.name === element.name)).some((other) => other.checked);
+        }
+        if (element.type === "file") return (element.files?.length ?? 0) === 0;
+        return element.value.trim() === "";
+      }
+      if (element instanceof HTMLTextAreaElement) return element.value.trim() === "";
+      if (element instanceof HTMLSelectElement) return element.value === "";
+      return words(element.textContent) === "";
+    };
+    const optionsOf = (element) => {
+      let labels = [];
+      if (element instanceof HTMLSelectElement)
+        labels = Array.from(element.options).filter((option) => !option.disabled && option.value !== "").map((option) => words(option.label || option.textContent));
+      else {
+        const ids = [element.getAttribute("aria-controls"), element.getAttribute("aria-owns")].filter(Boolean).flatMap((value) => value.split(/\s+/));
+        const lists = ids.map((id) => element.ownerDocument.getElementById(id)).filter(Boolean);
+        labels = lists.flatMap((list) => Array.from(list.querySelectorAll("[role=option]")))
+          .filter((option) => option.getAttribute("aria-disabled") !== "true")
+          .map((option) => words(option.getAttribute("aria-label") || option.textContent));
+      }
+      labels = labels.filter((label) => label !== "");
+      return labels.length >= 1 && labels.length <= 50 ? labels.map((label) => ({ value: label, label })) : undefined;
+    };
+    return elements.flatMap((element, index) => {
+      const style = getComputedStyle(element);
+      const visible = element.getClientRects().length > 0 && style.visibility !== "hidden";
+      const enabled = !element.matches(":disabled") && element.getAttribute("aria-disabled") !== "true";
+      const required =
+        element.required === true || element.getAttribute("aria-required") === "true" || element.getAttribute("aria-invalid") === "true";
+      if (!visible || !enabled || !required || !isEmpty(element)) return [];
+      return [{
+        index,
+        label: nameOf(element),
+        options: optionsOf(element),
+        input: element instanceof HTMLInputElement ? element.type : undefined,
+        code: (element.getAttribute("autocomplete") ?? "").split(/\s+/).includes("one-time-code"),
+        readOnly: element.readOnly === true,
+      }];
+    });
+  });
+  const fields = [];
+  for (const field of found) {
+    const control = candidates.nth(field.index);
+    let shape = await formControlShape(control, { timeout });
+    if (shape === "text" && ((field.input !== undefined && !formControlTextTypes.has(field.input)) || field.code || field.readOnly))
+      shape = "other";
+    const supported = field.label !== "" && (shape === "text" || shape === "select" || shape === "combobox");
+    fields.push({
+      label: field.label,
+      shape,
+      ...(supported && shape !== "text" && field.options !== undefined ? { options: field.options } : {}),
+      ...(supported ? {} : { unsupported: true }),
+      control,
+    });
+  }
+  return fields;
+};
+const unfilledRequiredFields = async (scope, options = {}) =>
+  (await formControlRequiredFields(scope, options.timeout ?? 10000)).map(({ control, ...field }) => field);
+const fillRequiredField = async (scope, label, answer, options = {}) => {
+  const timeout = options.timeout ?? 10000;
+  const matched = (await formControlRequiredFields(scope, timeout)).filter((field) => field.label === label && !field.unsupported);
+  if (matched.length === 0) throw formControlFailure("field_missing");
+  if (matched.length > 1) throw formControlFailure("field_ambiguous");
+  const [field] = matched;
+  const text = String(answer);
+  if (field.shape !== "text") {
+    await chooseOption(field.control, text, { timeout });
+    return { shape: field.shape };
+  }
+  await field.control.fill(text, { timeout });
+  const shown = await field.control.evaluate(
+    (element) => ("value" in element ? element.value : element.textContent),
+    undefined,
+    { timeout },
+  );
+  if (!formControlSameText(shown, text)) throw formControlFailure("not_committed");
+  return { shape: "text" };
 };
 `;
