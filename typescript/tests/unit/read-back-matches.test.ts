@@ -34,6 +34,26 @@ it("reads one date, one phone number or one amount however the page writes it", 
   expect(rankByWords("03/04/2026", ["2026-03-04", "2026-04-03", "03/04/2026"])).toEqual([0, 0, 1]);
 });
 
+it("reads an amount of seven digits or more as its number, written bare or formatted", () => {
+  expect(readBackMatches("¥1,500,000", "1500000")).toBe(true);
+  expect(readBackMatches("1500000", "$1,500,000.00")).toBe(true);
+  expect(readBackMatches("1500000.00", "€1,500,000")).toBe(true);
+  expect(readBackMatches("Total 1500000", "1,500,000")).toBe(true);
+  expect(rankByWords("1500000", ["¥1,500,000", "1,500,001", "15,000,000"])).toEqual([1, 0, 0]);
+  // A phone or account number still matches however it is spaced, and only its own digits.
+  expect(readBackMatches("5550100199", "(555) 010-0199")).toBe(true);
+  expect(readBackMatches("+1 555 010 0199", "15550100199")).toBe(true);
+  expect(readBackMatches("555 010 0198", "5550100199")).toBe(false);
+});
+
+it("ignores characters that never show, and reads a combining accent as the letter's", () => {
+  expect(rankByWords("Exemple Bay", ["Exem\u200Bple Bay", "Ex\u00ADemple Bay", "Exemple\u2060 Bay", "\uFEFFExemple Bay"])).toEqual([
+    1, 1, 1, 1,
+  ]);
+  expect(rankByWords("Café", ["Cafe\u0301", "cafe"])).toEqual([1, 1]);
+  expect(rankByWords("Exem\u200Bple", ["Exemple", "Exem ple"])).toEqual([1, 0]);
+});
+
 it("keeps a number, an email, a domain or a file name as one word", () => {
   expect(rankByWords("Order 1250", ["Order 1251"])[0]).toBeLessThan(0.7);
   expect(rankByWords("12", ["123", "1.2", "12"])).toEqual([0, 0, 1]);

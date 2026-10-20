@@ -102,13 +102,14 @@ export const sameText = (shown: string, wanted: string): boolean => {
  * and hyphens between letters are ignored. A whole text that names one date, such as
  * "Nov 5, 2026", "5 November 2026", "2026-11-05" or "25/11/2026", is one word, that date, unless
  * its day and month could be either way round, as in "03/04/2026". A whole text of 7 to 15 digits
- * with only spaces, periods, hyphens, brackets and a leading + is one word, its digits, without
- * the leading 1 of 11 digits, so a phone or account number matches however it is spaced. Thousands
- * commas, a trailing .00 and currency symbols are dropped, so $1,250.00 matches 1250. An email,
- * domain or file name, a word whose digits are joined by a slash, period or hyphen, such as 1.5 or
- * ACCT-0042, and a number with a sign before or after it, such as -5 or 5+, each stay one word, so
- * 12 never matches 123 or 1.2, and 5 never matches -5. A run of single letters is one word, so
- * U.S.A. matches USA.
+ * with only spaces, periods, hyphens, brackets and a leading +, other than a number with two
+ * decimals such as 1500000.00, is one word, its digits, without the leading 1 of 11 digits, so a
+ * phone or account number matches however it is spaced. Thousands commas, a trailing .00 and
+ * currency symbols are dropped, so $1,250.00 matches 1250 and ¥1,500,000 matches 1500000. An
+ * email, domain or file name, a word whose digits are joined by a slash, period or hyphen, such as
+ * 1.5 or ACCT-0042, and a number with a sign before or after it, such as -5 or 5+, each stay one
+ * word, so 12 never matches 123 or 1.2, and 5 never matches -5. A run of single letters is one
+ * word, so U.S.A. matches USA.
  *
  * It is pure and self-contained: the page code of `formControlsCode` and `pickerCode` embeds this
  * same function.
@@ -166,34 +167,35 @@ export const rankByWords = (query: string, texts: readonly string[]): number[] =
     return at.toISOString().slice(0, 10);
   };
   const foldCase = (word: string) =>
-    word.normalize("NFKD").replace(/[̀-ͯ]/gu, "").normalize("NFC").toLowerCase();
+    word.normalize("NFKD").replace(/[\u0300-\u036f]/gu, "").normalize("NFC").toLowerCase();
   const foldName = (word: string) => {
     const folded = foldCase(word)
-      .replace(/(?<!\p{N})['‘’ʼ](?!\p{N})/gu, "")
-      .replace(/(?<!\p{N})[.,\-‐‑‒–—](?!\p{N})/gu, " ")
+      .replace(/(?<!\p{N})['\u2018\u2019\u02bc](?!\p{N})/gu, "")
+      .replace(/(?<!\p{N})[.,\-\u2010\u2011\u2012\u2013\u2014](?!\p{N})/gu, " ")
       .replace(/\s+/gu, " ")
       .trim();
     return folded === "" ? word.trim() : folded;
   };
   const wordsOf = (text: string): string[] => {
     const raw = String(text ?? "")
-      .replace(/[​⁠﻿­]/gu, "")
+      .replace(/[\u200B\u2060\uFEFF\u00AD]/gu, "")
       .replace(/[\s\u0085]+/gu, " ")
       .trim();
     const date = dateOf(raw);
     if (date !== "") return ["date:" + date];
-    if (/^[+\d\s().-]+$/u.test(raw)) {
+    // A phone or account number is its digits, the word a bare number or an amount also gives.
+    if (/^[+\d\s().-]+$/u.test(raw) && !/^\d+\.\d\d$/u.test(raw)) {
       const digits = raw.replace(/\D/gu, "");
       if (digits.length >= 7 && digits.length <= 15)
-        return ["digits:" + (digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits)];
+        return [digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits];
     }
     const spaced = raw
       .replace(/(?<![\p{L}\p{N}])(\d{1,3}(?:,\d{3})+)(?!\p{N})/gu, (number) => number.replace(/,/gu, ""))
       .replace(/(?<![\p{N}.])(\d+)\.0{1,2}(?!\p{N})/gu, "$1")
-      .replace(/[$€£¥₹]/gu, " ");
+      .replace(/[$\u20AC\u00A3\u00A5\u20B9]/gu, " ");
     const words: string[] = [];
     for (const piece of spaced.split(" ")) {
-      const word = piece.replace(/^[("'‘“[]+|[)"'’”\].,;:!?…]+$/gu, "");
+      const word = piece.replace(/^[("'\u2018\u201C[]+|[)"'\u2019\u201D\].,;:!?\u2026]+$/gu, "");
       if (word === "") continue;
       const literal =
         /@|[\p{L}\p{N}]\.\p{L}{2,}/u.test(word) ||
