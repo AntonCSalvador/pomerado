@@ -8,6 +8,7 @@ import {
   type AutofillStep,
 } from "../../src/destinations/autofill-step.js";
 import { fillAutofillStep } from "../../src/destinations/autofill-fill.js";
+import { elementReadMs } from "../../src/destinations/autofill-locate-code.js";
 import { maySend } from "../../src/destinations/autofill-refusal.js";
 import { expectNotCarried, hostKeyboard, hostPage } from "./autofill-host-page.js";
 
@@ -660,6 +661,125 @@ observer.observe(document.forms[0], { attributes: true, subtree: true });
   if ("outcome" in first || "outcome" in again) throw new Error("Inspection refused");
   expect(first.targets).toEqual(again.targets);
   expect(first.targets.fields[1]).toMatchObject({ actions: [`${site}/session`], editable: true });
+});
+
+/**
+ * Runs `hook` once, as the next host call starts to look for `selector`, before it counts the
+ * selector's matches, so a test can change the page between two of the call's finds. It returns
+ * the undo for a hook that never ran.
+ */
+const beforeFind = (page: Page, selector: string, hook: () => Promise<void>) => {
+  const locators: object = Object.getPrototypeOf(page.locator("body"));
+  const count: unknown = Reflect.get(locators, "count");
+  if (typeof count !== "function") throw new Error("Locator count missing");
+  const undo = () => Reflect.set(locators, "count", count);
+  Reflect.set(locators, "count", async function (this: object) {
+    if (String(this) === `locator('${selector}')`) {
+      undo();
+      await hook();
+    }
+    return Reflect.apply(count, this, []);
+  });
+  return undo;
+};
+
+// A control whose read fails, here because its form holds a submit button whose formaction is no
+// URL, fails the call whether the call then finds every control or stops at one it can't find.
+for (const [name, step] of [
+  ["every control is found", loginStep],
+  [
+    "a later field is missing",
+    {
+      ...loginStep,
+      fields: [
+        { selector: "#username", slot: "username", accepts: ["username"] },
+        { selector: "#missing", slot: "password" },
+      ],
+    },
+  ],
+  ["its submit is missing", { ...loginStep, submit: "#missing" }],
+] satisfies readonly (readonly [string, AutofillStep])[])
+  test(`a sign-in form whose button's formaction is no URL fails the inspection's call when ${name}`, async ({
+    page,
+  }) => {
+    await serve(page, login("").replace('<button id="sign-in">', '<button id="sign-in" formaction="http://[">'));
+    const inspection = await Effect.runPromise(
+      inspectAutofillStep({ step, page: await hostPage(page), siteOrigin: site, authenticationOrigins: [] }),
+    );
+    expect(inspection).toMatchObject({ outcome: "refused", reason: "page_unavailable" });
+  });
+
+test("a sign-in page that loads itself again after the host found its fields, as the host looks for its submit, is inspected as the page it then shows", async ({
+  page,
+}) => {
+  await serve(page, login(""));
+  const inspect = async () =>
+    Effect.runPromise(
+      inspectAutofillStep({
+        step: loginStep,
+        page: await hostPage(page),
+        siteOrigin: site,
+        authenticationOrigins: [],
+      }),
+    );
+  // The same form loads again, as a new document, as the inspection starts to look for the submit.
+  let reloaded = false;
+  const undo = beforeFind(page, "#sign-in", async () => {
+    await page.reload();
+    await expect(page.locator("#sign-in")).toBeVisible();
+    reloaded = true;
+  });
+  const first = await inspect().finally(undo);
+  expect(reloaded).toBe(true);
+  expect(first).not.toHaveProperty("outcome");
+  const again = await inspect();
+  if ("outcome" in first || "outcome" in again) throw new Error("Inspection refused");
+  expect(first.targets).toEqual(again.targets);
+  expect(first.targets.fields[1]).toMatchObject({ actions: [`${site}/session`], editable: true });
+});
+
+test("a sign-in form with a button whose next page loads after the host's submit call found the username, before it finds the password, is reported sent by the page at once", async ({
+  page,
+}) => {
+  const { posted } = await serve(page, login(""));
+  const submitCalls: { readonly ms: number; readonly answered: boolean }[] = [];
+  let undo = () => true;
+  // As the host's first submit call starts to look for the password field, the page's own script
+  // submits its form, as one that submits itself once its check of the password ends, and the
+  // site's answer loads as a new document.
+  const sentMidCall = (host: AutofillPage): AutofillPage => ({
+    ...host,
+    execute: (script, timeout) => {
+      if (!script.includes("guardCall")) return host.execute(script, timeout);
+      if (submitCalls.length === 0)
+        undo = beforeFind(page, "#password", async () => {
+          await page.evaluate(() => document.forms[0]?.requestSubmit());
+          await expect(page.locator("#account")).toBeVisible();
+        });
+      const started = Date.now();
+      const ended = (answered: boolean) =>
+        Effect.sync(() => submitCalls.push({ ms: Date.now() - started, answered }));
+      return host
+        .execute(script, timeout)
+        .pipe(Effect.tapBoth({ onFailure: () => ended(false), onSuccess: () => ended(true) }));
+    },
+  });
+  const report = await fill(page, loginStep, [username, password], { wrap: sentMidCall }).finally(
+    () => undo(),
+  );
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: [
+      { slot: "username", status: "filled" },
+      { slot: "password", status: "filled" },
+    ],
+    submit: "page",
+  });
+  expect(report).not.toHaveProperty("clicked");
+  expect(posted.map((received) => Object.fromEntries(received))).toEqual([{ username, password }]);
+  // The call that met the new page answered, with no wait for the field it found before it.
+  expect(submitCalls[0]?.answered).toBe(true);
+  expect(submitCalls[0]?.ms).toBeLessThan(elementReadMs);
 });
 
 test("a sign-in form with a button that draws itself again, empty, once the password is typed is never clicked nor taken as sent by the page", async ({

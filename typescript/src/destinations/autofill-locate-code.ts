@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { formControlShapeCode } from "../browser/form-controls.js";
 import { opaqueOrigins } from "./autofill-refusal.js";
 import { clipCode, controlNamingCode } from "./control-naming-code.js";
 
@@ -95,6 +94,24 @@ export const questionTextCode = `(element) => {
 }`;
 
 /**
+ * Page code: the shape of a form control element (`FormControlShape`), the function
+ * `formControlShape` in `formControlsCode` evaluates, word for word, so a step call reads it in the
+ * same evaluation as the control's other properties. A unit test keeps the two the same.
+ */
+const controlShapeCode = String.raw`(element) => {
+    const popup = element.getAttribute("aria-haspopup");
+    if (element instanceof HTMLSelectElement) return "select";
+    // A date picker's popup is a dialog or grid: the field still takes typing.
+    if (popup === "dialog" || popup === "grid") return element instanceof HTMLInputElement ? "text" : "other";
+    if (element.getAttribute("role") === "combobox" || popup === "listbox" || popup === "true" || popup === "menu")
+      return "combobox";
+    if (element instanceof HTMLInputElement && element.type === "date") return "date";
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element.isContentEditable)
+      return "text";
+    return "other";
+  }`;
+
+/**
  * Page code: what a step call reads of one control it found (`readControls`): every form action
  * and method it could submit with, its link destination, whether it is disabled, inert or editable,
  * whether it is empty, its shape and the words that label it, never its value.
@@ -149,7 +166,7 @@ const controlReadCode = `(element) => {
   return {
     disabled,
     inert,
-    shape: (${formControlShapeCode})(element),
+    shape: (${controlShapeCode})(element),
     target: { documentOrigin: self.origin, actions, methods, explicitGet, submitMethod, editable, empty },
     described: {
       role: element.getAttribute("role"),
@@ -225,27 +242,35 @@ const locate = async (selector, questionSelector) => {
     if (!["about:blank", "about:srcdoc"].includes(up.url())) ancestors.push(where(up.url(), false));
   return { frame, locator, handle, owner, ancestors, questionSelector, frames: frames.length };
 };
+// The controls found in each frame, in the order found.
+const frameGroups = (founds) => {
+  const groups = new Map();
+  for (const found of founds) groups.set(found.frame, [...(groups.get(found.frame) ?? []), found]);
+  return [...groups.values()];
+};
 // One evaluation per frame reads every control found there, so a call sees them all as they were
 // at one moment: a page that changes several at once, as a form that locks or unlocks every field
 // does, never reads as half changed. The first control's locator runs it, so it waits for that
 // control as any read does, and the others go in as the handles found. When the page replaced one
-// of those since it was found, each control there is read through its own locator, which finds
-// the replacement.
+// of those since it was found, or loaded a new document, which no handle found before reaches,
+// each control there is read through its own locator, which finds it as the page now shows it. A
+// read that fails then fails the call. A wait for the first control that runs out ends the call
+// at once, as that control's own read would.
 const readControls = async (founds) => {
   const read = { timeout: ${elementReadMs} };
-  const frameGroups = new Map();
-  for (const found of founds) frameGroups.set(found.frame, [...(frameGroups.get(found.frame) ?? []), found]);
   const reads = new Map();
-  for (const group of frameGroups.values()) {
+  for (const group of frameGroups(founds)) {
     const [first, ...others] = group;
-    const handles = others.map((found) => found.handle);
-    let values = handles.includes(null)
-      ? null
-      : await first.locator.evaluate((element, others) => {
-          if (!others.every((other) => other.isConnected)) return null;
-          const readControl = ${controlReadCode};
-          return [element, ...others].map(readControl);
-        }, handles, read);
+    let values = null;
+    try {
+      values = await first.locator.evaluate((element, others) => {
+        if (!others.every((other) => other.isConnected)) return null;
+        const readControl = ${controlReadCode};
+        return [element, ...others].map(readControl);
+      }, others.map((found) => found.handle), read);
+    } catch (error) {
+      if (error?.name === "TimeoutError") throw error;
+    }
     if (values === null) {
       values = [];
       for (const found of group) values.push(await found.locator.evaluate(${controlReadCode}, undefined, read));
@@ -280,6 +305,28 @@ const readControls = async (founds) => {
     });
   }
   return controls;
+};
+// The controls found before one the call could not find, read through the handles found with no
+// wait, as each was read when found: one the page took away, or whose document is gone, is
+// skipped, and a read that fails fails the call.
+const checkReads = async (founds) => {
+  for (const [first, ...others] of frameGroups(founds)) {
+    const failed = await first.handle
+      .evaluate((element, others) => {
+        const readControl = ${controlReadCode};
+        for (const each of [element, ...others]) {
+          if (!each.isConnected) continue;
+          try {
+            readControl(each);
+          } catch {
+            return true;
+          }
+        }
+        return false;
+      }, others.map((found) => found.handle))
+      .catch(() => false);
+    if (failed) throw new Error("A control the call found could not be read");
+  }
 };
 `;
 

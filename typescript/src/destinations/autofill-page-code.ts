@@ -533,12 +533,12 @@ const codeSlots = ${JSON.stringify(step.fields.map((field) => field.slot === "co
 const submitSelector = ${JSON.stringify(step.submit ?? null)};
 const submitKey = ${JSON.stringify(step.submitKey ?? null)};
 // Every control is found first, then read in one pass (readControls). A control that is not found
-// ends the call once the controls found before it are read, since a read can fail the call.
+// ends the call at once, after the no-wait read of the ones found before it (checkReads).
 const foundFields = [];
 for (let index = 0; index < selectors.length; index++) {
   const foundField = await locate(selectors[index], questionSelectors[index]);
   if ("error" in foundField) {
-    await readControls(foundFields);
+    await checkReads(foundFields);
     return { ...foundField, target: index, url: primary.url()${fill?.call.kind === "submit" ? ", document: await documentStart()" : ""} };
   }
   foundFields.push(foundField);
@@ -546,7 +546,7 @@ for (let index = 0; index < selectors.length; index++) {
 const foundSubmit =
   (submitKey !== null && foundFields.length > 0) || submitSelector === null ? null : await locate(submitSelector);
 if (foundSubmit !== null && "error" in foundSubmit) {
-  await readControls(foundFields);
+  await checkReads(foundFields);
   return { ...foundSubmit, target: "submit", url: primary.url() };
 }
 const readFound = await readControls(foundSubmit === null ? foundFields : [...foundFields, foundSubmit]);
