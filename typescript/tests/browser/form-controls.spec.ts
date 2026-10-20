@@ -486,6 +486,66 @@ test("chooseOption keeps a value of punctuation alone as it is, never blank", as
   expect(await submitted(page)).toEqual({ code: "b" });
 });
 
+// A list may write a name short, as St-Jean for Saint-Jean. Its last rank takes the one label
+// that shortens the wanted name word for word.
+const towns = (labels: readonly string[]) => {
+  const options = labels.map((label, index) => `<option value="${index + 1}">${label}</option>`);
+  return `<form><label>Town<select name="town">
+<option value="">Choose</option>${options.join("")}</select></label></form>`;
+};
+
+test("chooseOption picks the one label that writes the wanted name short", async ({ page }) => {
+  await page.setContent(towns(["St-Jean", "St-Jean-de-Luz", "Ste-Marie"]));
+  const town = 'page.getByLabel("Town")';
+  expect(await call(page, `return await chooseOption(${town}, "Saint Jean");`)).toEqual({
+    result: { shape: "select", label: "St-Jean", value: "1" },
+  });
+  expect(await call(page, `return await chooseOption(${town}, "Sainte-Marie");`)).toEqual({
+    result: { shape: "select", label: "Ste-Marie", value: "3" },
+  });
+  expect(await submitted(page)).toEqual({ town: "3" });
+});
+
+test("chooseOption finds no option for a short form with a letter the wanted name lacks", async ({
+  page,
+}) => {
+  await page.setContent(towns(["St-Jean", "St-Jean-de-Luz", "Ste-Marie"]));
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Town"), "Saint Marie");`),
+  ).toEqual({ error: "option_missing" });
+  expect(await submitted(page)).toEqual({ town: "" });
+});
+
+test("chooseOption prefers a label equal to the wanted name over one that writes it short", async ({
+  page,
+}) => {
+  await page.setContent(towns(["St-Jean", "Saint-Jean"]));
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Town"), "Saint-Jean");`),
+  ).toEqual({ result: { shape: "select", label: "Saint-Jean", value: "2" } });
+  expect(await submitted(page)).toEqual({ town: "2" });
+});
+
+test("chooseOption refuses two labels that both write the wanted name short", async ({ page }) => {
+  await page.setContent(towns(["St-Jean", "St. Jean"]));
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Town"), "Saint Jean");`),
+  ).toEqual({ error: "option_ambiguous" });
+  expect(await submitted(page)).toEqual({ town: "" });
+});
+
+test("chooseOption picks and reads back a short label in a custom dropdown", async ({ page }) => {
+  const options = [
+    ["SJ", "St-Jean"],
+    ["SM", "Ste-Marie"],
+  ] as const;
+  await page.setContent(`<form>${dropdown("Town", options)}</form>`);
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Town"), "Saint Jean");`),
+  ).toEqual({ result: { shape: "combobox", label: "St-Jean", value: "SJ" } });
+  expect(await submitted(page)).toEqual({ Town: "SJ" });
+});
+
 test("chooseOption and fillDate fail within about their timeout, never 30 s, when what they read vanishes", async ({
   page,
 }) => {

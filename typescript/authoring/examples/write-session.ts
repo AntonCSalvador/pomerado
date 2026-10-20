@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { defineOperation, normalizeText, timeoutDefaults } from "../../src/browser/index.js";
+import { defineOperation, sameText, timeoutDefaults } from "../../src/browser/index.js";
 import type { KernelOperationContext } from "../../src/browser/index.js";
 
 // Observed contract: /checkout fills item, quantity and a gift-wrap add-on the page offers
@@ -122,7 +122,7 @@ export const checkReview = async ({ kernel, sessionId, input, errors }: Context)
     throw new errors.OperationFailure(review.failure, { dispatch: "not_sent" });
   // The tool filled the item itself, so another one on the review is a page that changed: a
   // failure, never the caller's input.
-  if (normalizeText(review.item) !== normalizeText(input.item))
+  if (!sameText(review.item, input.item))
     throw new errors.OperationFailure("review_item_mismatch", { dispatch: "not_sent" });
   // Over the caller's own limit is a refusal: InvalidInput naming the input, a stable kind and
   // both values, thrown before the mark so the run reports that it changed nothing.

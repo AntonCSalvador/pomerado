@@ -18,3 +18,35 @@ export const normalizeText = (text: string, options: { readonly lines?: boolean 
     .map((line) => line.trim())
     .filter((line) => line !== "")
     .join(options.lines === true ? "\n" : " ");
+
+export const sameText = (shown: string, wanted: string): boolean => {
+  const fold = (text: string) => {
+    const raw = String(text ?? "");
+    const folded = raw
+      .normalize("NFKD")
+      .replace(/\p{M}/gu, "")
+      .normalize("NFC")
+      .toLowerCase()
+      .replace(/(?<!\p{N})['‘’ʼ](?!\p{N})/gu, "")
+      .replace(/(?<!\p{N})[.,\-‐‑‒–—](?!\p{N})/gu, " ")
+      .replace(/\s+/gu, " ")
+      .trim();
+    return folded === "" ? raw.trim() : folded;
+  };
+  const shortens = (x: string, y: string) => {
+    const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+    if (!/^\p{L}+$/u.test(short + long) || short[0] !== long[0] || short.length * 2 > long.length)
+      return false;
+    let next = 0;
+    for (const letter of long) if (letter === short[next]) next++;
+    return next === short.length;
+  };
+  const a = fold(shown).split(" ");
+  const b = fold(wanted).split(" ");
+  if (a.length !== b.length) return false;
+  const collator = new Intl.Collator("und", { sensitivity: "base" });
+  return a.every((word, index) => {
+    const other = b[index] ?? "";
+    return word === other || collator.compare(word, other) === 0 || shortens(word, other);
+  });
+};

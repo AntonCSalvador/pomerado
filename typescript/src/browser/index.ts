@@ -58,7 +58,7 @@ export type { ConditionObservation, ConditionState, Dispatch } from "../runtime/
 export { CalendarDate, formControlsCode } from "./form-controls.js";
 export { outcomeWaitCode } from "./outcome-wait.js";
 export { visibleTextCode } from "./visible-text.js";
-export { normalizeText } from "../runtime/text.js";
+export { normalizeText, sameText } from "../runtime/text.js";
 export { waitCode } from "./wait.js";
 export {
   CursorRefusal,

@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { sameText } from "../runtime/text.js";
 
 /**
  * The shape of a form control, as the page code reads it: a native date input, a text box, a
@@ -104,6 +105,7 @@ const formControlText = (text) => {
     .toLowerCase();
   return folded === "" ? String(text ?? "").trim() : folded;
 };
+const formControlSameName = ${String(sameText)};
 const formControlFrame = async (control, options) => {
   const handle = await control.elementHandle(options);
   const frame = handle === null ? null : await handle.ownerFrame();
@@ -140,7 +142,10 @@ const formControlDateCandidates = (iso, format, locale) => {
   if (kind === "D") candidates.push(formControlOrdinal(iso.slice(8)));
   return [...new Set(candidates)];
 };
-/** The one option a choice names, by rank: label, then value, then whole words of the label. */
+/**
+ * The one option a choice names, by rank: label, then value, then whole words of the label, then a
+ * label sameText matches, such as one that writes the name short.
+ */
 const formControlPick = (options, wanted) => {
   const names = new Set(wanted.map(formControlText).filter((name) => name !== ""));
   const words = (label) => label.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
@@ -148,6 +153,7 @@ const formControlPick = (options, wanted) => {
     (option) => names.has(option.label),
     (option) => option.value !== "" && names.has(option.value),
     (option) => [...names].some((name) => (" " + words(option.label).join(" ") + " ").includes(" " + name + " ")),
+    (option) => [...names].some((name) => formControlSameName(option.label, name)),
   ];
   for (const rank of ranks) {
     const matched = options.filter(rank);
