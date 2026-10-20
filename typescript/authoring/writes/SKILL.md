@@ -98,7 +98,10 @@ During the session:
   example). A build whose session never reached the end publishes nothing.
 - When a write's form adds required fields that depend on earlier answers, prefer declaring
   the site-field question, and prefer asking it for a required field that no input covers,
-  before that step's commit mark, over refusing. It isn't for passwords, codes or logins.
+  before that step's commit mark, over refusing. When such a field shows only after the step's
+  click, prefer asking it once `blockingRequiredFields` returns it, which proves the click saved
+  nothing: call `notCommitted` with the step's name first, then fill the answer and click again.
+  It isn't for passwords, codes or logins.
 - A pop-up, banner or interstitial on the path, such as an upsell, is conditional unless the
   page always opens it in answer to an action: handle it as the forms skill says, so the tool
   still works for a caller who never sees it.
