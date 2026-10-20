@@ -356,6 +356,13 @@ const defaultChoice = (type: DialogType): DialogChoice =>
  * confirms keep asking. Every other dialog is decided at once by the safe default and recorded,
  * so a page alert never becomes a long caller decision, unless the host asks the caller about
  * every dialog the record does not settle (`askEveryDialog`).
+ *
+ * A host may judge a write `confirm` that matched no record before the caller is asked
+ * (`judgeConfirm`), such as one whose wording first appears in this run. It gets the popup as
+ * observed, its `template` naming where each of this run's values came from, and answers
+ * `accept`, which accepts and records it, or `ask`. A judgment that fails or dies counts as
+ * `ask`. A popup that cannot be expected, because no step is known or its page is not https, is
+ * never judged. The host bounds the judgment's time itself.
  */
 export const makeRunDialogDecision = <Event extends DialogEvent>(input: {
   readonly readOnly: boolean;
@@ -364,25 +371,29 @@ export const makeRunDialogDecision = <Event extends DialogEvent>(input: {
   /** The run's input, whose values a recorded confirm's message may name. */
   readonly input?: unknown;
   readonly askCaller?: (event: Event) => Effect.Effect<DialogChoice, DialogFailure>;
+  /** Judges a write's confirm that matched no record, before the caller is asked. */
+  readonly judgeConfirm?: (
+    event: Event,
+    confirm: ObservedConfirm,
+  ) => Effect.Effect<"accept" | "ask", unknown>;
   readonly incidents: IncidentStore;
   readonly askEveryDialog?: boolean;
 }) => {
   const expected = makeExpectedConfirms(input.expectedConfirms ?? [], input.input);
-  return (event: Event, facts: DialogFacts): Effect.Effect<DialogChoice, DialogFailure> => {
-    if (event.type === "confirm" && !input.readOnly) {
-      if (expected.take(event, facts) !== undefined)
-        return input.incidents
-          .record({
-            source: "host",
-            kind: "dialog",
-            reason: "dialog_expected_confirm_accepted",
-            hostBug: false,
-            severity: "info",
-            subCause: "confirm_accept",
-          })
-          .pipe(Effect.as<DialogChoice>({ choice: "accept" }));
-      if (input.askCaller) return input.askCaller(event);
-    }
+  const accepted = (reason: "dialog_expected_confirm_accepted" | "dialog_judged_confirm_accepted") =>
+    input.incidents
+      .record({
+        source: "host",
+        kind: "dialog",
+        reason,
+        hostBug: false,
+        severity: "info",
+        subCause: "confirm_accept",
+      })
+      .pipe(Effect.as<DialogChoice>({ choice: "accept" }));
+  const unexpected = (event: Event) =>
+    input.askCaller ? input.askCaller(event) : settled(event);
+  const settled = (event: Event) => {
     if (input.askEveryDialog === true && input.askCaller) return input.askCaller(event);
     const choice = defaultChoice(event.type);
     return input.incidents
@@ -395,6 +406,22 @@ export const makeRunDialogDecision = <Event extends DialogEvent>(input: {
         subCause: `${event.type}_${choice.choice}`,
       })
       .pipe(Effect.as(choice));
+  };
+  return (event: Event, facts: DialogFacts): Effect.Effect<DialogChoice, DialogFailure> => {
+    if (event.type !== "confirm" || input.readOnly) return settled(event);
+    if (expected.take(event, facts) !== undefined)
+      return accepted("dialog_expected_confirm_accepted");
+    const judge = input.judgeConfirm;
+    const observed = judge === undefined ? undefined : observedConfirmOf(event, facts, input.input);
+    if (judge === undefined || observed === undefined) return unexpected(event);
+    return Effect.suspend(() => judge(event, observed)).pipe(
+      Effect.catchAllCause(() => Effect.succeed("ask" as const)),
+      Effect.flatMap((verdict) =>
+        verdict === "accept"
+          ? accepted("dialog_judged_confirm_accepted")
+          : unexpected(event),
+      ),
+    );
   };
 };
 
