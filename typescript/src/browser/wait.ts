@@ -1,4 +1,5 @@
 import { timeoutDefaults } from "../runtime/deadline.js";
+import { outcomeKindsCode, readyWaitCode } from "./action-waits.js";
 
 /**
  * What one outcome's locator matched at the last look: all its matches and the visible ones, and
@@ -29,7 +30,7 @@ export interface WaitProgress {
 
 /** One entry of `waitReport()`: a wait this call ran and how it ended, in words and numbers. */
 export interface WaitRecord {
-  readonly wait: "waitForOutcome" | "waitForRows" | "waitForValues" | "waitForChange";
+  readonly wait: "waitForOutcome" | "waitForRows" | "waitForValues" | "waitForChange" | "waitForReady";
   readonly outcome?: string;
   readonly reason?: string;
   readonly elapsedMs: number;
@@ -78,6 +79,16 @@ const waitRecords = [];
 // Every wait this call ran, oldest first, each with a sentence saying how it ended.
 const waitReport = () => waitRecords.map((record) => ({ ...record }));
 const waitSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// A promise, or fallback once ms have passed without it settling; its timer never outlives it.
+const waitBounded = (promise, ms, fallback = undefined) => {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(fallback), Math.max(0, ms));
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
 const waitSeconds = (ms) => (Math.max(0, ms) / 1000).toFixed(1) + " s";
 const waitContextLost = (error) =>
   /Execution context was destroyed|Frame was detached/.test(String(error?.message));
@@ -319,16 +330,21 @@ const waitProgress = (options = {}) => {
           "; last progress at " + waitSeconds(lastProgress - started);
       return seen + (ignoredRepeats > 0 ? "; ignored " + ignoredRepeats + " repeating requests" : "");
     },
-    stop: async () => {
+    stop: async (inPage = true) => {
       page.off("request", onRequest);
       page.off("requestfinished", onDone);
       page.off("requestfailed", onDone);
-      await options.region
-        ?.evaluateAll((elements, key) => {
-          globalThis[Symbol.for(key)]?.observer?.disconnect();
-          delete globalThis[Symbol.for(key)];
-        }, key)
-        .catch(() => undefined);
+      if (inPage && options.region !== undefined) {
+        const cleanup = options.region
+          .evaluateAll((elements, key) => {
+            globalThis[Symbol.for(key)]?.observer?.disconnect();
+            delete globalThis[Symbol.for(key)];
+          }, key)
+          .catch(() => undefined);
+        let timer;
+        await Promise.race([cleanup, new Promise((resolve) => { timer = setTimeout(resolve, 250); })]);
+        clearTimeout(timer);
+      }
     },
   };
 };
@@ -345,8 +361,17 @@ const waitRecord = (record) => {
 const outcomeCode = String.raw`
 const outcomeWaitSeen = (observations) =>
   Object.entries(observations)
-    .map(([name, { count, visible, changed }]) =>
-      name + " " + visible + " visible of " + count + (changed === 0 && visible > 0 ? ", unchanged" : ""))
+    .map(([name, observation]) => {
+      const { kind, count, visible, changed, matched, invalid, seen } = observation;
+      if (kind === undefined || kind === "gone")
+        return name + (kind === "gone" ? " (gone) " : " ") + visible + " visible of " + count +
+          (changed === 0 && visible > 0 ? ", unchanged" : "");
+      if (kind === "invalid") return name + " " + invalid + " invalid fields";
+      if (kind === "url") return name + (matched ? " URL matched" : " URL not matched");
+      if (kind === "check") return name + (matched ? " check true" : " check not true");
+      if (kind === "announced") return name + (matched ? " announced" : " no matching announcement of " + seen + " seen");
+      return name + (matched ? " " + kind + " matched" : " no matching " + kind + " of " + seen + " seen");
+    })
     .join(", ");
 const outcomeWaitFailure = (reason, message, observations, extra) =>
   Object.assign(new Error(reason + message), {
@@ -369,22 +394,38 @@ const outcomeWaitChanged = (locator, key) =>
   }, key);
 // Reads the outcomes highest priority last, so a look that sees one also sees a higher one drawn
 // in the same render. The observations keep the listed order.
-const outcomeWaitObserve = async (outcomes, key) => {
+const outcomeWaitObserve = async (outcomes, key, state, events) => {
+  const candidates = Array.isArray(outcomes) ? outcomes
+    : Object.entries(outcomes).map(([name, locator]) => ({ name, kind: "locator", locator }));
   const observations = {};
-  for (const [name, locator] of Object.entries(outcomes).reverse()) {
-    const count = await locator.count();
-    const visible = count === 0 ? 0 : await locator.filter({ visible: true }).count();
-    observations[name] = key === undefined ? { count, visible }
-      : { count, visible, changed: visible === 0 ? 0 : await outcomeWaitChanged(locator, key) };
-  }
-  return Object.fromEntries(Object.keys(outcomes).map((name) => [name, observations[name]]));
+  for (const candidate of [...candidates].reverse())
+    observations[candidate.name] = await outcomeWaitRead(candidate, state, key, events);
+  return Object.fromEntries(candidates.map(({ name }) => [name, observations[name]]));
 };
-const waitForOutcome = async (outcomes, options = {}) => {
-  const names = Object.keys(outcomes);
+// How long a look the page holds up may still finish once a response or popup outcome arrived, and
+// once the deadline passed.
+const outcomeWaitGraceMs = 1000;
+const outcomeWaitLateMs = 500;
+const waitForOutcomeResult = async (outcomes, options = {}) => {
+  const names = Object.keys(outcomes ?? {});
   if (names.length === 0) throw new TypeError("waitForOutcome needs at least one outcome");
+  const candidates = names.map((name) => outcomeWaitCandidate(name, outcomes[name]));
   const timeout = options.timeout ?? waitLimits.answerCap;
   const noProgressMs = options.noProgressMs ?? waitLimits.answer;
   const progress = waitProgress({ ...options, noProgressMs });
+  const events = outcomeWaitEvents(candidates);
+  const state = {
+    goneSeen: new Set(),
+    goneSince: new Map(),
+    invalidFields: new Map(),
+    invalidBefore: new Map(),
+    checked: new Map(),
+    announcedText: new Map(),
+    announceKey: candidates.some((candidate) => candidate.kind === "announced")
+      ? "pomerado.outcomeAnnounce." + Date.now() + "." + Math.random() : undefined,
+    urlBefore: undefined,
+    actedAt: -Infinity,
+  };
   let looks = 0;
   const finish = (fields, summary) =>
     waitRecord({
@@ -397,24 +438,84 @@ const waitForOutcome = async (outcomes, options = {}) => {
     });
   let begun = Date.now();
   let key;
+  // How long the cleanup may take: 250 ms, and nothing past the wait's hard stop.
+  let cleanupMs = () => 250;
   try {
     if (options.action !== undefined) {
       key = "pomerado.outcomeWait." + Date.now() + "." + Math.random();
-      for (const locator of Object.values(outcomes)) await outcomeWaitNote(locator, key);
+      for (const candidate of candidates) {
+        if (candidate.kind === "locator") await outcomeWaitNote(candidate.locator, key);
+        if (candidate.kind === "gone" && (await candidate.locator.filter({ visible: true }).count()) > 0)
+          state.goneSeen.add(candidate.name);
+        if (candidate.kind === "invalid")
+          state.invalidBefore.set(candidate.name, outcomeWaitInvalidKey(await candidate.locator.evaluateAll(outcomeWaitInvalidInPage)));
+      }
+      state.urlBefore = page.url();
+      if (state.announceKey !== undefined) await page.evaluate(outcomeWaitAnnounceInPage, { key: state.announceKey, seed: false });
       await progress.baseline();
-      await options.action();
+      state.actedAt = Date.now();
+      // A click whose handler opens a native dialog does not return until the dialog is handled,
+      // and the wait's dialog listener keeps Playwright from dismissing it: with a dialog outcome,
+      // the wait goes on once the action returns or a dialog opens.
+      if (candidates.some((candidate) => candidate.kind === "dialog")) {
+        const acting = Promise.resolve().then(() => options.action());
+        acting.catch(() => undefined);
+        const first = await Promise.race([acting.then(() => "acted"), events.dialogSignal.then(() => "dialog")]);
+        if (first === "acted") await acting;
+      } else await options.action();
     }
     progress.begin();
     begun = Date.now();
-    const until = begun + timeout;
+    // deadline, a Date.now() time such as the call's own, bounds the wait wherever the action left it.
+    const until = Math.min(begun + timeout, options.deadline ?? Infinity);
+    // Past the deadline, every page call shares outcomeWaitLateMs of grace and then ends: the wait
+    // never outlasts hardStop, however long the page holds it.
+    const hardStop = until + outcomeWaitLateMs;
+    const beforeStop = () => Math.max(0, hardStop - Date.now());
+    cleanupMs = () => Math.min(250, beforeStop());
     const unchangedMs = options.unchangedMs ?? waitLimits.unchanged;
     const unchangedFrom = begun + unchangedMs;
     // A page or frame the action is replacing can drop a look midway; the next look sees the new one.
+    // The page cannot always be read: a native dialog stops its scripts, and while a navigation
+    // is pending Playwright cannot evaluate in it. A look the page holds up ends at the deadline
+    // (with outcomeWaitLateMs of grace, so a look begun just before it finishes), at once for a dialog,
+    // and outcomeWaitGraceMs after a response or popup outcome arrived, which then decides on the
+    // outcomes the page announced as events.
+    const unblocked = (reading) => {
+      reading.catch(() => undefined);
+      const bounded = waitBounded(reading, beforeStop());
+      if (!candidates.some((candidate) => ["response", "dialog", "popup"].includes(candidate.kind))) return bounded;
+      return Promise.race([
+        bounded,
+        events.dialogSignal.then(() => undefined),
+        events.hitSignal.then(() => waitBounded(reading, Math.min(outcomeWaitGraceMs, beforeStop()))),
+      ]);
+    };
     const look = () =>
-      outcomeWaitObserve(outcomes, key).catch((error) => {
+      unblocked(outcomeWaitObserve(candidates, key, state, events).catch((error) => {
         if (waitContextLost(error)) return undefined;
         throw error;
-      });
+      }));
+    const result = (candidate, observations, evidence) => {
+      const handles = events.hit(candidate.name)?.handles ?? {};
+      const answer = {
+        outcome: candidate.name,
+        kind: candidate.kind,
+        afterMs: Date.now() - begun,
+        looks,
+        evidence,
+        observations,
+      };
+      for (const [name, value] of Object.entries(handles)) outcomeWaitHidden(answer, name, value);
+      // A dialog that opened while the wait listened stays open whichever outcome won.
+      if (answer.dialog === undefined) outcomeWaitHidden(answer, "dialog", events.dialog());
+      finish(
+        { outcome: candidate.name },
+        '"' + candidate.name + '"' + (candidate.kind === "locator" ? "" : " (" + candidate.kind + ")") + " showed after " +
+          answer.afterMs + " ms (" + looks + (looks === 1 ? " look)" : " looks)"),
+      );
+      return answer;
+    };
     // The first look that shows an outcome decides: no second look confirms it. An answer from
     // before the action is kept out of that look by the stale rule below, not by a second look.
     let last;
@@ -425,6 +526,7 @@ const waitForOutcome = async (outcomes, options = {}) => {
       // that look's matches, even when it ends while the look runs.
       const inflightAtStart = progress.causedInflight();
       const observations = await look();
+      events.rethrow();
       looks += 1;
       last = observations ?? last;
       // A match from before the action stays stale while a request the action started is in flight,
@@ -434,35 +536,55 @@ const waitForOutcome = async (outcomes, options = {}) => {
       const now = Date.now();
       const stale = now < unchangedFrom ||
         (now < until - unchangedMs && (inflightAtStart || progress.causedInflight()));
-      const shown = names.find(
-        (name) => observations?.[name].visible > 0 && !(stale && observations[name].changed === 0),
-      );
+      // With the page unreadable, only the outcomes the page announced as events decide, in the
+      // listed order.
+      const blocked = events.dialogOpen() || (observations === undefined && events.anyHit());
+      const shown = candidates.find((candidate) =>
+        blocked ? ["response", "dialog", "popup"].includes(candidate.kind) && events.hit(candidate.name) !== undefined
+          : outcomeWaitShows(candidate, observations?.[candidate.name], state, stale, now));
       if (shown !== undefined) {
-        if (observations[shown].count > 1) {
+        const observation = observations?.[shown.name];
+        if (shown.kind === "locator" && observation.count > 1) {
           const failure = outcomeWaitFailure("outcome_ambiguous", ": " + outcomeWaitSeen(observations), observations, {
-            outcome: shown,
+            outcome: shown.name,
           });
-          finish({ reason: "outcome_ambiguous", outcome: shown }, failure.message);
+          finish({ reason: "outcome_ambiguous", outcome: shown.name }, failure.message);
           throw failure;
         }
-        finish(
-          { outcome: shown },
-          '"' + shown + '" showed after ' + (Date.now() - begun) + " ms (" + looks + (looks === 1 ? " look)" : " looks)"),
+        const evidence = await waitBounded(
+          outcomeWaitEvidence(shown, observation, state, events, now),
+          Math.max(250, until - Date.now()),
+          {},
         );
-        return shown;
+        return result(shown, observations ?? last ?? {}, evidence);
+      }
+      if (events.unnamedDialog() !== undefined) {
+        const opened = events.unnamedDialog();
+        const failure = outcomeWaitFailure(
+          "outcome_unknown",
+          " after " + (now - begun) + " ms: a native " + opened.type() + " dialog opened that no outcome names",
+          last ?? {},
+          {},
+        );
+        outcomeWaitHidden(failure, "dialog", opened);
+        finish({ reason: "outcome_unknown" }, failure.message);
+        throw failure;
       }
       // Only a look that decides nothing samples the page's progress: the decision never uses it.
       const current = JSON.stringify(observations ?? null);
-      await progress.sample(
+      await unblocked(progress.sample(
         observations === undefined ? ["page replaced"]
           : signature !== undefined && current !== signature ? ["outcome matches changing"] : [],
-      );
+      ));
+      // An outcome the page announced as an event during the sample decides at the next look.
+      if (events.dialogOpen() || events.anyHit()) continue;
       signature = current;
       if (now >= until) {
-        const seen = last ?? (await look().catch(() => undefined)) ?? {};
+        const seen = last ?? (beforeStop() > 0 ? await look().catch(() => undefined) : undefined) ?? {};
         const failure = outcomeWaitFailure(
           "outcome_timeout",
-          " after " + Math.round(timeout) + " ms: " + outcomeWaitSeen(seen) + "; " + progress.describe(),
+          " after " + Math.round(Math.max(0, until - begun)) + " ms: " +
+            (Object.keys(seen).length === 0 ? "the page could not be read" : outcomeWaitSeen(seen)) + "; " + progress.describe(),
           seen,
           { progress: progress.diagnostics() },
         );
@@ -472,7 +594,7 @@ const waitForOutcome = async (outcomes, options = {}) => {
       // Nothing shows, not even an answer from before the action, and the page went quiet.
       // A quiet page fails only when the next look agrees, since the page may have answered
       // between this look's outcomes and its progress sample.
-      const anyShown = names.some((name) => observations?.[name].visible > 0);
+      const anyShown = candidates.some((candidate) => outcomeWaitShowsAny(candidate, observations?.[candidate.name]));
       const quiet = !anyShown && progress.quietMs() >= noProgressMs;
       if (quiet && !quietBefore) quietBefore = true;
       else if (quiet) {
@@ -489,16 +611,28 @@ const waitForOutcome = async (outcomes, options = {}) => {
       } else quietBefore = false;
       await waitSleep(100);
     }
+  } catch (error) {
+    // A dialog that opened while the wait listened stays open: the failure carries it too.
+    if (error !== null && typeof error === "object" && error.dialog === undefined) outcomeWaitHidden(error, "dialog", events.dialog());
+    throw error;
   } finally {
-    if (key !== undefined)
-      await page
-        .evaluate((key) => {
-          delete globalThis[Symbol.for(key)];
-        }, key)
-        .catch(() => undefined);
-    await progress.stop();
+    events.stop();
+    // With a native dialog open the page cannot run the cleanup; what it leaves is inert.
+    const inPage = !events.dialogOpen();
+    // A page held up by a pending navigation gets a moment; what it keeps is inert.
+    for (const each of [key, state.announceKey])
+      if (each !== undefined && inPage)
+        await waitBounded(
+          page.evaluate((key) => {
+            globalThis[Symbol.for(key)]?.observer?.disconnect?.();
+            delete globalThis[Symbol.for(key)];
+          }, each),
+          cleanupMs(),
+        ).catch(() => undefined);
+    await progress.stop(inPage && cleanupMs() > 0);
   }
 };
+const waitForOutcome = async (outcomes, options = {}) => (await waitForOutcomeResult(outcomes, options)).outcome;
 `;
 
 /**
@@ -880,8 +1014,9 @@ const waitForChange = async (fields, options = {}) => {
 
 /**
  * Page code for a Kernel call body, where `page` is in scope: paste it once at the top of the code
- * string, then wait with your verified Playwright locators. It declares four waits that share one
- * set of limits (`waitLimits`, from `timeoutDefaults`) and one progress budget, and `waitReport()`.
+ * string, then wait with your verified Playwright locators. It declares the waits below, which share
+ * one set of limits (`waitLimits`, from `timeoutDefaults`) and one progress budget, and
+ * `waitReport()`.
  *
  * Every wait returns as soon as its condition holds: a ready page costs `waitForOutcome` one look,
  * and the value waits two looks `settle` (0.5 s) apart. While it waits it watches the page's
@@ -914,7 +1049,8 @@ const waitForChange = async (fields, options = {}) => {
  * action started is still in flight, or was as the look began. Such a request holds it back for
  * at most `lateFillCap` (15 s), and never past `timeout` less `unchangedMs`, so the match still
  * counts before the timeout.
- * `timeout`, `noProgressMs` and `unchangedMs` start once the action returns. Its
+ * `timeout`, `noProgressMs` and `unchangedMs` start once the action returns; `deadline`, a
+ * `Date.now()` time such as the call's own, ends the wait by then however long the action took. Its
  * `OutcomeWaitFailure` has `observations` (`OutcomeObservation` by key) and one of these reasons:
  *
  * - `outcome_ambiguous`, when the winning outcome's locator matches more than one element; its
@@ -922,6 +1058,42 @@ const waitForChange = async (fields, options = {}) => {
  * - `outcome_unknown`, when no outcome shows and the page made no progress for `noProgressMs`: a
  *   challenge, the site's error or a layout the code does not handle, never slowness.
  * - `outcome_timeout`, when the page was still progressing at `timeout`.
+ *
+ * An outcome may also be an object naming one declared kind, raced beside the locators in the same
+ * listed order, so a site that answers in a way the code did not expect still ends the wait:
+ *
+ * - `{ gone: locator, stableMs? }`: the element, visible before the action (or at a look), has
+ *   had no visible match for `stableMs` (default 300), such as a form or a modal closing. A form
+ *   redrawn in place within that time is not gone.
+ * - `{ invalid: locator }`: a control inside it is marked invalid (`aria-invalid="true"`, the
+ *   `is-invalid` class, or the browser's own check after a submit). Fields flagged before the
+ *   action, and unchanged, follow the same `unchangedMs` rule as a locator.
+ * - `{ url }`: the page's URL matches a string (the whole URL, its path, or path and query), a
+ *   RegExp or a function of the `URL`. After an `action` it counts only once the page navigated,
+ *   by a document load or a route change, so an edit page whose URL already matched waits.
+ * - `{ response }`: a response arrived, from before the action, that a function of the Playwright
+ *   `Response` accepts, or that matches `{ method, url, status, navigation }` (`status` a number,
+ *   `[low, high]` or a function). It races the page's answers, so a request the site batches,
+ *   caches or renames never hangs the wait: name one only for a write's commit request.
+ * - `{ dialog: true | type | [types] }`: a native dialog opened, even one the action's own click
+ *   raised. Page scripts stop while it is open, so it decides at once, and a dialog of a type no
+ *   outcome names fails as `outcome_unknown`. The wait never accepts or dismisses it: a dialog
+ *   that opened while it listened is on the result's or failure's `dialog`, whichever won. An
+ *   action still waiting to click when a dialog opens clicks once the dialog is handled, so
+ *   handle it before ending the call.
+ * - `{ popup: true | (page) => boolean }`: the page opened a new tab or window.
+ * - `{ announced: string | RegExp }`: a live region (`aria-live`, or the role `alert`, `status`,
+ *   `log` or `alertdialog`) announced matching text after the action, as a screen reader hears
+ *   it. A toast that comes and goes between two looks still counts.
+ * - `{ check: async () => value }`: a condition of your own, true once it returns a truthy value.
+ *   It has no stale rule: one already true before the action wins at the first look.
+ *
+ * `waitForOutcomeResult(outcomes, options?)` is the same wait returning `OutcomeResult`: the
+ * winning `outcome` and its `kind`, `afterMs`, `looks`, the `observations`, and `evidence` of what
+ * showed it (a locator's visible text, the invalid fields' labels and messages, the URL reached,
+ * the response's method, URL and status, the dialog's type and message). The winning Playwright
+ * `response`, `dialog` or popup `page` is on the result too, kept off its JSON. Every listener
+ * the losing outcomes used is removed before it returns or throws.
  *
  * `waitForRows(rows, fields, { count, key, ...options })` waits until the first `count` identified
  * rows have every field filled and read the same on two looks `stableMs` apart (default `settle`,
@@ -946,6 +1118,27 @@ const waitForChange = async (fields, options = {}) => {
  * they were before `action` ran) and hold, or once they stayed the same for `unchangedMs` with no
  * progress sign showing, so a loading sign or request the choice started must first go.
  *
+ * `waitForReady(control, { overlays, expand, dismiss, pending, until, editable, stableMs,
+ * dismissLimit, watch, deadline, ...options })` waits before an action until the control's one visible
+ * match is attached, visible, enabled (and not read-only when `editable`), not busy (no
+ * `aria-busy` around it, no spinner inside it), in the same place on two looks, and what a click
+ * at its centre would hit is the control itself, not an overlay. It also waits while an `overlays`
+ * locator shows, while `pending` (a function run in the page, such as
+ * `() => window.jQuery?.active ?? 0`) returns a truthy count, and until `until()` is true. Once
+ * anything held it back, ready must hold for `stableMs` (default `settle`), so a spinner that
+ * flickers off between two requests does not count as gone. `expand` names the toggle of the
+ * control's section: it clicks it once while the control is hidden and the toggle says the
+ * section is collapsed (`aria-expanded` false, or the summary of a closed `details`), so it never
+ * closes an open one. `dismiss`
+ * names the close or skip controls of panels that open on their own, such as a tour, a what's-new
+ * dialog or a cookie banner: it clicks one that shows, up to `dismissLimit` (5) times, and once
+ * ready keeps a Playwright locator handler on each, so one that opens later is closed before the
+ * next action, until `result.release()` or `dismissLimit` uses (`watch: false` skips it). It
+ * returns `ReadyResult`, and fails as a `ReadyWaitFailure` with `blockers` and a message naming
+ * what held it back last: `not_ready` once nothing progressed for `noProgressMs`, `ready_timeout`
+ * at `timeout` (default `answerCap`), `ready_ambiguous` when more than one visible element
+ * matches.
+ *
  * A value is still loading, never absent, while it is empty, reads as a loading word or only dots,
  * matches the field's `placeholder` pattern, or sits in an `aria-busy`, skeleton or shimmer
  * element. An `optional` field may be absent and is then `null`; a needed one may not. A value
@@ -953,7 +1146,7 @@ const waitForChange = async (fields, options = {}) => {
  * `change_unknown` when waitForChange's fields are missing; `values_timeout` at the cap. Each is a
  * `ValueWaitFailure`.
  */
-export const waitCode = `${progressCode}${outcomeCode}${valueCode}`;
+export const waitCode = `${progressCode}${outcomeKindsCode}${outcomeCode}${valueCode}${readyWaitCode}`;
 
 /**
  * `waitForOutcome` alone, for code written against the first release of it: it declares only the
@@ -963,7 +1156,7 @@ export const waitCode = `${progressCode}${outcomeCode}${valueCode}`;
  */
 export const outcomeOnlyWaitCode = `
 const { outcomeWaitFailure, outcomeWaitNote, outcomeWaitChanged, outcomeWaitObserve, waitForOutcome } = (() => {
-${progressCode}${outcomeCode}
+${progressCode}${outcomeKindsCode}${outcomeCode}
 return { outcomeWaitFailure, outcomeWaitNote, outcomeWaitChanged, outcomeWaitObserve, waitForOutcome };
 })();
 `;
