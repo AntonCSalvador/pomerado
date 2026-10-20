@@ -92,7 +92,7 @@ export const CalendarDate = Schema.String.pipe(
  *   word, one lacking a number of the wanted name, such as 7:00 PM for 7:30 PM, or a native select's
  *   empty-valued prompt; labels tied for the most shared words are ambiguous; and in a dropdown
  *   that filters as you type it waits, as a missing option does, for a list other than the one
- *   shown before typing. A write keeps the default. A custom dropdown is opened, its own listbox
+ *   shown before typing, for at most half the timeout. A write keeps the default. A custom dropdown is opened, its own listbox
  *   found through `aria-controls` or `aria-owns` (else the one visible listbox), typed into when it
  *   filters as you type, and scrolled when it renders its options as you scroll. Returns
  *   `{ shape, label, value }`.
@@ -311,9 +311,11 @@ const formControlChooseCustom = async (control, wanted, timeout, byWords) => {
   let stuck = 0;
   // The options listed before typing. With match "words", a match by shared words in a field that
   // takes typing waits for a list other than this one, as a missing option waits: until then the
-  // list may still be one from before the text, such as recent picks.
+  // list may still be one from before the text, such as recent picks. It waits at most half the
+  // timeout after typing, then stands, since some lists never change for what is typed.
   const listed = (found) => JSON.stringify(found.map((option) => [option.label, option.value]));
   let untyped = listed([]);
+  let settled = until;
   while (true) {
     const before = options.length;
     options = await formControlOptions(listbox);
@@ -323,13 +325,14 @@ const formControlChooseCustom = async (control, wanted, timeout, byWords) => {
       wanted,
       byWords,
     );
-    const early = picked.words && editable && (!typed || listed(options) === untyped);
+    const early = picked.words && editable && (!typed || (listed(options) === untyped && Date.now() < settled));
     if ((picked.failure !== "option_missing" && !early) || Date.now() >= until) break;
     // A dropdown that filters as you type shows its options for the typed text.
     if (editable && !typed) {
       untyped = listed(options);
       await formControlFill(control, wanted[0], timeout);
       typed = true;
+      settled = Math.min(until, Date.now() + timeout / 2);
       continue;
     }
     // One that renders its options as it scrolls shows more of them further down.

@@ -111,9 +111,19 @@ export const sameText = (shown: string, wanted: string): boolean => {
  * word, so 12 never matches 123 or 1.2, and 5 never matches -5. A run of single letters is one
  * word, so U.S.A. matches USA.
  *
+ * A clock time is one word however it is written, and AM or PM counts: 7 PM, 7:00 PM, 7:00pm,
+ * 7 p.m. and 19:00 match each other, never 7:30 PM or 7 AM. A time with no AM or PM and an hour up
+ * to 12, such as 7:30, matches either half of the day. A # before a number is dropped, so
+ * Order #1250 matches Order 1250.
+ *
  * A text that lacks any word of the query holding a digit, read as above, scores 0 whatever else
  * it shares, so 7:30 PM never matches 7:00 PM, Order 1250 never matches Order 1251 and Room 102
- * never matches Room 101. A text may hold numbers the query lacks.
+ * never matches Room 101. A text may hold numbers the query lacks, and the numbers may come in
+ * another order, so 3 adults, 2 children matches 2 adults, 3 children. A text scores 0 too when
+ * exactly one of it and the query says no, not, non or without, as a word or before a hyphen, so
+ * Non-refundable, Not refundable and No free cancellation never match Refundable or Free
+ * cancellation. "No" before a number, as in No. 5, is no negation. Part of a value, such as Nov 5
+ * for a date with its year or 555-1234 for a phone number with its area code, matches nothing.
  *
  * It is pure and self-contained: the page code of `formControlsCode` and `pickerCode` embeds this
  * same function.
@@ -193,12 +203,34 @@ export const rankByWords = (query: string, texts: readonly string[]): number[] =
       if (digits.length >= 7 && digits.length <= 15)
         return [digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits];
     }
-    const spaced = raw
+    // A clock time is one value. With AM or PM, or an hour over 12 or of 0, it is its 24-hour time
+    // and its time on a 12-hour clock; an hour up to 12 alone gives only the 12-hour time, which
+    // either half of the day holds. Each time waits in the text as a mark for its words.
+    const times: string[][] = [];
+    const clock = (hour: number, minute: string, day: boolean) => {
+      times.push([...(day ? [`time:${String(hour).padStart(2, "0")}:${minute}`] : []), `clock:${((hour + 11) % 12) + 1}:${minute}`]);
+      return " \uE000 ";
+    };
+    const timed = raw
+      .replace(/(?<![\p{L}\p{N}:.])(\d{1,2})(?::([0-5]\d))?\s*([ap])\.?\s?m\.?(?![\p{L}\p{N}])/giu, (text, hour, minute, half) =>
+        Number(hour) >= 1 && Number(hour) <= 12
+          ? clock((Number(hour) % 12) + (String(half).toLowerCase() === "p" ? 12 : 0), minute ?? "00", true)
+          : text,
+      )
+      .replace(/(?<![\p{L}\p{N}:.])(\d{1,2}):([0-5]\d)(?![\p{N}:])/gu, (text, hour, minute) =>
+        Number(hour) <= 23 ? clock(Number(hour), minute, Number(hour) === 0 || Number(hour) > 12) : text,
+      );
+    const spaced = timed
       .replace(/(?<![\p{L}\p{N}])(\d{1,3}(?:,\d{3})+)(?!\p{N})/gu, (number) => number.replace(/,/gu, ""))
       .replace(/(?<![\p{N}.])(\d+)\.0{1,2}(?!\p{N})/gu, "$1")
-      .replace(/[$\u20AC\u00A3\u00A5\u20B9]/gu, " ");
+      .replace(/[$\u20AC\u00A3\u00A5\u20B9]/gu, " ")
+      .replace(/#(?=\p{N})/gu, " ");
     const words: string[] = [];
     for (const piece of spaced.split(" ")) {
+      if (piece === "\uE000") {
+        words.push(...(times.shift() ?? []));
+        continue;
+      }
       const word = piece.replace(/^[("'\u2018\u201C[]+|[)"'\u2019\u201D\].,;:!?\u2026]+$/gu, "");
       if (word === "") continue;
       const literal =
@@ -249,10 +281,16 @@ export const rankByWords = (query: string, texts: readonly string[]): number[] =
     }
     return sum;
   };
-  // Every number of the query, as read above, must be in the text.
+  // Every number of the query, as read above, must be in the text, and both or neither must say
+  // no, not, non or without, though "no" before a number, as in "No. 5", says nothing.
   const numbers = asked.filter((word) => /\p{N}/u.test(word));
+  const negated = (words: readonly string[]) =>
+    words.some((word, at) => ["no", "not", "non", "without"].includes(word) && !(word === "no" && /\p{N}/u.test(words[at + 1] ?? "")));
+  const no = negated(asked);
   const own = score(asked);
-  return docs.map((doc) => (own === 0 || numbers.some((word) => !doc.includes(word)) ? 0 : score(doc) / own));
+  return docs.map((doc) =>
+    own === 0 || numbers.some((word) => !doc.includes(word)) || negated(doc) !== no ? 0 : score(doc) / own,
+  );
 };
 
 /**
@@ -264,9 +302,10 @@ export const rankByWords = (query: string, texts: readonly string[]): number[] =
  * confirmed by text that adds up to two words to it, and text that drops one of the wanted words
  * is not, unless the value has eleven words or more. So a wanted name inside a longer one, such as
  * Lakeside in North Lakeside, is confirmed, and so is Premium Economy for Economy. `shown` must
- * hold every number `wanted` holds: dates, phone numbers and amounts as `rankByWords` reads them,
- * and other numbers the same. A write's check before it saves uses `sameText` alone, which
- * refuses a word added or dropped. It calls `sameText` and `rankByWords`, so page code that
+ * hold every number `wanted` holds: dates, times, phone numbers and amounts as `rankByWords` reads
+ * them, and other numbers the same, though in any order. When exactly one of them says no, not,
+ * non or without, as in Non-refundable for Refundable, only `sameText` can confirm. A write's
+ * check before it saves uses `sameText` alone, which refuses a word added or dropped. It calls `sameText` and `rankByWords`, so page code that
  * embeds it embeds those two first.
  */
 export const readBackMatches = (shown: string, wanted: string): boolean =>

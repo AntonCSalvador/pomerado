@@ -259,6 +259,26 @@ test("pickValue on a read never picks an option that lacks a number of the value
   expect(await submitted(page)).toEqual({ customer: "2" });
 });
 
+test("pickValue on a read reads a clock time as one value, never picks a negation and ignores a # before a number", async ({ page }) => {
+  for (const [labels, wanted, picked] of [
+    [["7:30 AM", "7:00 PM", "19:30"], "7:30 PM", "19:30"],
+    [["7:30 AM", "7 PM"], "7:30 PM", null],
+    [["Non-refundable", "Flexible"], "Refundable", null],
+    [["Order #1251", "Order #1250"], "Order 1250", "Order #1250"],
+  ] as const) {
+    await serve(page, dropdown(labels.map((label, index) => [String(index + 1), label] as const)));
+    const outcome = await call(page, `return await pickValue(page.getByRole("button", { name: "Customer" }), "${wanted}", ${read});`);
+    if (picked === null)
+      expect(outcome, wanted).toEqual({
+        result: { picked: false, reason: "option_missing", wanted, available: [...labels], matches: [] },
+      });
+    else
+      expect(outcome, wanted).toEqual({
+        result: { picked: true, kind: "dropdown", label: picked, value: String((labels as readonly string[]).indexOf(picked) + 1), rank: "words", refills: 0 },
+      });
+  }
+});
+
 test("pickValue on a read picks a name the list writes in another order", async ({ page }) => {
   await serve(page, dropdown([["1", "Lopez, Carlos"], ["2", "Lopez, Catherine"]]));
   expect(await call(page, `return await pickValue(page.getByRole("button", { name: "Customer" }), "Catherine Lopez", ${read});`)).toEqual({

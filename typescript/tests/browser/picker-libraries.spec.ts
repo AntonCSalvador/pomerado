@@ -377,6 +377,22 @@ test("pickValues replaces the chosen chips when asked, and stops at a value the 
   });
 });
 
+test("pickValues keeps a chip it just added when it replaces the others", async ({ page }) => {
+  const colors = 'page.getByRole("combobox", { name: "Colors" })';
+  // "Grey" picks "Blue Grey", the one label that holds it as a word, and replacing keeps it.
+  await serve(page, chips);
+  expect(await call(page, `return await pickValues(${colors}, ["Grey"], { ...fast, mode: "replace" });`)).toMatchObject({
+    result: { picked: true, values: [{ label: "Blue Grey", added: true }], removed: ["Red"] },
+  });
+  expect(await submitted(page)).toEqual({ colors: "blue grey" });
+  // On a read, "Grey Blue" picks "Blue Grey" by its words, and replacing keeps it too.
+  await serve(page, chips);
+  expect(
+    await call(page, `return await pickValues(${colors}, ["Grey Blue"], { ...fast, mode: "replace", match: "words", query: "grey" });`),
+  ).toMatchObject({ result: { picked: true, values: [{ label: "Blue Grey", added: true }], removed: ["Red"] } });
+  expect(await submitted(page)).toEqual({ colors: "blue grey" });
+});
+
 test("pickValues makes free-entry tags with Enter when asked to create them", async ({ page }) => {
   await serve(page, `<form><label for="tag-entry">Tags</label><div class="tag-input"><input id="tag-entry" autocomplete="off"></div><input type="hidden" name="tags"></form>
 <script>

@@ -93,11 +93,68 @@ it("leaves a write's check before it saves to sameText, which refuses a word add
   expect(sameText("Economy", "Premium Economy")).toBe(false);
   expect(sameText("Refundable", "Non-refundable")).toBe(false);
   expect(readBackMatches("Premium Economy", "Economy")).toBe(true);
-  expect(readBackMatches("Non-refundable", "Refundable")).toBe(true);
+  // A read never confirms a value against its negation, either way round.
+  expect(readBackMatches("Non-refundable", "Refundable")).toBe(false);
   // A read still confirms a name in another order or written short.
   expect(readBackMatches("Lopez, Catherine", "Catherine Lopez")).toBe(true);
   expect(sameText("Lopez, Catherine", "Catherine Lopez")).toBe(false);
   expect(readBackMatches("St-Exemple-sur-Lac", "Saint-Exemple-sur-Lac")).toBe(true);
+});
+
+it("reads a clock time as one value, where AM or PM counts", () => {
+  // The same time written five ways.
+  for (const shown of ["7:30 PM", "7:30PM", "7:30 pm", "19:30", "7:30 p.m."])
+    expect(readBackMatches(shown, "7:30 PM"), shown).toBe(true);
+  for (const shown of ["7 PM", "7:00 PM", "19:00", "7:00pm", "7pm"]) expect(readBackMatches(shown, "7 PM"), shown).toBe(true);
+  // Another minute or the other half of the day never matches.
+  expect(readBackMatches("7 PM", "7:30 PM")).toBe(false);
+  expect(readBackMatches("7:30 PM", "7 PM")).toBe(false);
+  expect(readBackMatches("7:30 AM", "7:30 PM")).toBe(false);
+  expect(readBackMatches("19:30", "7:30 AM")).toBe(false);
+  expect(rankByWords("7:30 PM", ["7:30 AM", "7 PM", "19:30", "Sat 7:30PM"])).toEqual([0, 0, 1, expect.any(Number)]);
+  expect(rankByWords("7:30 PM", ["Sat 7:30PM"])[0]).toBeGreaterThan(0);
+  // A time without AM or PM, and an hour up to 12, matches either half of the day.
+  expect(readBackMatches("7:30 PM", "7:30")).toBe(true);
+  expect(readBackMatches("7:30 AM", "7:30")).toBe(true);
+  expect(readBackMatches("07:30", "7:30")).toBe(true);
+  const [morning, evening] = rankByWords("7:30", ["7:30 AM", "7:30 PM"]);
+  expect(morning).toBeGreaterThan(0);
+  expect(morning).toBe(evening);
+});
+
+it("never confirms a value against its negation, with no, not, non or without", () => {
+  for (const [shown, wanted] of [
+    ["Non-refundable", "Refundable"],
+    ["Refundable", "Non-refundable"],
+    ["Not refundable", "Refundable"],
+    ["Refundable", "Not refundable"],
+    ["No free cancellation", "Free cancellation"],
+    ["Free cancellation", "No free cancellation"],
+    ["Without breakfast", "Breakfast"],
+    ["Breakfast", "Without breakfast"],
+  ] as const) {
+    expect(readBackMatches(shown, wanted), `${shown} | ${wanted}`).toBe(false);
+    expect(rankByWords(wanted, [shown]), `${shown} | ${wanted}`).toEqual([0]);
+  }
+  // Both negated, the words still count, and "No." before a number is no negation.
+  expect(readBackMatches("Fare: non-refundable", "Non-refundable")).toBe(true);
+  expect(readBackMatches("Order No. 1250", "Order 1250")).toBe(true);
+});
+
+it("reads a # before a number as part of no word", () => {
+  expect(readBackMatches("Order #1250", "Order 1250")).toBe(true);
+  expect(readBackMatches("Order 1250", "Order #1250")).toBe(true);
+  expect(rankByWords("1250", ["Order #1250", "Order #1251"])[1]).toBe(0);
+  expect(rankByWords("1250", ["Order #1250"])[0]).toBeGreaterThan(0);
+  expect(readBackMatches("Order #1251", "Order 1250")).toBe(false);
+});
+
+it("keeps some limits: numbers in another order match, and part of a date or phone number does not", () => {
+  // Every number is there, so swapped counts confirm.
+  expect(readBackMatches("3 adults, 2 children", "2 adults, 3 children")).toBe(true);
+  // A date without its year, or a phone number without its area code, is refused loudly.
+  expect(readBackMatches("Thu, Nov 5, 2026", "Nov 5")).toBe(false);
+  expect(readBackMatches("(415) 555-1234", "555-1234")).toBe(false);
 });
 
 it("embeds as self-contained source, so page code can use it", () => {

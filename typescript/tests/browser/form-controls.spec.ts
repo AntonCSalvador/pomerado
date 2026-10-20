@@ -662,6 +662,31 @@ test("chooseOption on a read never picks an option that lacks a number of the wa
   expect(await submitted(page)).toEqual({ Time: "" });
 });
 
+test("chooseOption on a read reads a clock time as one value, never picks a negation and ignores a # before a number", async ({
+  page,
+}) => {
+  const choices = (name: string, labels: readonly string[]) =>
+    `<form><label>${name}<select name="${name.toLowerCase()}"><option value="">Choose</option>${labels
+      .map((label, index) => `<option value="${index + 1}">${label}</option>`)
+      .join("")}</select></label></form>`;
+  await page.setContent(choices("Time", ["7:30 AM", "7:00 PM", "19:30"]));
+  expect(await call(page, `return await chooseOption(page.getByLabel("Time"), "7:30 PM", ${read});`)).toEqual({
+    result: { shape: "select", label: "19:30", value: "3" },
+  });
+  await page.setContent(choices("Time", ["7:30 AM", "7 PM"]));
+  expect(await call(page, `return await chooseOption(page.getByLabel("Time"), "7:30 PM", ${read});`)).toEqual({
+    error: "option_missing",
+  });
+  await page.setContent(choices("Fare", ["Non-refundable", "Flexible"]));
+  expect(await call(page, `return await chooseOption(page.getByLabel("Fare"), "Refundable", ${read});`)).toEqual({
+    error: "option_missing",
+  });
+  await page.setContent(choices("Order", ["Order #1251", "Order #1250"]));
+  expect(await call(page, `return await chooseOption(page.getByLabel("Order"), "Order 1250", ${read});`)).toEqual({
+    result: { shape: "select", label: "Order #1250", value: "2" },
+  });
+});
+
 test("chooseOption on a read refuses labels tied for the most shared words, in a select and a dropdown", async ({
   page,
 }) => {
@@ -749,6 +774,39 @@ test("chooseOption on a read waits for a typeahead's results instead of taking a
   expect(
     await call(page, `return await chooseOption(page.getByLabel("Country"), "South Korea", ${read});`),
   ).toEqual({ result: { shape: "combobox", label: "South Korea", value: "KR" } });
+  expect(await submitted(page)).toEqual({ country: "KR" });
+});
+
+// A combobox whose list ignores what is typed: the list after typing equals the one before.
+const fixedCombobox = `<form><label for="country">Country</label>
+<input id="country" role="combobox" aria-expanded="false" aria-controls="country-list" autocomplete="off">
+<div role="listbox" id="country-list" hidden></div><input type="hidden" name="country"></form>
+<script>
+const input = document.getElementById("country");
+const list = document.getElementById("country-list");
+input.addEventListener("click", () => {
+  list.innerHTML = '<div role="option" data-value="KR">Korea, South</div><div role="option" data-value="US">USA</div>';
+  list.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+});
+list.addEventListener("click", (event) => {
+  const option = event.target.closest("[role=option]");
+  if (!option) return;
+  document.querySelector("[name=country]").value = option.dataset.value;
+  input.value = option.textContent;
+  list.hidden = true;
+  input.setAttribute("aria-expanded", "false");
+});
+</script>`;
+
+test("chooseOption on a read waits at most half its timeout for the list to change after typing", async ({ page }) => {
+  await page.setContent(fixedCombobox);
+  const started = Date.now();
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Country"), "South Korea", { match: "words", timeout: 6000 });`),
+  ).toEqual({ result: { shape: "combobox", label: "Korea, South", value: "KR" } });
+  // Half of 6 s, plus the call's own work; the whole timeout would be 6 s.
+  expect(Date.now() - started).toBeLessThan(4500);
   expect(await submitted(page)).toEqual({ country: "KR" });
 });
 

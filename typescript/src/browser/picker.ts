@@ -484,7 +484,8 @@ const pickerPageCode = String.raw`(element, args) => {
  *   of its spellings (`["CA", "California"]`).
  * - `pickValues(control, values, options?)` chooses several in a multi-select: a native
  *   `select[multiple]`, or chips and tags beside a typeahead or dropdown. `options.mode` is
- *   `"add"` (default: keep the chips already there) or `"replace"` (remove the others), and
+ *   `"add"` (default: keep the chips already there) or `"replace"` (remove every chip but the
+ *   ones it picked or found), and
  *   `options.create` types a value the list lacks and presses Enter to make a free-entry tag.
  * - `pickerOptions(control, options?)` opens the picker (typing `options.query` when given) and
  *   returns `{ kind, options: [{ label, value, disabled }] }`, every option it lists, scrolled
@@ -1248,9 +1249,11 @@ const pickValues = async (control, values, options = {}) => {
     }
     const removed = [];
     if (mode === "replace") {
+      // Every chip this call added or found stays, such as Blue Grey picked for Grey.
+      const keep = [...list, ...results.map((result) => [result.label])];
       for (let round = 0; round < 50 && Date.now() < s.until; round++) {
         const chips = await pickerChips(s);
-        const extra = chips.find((chip) => !list.some((wanted) => pickerChipIs([chipNames(chip)], wanted)));
+        const extra = chips.find((chip) => !keep.some((wanted) => pickerChipIs([chipNames(chip)], wanted)));
         if (!extra) break;
         if (!extra.removable) throw pickerFailure("not_committed");
         const since = pickerMark(s);
