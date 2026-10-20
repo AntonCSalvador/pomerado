@@ -34,9 +34,9 @@ export interface SignInVersionInput {
   /**
    * Identity values the host knows for the account that recorded the version, such as its
    * username, email, phone or account number. No part of a version may name one; none is ever
-   * returned. The identity rules apply only to the values a caller passes: a host that no longer
-   * holds them, because it applied identity guards of its own to each screen while it recorded
-   * the sign-in, passes none.
+   * returned. The identity rules apply to the values a caller passes, and to the `[private]`
+   * placeholder whatever it passes: a host that no longer holds them, because it applied identity
+   * guards of its own to each screen while it recorded the sign-in, passes none.
    */
   readonly identities?: readonly string[] | undefined;
   /**
