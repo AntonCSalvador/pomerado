@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { formControlsCode } from "../browser/form-controls.js";
-import type { AutofillPopup, DateOfBirthFormat } from "./autofill-contracts.js";
+import { maximumCodeBoxes, type AutofillPopup, type DateOfBirthFormat } from "./autofill-contracts.js";
 import { elementReadMs, locateCode, questionTextCode } from "./autofill-locate-code.js";
 import { clipCode, controlNamingCode } from "./control-naming-code.js";
 import { pageCode, primaryPageCode } from "../runtime/host-execute.js";
@@ -10,33 +10,58 @@ import { pageControlsCode } from "./page-controls.js";
 
 /**
  * Page code: where each code field sits among its screen's one-character boxes, as
- * `Described.codeBox` says, else null. A box is a visible, enabled, editable text input whose
- * `maxlength` is 1; the screen is the field's form, or its document or shadow root outside one. A
- * field that is no box, or a screen with fewer than two, has none. Attributes only, never a value.
+ * `Described.codeBox` says, else null. A box is a visible, enabled, editable text input that takes
+ * one character:
+ * - by its `maxlength` of 1, among the like boxes of its screen, the field's form, or its document
+ *   or shadow root outside one;
+ * - or, with no `maxlength` limit, by the page's own script, as many one-time-code widgets limit
+ *   their boxes, when the step names two or more code fields: among the visible, enabled, editable
+ *   text inputs that are children of its parent element, when those are two to
+ *   `maximumCodeBoxes`, all of its type and none with a `maxlength` limit. When the step's boxes
+ *   found so disagree on how many there are, or two take one place, as boxes split between two
+ *   containers do, none of them is a box.
+ * A field that is no box, or a screen with fewer than two, has none. Attributes only, never a value.
  */
 const codeBoxesCode = `const codeBoxes = [];
+const codeFields = codeSlots.filter(Boolean).length;
 for (const [index, field] of fields.entries()) {
   if (!codeSlots[index]) {
     codeBoxes.push(null);
     continue;
   }
-  const codeBox = await field.locator.evaluate((element) => {
+  const codeBox = await field.locator.evaluate((element, [codeFields, mostBoxes]) => {
     const textTypes = ["", "text", "tel", "number", "password", "search"];
-    const box = (control) => {
-      if (control.tagName !== "INPUT" || control.maxLength !== 1) return false;
+    const editable = (control) => {
+      if (control.tagName !== "INPUT") return false;
       if (!textTypes.includes((control.getAttribute("type") ?? "").toLowerCase())) return false;
       if (control.disabled || control.readOnly) return false;
       const rect = control.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0 && control.checkVisibility({ visibilityProperty: true });
     };
-    if (!box(element)) return null;
-    const screen = element.form ?? element.getRootNode();
-    const boxes = Array.from(screen.querySelectorAll("input")).filter(box);
-    const at = boxes.indexOf(element);
-    return boxes.length < 2 || at < 0 ? null : { box: at + 1, of: boxes.length };
-  }, undefined, { timeout: ${elementReadMs} }).catch(() => null);
+    const place = (boxes, limit) => {
+      const at = boxes.indexOf(element);
+      return boxes.length < 2 || at < 0 ? null : { box: at + 1, of: boxes.length, limit };
+    };
+    if (!editable(element)) return null;
+    if (element.maxLength === 1) {
+      const screen = element.form ?? element.getRootNode();
+      return place(Array.from(screen.querySelectorAll("input")).filter((control) => editable(control) && control.maxLength === 1), "maxlength");
+    }
+    if (element.maxLength >= 0 || codeFields < 2 || element.parentNode === null) return null;
+    const boxes = Array.from(element.parentNode.children).filter(editable);
+    if (boxes.length > mostBoxes || boxes.some((control) => control.maxLength >= 0 || control.type !== element.type))
+      return null;
+    return place(boxes, "script");
+  }, [codeFields, ${maximumCodeBoxes}], { timeout: ${elementReadMs} }).catch(() => null);
   codeBoxes.push(codeBox);
-}`;
+}
+const scriptBoxes = codeBoxes.filter((codeBox) => codeBox?.limit === "script");
+const scriptAgree =
+  new Set(scriptBoxes.map(({ box }) => box)).size === scriptBoxes.length &&
+  new Set(scriptBoxes.map(({ of }) => of)).size <= 1;
+for (const [index, codeBox] of codeBoxes.entries())
+  codeBoxes[index] =
+    codeBox === null || (codeBox.limit === "script" && !scriptAgree) ? null : { box: codeBox.box, of: codeBox.of };`;
 
 /**
  * Page code: the step's controls and visible native and ARIA actions, for the host and Guardian.
