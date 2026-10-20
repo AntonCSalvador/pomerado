@@ -41,6 +41,7 @@ const quoteForm = `
     <span id="county-name">County</span>
     <input role="combobox" name="county" aria-labelledby="county-name" aria-required="true" aria-expanded="false" aria-controls="county-list" autocomplete="off">
     <div role="listbox" id="county-list" hidden><div role="option">Kent</div><div role="option">Essex</div></div>
+    <div role="combobox" aria-haspopup="listbox" aria-label="Roof pitch" aria-required="true" tabindex="0">&#8203;</div>
     <input aria-label="Previous claims" name="claims" aria-invalid="true">
     <input type="checkbox" id="confirm" name="confirm" required><label for="confirm">I confirm the details</label>
     <label for="inspected">Inspection date</label><input type="date" id="inspected" name="inspected" required>
@@ -86,6 +87,8 @@ const roofFields = [
       { value: "Essex", label: "Essex" },
     ],
   },
+  // A custom dropdown that shows a zero-width space while empty, its listbox not rendered yet.
+  { label: "Roof pitch", shape: "combobox" },
   { label: "Previous claims", shape: "text" },
   { label: "I confirm the details", shape: "other", unsupported: true },
   { label: "Inspection date", shape: "date", unsupported: true },

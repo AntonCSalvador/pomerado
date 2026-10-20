@@ -353,7 +353,7 @@ const formControlTextTypes = new Set(["", "text", "email", "tel", "url", "number
 const formControlRequiredFields = async (scope, timeout) => {
   const candidates = scope.locator(formControlFieldSelector);
   const found = await candidates.evaluateAll((elements) => {
-    const words = (text) => String(text ?? "").replace(/[\s​]+/g, " ").trim();
+    const words = (text) => String(text ?? "").replace(/[\s\u200b]+/g, " ").trim();
     // A wrapping label holds the control itself, whose value or options are not its name.
     const labelText = (label) => {
       const copy = label.cloneNode(true);
