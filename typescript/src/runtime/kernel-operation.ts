@@ -12,7 +12,7 @@ import type {
 } from "./script-input.js";
 import type { EffectJournal, WriteConfirmation } from "./context.js";
 import type { Deadline } from "./deadline.js";
-import { WriteConfirmationRefused, type Dispatch } from "./errors.js";
+import { CommitAlreadySent, WriteConfirmationRefused, type Dispatch } from "./errors.js";
 import type { WriteDeclaration } from "./operation.js";
 import { kernelTimeoutSec } from "./kernel-execute-client.js";
 import type { KernelExecuteClient } from "./kernel-execute-client.js";
@@ -179,6 +179,16 @@ export interface KernelOperationContext<
    * before its execute call.
    */
   readonly enteringCommit: (name: string) => void;
+  /**
+   * Marks the named commit step unsent again, once the page proved that its click saved nothing:
+   * `blockingRequiredFields` returned the fields that stopped it, so the same step still shows,
+   * every field it flagged is a required one left empty, and no confirmation showed. Call it
+   * right after the call that read that, before asking for those fields; then fill them, call
+   * `enteringCommit` again and click once more. A run that ends before that reports the step
+   * unsent. A step this run did not enter from unsent, or one confirmed since, throws
+   * `CommitAlreadySent`, which ends the run with the step still sent. An offline run ignores it.
+   */
+  readonly notCommitted: (name: string) => void;
   /** Time left before the operation's deadline, for choosing `timeout_sec`. */
   readonly remainingMs: () => number;
   /** Inspect a value-free marker on the authorized page; throw only when it is visible. */
@@ -467,6 +477,14 @@ const makeKernelOperationContext = <Input>(
     if (options.journal === undefined) return;
     const entered = Effect.runSync(Effect.either(options.journal.enteringCommit(name)));
     if (entered._tag === "Left") throw entered.left;
+  },
+  // A host journal without it cannot record the click unsent, so the step stays sent.
+  notCommitted: (name) => {
+    if (options.journal === undefined) return;
+    const revert = options.journal.notCommitted;
+    if (revert === undefined) throw new CommitAlreadySent({ name });
+    const reverted = Effect.runSync(Effect.either(revert(name)));
+    if (reverted._tag === "Left") throw reverted.left;
   },
   remainingMs: () => options.deadline.remainingMs(),
   errors: operationErrors,

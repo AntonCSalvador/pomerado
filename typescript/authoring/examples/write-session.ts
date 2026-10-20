@@ -4,6 +4,7 @@ import {
   formControlsCode,
   normalizeText,
   timeoutDefaults,
+  waitCode,
 } from "../../src/browser/index.js";
 import type { KernelOperationContext } from "../../src/browser/index.js";
 
@@ -11,7 +12,9 @@ import type { KernelOperationContext } from "../../src/browser/index.js";
 // unchecked, some items add a required field of their own, such as an engraving choice, once
 // filled in, Continue opens a review step showing the item and the order total, some accounts
 // get a membership offer over the review, and Place order shows "Order ORD-…" on its
-// confirmation page. Adapt every selector and condition from your own session's evidence.
+// confirmation page. For an item that goes by courier, Place order instead keeps the review and
+// shows a delivery phone field, flagged empty, and places nothing. Adapt every selector and
+// condition from your own session's evidence.
 // Every on-path option is an input: the add-on is the caller's choice, never kept or cleared
 // unasked. An account-specific value (a passenger, saved card or address) would be a free-form
 // input, never an enum member, example or default.
@@ -56,8 +59,11 @@ const Review = Schema.Union(
 );
 const Confirmed = Schema.Union(
   Schema.Struct({ order_number: Schema.NonEmptyTrimmedString }),
+  Schema.Struct({ blocked: Schema.Array(RequiredField) }),
   Schema.Struct({ failure: Schema.Literal("review_missing", "total_changed", "not_confirmed") }),
 );
+const Answer = Schema.Struct({ label: Schema.String, answer: Schema.String });
+type Answer = typeof Answer.Type;
 type Context = Omit<KernelOperationContext<OrderInput>, "ask" | "askOne">;
 type FillContext = KernelOperationContext<
   OrderInput,
@@ -66,6 +72,20 @@ type FillContext = KernelOperationContext<
 
 // The act steps and the composed script share these calls, so the published script repeats
 // exactly what the session did.
+
+/** Asks the caller for each field the page requires and no input covers, by its label and options. */
+const askFields = async (
+  askOne: FillContext["askOne"],
+  fields: readonly (typeof RequiredField.Type)[],
+) => {
+  const answers: Answer[] = [];
+  for (const { label, options } of fields)
+    answers.push({
+      label,
+      answer: await askOne("extra_field", options === undefined ? { label } : { label, options }),
+    });
+  return answers;
+};
 
 // The membership offer shows only to some accounts, so it is conditional: decline it when it
 // shows and go on when it does not. It is outside this tool's purpose, so declining needs no
@@ -105,16 +125,9 @@ const fillCheckout = async ({ kernel, sessionId, siteOrigin, input, errors, askO
     throw new errors.OperationFailure(filled.failure, { dispatch: "not_sent" });
   // A required field the item added, which no input covers, is asked with the site-field
   // question before anything saves. Another kind of field is a checkout this tool does not know.
-  const answers: { readonly label: string; readonly answer: string }[] = [];
-  for (const field of filled.fields) {
-    if (field.unsupported === true)
-      throw new errors.OperationFailure("checkout_changed", { dispatch: "not_sent" });
-    const { label, options } = field;
-    answers.push({
-      label,
-      answer: await askOne("extra_field", options === undefined ? { label } : { label, options }),
-    });
-  }
+  if (filled.fields.some((field) => field.unsupported === true))
+    throw new errors.OperationFailure("checkout_changed", { dispatch: "not_sent" });
+  const answers = await askFields(askOne, filled.fields);
   const continued = await kernel.browsers.playwright.execute(sessionId, {
     timeout_sec: 60,
     code: `
@@ -184,25 +197,33 @@ export const checkReview = async ({ kernel, sessionId, input, errors }: Context)
   return review.total_minor;
 };
 
-/** The one commit, then the confirmation the site shows for it. Never clicked twice. */
-export const placeAndConfirm = async (
-  { kernel, sessionId, errors, verified, enteringCommit }: Context,
-  checkedTotal: number,
-) => {
-  // The call below can send the order, so its commit step is marked first. It only guards
-  // against a total that moved since checkReview, clicks once and confirms.
-  enteringCommit("place-order");
-  // One call clicks and reads: a confirmation already on the page cannot stand in for this one.
+/**
+ * The marked call: it only guards against a total that moved since checkReview, clicks once and
+ * reads what the click did. A confirmation already on the page cannot stand in for this one.
+ */
+const clickPlace = async ({ kernel, sessionId, errors }: Context, checkedTotal: number) => {
   const answer = await kernel.browsers.playwright.execute(sessionId, {
     timeout_sec: 60,
     code: `
-      const place = page.getByRole("button", { name: "Place order", exact: true });
+      ${waitCode}
+      ${formControlsCode}
+      const review = page.getByRole("form", { name: "Review", exact: true });
+      const place = review.getByRole("button", { name: "Place order", exact: true });
       if ((await place.count()) !== 1) return { failure: "review_missing" };
       ${readTotal}
       if (total_minor !== ${JSON.stringify(checkedTotal)}) return { failure: "total_changed" };
-      await place.click({ timeout: 5000 });
+      // The confirmation, or the review again with a field it flagged. Anything else fails the wait.
       const confirmation = page.getByRole("status", { name: "Order confirmation", exact: true });
-      try { await confirmation.waitFor({ timeout: 15000 }); } catch { return { failure: "not_confirmed" }; }
+      const answer = await waitForOutcomeResult(
+        { placed: confirmation, flagged: { invalid: review } },
+        { action: () => place.click({ noWaitAfter: true, timeout: 5000 }), deadline: Date.now() + 30000 },
+      );
+      if (answer.outcome === "flagged") {
+        // Only a review whose every flag is a required field left empty proves the click saved
+        // nothing. Any other flag may be the site's answer to a saved order.
+        const blocked = await blockingRequiredFields(review);
+        return blocked === null ? { failure: "not_confirmed" } : { blocked: blocked.fields };
+      }
       const number = /^Order (ORD-[0-9]+)/.exec(await confirmation.innerText())?.[1];
       return number === undefined ? { failure: "not_confirmed" } : { order_number: number };
     `,
@@ -210,7 +231,45 @@ export const placeAndConfirm = async (
   // A failure after the click leaves the write uncertain. Nothing here resubmits it.
   if (!answer.success)
     throw new errors.OperationFailure(String(answer.error), { stderr: answer.stderr });
-  const result = Schema.decodeUnknownSync(Confirmed)(answer.result);
+  return Schema.decodeUnknownSync(Confirmed)(answer.result);
+};
+
+/** Fills the caller's answers into the fields the review flagged. It saves nothing. */
+const fillBlocked = async ({ kernel, sessionId, errors }: Context, answers: readonly Answer[]) => {
+  const filled = await kernel.browsers.playwright.execute(sessionId, {
+    timeout_sec: 30,
+    code: `
+      ${formControlsCode}
+      const review = page.getByRole("form", { name: "Review", exact: true });
+      for (const { label, answer } of ${JSON.stringify(answers)}) await fillRequiredField(review, label, answer);
+      return true;
+    `,
+  });
+  if (!filled.success)
+    throw new errors.OperationFailure(String(filled.error), { stderr: filled.stderr });
+};
+
+/**
+ * The one commit, then the confirmation the site shows for it. It clicks a second time only when
+ * the page proved the first click saved nothing, once the fields that stopped it are filled.
+ */
+export const placeAndConfirm = async (context: FillContext, checkedTotal: number) => {
+  const { errors, verified, enteringCommit, notCommitted, askOne } = context;
+  // The call below can send the order, so its commit step is marked first.
+  enteringCommit("place-order");
+  let result = await clickPlace(context, checkedTotal);
+  if ("blocked" in result) {
+    // The review stayed, and its only flags are fields it showed on the click, left empty: that
+    // click saved nothing. Record it before asking, so a caller who never answers leaves the
+    // order unsent, then fill the answers and click once more.
+    notCommitted("place-order");
+    await fillBlocked(context, await askFields(askOne, result.blocked));
+    enteringCommit("place-order");
+    result = await clickPlace(context, checkedTotal);
+  }
+  // A review that still stops the order after its answers is the site's refusal, never resubmitted.
+  if ("blocked" in result)
+    throw new errors.OperationFailure("not_confirmed", { dispatch: "sent" });
   if ("failure" in result)
     throw new errors.OperationFailure(result.failure, {
       dispatch: result.failure === "not_confirmed" ? "sent" : "not_sent",
@@ -238,7 +297,12 @@ export const fillStep = defineOperation(
 
 /** Act step 2: continues on the page step 1 left, checks it, commits once and confirms. */
 export const placeStep = defineOperation(
-  { name: "place_order", input: OrderInput, output: Placed },
+  {
+    name: "place_order",
+    input: OrderInput,
+    output: Placed,
+    questions: { extra_field: { type: "site_field" } },
+  },
   async (context) => placeAndConfirm(context, await checkReview(context)),
 );
 

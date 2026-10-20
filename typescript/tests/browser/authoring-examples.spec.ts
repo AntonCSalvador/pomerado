@@ -43,6 +43,7 @@ import {
   type ListCursorScope,
 } from "../../src/runtime/list-cursor.js";
 
+import { commitEvidenceOf, unenteredWrite } from "../../src/runtime/run-outcome.js";
 import { runExample, failure, localFiles } from "./authoring-fixture.js";
 
 const dialogPickerFixture = async (page: Page, mode: "success" | "ambiguous" | "no_commit") => {
@@ -1354,17 +1355,45 @@ const checkoutSite = async (
           });
         </script>`,
       });
+    // An armchair goes by courier, so the review asks for a delivery phone, but only once Place
+    // order is pressed: the click keeps the review, with the phone field shown and flagged.
+    const review = (item: string, total: string, extra = "") => `<p aria-label="Item">${item}</p>
+          <p aria-label="Order total">${total}</p>
+          <form aria-label="Review" method="post" action="/orders"><input type="hidden" name="item" value="${item}">
+          <input type="hidden" name="quantity" value="${url.searchParams.get("quantity") ?? "1"}">
+          <label hidden>Delivery phone<input type="tel" name="phone" aria-describedby="phone-error"></label>
+          <p id="phone-error" hidden>Enter a phone number for the courier</p>${extra}<button>Place order</button></form>
+          <script>
+            document.forms[0].addEventListener("submit", (event) => {
+              const phone = document.querySelector("[name=phone]");
+              if (${JSON.stringify(item)} !== "armchair" || phone.value.trim() !== "") return;
+              event.preventDefault();
+              phone.parentElement.hidden = false;
+              phone.setAttribute("aria-invalid", "true");
+              document.querySelector("#phone-error").hidden = false;
+            });
+          </script>`;
     if (url.pathname === "/checkout/review")
       return route.fulfill({
         contentType: "text/html",
-        body: `<p aria-label="Item">${url.searchParams.get("item") ?? ""}</p>
-          <p aria-label="Order total">$${(Number(url.searchParams.get("quantity")) * 12.5).toFixed(2)}</p>
-          <form method="post" action="/orders"><input type="hidden" name="item" value="${url.searchParams.get("item") ?? ""}"><button>Place order</button></form>
+        body: `${review(url.searchParams.get("item") ?? "", `$${(Number(url.searchParams.get("quantity")) * 12.5).toFixed(2)}`)}
           ${site.offer ? `<div role="dialog" aria-label="Membership offer"><button onclick="window.declineOffer(); this.parentElement.remove()">No thanks</button></div>` : ""}`,
       });
-    // The site answers the order's own POST with its confirmation.
+    // The site answers the order's own POST with its confirmation. A sofa's order is taken, but
+    // the site answers with the review again, its promo code flagged: the page can't tell whether
+    // the order went through.
     if (url.pathname === "/orders" && request.method() === "POST") {
-      orders.push(new URLSearchParams(request.postData() ?? "").get("item") ?? "");
+      const posted = new URLSearchParams(request.postData() ?? "");
+      orders.push(posted.get("item") ?? "");
+      if (posted.get("item") === "sofa")
+        return route.fulfill({
+          contentType: "text/html",
+          body: review(
+            "sofa",
+            `$${(Number(posted.get("quantity")) * 12.5).toFixed(2)}`,
+            `<label>Promo code<input name="promo" value="SPRING" aria-invalid="true"></label>`,
+          ),
+        });
       return route.fulfill({
         contentType: "text/html",
         body: `<p role="status" aria-label="Order confirmation">Order ORD-${1000 + orders.length} is placed.</p>`,
@@ -1471,6 +1500,80 @@ test("write-session example stops before its commit mark when the added field ca
   expect(orders).toEqual([]);
 });
 
+test("write-session example asks for a field the review flags only after Place order, then places the order once", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  const phones: string[] = [];
+  await checkoutSite(page, origin, orders);
+  await page.route(`${origin}/orders`, (route) => {
+    phones.push(new URLSearchParams(route.request().postData() ?? "").get("phone") ?? "");
+    return route.fallback();
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "armchair", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "555-0100" };
+    },
+  });
+  // The click proved it saved nothing, so the field it showed is asked, filled, and the order
+  // placed by the second click alone.
+  expect(asked.map((request) => request.questions)).toEqual([
+    [{ id: "extra_field", type: "text", prompt: "Delivery phone" }],
+  ]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    effect: "verified",
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["armchair"]);
+  expect(phones).toEqual(["555-0100"]);
+});
+
+test("write-session example asks nothing after a click whose page may have saved, and keeps it possibly sent", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const unsure = await runExample(page, placeOrder, { item: "sofa", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "555-0100" };
+    },
+  });
+  // The review came back with a filled field flagged: nothing proves the click saved nothing.
+  expect(failure(unsure.result)).toMatchObject({ _tag: "OperationFailure", message: "not_confirmed" });
+  expect(asked).toEqual([]);
+  expect(unsure.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  expect(orders).toEqual(["sofa"]);
+});
+
+test("write-session example leaves the order unsent when nobody answers the field a click proved missing", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const unanswered = await runExample(page, placeOrder, { item: "armchair", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+  });
+  expect(failure(unanswered.result)).toMatchObject({ _tag: "ScriptInputFailure", code: "Unavailable" });
+  // The same evidence as a question asked before the mark: every commit step unsent.
+  expect(unanswered.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
+  expect(commitEvidenceOf(unanswered.commits)).toBe("not_entered");
+  expect(unenteredWrite(unanswered.effect, unanswered.commits)).toBe(true);
+  expect(orders).toEqual([]);
+});
+
 test("write-session example refuses a total over the caller's limit before its commit mark", async ({
   page,
 }) => {
@@ -1509,6 +1612,7 @@ test("write-session example stops before clicking when the total moves after its
       name: "place_order",
       input: OrderInput,
       output: Schema.Struct({ order_number: Schema.String }),
+      questions: { extra_field: { type: "site_field" } },
       write: { confirmation: "readback", commits: ["place-order"] },
     },
     async (context) => {

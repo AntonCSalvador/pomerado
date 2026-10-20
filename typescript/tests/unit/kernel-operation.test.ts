@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Option, Schema } from "effect";
+import { Cause, Effect, Either, Exit, Option, Schema } from "effect";
 import type { Scope } from "effect";
 import { describe, expect, it } from "vitest";
 import {
@@ -16,6 +16,7 @@ import { offlineKernel } from "../support/offline-kernel.js";
 import { executeKernelOperation } from "../../src/runtime/kernel-operation-run.js";
 import { defineOperation } from "../../src/runtime/operation.js";
 import { ScriptInput, makeScriptInput } from "../../src/runtime/script-input.js";
+import { commitEvidenceOf, unenteredWrite } from "../../src/runtime/run-outcome.js";
 import type { ScriptQuestionHandler } from "../../src/runtime/script-input.js";
 import type { InputRequest } from "../../src/runtime/input-request.js";
 
@@ -1095,5 +1096,105 @@ describe("browser calls while the host signs in", () => {
     signedIn.resolve();
     await nextTask();
     expect(reached).toEqual(["execute"]);
+  });
+});
+
+// A step's click that the page proved saved nothing, such as one that left the same step showing
+// with a required field flagged empty, marks that step unsent again, so the run reports it as
+// never sent; a step that may have saved never goes back.
+describe("a commit step whose click saved nothing", () => {
+  it("reads unsent again only when this run entered it from unsent and nothing confirmed it since", async () => {
+    const journal = await Effect.runPromise(makeEffectJournal);
+    const revert = (name: string) =>
+      Effect.runSync(Effect.either(journal.notCommitted?.(name) ?? Effect.die("no notCommitted")));
+    const commits = () => Effect.runSync(journal.commits);
+    Effect.runSync(journal.declareCommits(["save-details", "place-order"]));
+    Effect.runSync(journal.enteringDispatch);
+    // An earlier step that saved stays sent; only the step whose click was refused goes back.
+    Effect.runSync(journal.enteringCommit("save-details"));
+    Effect.runSync(journal.enteringCommit("place-order"));
+    expect(revert("place-order")).toEqual(Either.right(undefined));
+    expect(commits()).toEqual([
+      { name: "save-details", state: "sent" },
+      { name: "place-order", state: "not_sent" },
+    ]);
+    // A step never entered, or already back, stays as it is.
+    expect(revert("place-order")).toEqual(Either.right(undefined));
+    // Entered twice without going back between, the second click may have saved.
+    Effect.runSync(journal.enteringCommit("place-order"));
+    Effect.runSync(journal.enteringCommit("place-order"));
+    expect(revert("place-order")).toEqual(
+      Either.left(expect.objectContaining({ _tag: "CommitAlreadySent", name: "place-order" })),
+    );
+    expect(commits()).toContainEqual({ name: "place-order", state: "sent" });
+    // A confirmed step saved, even once a later call reopens it.
+    const confirmedJournal = await Effect.runPromise(makeEffectJournal);
+    Effect.runSync(confirmedJournal.enteringCommit("place-order"));
+    Effect.runSync(confirmedJournal.confirmed("message"));
+    Effect.runSync(confirmedJournal.enteringDispatch);
+    expect(
+      Effect.runSync(Effect.either(confirmedJournal.notCommitted?.("place-order") ?? Effect.void)),
+    ).toEqual(Either.left(expect.objectContaining({ _tag: "CommitAlreadySent" })));
+    expect(Effect.runSync(confirmedJournal.commits)).toEqual([{ name: "place-order", state: "sent" }]);
+  });
+
+  it("leaves a write whose only step went back as one that entered no step", async () => {
+    const write = defineOperation(
+      {
+        input: Schema.Struct({}),
+        output: Schema.String,
+        write: { confirmation: "readback", commits: ["place-order"] },
+      },
+      async ({ kernel, sessionId, enteringCommit, notCommitted, errors }) => {
+        enteringCommit("place-order");
+        await kernel.browsers.playwright.execute(sessionId, { code: "return click();", timeout_sec: 10 });
+        notCommitted("place-order");
+        throw new errors.OperationFailure("delivery_phone_unanswered", { dispatch: "not_sent" });
+      },
+    );
+    const kernel = fakeKernel(() => ({ success: true, result: null }));
+    const journal = await Effect.runPromise(makeEffectJournal);
+    const outcome = await run(
+      executeKernelOperation(write, {}, { kernel: kernel.client, sessionId: "s" }),
+      Deadline.after(60_000),
+      Effect.succeed(journal),
+    );
+    expect(failureOf(outcome.exit)).toEqual(
+      Option.some(expect.objectContaining({ _tag: "OperationFailure" })),
+    );
+    const marks = await Effect.runPromise(journal.commits);
+    expect(marks).toEqual([{ name: "place-order", state: "not_sent" }]);
+    expect(commitEvidenceOf(marks)).toBe("not_entered");
+    expect(unenteredWrite(outcome.websiteEffect, marks)).toBe(true);
+  });
+
+  it("stops the script when its host's journal cannot mark a step unsent", async () => {
+    const write = defineOperation(
+      {
+        input: Schema.Struct({}),
+        output: Schema.String,
+        write: { confirmation: "readback", commits: ["place-order"] },
+      },
+      async ({ kernel, sessionId, enteringCommit, notCommitted }) => {
+        enteringCommit("place-order");
+        await kernel.browsers.playwright.execute(sessionId, { code: "return click();", timeout_sec: 10 });
+        notCommitted("place-order");
+        await kernel.browsers.playwright.execute(sessionId, { code: "return click();", timeout_sec: 10 });
+        return "placed";
+      },
+    );
+    const kernel = fakeKernel(() => ({ success: true, result: null }));
+    const { notCommitted: _dropped, ...older } = await Effect.runPromise(makeEffectJournal);
+    const outcome = await run(
+      executeKernelOperation(write, {}, { kernel: kernel.client, sessionId: "s" }),
+      Deadline.after(60_000),
+      Effect.succeed(older),
+    );
+    expect(failureOf(outcome.exit)).toEqual(
+      Option.some(expect.objectContaining({ _tag: "CommitAlreadySent", name: "place-order" })),
+    );
+    // The second click never ran, and the step stays sent.
+    expect(kernel.requests).toHaveLength(1);
+    expect(await Effect.runPromise(older.commits)).toEqual([{ name: "place-order", state: "sent" }]);
   });
 });
