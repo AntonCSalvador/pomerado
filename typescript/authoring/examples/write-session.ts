@@ -107,10 +107,10 @@ const askFields = async (ask: FillContext["ask"], fields: readonly Field[]) => {
 
 /**
  * Asks for the fields the form requires and no input covers, and fills each answer into its field.
- * An answer can make the form show another required field, such as a karat once gold is chosen,
- * so the form is read again after each round and such a field is asked in the next. It returns
- * false when the form shows a field no site-field question can ask, or shows again a field it
- * asked already.
+ * It saves nothing. An answer can make the form show or enable another required field, such as a
+ * karat once gold is chosen, so the form is read again after each round and such a field is asked
+ * in the next. It returns false when the form shows a field no site-field question can ask, or
+ * shows again a field it asked already.
  */
 const askAndFill = async (context: FillContext, form: string, shown: readonly Field[]) => {
   const { kernel, sessionId, errors, ask } = context;
@@ -125,10 +125,10 @@ const askAndFill = async (context: FillContext, form: string, shown: readonly Fi
       code: `
         ${formControlsCode}
         const form = page.getByRole("form", { name: ${JSON.stringify(form)}, exact: true });
-        const before = new Set(await visibleFieldLabels(form));
+        const before = await visibleFieldLabels(form, { enabledOnly: true });
         for (const { label, answer } of ${JSON.stringify(answers)}) await fillRequiredField(form, label, answer);
-        // Only a field the answers made the form show is new.
-        return (await unfilledRequiredFields(form)).filter((field) => !before.has(field.label));
+        // Only a labelled field the answers showed or enabled is new.
+        return await unfilledRequiredFields(form, { before });
       `,
     });
     if (!filled.success)
