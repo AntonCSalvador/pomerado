@@ -92,12 +92,9 @@ first:
 - **Inputs.** Nothing the caller could vary is a literal, and every control the flow offers
   that narrows, orders or configures what the tool returns, a location included, is an optional
   input, even one the request never mentioned and one you never asked about (core skill, the
-  input schema). The one exception is a choice the request, the caller or the owner declined,
-  which is never an input for any caller (core skill), unless it is a costly choice a write still
-  meets on its path, one that changes what the caller buys or pays or whether the action can be
-  cancelled or refunded (a paid add-on within the tool's purpose, a rate, fare or plan tier, a
-  refundable option, shipping speed, the payment method or the delivery address), which stays an
-  input or a declared question (writes skill). Guardian counts such an input as
+  input schema; the search skill, "Find the filters"). The one exception is a choice the request,
+  the caller or the owner declined, which is never an input for any caller (core skill), unless
+  it is a costly choice a write still meets on its path (writes skill). Guardian counts such an input as
   part of the tool, never as scope drift or an unsupported claim. Each input you accept is
   applied and read back (core skill, the input schema, and `AGENTS.md`; the search skill for a search). An input
   that tailors the answer, such as a location, store or vehicle, that the site won't apply
@@ -143,7 +140,7 @@ first:
     in the site's order on a read and returns the one it used, and lists them for the caller
     instead of picking one on a write (core skill, the input schema);
   - a check that refuses a past date compares with today in the site's time zone, or the
-    place's, not with today in UTC (core skill) ("Past date in UTC");
+    place's, not with today in UTC (caller-input skill) ("Past date in UTC");
   - in a read signed out, each declared input is used, or changed from its default, by a passing
     case, and a case whose expectation you changed because the site itself gave another answer
     for that input names the capture of that answer, such as the site's no-results page for that
@@ -159,11 +156,9 @@ first:
   refuses them for the username or keys they carry, so never block, route around or suppress
   them to satisfy review. Your code, page code it runs included, must never send the caller's
   password, codes or answers off the site: Guardian refuses that.<!-- pomerado:section publication.recorded-requests -->
-- **Consent and privacy.** Turn safety defaults off (core skill): an option that shares the
-  caller's data with another company, opts into tracking or signs up for marketing ends off.
-  Never turn one on yourself, in a form or a request body. For a consent flag the site sets for
-  the user in a request body, send the value read at run time or leave the field out. Dismiss a
-  covering consent banner as the forms skill says.
+- **Consent and privacy.** Turn safety defaults off (core skill, "Safety defaults"): an
+  option that shares the caller's data with another company, opts into tracking or signs up for
+  marketing ends off. Dismiss a covering consent banner as the forms skill says.
 - **Imports.** Import `effect`, the workspace's `runtime/` and `browser/` modules and your own
   files; do not rely on any other package, such as an HTML parser, being installed.
 - **Host-owned files.** <!-- pomerado:section publication.host-owned:start
@@ -201,11 +196,9 @@ pomerado:section publication.saved-files:end -->.
    - the input schema: no account-specific value (a passenger, loyalty or member number, saved
      card or address, account ID) as an enum member, example or default; every input as general
      as the site's field, never narrowed to the example's value; on a write, every option the
-     session met on the path is an input or a settled default, and a costly choice, one that
-     changes what the caller buys or pays or whether the action can be cancelled or refunded
-     (core skill), is an input or a run-time question whose default may only decline it, never
-     left to the page's default or hard-coded from the build's request or answers, which spoke
-     for one caller; a paid upsell outside the tool's purpose is declined;
+     session met on the path is an input or a settled default, and a costly choice is an input
+     or a run-time question whose default may only decline it (writes skill); a paid upsell
+     outside the tool's purpose is declined;
    - a pop-up that shows only for some accounts, states or visits is handled when present and
      never required;
    - declared questions ask only what the page or the caller uniquely knows, never a login;

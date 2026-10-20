@@ -782,6 +782,52 @@ test("a sign-in form with a button whose next page loads after the host's submit
   expect(submitCalls[0]?.ms).toBeLessThan(elementReadMs);
 });
 
+test("a sign-in page that loads again with a button whose formaction is no URL, after the host found the username and before it finds the password, fails the inspection's call when a later field is missing", async ({
+  page,
+}) => {
+  await serve(page, login(""));
+  // As the inspection starts to look for the password, the form loads again as a new document,
+  // whose button's formaction is no URL. The username the inspection found was in the document
+  // that is gone, and the password it then finds can't be read.
+  let reloaded = false;
+  const undo = beforeFind(page, "#password", async () => {
+    await page.reload();
+    await page.locator("#sign-in").evaluate((button) => button.setAttribute("formaction", "http://["));
+    reloaded = true;
+  });
+  const inspection = await Effect.runPromise(
+    inspectAutofillStep({
+      step: { ...loginStep, fields: [...loginStep.fields, { selector: "#missing", slot: "password" }] },
+      page: await hostPage(page),
+      siteOrigin: site,
+      authenticationOrigins: [],
+    }),
+  ).finally(undo);
+  expect(reloaded).toBe(true);
+  expect(inspection).toMatchObject({ outcome: "refused", reason: "page_unavailable" });
+});
+
+test("a sign-in form that takes its username field away after the host found it, as the host looks for its submit, fails the inspection's call once one wait for that field runs out", async ({
+  page,
+}) => {
+  await serve(page, login(""));
+  let removed = false;
+  const undo = beforeFind(page, "#sign-in", async () => {
+    await page.evaluate(() => document.getElementById("username")?.remove());
+    removed = true;
+  });
+  const host = await hostPage(page);
+  const started = Date.now();
+  const inspection = await Effect.runPromise(
+    inspectAutofillStep({ step: loginStep, page: host, siteOrigin: site, authenticationOrigins: [] }),
+  ).finally(undo);
+  const ms = Date.now() - started;
+  expect(removed).toBe(true);
+  expect(inspection).toMatchObject({ outcome: "refused", reason: "page_unavailable" });
+  // One wait takes elementReadMs and a second would double it. Half of one wait is the margin.
+  expect(ms).toBeLessThan(elementReadMs * 1.5);
+});
+
 test("a sign-in form with a button that draws itself again, empty, once the password is typed is never clicked nor taken as sent by the page", async ({
   page,
 }) => {
