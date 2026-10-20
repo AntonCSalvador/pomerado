@@ -14,10 +14,12 @@ import { pageControlsCode } from "./page-controls.js";
  * one character:
  * - by its `maxlength` of 1, among the like boxes of its screen, the field's form, or its document
  *   or shadow root outside one;
- * - or, with no `maxlength` at all, by the page's own script, as many one-time-code widgets limit
+ * - or, with no `maxlength` limit, by the page's own script, as many one-time-code widgets limit
  *   their boxes, when the step names two or more code fields: among the visible, enabled, editable
- *   text inputs its parent element holds, when those are two to `maximumCodeBoxes`, all of its type
- *   and none with a `maxlength`.
+ *   text inputs that are children of its parent element, when those are two to
+ *   `maximumCodeBoxes`, all of its type and none with a `maxlength` limit. When the step's boxes
+ *   found so disagree on how many there are, or two take one place, as boxes split between two
+ *   containers do, none of them is a box.
  * A field that is no box, or a screen with fewer than two, has none. Attributes only, never a value.
  */
 const codeBoxesCode = `const codeBoxes = [];
@@ -36,23 +38,30 @@ for (const [index, field] of fields.entries()) {
       const rect = control.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0 && control.checkVisibility({ visibilityProperty: true });
     };
-    const place = (boxes) => {
+    const place = (boxes, limit) => {
       const at = boxes.indexOf(element);
-      return boxes.length < 2 || at < 0 ? null : { box: at + 1, of: boxes.length };
+      return boxes.length < 2 || at < 0 ? null : { box: at + 1, of: boxes.length, limit };
     };
     if (!editable(element)) return null;
     if (element.maxLength === 1) {
       const screen = element.form ?? element.getRootNode();
-      return place(Array.from(screen.querySelectorAll("input")).filter((control) => editable(control) && control.maxLength === 1));
+      return place(Array.from(screen.querySelectorAll("input")).filter((control) => editable(control) && control.maxLength === 1), "maxlength");
     }
     if (element.maxLength >= 0 || codeFields < 2 || element.parentNode === null) return null;
-    const boxes = Array.from(element.parentNode.querySelectorAll("input")).filter(editable);
+    const boxes = Array.from(element.parentNode.children).filter(editable);
     if (boxes.length > mostBoxes || boxes.some((control) => control.maxLength >= 0 || control.type !== element.type))
       return null;
-    return place(boxes);
+    return place(boxes, "script");
   }, [codeFields, ${maximumCodeBoxes}], { timeout: ${elementReadMs} }).catch(() => null);
   codeBoxes.push(codeBox);
-}`;
+}
+const scriptBoxes = codeBoxes.filter((codeBox) => codeBox?.limit === "script");
+const scriptAgree =
+  new Set(scriptBoxes.map(({ box }) => box)).size === scriptBoxes.length &&
+  new Set(scriptBoxes.map(({ of }) => of)).size <= 1;
+for (const [index, codeBox] of codeBoxes.entries())
+  codeBoxes[index] =
+    codeBox === null || (codeBox.limit === "script" && !scriptAgree) ? null : { box: codeBox.box, of: codeBox.of };`;
 
 /**
  * Page code: the step's controls and visible native and ARIA actions, for the host and Guardian.

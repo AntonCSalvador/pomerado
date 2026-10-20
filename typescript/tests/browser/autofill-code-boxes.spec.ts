@@ -94,3 +94,19 @@ test("code fields with no maxlength beside a field of another type in their cont
   );
   expect(places).toEqual([undefined, undefined]);
 });
+
+test("six boxes a script limits, split three and three between two containers, are no boxes, so a step that names all six is not sent back", async ({
+  page,
+}) => {
+  const half = (first: number) =>
+    `<div style="display:flex;gap:4px">${[first, first + 1, first + 2]
+      .map((box) => `<input id="box-${box}" type="tel" inputmode="numeric" style="width:32px;height:40px">`)
+      .join("")}</div>`;
+  const { step, inspection, places } = await inspect(
+    page,
+    `<div style="display:flex;gap:8px">${half(1)}<span>-</span>${half(4)}</div>`,
+    boxFields([1, 2, 3, 4, 5, 6]),
+  );
+  expect(places).toEqual([undefined, undefined, undefined, undefined, undefined, undefined]);
+  expect(codeBoxesRefusal(step, inspection)).toBeUndefined();
+});
