@@ -186,10 +186,10 @@ export interface KernelOperationContext<
    * no confirmation showed. Ask for those fields and fill them first, check the step again, then
    * call it right before `enteringCommit` and the click once more. Until then the step reads
    * sent, so a run that ends on the question, unanswered or declined, reports it possibly sent.
-   * It works once per step in a run, for a step in the contract's `write.commits`: a second call
-   * for the same step, another name, a step this run did not enter from unsent, or one confirmed
-   * since throws `CommitAlreadySent`, which ends the run with the step still sent. An offline run
-   * ignores it.
+   * It works once per step in a run, and only for a step in the contract's `write.commits` when it
+   * declares any: a second call for the same step, another name, a step this run did not enter
+   * from unsent, or one confirmed since throws `CommitAlreadySent`, which ends the run with the
+   * step still sent. An offline run ignores it.
    */
   readonly notCommitted: (name: string) => void;
   /** Time left before the operation's deadline, for choosing `timeout_sec`. */

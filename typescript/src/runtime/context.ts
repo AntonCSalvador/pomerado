@@ -78,10 +78,10 @@ export interface EffectJournal {
   /**
    * The page proved that the named step's latest click saved nothing, such as one that left the
    * same step showing with a required field flagged empty: the mark reads `not_sent` again, as
-   * before that `enteringCommit`. A declared step goes back once a run, and only when this run
-   * entered it from `not_sent` with no confirmation since; any other call for an entered step, a
-   * second call for the same step, or a call for a step `declareCommits` did not name fails with
-   * `CommitAlreadySent` and leaves it as it was. A declared step never entered stays `not_sent`.
+   * before that `enteringCommit`. A step goes back once a run, and only when this run entered it
+   * from `not_sent` with no confirmation since; any other call for an entered step, a second call
+   * for the same step, or, once `declareCommits` named any step, a call for one it did not name
+   * fails with `CommitAlreadySent` and leaves it as it was. A step never entered stays `not_sent`.
    * A host journal made before this existed has none, and a script's call then fails the same way.
    */
   readonly notCommitted?: (name: string) => Effect.Effect<void, CommitAlreadySent>;
@@ -149,11 +149,13 @@ export const makeEffectJournalWith = (options: {
               yield* withMark(name, () => "sent");
               yield* Ref.set(state, "may_have_dispatched");
             }),
-      // Back to unsent once, only for a declared step and from the one entering that found it
-      // unsent; never past a confirmation.
+      // Back to unsent once, only from the one entering that found it unsent, and for a declared
+      // step when the operation declares any (a build's act step declares none); never past a
+      // confirmation.
       notCommitted: (name) =>
         Effect.gen(function* () {
-          if ((yield* Ref.get(reverted)).has(name) || !(yield* Ref.get(declared)).has(name))
+          const known = yield* Ref.get(declared);
+          if ((yield* Ref.get(reverted)).has(name) || (known.size > 0 && !known.has(name)))
             return yield* Effect.fail(new CommitAlreadySent({ name }));
           const current = (yield* Ref.get(commits)).find((mark) => mark.name === name)?.state;
           if (current === undefined || current === "not_sent") return;

@@ -1534,6 +1534,34 @@ test("write-session example asks for a field the review flags only after Place o
   expect(phones).toEqual(["555-0100"]);
 });
 
+test("write-session example's act steps ask for a field the review flags only after Place order, then place the order once", async ({
+  page,
+}) => {
+  // An act step declares no write, so the step it marks is one it never declared: it still goes
+  // back once, so the build's act session can finish.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  const input = { item: "armchair", quantity: 1, gift_wrap: false };
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const filled = await runExample(page, fillStep, input, { siteOrigin: origin });
+  expect(filled.result).toEqual(Either.right({ review_shown: true }));
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeStep, input, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "555-0100" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([["Delivery phone"]]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["armchair"]);
+});
+
 test("write-session example asks nothing after a click whose page may have saved, and keeps it possibly sent", async ({
   page,
 }) => {

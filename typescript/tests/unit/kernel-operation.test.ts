@@ -1103,7 +1103,7 @@ describe("browser calls while the host signs in", () => {
 // with a required field flagged empty, marks that step unsent again, so the run reports it as
 // never sent; a step that may have saved never goes back.
 describe("a commit step whose click saved nothing", () => {
-  it("reads unsent again once, only for a declared step this run entered from unsent and nothing confirmed since", async () => {
+  it("reads unsent again once, only when this run entered it from unsent, nothing confirmed it since and any declared steps name it", async () => {
     const journal = await Effect.runPromise(makeEffectJournal);
     const revert = (name: string) =>
       Effect.runSync(Effect.either(journal.notCommitted?.(name) ?? Effect.die("no notCommitted")));
@@ -1139,6 +1139,14 @@ describe("a commit step whose click saved nothing", () => {
       Either.left(expect.objectContaining({ _tag: "CommitAlreadySent", name: "never-entered" })),
     );
     expect(commits()).toContainEqual({ name: "place-order-2", state: "sent" });
+    // An operation that declares no steps, such as a build's act step, can still put one back.
+    const undeclared = await Effect.runPromise(makeEffectJournal);
+    Effect.runSync(undeclared.declareCommits([]));
+    Effect.runSync(undeclared.enteringCommit("place-order"));
+    expect(Effect.runSync(Effect.either(undeclared.notCommitted?.("place-order") ?? Effect.void))).toEqual(
+      Either.right(undefined),
+    );
+    expect(Effect.runSync(undeclared.commits)).toEqual([{ name: "place-order", state: "not_sent" }]);
     // Entered twice without going back between, the second click may have saved.
     const twice = await Effect.runPromise(makeEffectJournal);
     Effect.runSync(twice.declareCommits(["place-order"]));
