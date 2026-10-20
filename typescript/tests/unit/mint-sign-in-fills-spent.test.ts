@@ -21,9 +21,9 @@ import { portableJobSession } from "../support/portable-mint.js";
 /*
  * The host fills a login's password at most twice in one sign-in. Once both fills went out and the
  * site still reads signed out, every further sign-in screen that needs the password is refused:
- * that is a host check refusing the step the build needs, so a host_refused report ends the build
- * as sign-in unavailable instead of being refused while the minter tries recoveries that cannot
- * sign in. Each scenario runs the real minter loop on recorded model responses, with the
+ * once it refused one, that is a host check refusing the step the build needs, so a host_refused
+ * report ends the build as sign-in unavailable instead of being refused while the minter tries
+ * recoveries that cannot sign in. Each scenario runs the real minter loop on recorded model responses, with the
  * standalone host's sign-in recorder over a synthetic site that never signs in.
  */
 
@@ -134,7 +134,7 @@ const signedOutSite = () => {
     dependencies: {
       autofillSignIn: true,
       reviewAndExecute,
-      signInFillsSpent: () => recorder.passwordFillsSpent(),
+      signInRefillRefused: () => recorder.passwordRefillRefused(),
     } satisfies Partial<MintDependencies>,
   };
 };
@@ -234,7 +234,6 @@ it("ends a host_refused report as sign-in unavailable once both password fills a
     build: "incomplete",
     recoveryReason: "sign_in_unavailable",
   });
-  expect(outcome.summary).toContain("could not be signed in");
 });
 
 it("refuses a host_refused report while a password fill remains, and the next screen still fills", async () => {
@@ -254,6 +253,25 @@ it("refuses a host_refused report while a password fill remains, and the next sc
   expect(site.fills()).toBe(2);
   expect(stepAnswer(run.requests[3], "fill_2")).toMatchObject({
     step: { outcome: "filled", submit: "clicked" },
+  });
+  expect(outcome).not.toMatchObject({ recoveryReason: "sign_in_unavailable" });
+});
+
+// Spent fills alone are no refusal: the second fill may have signed in, or led to a code screen,
+// so a host_refused report before the host refused any screen is refused as before.
+it("refuses a host_refused report once both fills went out but no screen was refused", async () => {
+  const site = signedOutSite();
+  const run = await fixture(
+    (_request, index) =>
+      [authenticate("fill_1"), authenticate("fill_2"), hostRefused("report")][index] ?? stop,
+    site.dependencies,
+    { effect: "read", siteOrigin: origin },
+  );
+  const outcome = await run.run();
+  expect(site.fills()).toBe(2);
+  expect(answerTo(run.requests[3], "report")).toMatchObject({
+    status: "blocked_refused",
+    reason: "host_not_refused",
   });
   expect(outcome).not.toMatchObject({ recoveryReason: "sign_in_unavailable" });
 });

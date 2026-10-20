@@ -3161,8 +3161,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // escalation for missing evidence is not one), unless the host's own guidance names the
         // ending; the minter's reading of its own instructions is none. A host_refused block
         // stands on a host check's refusal the host recorded in this attempt that no later
-        // finish_build got past to Guardian's review, or on a sign-in whose password the host
-        // fills no more, which it refuses on every screen that needs it. The owner's no to a
+        // finish_build got past to Guardian's review, or on a sign-in screen the host refused
+        // because the password's fills are spent, while they still are. The owner's no to a
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
@@ -3174,7 +3174,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               typeof answer === "object" && "confirmed" in answer && !answer.confirmed,
           );
         const unanswered = noAnswerHandBacks > 0;
-        const hostRefusing = hostRefused || dependencies.signInFillsSpent?.() === true;
+        const hostRefusing = hostRefused || dependencies.signInRefillRefused?.() === true;
         if (reason === "owner_declined" && !ownerRefused)
           return refused(
             "owner_not_declined",

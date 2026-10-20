@@ -280,6 +280,12 @@ export const makeSignInRecorder = (input: {
   const screens: AutofillScreens[number][] = [];
   let signInStart = 0;
   /** The recorded markers the page showed right after the latest screen's submit, until the next. */
+  /**
+   * The host refused a screen for a password it already filled as often as it may
+   * (`credential_already_filled`), and the password has stayed spent since: every step that leaves
+   * it unspent clears this.
+   */
+  let passwordRefillRefused = false;
   let afterSubmit:
     | { readonly open: AutofillSignInState; readonly slots: readonly CredentialRejectedField[] }
     | undefined;
@@ -415,6 +421,7 @@ export const makeSignInRecorder = (input: {
       if (again !== -1) {
         if (h.autofillCodeRejected.current && step.fields.some((field) => field.slot === "code"))
           return yield* rejection("site_rejected", "code");
+        if (step.fields[again]?.slot === "password") passwordRefillRefused = true;
         return shown(yield* refusedRefill(h, step, again));
       }
       const refills = filledBefore(h, step);
@@ -763,7 +770,13 @@ export const makeSignInRecorder = (input: {
             ? rejectedStep(step.rejected.slot)
             : accountRejectedStep(step.rejected);
         return signedIn(step.signedIn);
-      }),
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (!passwordFillsSpent(h)) passwordRefillRefused = false;
+          }),
+        ),
+      ),
     /**
      * An exploration typed a code the site sent for the sign-in under way, on the site or a
      * configured sign-in origin: it proves the open sign-in as a code the host fills does.
@@ -773,8 +786,11 @@ export const makeSignInRecorder = (input: {
     },
     /** The screens a signed-in check reads now: every screen, and the current sign-in's. */
     screens: () => ({ screens: [...screens], challengeScreens: screens.slice(signInStart) }),
-    /** Whether the sign-in under way filled the password as often as it may. */
-    passwordFillsSpent: () => passwordFillsSpent(h),
+    /**
+     * Whether the host refused a screen of the sign-in under way because it already filled the
+     * password as often as it may, and the password is still spent.
+     */
+    passwordRefillRefused: () => passwordRefillRefused && passwordFillsSpent(h),
     /** The latest verified sign-in, while no later sign-in reached the site; else none. */
     published: (): PublishedSignIn | undefined => {
       if (verified === undefined || verified.signIn !== signIns) return undefined;

@@ -2478,12 +2478,14 @@ export interface MintDependencies {
    */
   readonly signInSessionLoss?: () => SessionLoss | undefined;
   /**
-   * Whether the host fills the login's password no more in this attempt: the sign-in under way
-   * filled it as often as the host allows, and none verified since, so the host refuses every
-   * further sign-in screen that needs it. A `host_refused` block stands on it as on any host
-   * refusal of a sign-in. Absent, the harness knows only the refusals it was handed.
+   * Whether the host refused a sign-in screen because the sign-in under way already filled the
+   * login's password as often as the host allows (`credential_already_filled`, a step result,
+   * not a failure), and the password is still spent: no sign-in verified and no corrected login
+   * started its fills again since, so the host refuses every further screen that needs it. A
+   * `host_refused` block stands on it as on any host refusal of a sign-in. Absent, the harness
+   * knows only the refusals it was handed as failures.
    */
-  readonly signInFillsSpent?: () => boolean;
+  readonly signInRefillRefused?: () => boolean;
   /** The host's own descriptions of its optional tools, in place of the generic ones. */
   readonly hostToolDescriptions?: HostToolDescriptions;
   /**
