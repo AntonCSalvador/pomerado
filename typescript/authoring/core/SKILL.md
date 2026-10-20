@@ -96,8 +96,9 @@ answers `{ success, result, error, stderr }`. Throw
 - `waitForOutcome` already waited for its answer, so prefer no extra wait for that same answer after it.
 - Check the null case if possible. Make sure the tool handles a lookup or filter that matches
   nothing.
-- Start a response wait in the same call as the click that causes it, with
-  `Promise.all([page.waitForResponse(...), button.click()])`. Listeners do not outlive a call.
+- Start a response wait in the same call as the click that causes it: name the response as a
+  `{ response }` answer of `waitForOutcomeResult`, beside the page's other answers, with the click
+  as its `action`. Listeners do not outlive a call.
 - Do site HTTP inside the page with `page.evaluate(() => fetch(...))`. Never use
   `page.request` or a Node-side fetch<!-- pomerado:section core.execute-calls:start
 .
@@ -721,7 +722,10 @@ Never wait for rows you won't return, for the whole list to stop changing, or fo
 `load` event. Read image links from attributes (`src`, `srcset`) without scrolling. A page with
 an outcome is ready only when it shows that outcome: results, or the site's own empty message.
 Before acting on a control, wait until loading overlays covering it are gone and its section is
-expanded. A panel or dialog you opened does not go away by waiting: close it with its own
+expanded. `waitForReady(control, { overlays, expand, dismiss })` waits for all of it: the control
+enabled, uncovered and still, the overlays you name gone, the section toggle you name opened once,
+and the close controls you name for a tour, a what's-new dialog or a banner that opens on its own
+clicked, now or before a later action. A panel or dialog you opened does not go away by waiting: close it with its own
 control or Escape and check it closed. A click Playwright keeps reporting as intercepted by the
 same element is a page state, not slowness. After an action that navigates or re-renders, wait
 for the committed state
@@ -743,6 +747,9 @@ reports “Execution context was destroyed,” the action may already have succe
 Reacquire page/frame locators, wait for readiness and retry only the read within the
 original deadline. Never repeat the click or submission as part of that recovery.
 Use observed conditions, without fixed sleeps, whole-page network-idle waits or the `load` event.
+Race every answer a step can give with `waitForOutcome` rather than waiting for one request you
+saw, which the site may batch, cache or rename; name a write's commit request as a `{ response }`
+answer beside them (writes skill).
 For an unknown destination, inspect after the document transition; do not invent a
 selector or repeat the action in a follow-up read.
 Import `waitCode` from the runtime (`outcomeWaitCode` declares `waitForOutcome` alone, for code
@@ -755,6 +762,13 @@ first, then the empty state, then results. Pass the step itself as `action`, suc
 only after staying unchanged for `unchangedMs`, 2 s by default, so a list the step has not yet
 re-rendered is not read while a step that leaves the same answer still resolves; a new or
 changed element counts at once. `waitForOutcome` returns the name of the answer that showed.
+An answer may also be `{ invalid: form }` (a field the site marked invalid), `{ gone: locator }`
+(a form or dialog that closed), `{ url }` (a navigation or route change), `{ response }`,
+`{ dialog }` (a native dialog, left open as `result.dialog`: keep it on `globalThis.dialog` and
+return its type and message for `decideDialog`, as `references/native-dialog.ts` does), `{ popup }`, `{ announced: text }` (a toast or
+alert a live region announced, even one gone before a look) or `{ check: fn }`.
+`waitForOutcomeResult` returns the winner with its `evidence`, such as the invalid fields' labels
+and messages, the toast's text or the `response`.
 Prefer branching on that name over waiting again for the same answers or rechecking them with
 `isVisible`. Pass the site's own loading sign as `loading`, the part of the
 page the answer appears in as `region`, and the context's `siteDomain`, so the sign counts for as
