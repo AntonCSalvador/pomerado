@@ -12,10 +12,11 @@ example is normal); resolve its missing choices with reads when possible. A writ
 does the caller's requested task once, live (in as many write steps as it takes), then
 composes its script from what happened (the `writes` skill). A read tests what its example
 did not exercise with a few combined live cases (the `testing` skill): a read signed out runs a
-handful, and a signed-in read one combined case that sets the optional inputs its example left
-unset, two distinct inputs at most. A write proves its tool with its act session; it never reads
+handful, and a signed-in read four distinct inputs at most. A write proves its tool with its act session; it never reads
 the `testing` skill or designs further tests<!-- pomerado:section core.write-http-check -->.
-The scope follows what the tool is now, not what the build started as: a read that becomes a
+That forbids running the write again or testing it live, not writing checks: a write's script
+checks its own result, and its read-back and comparison are checked offline over what the session
+read (the `writes` skill). The scope follows what the tool is now, not what the build started as: a read that becomes a
 write, in a new build or a repair, keeps to the one run from then on, a read that signs in keeps
 to the signed-in bound from then on, and a repair that rebuilds a signed-in tool or a write as a
 read signed out tests it as one. Credentials and
@@ -82,8 +83,9 @@ answers `{ success, result, error, stderr }`. Throw
   error or validation message, a pick-one list, or the element the next step uses. Prefer it over
   `waitForURL` or `waitForLoadState`: a dialog keeps the URL, and a page that changes route without
   loading a document passes `waitForLoadState` at once. Opening a record by its identifier or URL
-  can also answer with a removed or not-found page: name it, and throw `InvalidInput` with the
-  page's own words and `field`, never a readiness timeout. The waits paragraph below shows how to
+  can also answer with a removed or not-found page, or an exact lookup of its key with an empty
+  result: name it, and throw `InvalidInput` with `field` and what the page shows, before any
+  commit mark, never a readiness timeout; below says when it starts "Caller input error:". The waits paragraph below shows how to
   paste `waitCode` and call it. Prefer no fixed pauses unless necessary.
 - Wait for a change (`waitForChange`, or a settle of your own) only after a step that changed the
   page or should have, such as a click, fill or navigation that loads new results. Skip it when no
@@ -94,8 +96,9 @@ answers `{ success, result, error, stderr }`. Throw
 - `waitForOutcome` already waited for its answer, so prefer no extra wait for that same answer after it.
 - Check the null case if possible. Make sure the tool handles a lookup or filter that matches
   nothing.
-- Start a response wait in the same call as the click that causes it, with
-  `Promise.all([page.waitForResponse(...), button.click()])`. Listeners do not outlive a call.
+- Start a response wait in the same call as the click that causes it: name the response as a
+  `{ response }` answer of `waitForOutcomeResult`, beside the page's other answers, with the click
+  as its `action`. Listeners do not outlive a call.
 - Do site HTTP inside the page with `page.evaluate(() => fetch(...))`. Never use
   `page.request` or a Node-side fetch<!-- pomerado:section core.execute-calls:start
 .
@@ -115,10 +118,13 @@ pomerado:section core.execute-calls:end -->
   once. It is obvious when the input alone breaks a rule of the task, checked before any site
   action, such as a departure date before today in its airport's time zone, a return before
   its departure or a count below one. It is also obvious when the page itself refuses the value in
-  its own words, which the message quotes. Never use that start when the tool's own read found
-  nothing, such as an empty suggestion list, a slider or list that hadn't loaded, or a day a
-  write finds disabled without the page saying why; a read returns such a day unavailable, as "Configure,
-  then read" says. When the value is not among choices the page lists, throw
+  its own words, which the message quotes, or when the site's own lookup of a record's own key,
+  such as an order, ticket or item number, or the site's own link to that record, shows the
+  site's not-found or empty result. Never use that start for a breakage, which goes to repair: a
+  URL the tool built itself, a page whose layout or controls the tool no longer finds, or a
+  lookup, slider or list that hadn't loaded. Nor when a suggestion list or picker offered nothing,
+  or a write finds a day disabled without the page saying why; a read returns such a day
+  unavailable, as "Configure, then read" says. When the value is not among choices the page lists, throw
   `new errors.InvalidInput(message, { field, available })` instead, as "Configure, then read"
   below says. Add `kind`, the reason as a stable lowercase token such as `out_of_stock`, when
   a caller needs to tell refusals apart (caller-input skill). `errors` exists only in the
@@ -223,17 +229,14 @@ exception: it is optional unless the task can't run without it (below).
   shows on its own pages, such as a product number, is not internal). A closed list
   of options stays an enum of the site's options, as above. When the options come from a
   query, as in a search box, autocomplete, typeahead or searchable combobox, look the value
-  up the way a person would. Type the caller's value into the site's own search and read
-  every suggestion or result it shows. Prefer matching names loosely, ignoring case,
-  accents, spacing, punctuation, apostrophe style and a location the site adds to the
-  name, such as a
-  neighborhood or an airport code in brackets, over waiting for an element named exactly as
-  the caller typed it. A whole-name or code match outranks a partial one, so an airport code
-  picks that airport, not its city. Then count the matches at the best rank. With none,
-  throw `InvalidInput` at once, saying the site has no match, with `field` and `available`,
-  the closest entries it showed. With one, use it. With several, ask the caller which one with
-  a declared choice question whose options are those matches as the site labels them
-  (.agents/caller-input/SKILL.md).
+  up the way a person would, with `pickValue` from `pickerCode` (forms skill). It types the
+  caller's value into the site's own search, reads every suggestion, matches names loosely
+  (case, accents, spacing, punctuation, and whole words, so a name with a neighborhood or an
+  airport code in brackets still matches) with a whole-name or code match outranking a partial
+  one, and counts the matches at the best rank. With none, throw its `pickRefusal`, an
+  `InvalidInput` with `field` and `available`, the entries the site showed. With one, it picks
+  it. With several, ask the caller which one with a declared choice question whose options are
+  its `matches` (.agents/caller-input/SKILL.md).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
   match that accepts the usual forms of the same name, such as a name with or without its
   accents (Abaca for Abacá), a city alone or with its state and country, or a company with
@@ -716,7 +719,10 @@ Never wait for rows you won't return, for the whole list to stop changing, or fo
 `load` event. Read image links from attributes (`src`, `srcset`) without scrolling. A page with
 an outcome is ready only when it shows that outcome: results, or the site's own empty message.
 Before acting on a control, wait until loading overlays covering it are gone and its section is
-expanded. A panel or dialog you opened does not go away by waiting: close it with its own
+expanded. `waitForReady(control, { overlays, expand, dismiss })` waits for all of it: the control
+enabled, uncovered and still, the overlays you name gone, the section toggle you name opened once,
+and the close controls you name for a tour, a what's-new dialog or a banner that opens on its own
+clicked, now or before a later action. A panel or dialog you opened does not go away by waiting: close it with its own
 control or Escape and check it closed. A click Playwright keeps reporting as intercepted by the
 same element is a page state, not slowness. After an action that navigates or re-renders, wait
 for the committed state
@@ -738,6 +744,9 @@ reports “Execution context was destroyed,” the action may already have succe
 Reacquire page/frame locators, wait for readiness and retry only the read within the
 original deadline. Never repeat the click or submission as part of that recovery.
 Use observed conditions, without fixed sleeps, whole-page network-idle waits or the `load` event.
+Race every answer a step can give with `waitForOutcome` rather than waiting for one request you
+saw, which the site may batch, cache or rename; name a write's commit request as a `{ response }`
+answer beside them (writes skill).
 For an unknown destination, inspect after the document transition; do not invent a
 selector or repeat the action in a follow-up read.
 Import `waitCode` from the runtime (`outcomeWaitCode` declares `waitForOutcome` alone, for code
@@ -750,6 +759,13 @@ first, then the empty state, then results. Pass the step itself as `action`, suc
 only after staying unchanged for `unchangedMs`, 2 s by default, so a list the step has not yet
 re-rendered is not read while a step that leaves the same answer still resolves; a new or
 changed element counts at once. `waitForOutcome` returns the name of the answer that showed.
+An answer may also be `{ invalid: form }` (a field the site marked invalid), `{ gone: locator }`
+(a form or dialog that closed), `{ url }` (a navigation or route change), `{ response }`,
+`{ dialog }` (a native dialog, left open as `result.dialog`: keep it on `globalThis.dialog` and
+return its type and message for `decideDialog`, as `references/native-dialog.ts` does), `{ popup }`, `{ announced: text }` (a toast or
+alert a live region announced, even one gone before a look) or `{ check: fn }`.
+`waitForOutcomeResult` returns the winner with its `evidence`, such as the invalid fields' labels
+and messages, the toast's text or the `response`.
 Prefer branching on that name over waiting again for the same answers or rechecking them with
 `isVisible`. Pass the site's own loading sign as `loading`, the part of the
 page the answer appears in as `region`, and the context's `siteDomain`, so the sign counts for as
@@ -887,8 +903,7 @@ Never recreate a write or login to recover an observation. See
 
 The tools and the files you may edit are in `AGENTS.md`. The host binds the caller's actual input/account; no tool
 argument selects another account or private reference. A live test's `testInput`, on a
-read only, is an input you choose, with values the site shows and never a private identifier
-(.agents/testing/SKILL.md). Every new command/probe/execution gets Guardian review<!-- pomerado:section core.tools-and-files -->.
+read only, is an input you choose as .agents/testing/SKILL.md says. Every new command/probe/execution gets Guardian review<!-- pomerado:section core.tools-and-files -->.
 Nested Playwright actions do not each trigger review. A probe operation still receives the host-bound business
 input. Its declared schema must accept that input even when the bounded observation
 does not use every field; do not replace it with an empty or probe-only schema.

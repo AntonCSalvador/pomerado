@@ -5,6 +5,7 @@ import {
   cursorPairOf,
   decodeCasesFile,
   judgeCase,
+  liveTestsEvidence,
   primaryListOf,
   signedInTestInputRefusal,
   testInputKey,
@@ -30,6 +31,19 @@ describe("cursorPairOf", () => {
       "query",
     ]);
     expect(cursorPairOf(input, output)).toEqual({ inputField: "cursor", outputField: "next_cursor" });
+  });
+
+  it("reads only the runtime's string cursor and next_cursor, never a continuation of the tool's own", () => {
+    const results = { results: { type: "array" } };
+    for (const [input, output] of [
+      [{ page_token: { type: "string" } }, { next_page_token: { type: "string" } }],
+      [{ continuation: { type: "string" } }, { continuation_token: { type: "string" } }],
+      [{ cursor: { type: "string" } }, { cursor: { type: "string" } }],
+      [{ next_cursor: { type: "string" } }, { next_cursor: { type: "string" } }],
+      [{ cursor: { type: "integer" } }, { next_cursor: { type: "integer" } }],
+      [{ cursor: { type: "string" } }, { next_cursor: { type: "number" } }],
+    ] as const)
+      expect(cursorPairOf(object(input), object({ ...results, ...output }))).toBeUndefined();
   });
 
   it("finds no cursor when only a boolean says there is a next page", () => {
@@ -220,14 +234,87 @@ describe("the signed-in test input bound", () => {
   });
 
   it("allows up to the limit, then refuses only a new input", () => {
-    const first = testInputKey(combined);
-    const second = testInputKey({ query: "desk" });
-    expect(signedInTestInputRefusal([first], [{ query: "desk" }])).toBeUndefined();
-    // Both counted: a rerun of either is free, a third input is refused.
-    expect(signedInTestInputRefusal([first, second], [reordered, { query: "desk" }])).toBeUndefined();
-    expect(signedInTestInputRefusal([first, second], [{ query: "chair" }])).toBeDefined();
+    const counted = [combined, { query: "desk" }, { query: "chair" }].map(testInputKey);
+    expect(signedInTestInputRefusal(counted, [{ query: "lamp" }])).toBeUndefined();
+    // Four counted: a rerun of any is free, a fifth input is refused.
+    const full = [...counted, testInputKey({ query: "lamp" })];
+    expect(signedInTestInputRefusal(full, [reordered, { query: "desk" }])).toBeUndefined();
+    expect(signedInTestInputRefusal(full, [{ query: "sofa" }])).toBeDefined();
     // A batch that would add two inputs when one is left runs nothing.
-    expect(signedInTestInputRefusal([first], [{ query: "desk" }, { query: "chair" }])).toBeDefined();
-    expect(signedInTestInputRefusal([], [combined, { query: "desk" }, { query: "chair" }])).toBeDefined();
+    expect(signedInTestInputRefusal(counted, [{ query: "lamp" }, { query: "sofa" }])).toBeDefined();
+    expect(
+      signedInTestInputRefusal(
+        [],
+        [combined, { query: "desk" }, { query: "chair" }, { query: "lamp" }, { query: "sofa" }],
+      ),
+    ).toBeDefined();
+  });
+});
+
+describe("liveTestsEvidence", () => {
+  const failedThenDeleted = {
+    id: "sort-price",
+    caseDigest: "case",
+    sourceDigest: "earlier",
+    verdict: "fail" as const,
+    got: "TimeoutError",
+    frame: "src/tool.ts:12",
+    durationMs: 1,
+    input: { query: "lamp", sort: "price_low" },
+    expect: "result" as const,
+  };
+
+  // Running out of time for live tests leaves gaps to the rationale, never a failure: a source fix
+  // and a passing case of its input still clear it, so it keeps counting.
+  it("keeps a deleted failure counting, with a source fix as its way out, when time ran out", () => {
+    const { record, coverage } = liveTestsEvidence({
+      file: { cases: [] },
+      outOfTime: true,
+      versions: [
+        {
+          version: "playwright",
+          sourceDigest: "published",
+          records: new Map([[failedThenDeleted.id, failedThenDeleted]]),
+          inputSchema: { type: "object", properties: { query: { type: "string" } } },
+        },
+      ],
+    });
+    expect(record).toMatchObject({ outOfTime: true });
+    expect(record.retired).toEqual([
+      expect.objectContaining({
+        id: "sort-price",
+        lastVerdict: "fail",
+        clearedBy: expect.objectContaining({ ways: expect.arrayContaining(["excusedBy"]) }),
+      }),
+    ]);
+    expect(record.retired[0]).not.toHaveProperty("outsideSchema");
+    expect(coverage).toContain("1 of those failures still counts.");
+  });
+
+  // A host that read no input schema cannot mark a failure outsideSchema, so the record never
+  // offers that way out.
+  it("offers no schema bound as a way out when the host read no input schema", () => {
+    const failed = {
+      id: "deleted-case",
+      caseDigest: "case",
+      sourceDigest: "earlier",
+      verdict: "fail" as const,
+      got: "TimeoutError",
+      durationMs: 1,
+      input: { query: "lamp" },
+      expect: "result" as const,
+    };
+    const { record } = liveTestsEvidence({
+      file: { cases: [] },
+      versions: [
+        { version: "playwright", sourceDigest: "published", records: new Map([[failed.id, failed]]) },
+      ],
+    });
+    expect(record.retired).toEqual([
+      expect.objectContaining({
+        id: "deleted-case",
+        clearedBy: expect.objectContaining({ ways: ["changedExpectationBy", "excusedBy"] }),
+      }),
+    ]);
   });
 });

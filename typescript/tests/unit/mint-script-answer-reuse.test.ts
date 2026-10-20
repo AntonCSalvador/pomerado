@@ -4,7 +4,7 @@
 // anew; the same question asked again, or long after the owner answered, asks the owner again; a
 // reuse changes the answer's shape; a host reading kept answers back decodes one it cannot read,
 // or refuses one an earlier release kept with more fields.
-import { Effect, Option, Schema } from "effect";
+import { Effect, Either, Option, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   forgetScriptAnswers,
@@ -12,6 +12,7 @@ import {
   keptScriptAnswers,
   reusedScriptAnswers,
   scriptQuestionKeys,
+  validateKeptAnswers,
 } from "../../src/mint/script-answer-reuse.js";
 import type { InputRequest, ValidAnswers } from "../../src/runtime/input-request.js";
 
@@ -153,6 +154,17 @@ describe("a later step's script question", () => {
     const newer = keptScriptAnswers(entries, keys(wider), bronze);
     expect(reuse(plan, newer)).toBeUndefined();
     expect(reuse(wider, newer)).toEqual(bronze);
+  });
+
+  it("checks kept answers by the rules of a fresh answer, for a host that keeps them itself", () => {
+    expect(validateKeptAnswers(plan, gold)).toEqual(Either.right(gold));
+    expect(validateKeptAnswers(plan, { plan: { type: "choice", value: "bronze" } })).toMatchObject({
+      _tag: "Left",
+    });
+    expect(validateKeptAnswers(plan, { plan: "gold" })).toMatchObject({
+      _tag: "Left",
+      left: { reason: "malformed" },
+    });
   });
 
   it("decodes only the kept answers this release reads, when a host reads them back", () => {

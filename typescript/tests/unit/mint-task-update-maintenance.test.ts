@@ -353,3 +353,33 @@ it("tells Guardian who can confirm an addition, though it needs no confirmation"
   expect(result).toMatchObject({ status: "updated" });
   expect(host.reviews[0]?.update).toMatchObject({ maintenance: { confirmer: "owner_request" } });
 });
+
+it.each(["Owner", "", undefined, null, 7])(
+  "refuses a contract change as owner_unavailable when the confirmer returns %j",
+  async (value) => {
+    const host = updateHost();
+    const result = await propose(dropColor, {
+      ...host.dependencies,
+      taskUpdateConfirmer: () => Effect.succeed(value as never),
+    });
+    expect(result).toMatchObject({ status: "update_refused", reason: "owner_unavailable" });
+    expect(host.reviews).toEqual([]);
+    expect(host.applied).toEqual([]);
+  },
+);
+
+it("asks the host who can confirm once per update", async () => {
+  const host = updateHost();
+  let asked = 0;
+  const result = await propose(dropColor, {
+    ...host.dependencies,
+    taskUpdateConfirmer: () =>
+      Effect.sync(() => {
+        asked += 1;
+        return asked === 1 ? ("owner" as const) : ("none" as const);
+      }),
+  });
+  expect(result).toMatchObject({ status: "updated" });
+  expect(asked).toBe(1);
+  expect(host.reviews[0]?.update).toMatchObject({ maintenance: { confirmer: "owner" } });
+});

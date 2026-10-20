@@ -67,6 +67,7 @@ import {
   taskUpdateForReview,
   type PendingTaskUpdate,
   type TaskChange,
+  type TaskUpdateConfirmer,
 } from "../guardian/task-update.js";
 import { siteDomain } from "../runtime/same-site.js";
 import { validateSignedInMarker } from "../destinations/signed-in-marker.js";
@@ -399,6 +400,7 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   "read_back_required",
   "login_url_one_time",
   "login_url_contains_credential",
+  "sign_in_version_refused",
   // An execution on the site the build moved away from: a fresh example on the current site.
   "example_before_site_change",
   // Restored inputs change the code, which needs its own example.
@@ -415,12 +417,17 @@ const askedOnceReasons: ReadonlySet<string> = new Set([
   "http_implementation_stale",
   "login_url_one_time",
 ]);
+/** An execution request for a sign-in step, read before it decodes. */
+const isAuthenticate = Schema.is(Schema.Struct({ purpose: Schema.Literal("authenticate") }));
 /** How the minter goes on after a refusal that is neither an outage nor Guardian's. */
 const refusalRecovery = (reason: string | undefined, write: boolean): PublicationRecovery =>
   reason !== undefined &&
   (writeCompletionReasons.has(reason) || (write && contractReasons.has(reason)))
     ? "write_completion"
-    : reason !== undefined && newObservationReasons.has(reason)
+    : reason !== undefined &&
+        newObservationReasons.has(reason) &&
+        // A write restores its inputs in the source and publishes its session's execution again.
+        !(write && reason === "input_contract_changed")
       ? "new_observation"
       : "correct_source";
 /** A refusal the harness makes before publication runs, as its decision. */
@@ -1070,15 +1077,20 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * takeover keeps it, and a move to another site clears it.
        */
       let signInUnconfirmed = recovered?.signInUnconfirmed === true;
-      /** Updates `signInUnconfirmed` once an authenticate ends, by what it did. */
+      /**
+       * Updates `signInUnconfirmed` once an authenticate ends, by what it did; a confirmed sign-in
+       * also clears `signInRefusalOnly`.
+       */
       const noteSignIn = (
         exit: Exit.Exit<ExecutionEvidence, MintFailure>,
         crossedDispatch: boolean,
       ) => {
         if (Exit.isSuccess(exit)) {
           const { authentication, effect } = exit.value;
-          if (authentication?.state === "authenticated") signInUnconfirmed = false;
-          else if (effect !== "not_sent") signInUnconfirmed = true;
+          if (authentication?.state === "authenticated") {
+            signInUnconfirmed = false;
+            signInRefusalOnly = false;
+          } else if (effect !== "not_sent") signInUnconfirmed = true;
           return;
         }
         // One that failed past its dispatch fence may have sent the login, unless it says it
@@ -1146,6 +1158,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * that names a correction is not one, nor is a correctable execution refusal.
        */
       let guardianRefused = recovered?.guardianRefused === true;
+      /**
+       * Every refusal `guardianRefused` stands on is Guardian's of an authenticate step, and no
+       * sign-in on the current site confirmed after it: the build never got past signing in, so a
+       * blocked report that stands only on it ends as sign-in unavailable. Once cleared, it stays
+       * cleared for the rest of the attempt: a later refusal of a sign-in leaves `guardianRefused`
+       * standing on the earlier one too, so the report keeps its own ending.
+       */
+      let signInRefusalOnly = recovered?.signInRefusalOnly === true;
       /**
        * A host check refused a step the build needs in this attempt: a publication its checks
        * refused, a sign-in the host refused, or a task update the host refused. A `host_refused`
@@ -2208,11 +2228,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             instruction: "The build's owner did not answer in time. The host is ending this build.",
           });
         });
-      const reviewFeedback = (error: MintFailure) =>
+      const reviewFeedback = (error: MintFailure, signIn: boolean) =>
         Effect.gen(function* () {
           // A refusal Guardian marked correctable names a fix, so no policy block stands on it.
           // One without a kind, from an older reviewer, counts as final, as it did before.
-          if (error.review?.refusal !== "correctable") guardianRefused = true;
+          if (error.review?.refusal !== "correctable") {
+            signInRefusalOnly = signIn && (signInRefusalOnly || !guardianRefused);
+            guardianRefused = true;
+          }
           const rationale = error.review
             ? yield* screenMintText(dependencies, error.review.rationale)
             : "Guardian rejected this submission; rationale unavailable.";
@@ -3008,10 +3031,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * or what `executionFailed` picks out.
        */
       const executionFailureFeedback =
-        (executionFailed: (error: MintFailure) => boolean) =>
+        (executionFailed: (error: MintFailure) => boolean, signIn = false) =>
         <A, R>(execution: Effect.Effect<A, MintFailure, R>) =>
           execution.pipe(
-            Effect.catchIf((error) => error.code === "ReviewDenied", reviewFeedback),
+            Effect.catchIf(
+              (error) => error.code === "ReviewDenied",
+              (error) => reviewFeedback(error, signIn),
+            ),
             Effect.catchIf(
               (error) => error.code === "ReviewUnavailable",
               reviewUnavailableRetry("execution", reviewUnavailableFeedback),
@@ -3375,6 +3401,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const maintenanceConfirmer = (
         dependencies.taskUpdateConfirmer?.() ?? Effect.succeed("none" as const)
       ).pipe(
+        // A host outside the type, such as a script returning another word, names nobody.
+        Effect.map((confirmer): TaskUpdateConfirmer =>
+          confirmer === "owner" || confirmer === "owner_request" ? confirmer : "none",
+        ),
         Effect.catchAll((error) =>
           reportFailure(error, {
             component: "mint",
@@ -3391,7 +3421,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       let newBuildAskedAt: number | undefined;
       /** Guardian's review of a confirmed update, then the host's application of an allowed one. */
-      const reviewAndApplyTaskUpdate = (submitted: TaskUpdateRequest) =>
+      const reviewAndApplyTaskUpdate = (
+        submitted: TaskUpdateRequest,
+        /** The confirmer the gate already asked the host about, so one update asks once. */
+        asked?: TaskUpdateConfirmer,
+      ) =>
         Effect.gen(function* () {
           const review = dependencies.reviewTaskUpdate;
           const apply = dependencies.applyTaskUpdate;
@@ -3418,7 +3452,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               // Who can confirm, as the host says; a change that only adds or tightens output
               // fields reaches review even when nobody can.
               ...(request.mode === "maintenance"
-                ? { maintenance: { confirmer: yield* maintenanceConfirmer } }
+                ? { maintenance: { confirmer: asked ?? (yield* maintenanceConfirmer) } }
                 : {}),
               // So Guardian knows a site change here can only be a new build.
               ...(dependencies.siteMoveUnsupported === true
@@ -3549,7 +3583,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const siteChanged = next.siteOrigin !== taskState.siteOrigin;
           taskState = next;
           // The first site's unconfirmed sign-in says nothing of the next site.
-          if (siteChanged) signInUnconfirmed = false;
+          if (siteChanged) {
+            signInUnconfirmed = false;
+            signInRefusalOnly = false;
+          }
           // The task now runs signed out: a failed sign-in no longer holds anything back, and no
           // sign-in runs until a later update asks for one, which the owner then confirmed.
           for (const change of accepted.changes)
@@ -3783,12 +3820,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           return {
             cursor: cursorPairOf(input, output),
             list: primaryListOf(input, output),
+            inputSchema: input,
             outputSchema: output,
           };
         });
       const emptyCases: LiveTestCasesFile = { cases: [] };
       /** What a signed-in read designs, in place of a read signed out's suite. */
-      const signedInPlanInstruction = `This read signed in, so it runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, as the testing skill says: one combined case in ${liveTestCasesPath} that sets every optional input and filter the example left unset, with values the site shows (a picker's options, or values in the example's own rows, never a person's or record's name, number or email). Choose each value so at least one example row fails it while some rows still pass every filter, since a value every example row already satisfies passes even when the tool ignores it, and name in purpose the row each value excludes. Set next_page true when the tool pages. Add a second case only for inputs that cannot be set with the others. Then run it with live_tests action run and check that every row it returns satisfies each input it set, that the excluded rows are gone, and that page two holds new rows. Running it again after a fix, or on src/tool-http.mjs, is free.`;
+      const signedInPlanInstruction = `This read signed in, so it runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, as the testing skill says: one combined case in ${liveTestCasesPath} that sets every optional input and filter the example left unset, with values the site shows (a picker's options, or values in the example's own rows, never a person's or record's name, number or email). Choose each value so at least one example row fails it while some rows still pass every filter, since a value every example row already satisfies passes even when the tool ignores it, and name in purpose the row each value excludes. Set next_page true when the tool pages. Add a second case only for inputs that cannot be set with the others, and one made-up key for an input that takes a record's own key (testing skill). Then run it with live_tests action run and check that every row it returns satisfies each input it set, that the excluded rows are gone, and that page two holds new rows. Running it again after a fix, or on src/tool-http.mjs, is free.`;
       /** What the agent reads about its tests: its cases and their results. */
       const liveTestPlanView = (
         entrypoint: string,
@@ -3913,7 +3951,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               kind: "host_live_tests",
               status: "no_cursor",
               instruction:
-                "A next_page case needs an input field named cursor (or page_token) and an output field such as next_cursor, both strings or numbers, in the tool's schemas. Add them, or drop next_page. Nothing was executed.",
+                "A next_page case needs the list fields in the tool's schemas: the string input cursor and output next_cursor, which listInputFields and listOutputFields from pomerado/runtime give. Add them, or drop next_page. Nothing was executed.",
             });
           const digest = yield* stepDigest(request.entrypoint);
           if (digest === undefined)
@@ -3979,18 +4017,21 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const verdicts: Record<string, number> = {};
           const judgedRuns = result.cases.flatMap((run) => {
             const testCase = selected.find((entry) => entry.id === run.id);
-            return testCase === undefined
-              ? []
-              : [
-                  {
-                    run,
-                    testCase,
-                    judged: judgeCase(testCase, run, "list" in shape ? shape.list : undefined),
-                  },
-                ];
+            if (testCase === undefined) return [];
+            const judged = judgeCase(testCase, run, "list" in shape ? shape.list : undefined);
+            const previous = recordsFor(request.entrypoint).get(run.id);
+            // An inconclusive rerun, such as a challenge or a site block, tested nothing about
+            // the tool, so a failure it follows on the same source and case keeps counting, with
+            // the output it returned.
+            const keepsFailure =
+              judged.verdict === "inconclusive" &&
+              previous?.verdict === "fail" &&
+              previous.caseDigest === caseDigest(testCase) &&
+              previous.sourceDigest === sourceDigest;
+            return [{ run, testCase, judged, keepsFailure }];
           });
           // Every case's fields first, so each case's output check counts the whole batch.
-          for (const { run, judged } of judgedRuns)
+          for (const { run, judged } of judgedRuns.filter((entry) => !entry.keepsFailure))
             if (judged.output === undefined)
               liveTestFills.delete(outputKey(request.entrypoint, run.id));
             else
@@ -3998,7 +4039,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 sourceDigest,
                 fill: fieldFill(judged.output),
               });
-          for (const { run, testCase, judged } of judgedRuns) {
+          for (const { run, testCase, judged, keepsFailure } of judgedRuns) {
+            verdicts[judged.verdict] = (verdicts[judged.verdict] ?? 0) + 1;
+            if (attemptBound && judged.verdict === "inconclusive" && judged.got === "deadline")
+              liveTestsOutOfTime = true;
+            if (keepsFailure) continue;
             const screened =
               judged.output === undefined
                 ? undefined
@@ -4041,11 +4086,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             const version = liveTestVersion(request.entrypoint);
             const previous = records.get(run.id);
             // A failure the run replaces stays in the record: the case changed after it, or it
-            // did not fail again on the same source and case, which shows it is flaky.
+            // passed when run again on the same source and case, which shows it is flaky.
             const flaky =
               previous?.caseDigest === digestOfCase &&
               previous.sourceDigest === sourceDigest &&
-              judged.verdict !== "fail";
+              judged.verdict === "pass";
             if (
               previous !== undefined &&
               previous.verdict === "fail" &&
@@ -4088,9 +4133,6 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               ...(testCase.next_page === true ? { nextPage: true } : {}),
               ...(signedInBatch ? { signedIn: true as const } : {}),
             });
-            verdicts[judged.verdict] = (verdicts[judged.verdict] ?? 0) + 1;
-            if (attemptBound && judged.verdict === "inconclusive" && judged.got === "deadline")
-              liveTestsOutOfTime = true;
           }
           yield* reportBestEffort(
             dependencies.diagnostics?.emit("mint.live_tests", {
@@ -4147,6 +4189,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             new Map([...liveTestRecords[version]].filter(([, record]) => counted(record)));
           const read = yield* readCasesFile;
           const published = liveTestVersion(entrypoint);
+          // The input schema each version publishes, which marks a retired input it rejects.
+          const inputSchemaOf = (path: string) =>
+            Effect.map(liveTestShape(path), (shape) =>
+              "inputSchema" in shape ? { inputSchema: shape.inputSchema } : {},
+            );
           const replacedOf = (version: LiveTestVersion) =>
             liveTestReplaced.filter(
               (record) => liveTestVersion(record.entrypoint) === version && counted(record),
@@ -4158,6 +4205,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               sourceDigest: yield* stepDigest(entrypoint),
               records: recordsOf(published),
               replaced: replacedOf(published),
+              ...(yield* inputSchemaOf(entrypoint)),
             },
           ];
           if (published === "playwright" && !httpRuledOut) {
@@ -4184,6 +4232,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 sourceDigest: yield* stepDigest(httpEntrypoint),
                 records: recordsOf("http"),
                 replaced: replacedOf("http"),
+                ...(yield* inputSchemaOf(httpEntrypoint)),
               });
           }
           return liveTestsEvidence({
@@ -4342,9 +4391,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               if (questionOnly) return yield* new MintFailure({ code: "ScopeDenied" });
               // Once sign-in is unavailable, another authenticate gets the same answer; once the
               // owner declined to sign in, it gets theirs.
-              const authenticating = Schema.is(
-                Schema.Struct({ purpose: Schema.Literal("authenticate") }),
-              )(input);
+              const authenticating = isAuthenticate(input);
               if (signInUnavailable !== undefined && authenticating)
                 return signInUnavailable.answer;
               if (loginDeclined !== undefined && authenticating)
@@ -4608,6 +4655,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   error.spentSignIn !== undefined ||
                   error.sessionLoss !== undefined ||
                   error.reason === "login_in_use",
+                isAuthenticate(input),
               ),
             ),
           ),
@@ -4932,8 +4980,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 publication.left.code === "ReviewDenied" &&
                 denial !== undefined &&
                 publicationRefusalUnfixable(denial)
-              )
+              ) {
                 guardianRefused = true;
+                signInRefusalOnly = false;
+              }
               if (publication._tag === "Left" && publication.left.code === "ReviewDenied") {
                 const paths = [
                   ...new Set([
@@ -5208,7 +5258,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     error.code,
                     error.reason,
                     { brokenInputs: error.brokenInputs ?? [] },
-                    inputContractChangedInstruction,
+                    inputContractChangedInstruction(buildEffect === "write"),
                   );
                 if (error.reason === "tool_name_taken")
                   return notPublished(
@@ -5267,6 +5317,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     error.reason,
                     { ...error.publicationFeedback },
                     "Not published: each part named in parts holds a registered credential (credentialKinds names the kind, never the value). A published tool never carries one, and the host changes nothing itself. For loginUrl, run authenticate again with a login URL that has no credential in it, the site's plain sign-in page. For name, description, siteName or siteSummary, rewrite the text without it. Then call finish_build again with the same executionId. The host refuses every time until the credential is gone; the build is not over.",
+                  );
+                if (error.reason === "sign_in_version_refused")
+                  return notPublished(
+                    error.code,
+                    error.reason,
+                    { signInFindings: error.publicationFeedback?.signInFindings ?? [] },
+                    "Not published: the sign-in this tool would publish fails the host's sign-in version check. signInFindings names each rule and the part of the sign-in recipe or login URL it refused, never a value. The host changed nothing. Run authenticate again so the sign-in records without those parts: start from the site's stable sign-in page as loginUrl, name no account in a selector, page or marker, leave out any step or account page that signs out, and use a signed-in marker that only signed-in pages show. Then call finish_build again with the same executionId. The host refuses every time until the sign-in passes.",
                   );
                 if (error.reason === "definition_login_reference") {
                   const section = error.screening?.section;
@@ -5425,7 +5482,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     repeatableRead,
                   },
                   (error.code === "ReviewDenied" && error.review?.reason === "evidence"
-                    ? "Not published yet: Guardian needs more evidence to judge this publication, and the rationale names each missing item. Gather each one within your authority, such as running the live tests or cases it names so their results reach the test record, and fix every finding, then call finish_build again. Missing evidence is not a refusal and never a reason for a policy block. The existing example and result remain recorded."
+                    ? "Not published yet: Guardian needs more evidence to judge this publication, and the rationale names each missing item. Gather each one within your authority, such as running the live tests or cases it names so their results reach the test record, or exploring the site's own controls for a capture it names, and fix every finding, then call finish_build again. A retired failure in publication/tests.json clears only by a way its clearedBy lists: running the same cases again on the same source clears none. Missing evidence is not a refusal and never a reason for a policy block. The existing example and result remain recorded."
                     : error.code === "ReviewDenied" && error.review !== undefined
                       ? "Not published: Guardian blocked this publication. Each finding's explanation says what is wrong, the evidence and the fix, at its file and byte range. Fix every finding and each missing item the rationale names, then call finish_build again with the same executionId. The existing example and result remain recorded."
                       : "Not published. The existing example and result remain recorded. Source edits and another finish_build publication review may continue; this does not guarantee the failure is repairable.") +
@@ -5705,7 +5762,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     );
                     if ("refusal" in ending) return ending.refusal;
                     // An ending the checks above accepted, while the build's latest sign-in
-                    // never confirmed: the site never got as far as judging the task, so it
+                    // never confirmed, or while the only refusal on record is Guardian's final
+                    // refusal of a sign-in step: the site never got as far as judging the task, so it
                     // cannot have declined it or lacked it, and a policy or host check that
                     // stopped it stopped a sign-in. With no failed sign-in pending, whose own
                     // refusal above asks the agent to resolve it, the build ends as sign-in
@@ -5715,7 +5773,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     if (
                       ending.reason !== "owner_declined" &&
                       ending.reason !== "question_unanswered" &&
-                      signInUnconfirmed &&
+                      (signInUnconfirmed || (signInRefusalOnly && !hostRefused)) &&
                       unresolvedSignIn === undefined &&
                       loginDeclined === undefined &&
                       !signInAbandoned
@@ -5823,11 +5881,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       );
                     const refusal = taskUpdateRefusal(submitted);
                     if (refusal !== undefined) return taskUpdateAnswer("update_refused", refusal);
+                    let askedConfirmer: TaskUpdateConfirmer | undefined;
                     if (request.mode === "maintenance" && !keepsContract(submitted)) {
                       // Only the tool's owner confirms a change that takes from the registered
                       // contract; adding or tightening an output field takes nothing away.
                       const confirmer = yield* maintenanceConfirmer;
-                      if (confirmer === "none")
+                      askedConfirmer = confirmer;
+                      if (confirmer !== "owner" && confirmer !== "owner_request")
                         return taskUpdateAnswer("update_refused", {
                           reason: "owner_unavailable",
                           instruction:
@@ -5868,7 +5928,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         instruction:
                           "confirmedBy names questions the caller has not answered in this build, so nothing confirms the update and nothing changed. Ask the caller with request_input, then call mint_update again naming the questions they answered.",
                       });
-                    return yield* reviewAndApplyTaskUpdate(submitted);
+                    return yield* reviewAndApplyTaskUpdate(submitted, askedConfirmer);
                   }).pipe(
                     Effect.catchIf(
                       (error) => error.code === "ReviewUnavailable",
@@ -6306,6 +6366,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         },
         ...(blockedReviewUnavailable ? { blockedReviewUnavailable: true as const } : {}),
         ...(guardianRefused ? { guardianRefused: true as const } : {}),
+        ...(signInRefusalOnly ? { signInRefusalOnly: true as const } : {}),
         ...(hostRefused ? { hostRefused: true as const } : {}),
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),
         ...(loginHeld ? { loginHeld: true as const } : {}),
