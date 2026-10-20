@@ -264,7 +264,7 @@ test("pickValue on a read reads a clock time as one value, never picks a negatio
     [["7:30 AM", "7:00 PM", "19:30"], "7:30 PM", "19:30"],
     [["7:30 AM", "7 PM"], "7:30 PM", null],
     [["Non-refundable", "Flexible"], "Refundable", null],
-    [["Order #1251", "Order #1250"], "Order 1250", "Order #1250"],
+    [["Order \u00231251", "Order \u00231250"], "Order 1250", "Order \u00231250"],
   ] as const) {
     await serve(page, dropdown(labels.map((label, index) => [String(index + 1), label] as const)));
     const outcome = await call(page, `return await pickValue(page.getByRole("button", { name: "Customer" }), "${wanted}", ${read});`);

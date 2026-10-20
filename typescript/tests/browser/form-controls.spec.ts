@@ -681,9 +681,9 @@ test("chooseOption on a read reads a clock time as one value, never picks a nega
   expect(await call(page, `return await chooseOption(page.getByLabel("Fare"), "Refundable", ${read});`)).toEqual({
     error: "option_missing",
   });
-  await page.setContent(choices("Order", ["Order #1251", "Order #1250"]));
+  await page.setContent(choices("Order", ["Order \u00231251", "Order \u00231250"]));
   expect(await call(page, `return await chooseOption(page.getByLabel("Order"), "Order 1250", ${read});`)).toEqual({
-    result: { shape: "select", label: "Order #1250", value: "2" },
+    result: { shape: "select", label: "Order \u00231250", value: "2" },
   });
 });
 

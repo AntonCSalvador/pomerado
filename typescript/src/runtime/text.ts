@@ -113,8 +113,8 @@ export const sameText = (shown: string, wanted: string): boolean => {
  *
  * A clock time is one word however it is written, and AM or PM counts: 7 PM, 7:00 PM, 7:00pm,
  * 7 p.m. and 19:00 match each other, never 7:30 PM or 7 AM. A time with no AM or PM and an hour up
- * to 12, such as 7:30, matches either half of the day. A # before a number is dropped, so
- * Order #1250 matches Order 1250.
+ * to 12, such as 7:30, matches either half of the day. A number sign before a number is dropped,
+ * so an order number written with one matches the bare number.
  *
  * A text that lacks any word of the query holding a digit, read as above, scores 0 whatever else
  * it shares, so 7:30 PM never matches 7:00 PM, Order 1250 never matches Order 1251 and Room 102

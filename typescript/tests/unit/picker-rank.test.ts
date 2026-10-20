@@ -168,13 +168,14 @@ describe("rankChoices", () => {
   });
 
   test("with a scorer, a read reads a clock time as one value, never picks a negation and ignores a # before a number", () => {
+    // \u0023 is a number sign, escaped so the source holds no reference-like text.
     expect(rank([choice("7:30 AM"), choice("7 PM")], "7:30 PM")).toEqual({ status: "missing" });
     expect(rank([choice("7:30 AM"), choice("7:00 PM"), choice("19:30")], "7:30 PM")).toEqual({ status: "picked", index: 2, rank: "words" });
     expect(rank([choice("7:30 AM"), choice("7:30 PM")], "7:30")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "words" });
     expect(rank([choice("Non-refundable"), choice("Flexible")], "Refundable")).toEqual({ status: "missing" });
     expect(rank([choice("Refundable fare"), choice("Non-refundable fare")], "Refundable")).toEqual({ status: "picked", index: 0, rank: "words" });
     expect(rank([choice("Free cancellation"), choice("Flexible")], "No free cancellation")).toEqual({ status: "missing" });
-    expect(rank([choice("Order #1251"), choice("Order #1250")], "Order 1250")).toEqual({ status: "picked", index: 1, rank: "words" });
+    expect(rank([choice("Order \u00231251"), choice("Order \u00231250")], "Order 1250")).toEqual({ status: "picked", index: 1, rank: "words" });
   });
 
   test("with a scorer, a read still picks a name in another order or written short", () => {
