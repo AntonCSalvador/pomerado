@@ -552,3 +552,15 @@ test("a failure names its reason, never the value", async ({ page }) => {
   ).toEqual({ error: "control_unsupported" });
   expect(await submitted(page)).toEqual({ dob: "", month: "7" });
 });
+
+test("a fill the page never takes names its reason, never the value Playwright's error would quote", async ({
+  page,
+}) => {
+  await page.setContent(`<form><label>Date of birth<input name="dob" readonly></label></form>`);
+  expect(
+    await call(
+      page,
+      `return await fillDate(page.getByLabel("Date of birth"), "1990-07-04", "MM/DD/YYYY", { timeout: 500 });`,
+    ),
+  ).toEqual({ error: "not_committed" });
+});
