@@ -1,5 +1,6 @@
 import { Effect, Option, Schema } from "effect";
 import { publicDefinitionPath } from "../guardian/publication.js";
+import type { PendingExecution, ReviewTurn } from "../guardian/review.js";
 import type { PublicationScope } from "../guardian/review-contracts.js";
 import { inlineLocalRefs, UnresolvedSchemaReference } from "../registry/schema-references.js";
 import type { ScriptQuestionDeclarations } from "../runtime/script-input.js";
@@ -197,6 +198,79 @@ export const outputDigest = (output: unknown): string | undefined => {
 
 /** What the review is told about the digest, when the host writes one. */
 export const outputDigestNote = `${outputDigestPath} summarizes every field of each list in the example output across all its records, including records past what ${exampleOutputPath} keeps.`;
+
+/** The largest file a publication review's request carries inline. */
+const inlineFileBytes = 16 * 1024;
+
+/**
+ * The files a publication review reads first that fit in its request, by path: the public
+ * definition, the entrypoint, the output digest and a read example's output, each when it is
+ * there and holds at most 16 KiB. A write session's output is never one of them.
+ */
+export const inlinePublicationPaths = (review: {
+  readonly definition: string;
+  readonly entrypoint: string;
+  /** The bundle, by path without the `operation/` prefix. */
+  readonly files: ReadonlyMap<string, string>;
+  readonly digest?: string | undefined;
+  readonly exampleOutput?: string | undefined;
+}): readonly string[] =>
+  [
+    [publicDefinitionPath, review.definition],
+    [`operation/${review.entrypoint}`, review.files.get(review.entrypoint) ?? ""],
+    ...(review.digest === undefined ? [] : [[outputDigestPath, review.digest] as const]),
+    [exampleOutputPath, review.exampleOutput ?? ""],
+  ]
+    .filter(([, text]) => text !== "" && Buffer.byteLength(text) <= inlineFileBytes)
+    .map(([path]) => path);
+
+/** What the review is told about the inline files, when the host sends any. */
+export const inlineFilesNote =
+  "Each file in trusted_publication.inline, by its path, is exactly as read_source returns it, a JSON file parsed; there is no need to read those again, and any other file is read as usual.";
+
+const InlineChunk = Schema.Struct({ hasMore: Schema.Literal(false), source: Schema.String });
+/**
+ * Each listed publication file as one complete `read_source` chunk returns it, through the same
+ * screen and publication gate, a JSON file parsed so the request shows it as JSON. A file whose
+ * read fails or needs more than one chunk is left for Guardian to read itself.
+ */
+const inlinePublicationFiles = (readSource: ReviewTurn["readSource"], paths: readonly string[]) =>
+  Effect.forEach(paths, (path) =>
+    readSource(path, 0).pipe(
+      Effect.flatMap(Schema.decodeUnknown(Schema.parseJson(InlineChunk))),
+      Effect.map(({ source }): NonNullable<PublicationScope["inline"]> => [
+        {
+          path,
+          content: path.endsWith(".json")
+            ? Option.getOrElse(decodeJson(source), () => source)
+            : source,
+        },
+      ]),
+      // error-reporting-allow: typed-recovery a file the host cannot inline is still in the index for Guardian to read
+      Effect.orElseSucceed(() => []),
+    ),
+  ).pipe(Effect.map((files) => files.flat()));
+
+/**
+ * A publication review's request with the listed files that fit inline (`inlinePublicationPaths`),
+ * read through the review's own `readSource`. Unchanged when none of them reads whole, or for a
+ * review with no publication index.
+ */
+export const withInlineFiles = (
+  pending: PendingExecution,
+  readSource: ReviewTurn["readSource"],
+  paths: readonly string[] | undefined,
+) => {
+  const { publication } = pending;
+  return publication === undefined || paths === undefined
+    ? Effect.succeed(pending)
+    : inlinePublicationFiles(readSource, paths).pipe(
+        Effect.map((inline): PendingExecution => {
+          const scope: PublicationScope = { ...publication, inline };
+          return inline.length === 0 ? pending : { ...pending, publication: scope };
+        }),
+      );
+};
 
 /** The largest count below `exceeds` that `fits`, or 0, for a `fits` that holds up to a point. */
 const largestFitting = (exceeds: number, fits: (count: number) => boolean) => {

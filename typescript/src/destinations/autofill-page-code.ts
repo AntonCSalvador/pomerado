@@ -530,23 +530,34 @@ const observed = ${JSON.stringify(observed)};
 const selectors = ${JSON.stringify(step.fields.map((field) => field.selector))};
 const questionSelectors = ${JSON.stringify(step.fields.map((field) => field.slot === "private_answer" ? field.questionSelector ?? null : null))};
 const codeSlots = ${JSON.stringify(step.fields.map((field) => field.slot === "code"))};
-const fields = [];
-for (let index = 0; index < selectors.length; index++) {
-  const found = await locate(selectors[index], questionSelectors[index]);
-  if ("error" in found)
-    return { ...found, target: index, url: primary.url()${fill?.call.kind === "submit" ? ", document: await documentStart()" : ""} };
-  fields.push(found);
-}
 const submitSelector = ${JSON.stringify(step.submit ?? null)};
 const submitKey = ${JSON.stringify(step.submitKey ?? null)};
+// Every control is found first, then read in one pass (readControls). A control that is not found
+// ends the call at once, after the no-wait read of the ones found before it (checkReads).
+const foundFields = [];
+for (let index = 0; index < selectors.length; index++) {
+  const foundField = await locate(selectors[index], questionSelectors[index]);
+  if ("error" in foundField) {
+    await checkReads(foundFields);
+    return { ...foundField, target: index, url: primary.url()${fill?.call.kind === "submit" ? ", document: await documentStart()" : ""} };
+  }
+  foundFields.push(foundField);
+}
+const foundSubmit =
+  (submitKey !== null && foundFields.length > 0) || submitSelector === null ? null : await locate(submitSelector);
+if (foundSubmit !== null && "error" in foundSubmit) {
+  await checkReads(foundFields);
+  return { ...foundSubmit, target: "submit", url: primary.url() };
+}
+const readFound = await readControls(foundSubmit === null ? foundFields : [...foundFields, foundSubmit]);
+const fields = readFound.slice(0, foundFields.length);
 ${keySubmitCode}
 const submit =
   submitKey !== null && fields.length > 0
     ? await keySubmit(fields[fields.length - 1])
-    : submitSelector === null
+    : foundSubmit === null
       ? null
-      : await locate(submitSelector);
-if (submit !== null && "error" in submit) return { ...submit, target: "submit", url: primary.url() };
+      : readFound[foundFields.length];
 // An inert submit takes no interaction at all, so nothing is typed for it. A disabled one may be
 // enabled once the fields hold input; the submit call never clicks it while it is disabled.
 if (submit !== null && submit.inert)

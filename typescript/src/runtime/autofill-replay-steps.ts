@@ -197,6 +197,11 @@ export interface AutofillReplayInput<
    * an approval, so the run reads its login only when it must.
    */
   readonly credentials: WebsiteCredentials | undefined;
+  /**
+   * A session read just found the page signed out, and this value-free check is the sign-in that
+   * follows it: its login entry never ends as one that can't tell (`entryCantTell`).
+   */
+  readonly readSignedOut?: boolean;
   readonly retryState?: AutofillRetryState;
   readonly ask: InputAsker;
   /** The fields the owner gave, kept with the attempt. */

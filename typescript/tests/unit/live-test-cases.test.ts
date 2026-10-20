@@ -234,15 +234,20 @@ describe("the signed-in test input bound", () => {
   });
 
   it("allows up to the limit, then refuses only a new input", () => {
-    const first = testInputKey(combined);
-    const second = testInputKey({ query: "desk" });
-    expect(signedInTestInputRefusal([first], [{ query: "desk" }])).toBeUndefined();
-    // Both counted: a rerun of either is free, a third input is refused.
-    expect(signedInTestInputRefusal([first, second], [reordered, { query: "desk" }])).toBeUndefined();
-    expect(signedInTestInputRefusal([first, second], [{ query: "chair" }])).toBeDefined();
+    const counted = [combined, { query: "desk" }, { query: "chair" }].map(testInputKey);
+    expect(signedInTestInputRefusal(counted, [{ query: "lamp" }])).toBeUndefined();
+    // Four counted: a rerun of any is free, a fifth input is refused.
+    const full = [...counted, testInputKey({ query: "lamp" })];
+    expect(signedInTestInputRefusal(full, [reordered, { query: "desk" }])).toBeUndefined();
+    expect(signedInTestInputRefusal(full, [{ query: "sofa" }])).toBeDefined();
     // A batch that would add two inputs when one is left runs nothing.
-    expect(signedInTestInputRefusal([first], [{ query: "desk" }, { query: "chair" }])).toBeDefined();
-    expect(signedInTestInputRefusal([], [combined, { query: "desk" }, { query: "chair" }])).toBeDefined();
+    expect(signedInTestInputRefusal(counted, [{ query: "lamp" }, { query: "sofa" }])).toBeDefined();
+    expect(
+      signedInTestInputRefusal(
+        [],
+        [combined, { query: "desk" }, { query: "chair" }, { query: "lamp" }, { query: "sofa" }],
+      ),
+    ).toBeDefined();
   });
 });
 

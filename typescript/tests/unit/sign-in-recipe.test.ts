@@ -29,6 +29,21 @@ const steps = [
 ] as const;
 const signedIn = { selector: "#account-menu" };
 
+/** A version 1 recipe whose last step types a code split across `count` one-character boxes. */
+const boxedCodeRecipe = (count: number) => ({
+  version: 1,
+  steps: [
+    ...steps,
+    {
+      page: "https://example.test/login/code",
+      fields: Array.from({ length: count }, (_, at) => ({ selector: `#otp-${at + 1}`, slot: "code" })),
+      submit: "#verify",
+      submittedBy: "host",
+    },
+  ],
+  signedIn,
+});
+
 describe("decodeSignInRecipe", () => {
   it.each([
     ["version 1", { version: 1, steps, signedIn }],
@@ -136,8 +151,16 @@ describe("decodeSignInRecipe", () => {
         signedIn,
       },
     ],
+    ["version 1 with a code split across 7 one-character boxes", boxedCodeRecipe(7)],
+    ["version 1 with a code split across 8 one-character boxes", boxedCodeRecipe(8)],
   ])("reads %s", (_name, recipe) => {
     expect(decodeSignInRecipe(JSON.stringify(recipe))).toEqual(recipe);
+  });
+
+  it("refuses a step with more fields besides its code boxes than a screen holds", () => {
+    const fields = Array.from({ length: 7 }, (_, at) => ({ selector: `#f-${at}`, slot: "zip" }));
+    const recipe = { version: 1, steps: [{ page: "https://example.test/login", fields }], signedIn };
+    expect(decodeSignInRecipe(JSON.stringify(recipe))).toBe("invalid");
   });
 
   it("refuses a version it does not know, so a run never drops what that version adds", () => {
@@ -705,6 +728,26 @@ describe("the seen-sent rule", () => {
       expect(await carried(verifyRequest(boxed(["4", "2", "6", "8", "1", "0"])))).toEqual([]);
       expect(await carried(verifyRequest(boxed(digits.slice(0, 5))))).toEqual([]);
       expect(await carried(verifyRequest("d1=2&d2=4&d3=6&step=two&d4=8&d5=1&d6=0"))).toEqual([]);
+    });
+
+    it.each([7, 8])("counts a code split across %i boxes as carried whole, by the host's own matcher", async (count) => {
+      const digits = Array.from("4829135706".slice(0, count));
+      const boxes = { fields: digits.map((_, at) => ({ selector: `#otp-${at + 1}`, slot: "code" as const })) };
+      const boxesScreen = { ...screen, targets: { fields: boxes.fields.map(() => target), submit: null } };
+      const secrets = makeRunSecrets();
+      secrets.register(digits.join(""));
+      const carried = async (request: SignInRequest) => {
+        const signIn = openSignInRecord();
+        armStep(signIn, boxes, boxesScreen, digits, 0, signInOrigins);
+        expect(signIn.pending.get("code")).toBe(digits.join(""));
+        return Effect.runPromise(noteFormSubmit(signIn, 1, request, secrets.carries));
+      };
+      const boxed = (order: readonly string[]) =>
+        order.map((digit, at) => `d${at + 1}=${digit}`).join("&");
+      expect(await carried(verifyRequest(`csrf=abc123&${boxed(digits)}&remember=1`))).toEqual(["code"]);
+      expect(await carried(verifyRequest(JSON.stringify({ otp: digits })))).toEqual(["code"]);
+      expect(await carried(verifyRequest(`code=${digits.join("")}`))).toEqual(["code"]);
+      expect(await carried(verifyRequest(boxed(digits.slice(0, count - 1))))).toEqual([]);
     });
 
     it("keeps a one-character value beside the boxes out of the code, by the host's own matcher", async () => {
