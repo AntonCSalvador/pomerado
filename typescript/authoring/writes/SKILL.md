@@ -51,7 +51,10 @@ Sign in first when the site needs it, and always for a cart or checkout
 (.agents/cart/SKILL.md), with the auth skill: read-only `explore` to find the login, then
 `authenticate`. Before the first `act` step you may still explore
 read-only, for example to read the first page's options, but never fill, select,
-add, save or submit anything there.
+add, save or submit anything there. Among those explores, for each input that takes a record's
+own key, type one made-up key in the site's own format, with a serial past any the site lists,
+into the site's own lookup, once, to see what it shows for a key it has no record of (core
+skill).
 
 Read the path's options with read-only exploration where you can, then ask with
 `request_input` about the ones the caller's input does not settle, as `AGENTS.md` ("Try

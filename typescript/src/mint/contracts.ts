@@ -661,7 +661,7 @@ export const ExecutionRequest = Schema.Struct({
   testInput: Schema.optional(
     Schema.String.pipe(Schema.minLength(2), Schema.maxLength(16_384)).annotations({
       description:
-        "Only with purpose test and target liveBrowser on a read build: the tool's input you chose, as JSON text, to show the tool works for values other than the caller's, such as another route or passenger count. Public values only. A read signed out runs as many as it needs. A signed-in read runs at most two distinct inputs beyond its example in a build or repair, its combined filter case (testing skill); running one again is free. Where the host offers live_tests, run planned cases in batches with it instead. Omit it to run the caller's input.",
+        "Only with purpose test and target liveBrowser on a read build: the tool's input you chose, as JSON text, to show the tool works for values other than the caller's, such as another route or passenger count. Public values only. A read signed out runs as many as it needs. A signed-in read runs at most four distinct inputs beyond its example in a build or repair (testing skill); running one again is free. Where the host offers live_tests, run planned cases in batches with it instead. Omit it to run the caller's input.",
     }),
   ),
   /** Only on authenticate, and only where the host offers autofill sign-in. */

@@ -402,7 +402,7 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   "sign_in_version_refused",
   // An execution on the site the build moved away from: a fresh example on the current site.
   "example_before_site_change",
-  // Restored inputs change the code, which needs its own example.
+  // Restored inputs change the code, which needs its own example; a write publishes its session again.
   "input_contract_changed",
   // Too few cases pass on the published source: fix, then run them again.
   "live_tests_below_threshold",
@@ -421,7 +421,10 @@ const refusalRecovery = (reason: string | undefined, write: boolean): Publicatio
   reason !== undefined &&
   (writeCompletionReasons.has(reason) || (write && contractReasons.has(reason)))
     ? "write_completion"
-    : reason !== undefined && newObservationReasons.has(reason)
+    : reason !== undefined &&
+        newObservationReasons.has(reason) &&
+        // A write restores its inputs in the source and publishes its session's execution again.
+        !(write && reason === "input_contract_changed")
       ? "new_observation"
       : "correct_source";
 /** A refusal the harness makes before publication runs, as its decision. */
@@ -5166,7 +5169,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     error.code,
                     error.reason,
                     { brokenInputs: error.brokenInputs ?? [] },
-                    inputContractChangedInstruction,
+                    inputContractChangedInstruction(buildEffect === "write"),
                   );
                 if (error.reason === "tool_name_taken")
                   return notPublished(
