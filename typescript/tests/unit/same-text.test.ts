@@ -54,6 +54,11 @@ it("matches a word the page writes short when the wanted text has the full word"
   ]);
 });
 
+it("confirms a town the list writes short against the caller's spelling and the label picked", () => {
+  expect(sameText("St-Jean-sur-Richelieu", "Saint-Jean-sur-Richelieu")).toBe(true);
+  expect(sameText("St-Jean-sur-Richelieu", "St-Jean-sur-Richelieu")).toBe(true);
+});
+
 it("never matches a short wanted word against a longer word the page shows", () => {
   // Each pair is the caller's wanted text, then what the page shows.
   const pairs: Pairs = [
@@ -219,7 +224,7 @@ it("keeps text of punctuation alone as it is, never blank", () => {
   expectEach([["-", "  "]], false);
 });
 
-it("embeds as self-contained source, as the page code uses it", () => {
+it("embeds as self-contained source, so page code can use it", () => {
   const embedded = new Function(`return ${String(sameText)};`)() as typeof sameText;
   expect(embedded("St-Jean", "Saint Jean")).toBe(true);
   expect(embedded("Saint Jean", "St-Jean")).toBe(false);
