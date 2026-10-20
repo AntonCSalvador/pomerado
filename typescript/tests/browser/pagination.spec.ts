@@ -363,6 +363,17 @@ test.describe("pages the server renders, one URL per page", () => {
     });
   });
 
+  test("the URL's page number is read from the page parameters the pager knows, never from pg", async ({ page }) => {
+    await serverList(page, () => rowsHtml(records(5)));
+    const urlPageOf = async (query: string) => {
+      await page.goto(`${origin}/items?${query}`);
+      return (await runPager(page, `const pager = listPager({ ${serverSpec()} });\nreturn await pager.detect();`))["urlPage"];
+    };
+    for (const name of ["page", "p", "paged", "pagenum", "page_number", "pageNumber", "pageNo", "currentPage"])
+      expect(await urlPageOf(`${name}=3`), name).toEqual({ name, value: "3" });
+    expect(await urlPageOf("pg=3")).toBeNull();
+  });
+
   test("a page whose only way on is the document's rel=next link", async ({ page }) => {
     const all = records(19);
     headOf = (url) => {
