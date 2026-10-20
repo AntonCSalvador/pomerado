@@ -1827,6 +1827,12 @@ export interface MintHarnessSnapshot {
    * it, which ends a blocked report as sign-in unavailable. Optional for the same reason.
    */
   readonly signInUnconfirmed?: true;
+  /**
+   * Every refusal `guardianRefused` stands on is Guardian's of an authenticate step, with no
+   * confirmed sign-in on the current site since, which ends a blocked report that stands on no
+   * host refusal as sign-in unavailable. Optional for the same reason.
+   */
+  readonly signInRefusalOnly?: true;
   readonly destinationEvidenceRefusals: number;
   readonly inputFeedbackRounds: number;
   readonly inputFeedbackPublicTool: boolean;
@@ -1986,6 +1992,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   loginDeclined: Schema.optionalWith(LoginDecline, { exact: true }),
   signInAbandoned: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   signInUnconfirmed: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  signInRefusalOnly: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   destinationEvidenceRefusals: Schema.NonNegativeInt,
   inputFeedbackRounds: Schema.NonNegativeInt,
   inputFeedbackPublicTool: Schema.Boolean,

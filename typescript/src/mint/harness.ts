@@ -416,6 +416,8 @@ const askedOnceReasons: ReadonlySet<string> = new Set([
   "http_implementation_stale",
   "login_url_one_time",
 ]);
+/** An execution request for a sign-in step, read before it decodes. */
+const isAuthenticate = Schema.is(Schema.Struct({ purpose: Schema.Literal("authenticate") }));
 /** How the minter goes on after a refusal that is neither an outage nor Guardian's. */
 const refusalRecovery = (reason: string | undefined, write: boolean): PublicationRecovery =>
   reason !== undefined &&
@@ -1071,15 +1073,20 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * takeover keeps it, and a move to another site clears it.
        */
       let signInUnconfirmed = recovered?.signInUnconfirmed === true;
-      /** Updates `signInUnconfirmed` once an authenticate ends, by what it did. */
+      /**
+       * Updates `signInUnconfirmed` once an authenticate ends, by what it did; a confirmed sign-in
+       * also clears `signInRefusalOnly`.
+       */
       const noteSignIn = (
         exit: Exit.Exit<ExecutionEvidence, MintFailure>,
         crossedDispatch: boolean,
       ) => {
         if (Exit.isSuccess(exit)) {
           const { authentication, effect } = exit.value;
-          if (authentication?.state === "authenticated") signInUnconfirmed = false;
-          else if (effect !== "not_sent") signInUnconfirmed = true;
+          if (authentication?.state === "authenticated") {
+            signInUnconfirmed = false;
+            signInRefusalOnly = false;
+          } else if (effect !== "not_sent") signInUnconfirmed = true;
           return;
         }
         // One that failed past its dispatch fence may have sent the login, unless it says it
@@ -1147,6 +1154,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * that names a correction is not one, nor is a correctable execution refusal.
        */
       let guardianRefused = recovered?.guardianRefused === true;
+      /**
+       * Every refusal `guardianRefused` stands on is Guardian's of an authenticate step, and no
+       * sign-in on the current site confirmed after it: the build never got past signing in, so a
+       * blocked report that stands only on it ends as sign-in unavailable. Once cleared, it stays
+       * cleared for the rest of the attempt: a later refusal of a sign-in leaves `guardianRefused`
+       * standing on the earlier one too, so the report keeps its own ending.
+       */
+      let signInRefusalOnly = recovered?.signInRefusalOnly === true;
       /**
        * A host check refused a step the build needs in this attempt: a publication its checks
        * refused, a sign-in the host refused, or a task update the host refused. A `host_refused`
@@ -2146,11 +2161,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             instruction: "The build's owner did not answer in time. The host is ending this build.",
           });
         });
-      const reviewFeedback = (error: MintFailure) =>
+      const reviewFeedback = (error: MintFailure, signIn: boolean) =>
         Effect.gen(function* () {
           // A refusal Guardian marked correctable names a fix, so no policy block stands on it.
           // One without a kind, from an older reviewer, counts as final, as it did before.
-          if (error.review?.refusal !== "correctable") guardianRefused = true;
+          if (error.review?.refusal !== "correctable") {
+            signInRefusalOnly = signIn && (signInRefusalOnly || !guardianRefused);
+            guardianRefused = true;
+          }
           const rationale = error.review
             ? yield* screenMintText(dependencies, error.review.rationale)
             : "Guardian rejected this submission; rationale unavailable.";
@@ -2946,10 +2964,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * or what `executionFailed` picks out.
        */
       const executionFailureFeedback =
-        (executionFailed: (error: MintFailure) => boolean) =>
+        (executionFailed: (error: MintFailure) => boolean, signIn = false) =>
         <A, R>(execution: Effect.Effect<A, MintFailure, R>) =>
           execution.pipe(
-            Effect.catchIf((error) => error.code === "ReviewDenied", reviewFeedback),
+            Effect.catchIf(
+              (error) => error.code === "ReviewDenied",
+              (error) => reviewFeedback(error, signIn),
+            ),
             Effect.catchIf(
               (error) => error.code === "ReviewUnavailable",
               reviewUnavailableRetry("execution", reviewUnavailableFeedback),
@@ -3495,7 +3516,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const siteChanged = next.siteOrigin !== taskState.siteOrigin;
           taskState = next;
           // The first site's unconfirmed sign-in says nothing of the next site.
-          if (siteChanged) signInUnconfirmed = false;
+          if (siteChanged) {
+            signInUnconfirmed = false;
+            signInRefusalOnly = false;
+          }
           // The task now runs signed out: a failed sign-in no longer holds anything back, and no
           // sign-in runs until a later update asks for one, which the owner then confirmed.
           for (const change of accepted.changes)
@@ -4300,9 +4324,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               if (questionOnly) return yield* new MintFailure({ code: "ScopeDenied" });
               // Once sign-in is unavailable, another authenticate gets the same answer; once the
               // owner declined to sign in, it gets theirs.
-              const authenticating = Schema.is(
-                Schema.Struct({ purpose: Schema.Literal("authenticate") }),
-              )(input);
+              const authenticating = isAuthenticate(input);
               if (signInUnavailable !== undefined && authenticating)
                 return signInUnavailable.answer;
               if (loginDeclined !== undefined && authenticating)
@@ -4566,6 +4588,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   error.spentSignIn !== undefined ||
                   error.sessionLoss !== undefined ||
                   error.reason === "login_in_use",
+                isAuthenticate(input),
               ),
             ),
           ),
@@ -4890,8 +4913,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 publication.left.code === "ReviewDenied" &&
                 denial !== undefined &&
                 publicationRefusalUnfixable(denial)
-              )
+              ) {
                 guardianRefused = true;
+                signInRefusalOnly = false;
+              }
               if (publication._tag === "Left" && publication.left.code === "ReviewDenied") {
                 const paths = [
                   ...new Set([
@@ -5661,7 +5686,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     );
                     if ("refusal" in ending) return ending.refusal;
                     // An ending the checks above accepted, while the build's latest sign-in
-                    // never confirmed: the site never got as far as judging the task, so it
+                    // never confirmed, or while the only refusal on record is Guardian's final
+                    // refusal of a sign-in step: the site never got as far as judging the task, so it
                     // cannot have declined it or lacked it, and a policy or host check that
                     // stopped it stopped a sign-in. With no failed sign-in pending, whose own
                     // refusal above asks the agent to resolve it, the build ends as sign-in
@@ -5671,7 +5697,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     if (
                       ending.reason !== "owner_declined" &&
                       ending.reason !== "question_unanswered" &&
-                      signInUnconfirmed &&
+                      (signInUnconfirmed || (signInRefusalOnly && !hostRefused)) &&
                       unresolvedSignIn === undefined &&
                       loginDeclined === undefined &&
                       !signInAbandoned
@@ -6264,6 +6290,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         },
         ...(blockedReviewUnavailable ? { blockedReviewUnavailable: true as const } : {}),
         ...(guardianRefused ? { guardianRefused: true as const } : {}),
+        ...(signInRefusalOnly ? { signInRefusalOnly: true as const } : {}),
         ...(hostRefused ? { hostRefused: true as const } : {}),
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),
         ...(loginHeld ? { loginHeld: true as const } : {}),
