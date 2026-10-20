@@ -103,11 +103,11 @@ export const CalendarDate = Schema.String.pipe(
  *   combobox with two options of one label, and a card, password, one-time code or identity
  *   number field, by its `autocomplete` (`cc-…`, `current-password`, `new-password`,
  *   `one-time-code`) or by a label, name or id such as card number, card #, credit card, security
- *   code, card verification, CVV, CVN, CID, a card's expiry, SSN, verification, authentication or
- *   SMS code, OTP, a 6-digit code, a PIN (not a PIN code, which can be a postcode), password,
- *   passport, driver's licence, national ID or national insurance number, tax ID (TIN, EIN, VAT
- *   number), IBAN, bank account or account number, routing number or sort code, and a few of their
- *   German, Spanish and French names.
+ *   code, card verification, CVV, CVN, CID, a card's expiry (next to "card", or as MM/YY or valid
+ *   thru), SSN, verification, authentication or SMS code, OTP, a 6-digit code, a PIN (not a PIN
+ *   code, which can be a postcode), password, passport, driver's licence, national ID or national
+ *   insurance number, a TIN or EIN, IBAN, bank account, routing number or sort code, and a few of
+ *   their German, Spanish and French names.
  * - `visibleFieldLabels(scope, { timeout }?)`: every field the form shows now, by its label, as
  *   `unfilledRequiredFields` names it, and by each name and id it carries. Read them in the marked
  *   call just before the click, for `blockingRequiredFields`.
@@ -391,9 +391,9 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
     // protected forms, never a site-field question.
     const secretTokens = /^(cc-.*|current-password|new-password|one-time-code)$/;
     // A PIN code or pincode is a postcode in some countries, so only a PIN alone counts.
-    const secretWords = /\b(?:card ?(?:number|no)|cc ?(?:number|num)|credit card|card verification|security ?code|cvv2?|cvc2?|csc|cvn|cid|ssn|social security|verification ?code|authentication code|sms ?code|otp|\d[- ]?digit code|pass ?word|passcode|passport|driv(?:er|ing).?s? ?licen[cs]e|national ?(?:insurance|id|identity|identification)|tax ?(?:id|identification|number)|vat ?(?:number|no|id)|iban|bank ?account|account ?(?:number|no)|routing|sort ?code|swift|expiry|expiration|exp ?date|valid ?(?:thru|through|until)|mm ?\/ ?yy|kartennummer|n[uú]mero de tarjeta|num[eé]ro de carte|passwort|kennwort|contrase[nñ]a|mot de passe|reisepass|pasaporte|passeport|f[uü]hrerschein|(?:permiso|licencia|carn[eé]) de conducir|permis de conduire|personalausweis|ausweisnummer|documento de identidad|carte d.identit|sozialversicherung|seguridad social|s[eé]curit[eé] sociale|steuer ?(?:id|nummer|identifikationsnummer)|ust ?id|umsatzsteuer|n[uú]mero de identificaci[oó]n fiscal|num[eé]ro fiscal|num[eé]ro de tva|kontonummer|bankleitzahl|n[uú]mero de cuenta|cuenta bancaria|num[eé]ro de compte|ablaufdatum|g[uü]ltig bis|caducidad|vencimiento|date d.expiration)\b|\bcard ?#|\bpin\b(?! ?code)/i;
+    const secretWords = /\b(?:card ?(?:number|no)|cc ?(?:number|num)|credit card|card verification|security ?code|cvv2?|cvc2?|csc|cvn|cid|ssn|social security|verification ?code|authentication code|sms ?code|otp|\d[- ]?digit code|pass ?word|passcode|passport|driv(?:er|ing).?s? ?licen[cs]e|national ?(?:insurance|id|identity|identification)|iban|bank ?account|routing ?(?:number|no)|sort ?code|card ?(?:expiry|expiration|exp)|(?:expiry|expiration) (?:date )?(?:of|on) (?:your |the )?card|valid ?(?:thru|through)|mm ?\/ ?yy|kartennummer|n[uú]mero de tarjeta|num[eé]ro de carte|passwort|kennwort|contrase[nñ]a|mot de passe|reisepass|pasaporte|passeport|f[uü]hrerschein|(?:permiso|licencia|carn[eé]) de conducir|permis de conduire|personalausweis|ausweisnummer|documento de identidad|carte d.identit|sozialversicherung(?:snummer)?|seguridad social|s[eé]curit[eé] sociale|kontonummer|bankleitzahl|cuenta bancaria|compte bancaire)\b|\bcard ?#|\bpin\b(?! ?code)/i;
     // Short codes that are ordinary words in some languages count only in capitals.
-    const secretCodes = /\b(?:EIN|TIN|DNI|NIE|NIF|BIC)\b/;
+    const secretCodes = /\b(?:EIN|TIN|DNI|NIE)\b/;
     const spaced = (text) => words(String(text ?? "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\-.[\]]+/g, " "));
     const flagMarks = '[aria-invalid="true"], .is-invalid' +
       (globalThis.CSS?.supports?.("selector(:user-invalid)") ? ", :user-invalid" : "");

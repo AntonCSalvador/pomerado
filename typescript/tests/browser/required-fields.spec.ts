@@ -157,42 +157,36 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
     "Driving license number",
     "National insurance number",
     "National ID",
-    "Tax ID",
     "TIN",
     "EIN",
-    "VAT number",
     "IBAN",
     "Bank account number",
-    "Account number",
     "Routing number",
     "Sort code",
-    "SWIFT",
-    "BIC",
-    "Expiry date",
+    "Card expiry",
+    "Expiration date on card",
     "Expiration (MM/YY)",
-    "Exp. date",
     "Valid thru",
     "Reisepass",
     "Führerschein",
     "Personalausweis",
-    "Steuer-ID",
-    "USt-IdNr.",
+    "Sozialversicherungsnummer",
     "Kontonummer",
-    "Ablaufdatum",
+    "Bankleitzahl",
     "Pasaporte",
     "Permiso de conducir",
     "DNI",
-    "NIF",
-    "Número de cuenta",
-    "Fecha de caducidad",
+    "NIE",
+    "Número de la Seguridad Social",
+    "Cuenta bancaria",
     "Passeport",
     "Permis de conduire",
     "Carte d'identité",
     "Numéro de sécurité sociale",
-    "Numéro de TVA",
-    "Numéro de compte",
-    "Date d'expiration",
+    "Compte bancaire",
   ];
+  // Business and shop fields that only sound like them stay ordinary text.
+  const ordinaryLabels = ["VAT number", "Tax ID", "NIF", "Account number", "Expiry date", "Routing instructions", "SWIFT"];
   // Each is asked by the host's own protected forms, never as a site field, whatever its type.
   await page.setContent(`<form>
   <label>Number<input type="tel" name="n1" autocomplete="cc-number" required></label>
@@ -233,6 +227,7 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
   <label>Pincode<input name="postal2" required></label>
   <label>Nationality<input name="nationality" required></label>
   <label>Tin colour<input name="colour" required></label>
+  ${ordinaryLabels.map((label, index) => `<label>${label}<input name="plain${index}" required></label>`).join("")}
 </form>`);
   expect(await call(page, `return await unfilledRequiredFields(page.locator("form"));`)).toEqual({
     result: [
@@ -279,6 +274,7 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
       // A nationality is no national ID, and a short code counts only in capitals.
       { label: "Nationality", shape: "text" },
       { label: "Tin colour", shape: "text" },
+      ...ordinaryLabels.map((label) => ({ label, shape: "text" })),
     ],
   });
 });
