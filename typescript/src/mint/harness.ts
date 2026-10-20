@@ -3062,7 +3062,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
-        // one of those takes its name, so neither ever ends as policy.
+        // one of those takes its name, so neither ever ends as policy. `owner_ended` needs an
+        // answer the owner gave in this build.
         const ownerRefused =
           loginDeclined !== undefined ||
           [...answeredQuestions.values()].some(
@@ -3080,6 +3081,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "no_question_unanswered",
             "No question went unanswered in this build, so the build has not ended. Use question_unanswered only after a question you asked came back as no answer and the build cannot go on without it.",
           );
+        if (reason === "owner_ended" && answeredQuestions.size === 0)
+          return refused(
+            "owner_not_ended",
+            "The owner answered no question in this build, so the build has not ended. Use owner_ended only after the owner chose in an answer to end the build.",
+          );
         if (reason === "host_refused" && !hostRefused)
           return refused(
             "host_not_refused",
@@ -3094,7 +3100,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           if (unanswered) return { reason: "question_unanswered" };
           return refused(
             "policy_not_refused",
-            "Nothing in this attempt refused this: Guardian made no final refusal of an execution, and refused no publication for privacy or authority or for a finding no correction gets past. Use host_refused when a host check refused a step the build needs and nothing left in this attempt can fix it. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
+            "Nothing in this attempt refused this: Guardian made no final refusal of an execution, and refused no publication for privacy or authority or for a finding no correction gets past. Use host_refused when a host check refused a step the build needs and nothing left in this attempt can fix it. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, their choice to end the build is owner_ended, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
           );
         }
         return { reason };
@@ -5666,11 +5672,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     // stopped it stopped a sign-in. With no failed sign-in pending, whose own
                     // refusal above asks the agent to resolve it, the build ends as sign-in
                     // unavailable, worded by what the host saw, and its caller is never told to
-                    // change the request. The owner's own no, and a question they left
-                    // unanswered, keep their endings, a policy report renamed to one included.
+                    // change the request. The owner's own no, a question they left unanswered and
+                    // their choice to end the build keep their endings, a policy report renamed to
+                    // one included.
                     if (
                       ending.reason !== "owner_declined" &&
                       ending.reason !== "question_unanswered" &&
+                      ending.reason !== "owner_ended" &&
                       signInUnconfirmed &&
                       unresolvedSignIn === undefined &&
                       loginDeclined === undefined &&

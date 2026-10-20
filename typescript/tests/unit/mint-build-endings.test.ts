@@ -72,9 +72,25 @@ const ask = (prompt: string) => ({
 
 const fixture = makeMintContinuationFixture(cleanups, portableJobSession, makeOpenAIMinter);
 
+/** The owner's choice to stop, as a choice question the minter asks once a needed fact is unknown. */
+const stopChoice = {
+  questions: [
+    {
+      id: "next",
+      type: "choice",
+      prompt: "The form needs a start date the request doesn't give. How should the build go on?",
+      options: [
+        { id: "stop", label: "Stop here; I don't know it" },
+        { id: "wait", label: "I'll find it and answer" },
+      ],
+    },
+  ],
+};
+
 it.each([
   { reason: "question_unanswered", refusal: "no_question_unanswered" },
   { reason: "owner_declined", refusal: "owner_not_declined" },
+  { reason: "owner_ended", refusal: "owner_not_ended" },
 ] as const)(
   "refuses $reason with nothing on record, then ends with it once its basis is recorded",
   async ({ reason, refusal }) => {
@@ -85,15 +101,17 @@ it.each([
           call("report_blocked", { reason, explanation }, "before"),
           reason === "question_unanswered"
             ? call("request_input", ask("Which report?"))
-            : call("request_input", {
-                questions: [
-                  {
-                    id: "proceed",
-                    type: "confirm",
-                    prompt: "May the tool do this?",
-                  },
-                ],
-              }),
+            : reason === "owner_ended"
+              ? call("request_input", stopChoice)
+              : call("request_input", {
+                  questions: [
+                    {
+                      id: "proceed",
+                      type: "confirm",
+                      prompt: "May the tool do this?",
+                    },
+                  ],
+                }),
           call("report_blocked", { reason, explanation }, "after"),
         ][index] ?? prose("Stopping."),
       reason === "owner_declined"
@@ -103,7 +121,12 @@ it.each([
                 proceed: { type: "confirm", value: { confirmed: false } },
               }),
           }
-        : {},
+        : reason === "owner_ended"
+          ? {
+              askInput: () =>
+                Effect.succeed({ next: { type: "choice", value: "stop" } }),
+            }
+          : {},
     );
     const outcome = await f.run();
     expect(JSON.stringify(f.requests[1]?.input)).toContain(refusal);
@@ -972,6 +995,32 @@ it("ends a policy report that stands on the owner's no as owner_declined after a
   expect(await f.run()).toMatchObject({
     blocked: { reason: "owner_declined" },
     stopReason: "owner_declined",
+  });
+});
+
+// The owner's own choice to end the build keeps its ending, sign-in or not, as their no does.
+it("keeps owner_ended after an unconfirmed sign-in", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        signIn,
+        call("request_input", stopChoice),
+        call("report_blocked", {
+          reason: "owner_ended",
+          explanation: "You chose to stop because the start date is unknown.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: (_submitted, beforeDispatch = () => Effect.void) =>
+        beforeDispatch({ reviewId: "review_sign_in", action: "authentication" }).pipe(
+          Effect.as(submittedScreen),
+        ),
+      askInput: () => Effect.succeed({ next: { type: "choice", value: "stop" } }),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "owner_ended" },
+    stopReason: "owner_ended",
   });
 });
 
