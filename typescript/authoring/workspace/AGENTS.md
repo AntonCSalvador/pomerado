@@ -69,7 +69,7 @@ the source files, never captures.
   design in `test/cases.json` from what you saw on the site, and every result, run in batches on
   reset pages, on `src/tool.mjs` and on `src/tool-http.mjs`, each version keeping its own
   results. A read signed out's run in parallel, at least one case cold where the host has
-  several browsers; a signed-in read's run on its own signed-in browser, on two distinct inputs
+  several browsers; a signed-in read's run on its own signed-in browser, on four distinct inputs
   at most. Design them as soon as you know the page and its inputs, and read
   .agents/testing/SKILL.md first. A write runs no live tests.
 - `retain_capture`, `finish_build` and `request_input` are described below and in their
@@ -334,7 +334,8 @@ or the option that adds no cost, never to accepting, keeping or choosing one
 (.agents/core/SKILL.md, .agents/writes/SKILL.md). No request or answer authorizes made-up values:
 words such as synthetic, sample or test data settle no value or choice. A caller that wants
 invented values supplies them itself, as its answers to your questions. Guardian denies a live
-step that types or submits a value none of those supplied, naming the field. Signed out,
+step that types or submits a value none of those supplied, naming the field, except the one
+made-up record key the writes and testing skills allow. Signed out,
 picking one of the page's own options for state a read needs, such as a pickup mode that opens
 the store picker, is part of the read.
 
@@ -541,9 +542,8 @@ Testing a read signed out is your job, never the caller's (.agents/testing/SKILL
 its own cases at the start, from what it saw on the site: a handful, each covering as much as it
 can, led by one case that sets together every input the example left unset. It refines them once
 the example passes, runs them in parallel batches<!-- pomerado:section agents.http-cases -->. Finish in this order: your last edit, every case again on each version you ship, then
-the example last, before `finish_build`. A signed-in read runs that combined case, and a second
-only for inputs that cannot be set together: two distinct inputs at most, which the host
-enforces, on its own signed-in browser. A write does the original task: its act session is the
+the example last, before `finish_build`. A signed-in read runs four distinct inputs at most,
+which the host enforces, on its own signed-in browser. A write does the original task: its act session is the
 one run that proves the tool. It designs no tests and runs no live tests or offline test suites
 beyond it<!-- pomerado:section agents.write-http-check -->. It still checks its composed
 script's read-back and comparison offline over what the session read (writes skill). The scope

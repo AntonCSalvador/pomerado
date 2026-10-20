@@ -636,9 +636,9 @@ it("keeps the HTTP version passages in host sections", async () => {
         ["core", "or the site's own data request, to opening each record's page."],
         ["search", "it never returns unfiltered results as filtered. When setting one control"],
         ["testing", "builds no offline test suite. It still checks its composed script's read-back"],
-        ["testing", "no no-results case and no edge cases. Publication review reads"],
+        ["testing", "other no-results case and no edge cases. Publication review reads"],
         ["testing", "own controls\"). Either way, read the input back"],
-        ["testing", "count toward the same two. The example uses"],
+        ["testing", "count toward the same four. The example uses"],
         ["writes", "run no live test of it. That rule is about running the write"],
         ["workspace/AGENTS.md", "and your own probes. **Read back every input before returning.**"],
         ["workspace/AGENTS.md", "the request the page sends for the rows, to driving such a filter"],
@@ -841,17 +841,17 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["c8f029d44e2580b0d1853bbe793f35ebb928f2c3f23bc0adfb5a5c56d1e39744", "core"],
+    ["bef4d560346a7ecb9bcc181f9c8574d86dbe5917c08482b8a6a1ef94d53e3b5d", "core"],
     ["0d2259dda1fd5a909a036b6b10b918c0d1b4a88da3aa3486cc06027312ceb39d", "search"],
     ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
-    ["fa90f2aa2b56572021f6d254465a7920257698fda21213b5143f7f87ddb33e17", "testing"],
-    ["be11a02976c7e9521941546c48f113c6237a02cc8d78e7f9e1287e241dc75d79", "pagination"],
-    ["9711e39331ab9ca41274dd652c41efe4c487f59e5b7ca929a387a54fbc9a9c63", "forms"],
-    ["4f046d81e7c95aca5e2e902aac135a85e52c7bf2afccd728f4525a0f4015a910", "writes"],
+    ["48300e60493a84560bbef0cd8d9f3b2f97246983588a0b154a8749df1f775bff", "testing"],
+    ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
+    ["5ad3ed0f15ab0e096c046d7eecfb3b938b3f0f196450d76068ab7ad50992d97a", "forms"],
+    ["0214f314c0a79436f8446dca8b3338b13c67f6cda07be03399f4513ee5782ea4", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["a3a3b9de15fe58391adc4e5185e4bff3fa7f01a95b89a9cc6a87852f749d346e", "caller-input"],
-    ["a6eb9a6bd969759a27a04f49871779b6e790f03a5084e9cba02fbca18e07f41b", "publication"],
-    ["006aadb878ce3e8f2ebb87d0579f08a526209e5ff31bf9c03296d6e864f4b19b", "workspace/AGENTS.md"],
+    ["e28cae70ae518c1fe27fc94108fd488ccfe873c0888256ca732b430a360470c2", "publication"],
+    ["7aeb77bd53f9a3ad5646aad9115e732cbb618d633a9fb290dfc0a642985fa165", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
@@ -972,7 +972,7 @@ it("renders the search URL fast path only when a host turns it on", async () => 
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
     ["3eab0c3ce4fe41164a06d06ffaa9544c66c85870e618fb5d1ae48a553cf98b06", "search"],
-    ["11394f0eeccd388437e12363055dd68f762ee697d16e18ca66488fdad1e92255", "workspace/AGENTS.md"],
+    ["7fad7fd9bc7c02f7619ef98df5dfb14b02bc991929eded910667d2b3cf87b4c7", "workspace/AGENTS.md"],
   ]);
   expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(
     off.digests.filter(([, name]) => name !== "search"),

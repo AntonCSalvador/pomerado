@@ -33,20 +33,21 @@ const catalog = [
   {
     name: "testing",
     description:
-      "For a read: design a few combined live test cases and run them. A read signed out runs a handful; a signed-in read runs one combined filter case, two at most. A write skips it and proves its tool with one run",
+      "For a read: design a few combined live test cases and run them. A read signed out runs a handful; a signed-in read runs four inputs at most. A write skips it and proves its tool with one run",
     references: [],
   },
   {
     name: "pagination",
     description:
       "Read before settling the schema of any tool that returns a list: page size, the cursor, numbered pages, next links, load more, infinite scroll, the site's own list API, changed lists and when to stop",
-    references: ["pagination.ts"],
+    references: ["pagination.ts", "pager.ts"],
   },
   {
     name: "forms",
     description: "Native/custom selection, resolvers, staged forms and expected terms",
     references: [
       "dates-and-dropdowns.ts",
+      "picker.ts",
       "custom-selection.ts",
       "dialog-picker.ts",
       "dates-and-files.ts",
