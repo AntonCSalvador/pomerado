@@ -11,7 +11,11 @@ import type { ListCursorKeys } from "../runtime/list-cursor.js";
 import { ScriptQuestionDeclarations } from "../runtime/script-input.js";
 export interface PomeradoOptions {
   readonly ask: InputAsker;
-  readonly browser?: PlaywrightOptions;
+  /**
+   * The browser the host launches or attaches to. It never attaches over CDP (`cdp`): its runs
+   * close other tabs and reset site data, which would change a browser it doesn't own.
+   */
+  readonly browser?: Omit<PlaywrightOptions, "cdp">;
   readonly minterProvider?: ModelProvider;
   readonly guardianProvider?: ModelProvider;
   /** The outcome reviewer's model provider, which judges whether each write took effect. */

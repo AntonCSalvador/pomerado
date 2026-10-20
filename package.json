@@ -216,6 +216,11 @@
       "import": "./dist/typescript/src/execution/declared-questions.js",
       "default": "./dist/typescript/src/execution/declared-questions.js"
     },
+    "./core/execution/playwright-execute": {
+      "types": "./dist/typescript/src/execution/playwright-execute.d.ts",
+      "import": "./dist/typescript/src/execution/playwright-execute.js",
+      "default": "./dist/typescript/src/execution/playwright-execute.js"
+    },
     "./core/execution/sign-in-diagnostics": {
       "types": "./dist/typescript/src/execution/sign-in-diagnostics.d.ts",
       "import": "./dist/typescript/src/execution/sign-in-diagnostics.js",
@@ -756,6 +761,11 @@
       "import": "./dist/typescript/src/runtime/login-field-asks.js",
       "default": "./dist/typescript/src/runtime/login-field-asks.js"
     },
+    "./core/runtime/kernel-compatibility": {
+      "types": "./dist/typescript/src/runtime/kernel-compatibility.d.ts",
+      "import": "./dist/typescript/src/runtime/kernel-compatibility.js",
+      "default": "./dist/typescript/src/runtime/kernel-compatibility.js"
+    },
     "./core/runtime/kernel-operation": {
       "types": "./dist/typescript/src/runtime/kernel-operation.d.ts",
       "import": "./dist/typescript/src/runtime/kernel-operation.js",
@@ -1022,19 +1032,24 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.2.0",
+    "@openai/agents": "0.18.0",
     "@playwright/test": "1.63.0",
     "@types/node": "24.13.4",
+    "effect": "3.22.2",
+    "patchright": "1.63.0",
     "typescript": "7.0.2",
-    "vitest": "5.0.2",
-    "@openai/agents": "0.18.0",
-    "effect": "3.22.2"
+    "vitest": "5.0.2"
   },
   "peerDependencies": {
     "@openai/agents": "0.18.0",
     "effect": "3.22.2",
+    "patchright": "1.63.0",
     "vitest": "^5.0.2"
   },
   "peerDependenciesMeta": {
+    "patchright": {
+      "optional": true
+    },
     "vitest": {
       "optional": true
     }

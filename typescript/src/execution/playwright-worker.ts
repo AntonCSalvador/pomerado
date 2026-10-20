@@ -4,14 +4,7 @@ import { fileURLToPath } from "node:url";
 import { parentPort, workerData } from "node:worker_threads";
 import { compileFunction } from "node:vm";
 import { format } from "node:util";
-import {
-  chromium,
-  type Browser,
-  type BrowserContext,
-  type CDPSession,
-  type Frame,
-  type Page,
-} from "playwright";
+import type { Browser, BrowserContext, CDPSession, Frame, Page } from "playwright";
 import { Cause, Effect, Exit, Schema } from "effect";
 import type { BrowserExecuteResponse } from "../runtime/browser-execution.js";
 
@@ -38,7 +31,7 @@ if (import.meta.url.endsWith(".ts"))
         : nextLoad(url, context),
   });
 const { makeCredentialKeyboard } = await import("../destinations/credential-keyboard.js");
-const { NativeWorkerOptions, NativeWorkerRequest } = await import("./playwright-execute.js");
+const { NativeWorkerOptions, NativeWorkerRequest } = await import("./playwright-protocol.js");
 
 const asError = (cause: unknown): Error =>
   cause instanceof Error ? cause : new Error("Native browser worker failed", { cause });
@@ -56,6 +49,29 @@ const identify = (context: BrowserContext, page: Page) =>
       Effect.mapError(asError),
       Effect.ensuring(promise(() => session.detach()).pipe(Effect.orDie)),
     );
+  });
+
+/**
+ * The page of a CDP-attached browser's own context the worker drives: the one `targetId` names, or
+ * with none the context's first page, opened when it has none. Playwright lists other clients'
+ * contexts' pages under the default context too, so a page whose context the browser reports as
+ * a created one (`Target.getBrowserContexts` lists every context but the default) is never taken:
+ * its cookies and storage are not the ones `context` reads.
+ */
+const adoptPage = (browser: Browser, context: BrowserContext, targetId: string | undefined) =>
+  Effect.gen(function* () {
+    const session = yield* promise(() => browser.newBrowserCDPSession());
+    const created = yield* promise(() => session.send("Target.getBrowserContexts")).pipe(
+      Effect.map(({ browserContextIds }) => new Set(browserContextIds)),
+      Effect.ensuring(promise(() => session.detach()).pipe(Effect.orDie)),
+    );
+    for (const candidate of context.pages()) {
+      const target = yield* identify(context, candidate);
+      if (created.has(target.browserContextId)) continue;
+      if (targetId === undefined || target.targetId === targetId) return candidate;
+    }
+    if (targetId === undefined) return yield* promise(() => context.newPage());
+    return yield* Effect.fail(new Error("CDP target not found in the browser's own context"));
   });
 
 /**
@@ -376,16 +392,31 @@ await Effect.runPromise(
     const options = yield* Schema.decodeUnknown(NativeWorkerOptions)(workerData).pipe(
       Effect.mapError(asError),
     );
-    const browser = yield* promise(() =>
-      chromium.connect(options.endpoint, { timeout: options.startupTimeoutMs }),
+    const chromium = yield* promise(
+      async () => ((await import(options.library)) as typeof import("playwright")).chromium,
     );
-    const context = yield* promise(() => browser.newContext());
-    const page = yield* promise(() => context.newPage());
+    const attached = options.cdp;
+    const browser = yield* promise(() =>
+      attached === undefined
+        ? chromium.connect(options.endpoint, { timeout: options.startupTimeoutMs })
+        : chromium.connectOverCDP(options.endpoint, { timeout: options.startupTimeoutMs }),
+    );
+    // Over CDP the worker drives the browser's own context and page and owns neither.
+    const context =
+      attached === undefined ? yield* promise(() => browser.newContext()) : browser.contexts()[0];
+    if (context === undefined)
+      return yield* Effect.fail(new Error("CDP browser has no default context"));
+    const page =
+      attached === undefined
+        ? yield* promise(() => context.newPage())
+        : yield* adoptPage(browser, context, attached.targetId);
     const target = yield* identify(context, page);
+    if (attached !== undefined)
+      browser.on("disconnected", () => port.postMessage({ kind: "disconnected" }));
     port.postMessage({
       kind: "ready",
       targetId: target.targetId,
-      contextId: target.browserContextId,
+      ...(attached === undefined ? { contextId: target.browserContextId } : {}),
     });
     const semaphore = yield* Effect.makeSemaphore(1);
     port.on("message", (value: unknown) => {
