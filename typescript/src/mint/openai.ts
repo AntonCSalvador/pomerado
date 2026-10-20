@@ -11,6 +11,7 @@ import { modelUsageCounts } from "../models/model-usage.js";
 import { makeIdleCompaction, mintIdleCompactionTokens } from "./idle-compaction.js";
 import { solModel } from "../models/models.js";
 import { providerQuotaExhausted } from "../models/provider-quota.js";
+import { transientTransportFailure } from "../models/transport-failure.js";
 import { MaxTurnsExceededError, RunContext, RunState, Runner, Usage, tool } from "@openai/agents";
 import type {
   AgentInputItem,
@@ -171,7 +172,9 @@ const transientModelFailure = (error: unknown): boolean => {
   if (typeof name === "string" && transientProviderErrors.has(name)) return true;
   const status: unknown = Reflect.get(error, "status");
   if (typeof status === "number") return transientStatus(status);
-  return transientProviderCodes.has(Reflect.get(error, "code"));
+  return (
+    transientProviderCodes.has(Reflect.get(error, "code")) || transientTransportFailure(error)
+  );
 };
 
 /**
