@@ -1710,7 +1710,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           observations:
             "Private observations are available through the screened execution response.",
         };
-        executions.push(referenceOnly);
+        // An execution recorded again, as a resumed attempt's rejoined call is, replaces its entry.
+        const recorded = executions.findIndex((entry) => entry.executionId === evidence.executionId);
+        if (recorded === -1) executions.push(referenceOnly);
+        else executions[recorded] = referenceOnly;
         purposes.set(evidence.executionId, purpose);
         if (taskState.revision > 0) revisions.set(evidence.executionId, taskState.revision);
         if (purpose === "example") example = referenceOnly;
@@ -2199,6 +2202,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             ),
           );
           if (decision !== "suspended") return;
+          // A model run that ended meanwhile can no longer be stopped: the build ends instead.
+          if (modelRunEnded) {
+            yield* diagnose({ phase: "suspend_unanswered", reason: "model_run_ended" });
+            return;
+          }
           yield* Deferred.succeed(suspended, undefined);
           return yield* Effect.never;
         });

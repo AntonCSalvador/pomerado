@@ -1402,6 +1402,11 @@ export const makeOpenAIMinter = (
                 } else {
                   // The saved response replays first and its calls return. The segment then ends
                   // before the next model call, which carries the message after their results.
+                  // A response is saved inside its model call, so its turn is still in progress
+                  // and replays as the same turn; a turn not in progress counts as the next one.
+                  // The SDK version is pinned, its declarations name both fields, and the resume
+                  // tests check where the message lands, so an SDK that counts turns otherwise
+                  // fails them.
                   replayTurnLimit = input._currentTurnInProgress
                     ? input._currentTurn
                     : input._currentTurn + 1;
