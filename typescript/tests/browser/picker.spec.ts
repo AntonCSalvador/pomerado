@@ -370,6 +370,124 @@ test("pickValue reports two options with one label as ambiguous, each by its ful
   });
 });
 
+test("pickValue with tie first takes the first of the options that tie, in the site's order, and names them", async ({ page }) => {
+  await serve(page, `<form><label>City <select name="city">
+<option value="">Choose a city</option><option value="spf-il">Springfield, Illinois</option>
+<option value="spf-mo">Springfield, Missouri</option><option value="shb">Shelbyville</option></select></label></form>`);
+  const city = 'page.getByLabel("City")';
+  // Without the option a tie is refused, as before.
+  expect(await call(page, `return await pickValue(${city}, "Springfield", fast);`)).toEqual({
+    result: {
+      picked: false,
+      reason: "option_ambiguous",
+      wanted: "Springfield",
+      available: ["Springfield, Illinois", "Springfield, Missouri", "Shelbyville"],
+      matches: ["Springfield, Illinois", "Springfield, Missouri"],
+    },
+  });
+  expect(await submitted(page)).toEqual({ city: "" });
+  expect(await call(page, `return await pickValue(${city}, "Springfield", { ...fast, tie: "first" });`)).toEqual({
+    result: {
+      picked: true,
+      kind: "select",
+      label: "Springfield, Illinois",
+      value: "spf-il",
+      rank: "words",
+      refills: 0,
+      tied: ["Springfield, Illinois", "Springfield, Missouri"],
+    },
+  });
+  expect(await submitted(page)).toEqual({ city: "spf-il" });
+  // One match is picked as before, with no tie to report, and a value the site lacks is still refused.
+  expect(await call(page, `return await pickValue(${city}, "Shelbyville", { ...fast, tie: "first" });`)).toEqual({
+    result: { picked: true, kind: "select", label: "Shelbyville", value: "shb", rank: "exact", refills: 0 },
+  });
+  expect(await call(page, `return await pickValue(${city}, "Capital City", { ...fast, tie: "first" });`)).toEqual({
+    result: {
+      picked: false,
+      reason: "option_missing",
+      wanted: "Capital City",
+      available: ["Springfield, Illinois", "Springfield, Missouri", "Shelbyville"],
+      matches: [],
+    },
+  });
+  expect(await submitted(page)).toEqual({ city: "shb" });
+});
+
+test("pickValue with tie first picks options with one label by position, skipping a greyed-out one", async ({ page }) => {
+  await serve(page, `<form>
+<label>Branch <select name="branch"><option value="">Choose a branch</option>
+<option value="b-40">Springfield</option><option value="b-12">Springfield</option><option value="b-7">Shelbyville</option></select></label>
+<label>Depot <select name="depot"><option value="">Choose a depot</option>
+<option value="d-1" disabled>Springfield</option><option value="d-2">Springfield</option><option value="d-3">Springfield</option></select></label>
+<label>Yard <select name="yard"><option value="">Choose a yard</option>
+<option value="y-1" disabled>Springfield</option><option value="y-2" disabled>Springfield</option><option value="y-3">Shelbyville</option></select></label>
+</form>`);
+  const tie = '{ ...fast, tie: "first" }';
+  expect(await call(page, `return await pickValue(page.getByLabel("Branch"), "Springfield", ${tie});`)).toEqual({
+    result: {
+      picked: true,
+      kind: "select",
+      label: "Springfield",
+      value: "b-40",
+      rank: "exact",
+      refills: 0,
+      tied: ["Springfield [b-40]", "Springfield [b-12]"],
+    },
+  });
+  expect(await call(page, `return await pickValue(page.getByLabel("Depot"), "Springfield", ${tie});`)).toEqual({
+    result: {
+      picked: true,
+      kind: "select",
+      label: "Springfield",
+      value: "d-2",
+      rank: "exact",
+      refills: 0,
+      tied: ["Springfield [d-1]", "Springfield [d-2]", "Springfield [d-3]"],
+    },
+  });
+  // Every tied option greyed out is a value the site does not offer now.
+  expect(await call(page, `return await pickValue(page.getByLabel("Yard"), "Springfield", ${tie});`)).toEqual({
+    result: {
+      picked: false,
+      reason: "option_disabled",
+      wanted: "Springfield",
+      available: ["Shelbyville"],
+      matches: ["Springfield [y-1]", "Springfield [y-2]"],
+    },
+  });
+  expect(await submitted(page)).toEqual({ branch: "b-40", depot: "d-2", yard: "" });
+});
+
+test("pickValue with tie first clicks the first of identical options in a dropdown, not one found again by its label", async ({ page }) => {
+  // The options carry no value, so only their position tells them apart; the page records the
+  // position of the one clicked.
+  await serve(page, `<form><button type="button" id="pick" aria-label="Office" aria-haspopup="listbox" aria-expanded="false" aria-controls="offices">Choose</button>
+<div id="offices" role="listbox" hidden><div role="option">Shelbyville</div><div role="option">Springfield</div><div role="option">Springfield</div></div>
+<input type="hidden" name="office"></form>
+<script>
+const button = document.getElementById("pick"), list = document.getElementById("offices");
+button.addEventListener("click", () => { list.hidden = !list.hidden; button.setAttribute("aria-expanded", String(!list.hidden)); });
+list.addEventListener("click", (event) => {
+  const option = event.target.closest("[role=option]");
+  if (!option) return;
+  button.textContent = option.textContent;
+  document.querySelector("[name=office]").value = String([...list.children].indexOf(option));
+  list.hidden = true;
+  button.setAttribute("aria-expanded", "false");
+});
+</script>`);
+  const office = 'page.getByRole("button", { name: "Office" })';
+  expect(await call(page, `return await pickValue(${office}, "Springfield", fast);`)).toEqual({
+    result: { picked: false, reason: "option_ambiguous", wanted: "Springfield", available: ["Shelbyville", "Springfield"], matches: ["Springfield", "Springfield"] },
+  });
+  expect(await submitted(page)).toEqual({ office: "" });
+  expect(await call(page, `return await pickValue(${office}, "Springfield", { ...fast, tie: "first" });`)).toEqual({
+    result: { picked: true, kind: "dropdown", label: "Springfield", value: "", rank: "exact", refills: 0, tied: ["Springfield", "Springfield"] },
+  });
+  expect(await submitted(page)).toEqual({ office: "1" });
+});
+
 test("pickValue scrolls a virtualized list to an option it has not rendered yet", async ({ page }) => {
   await serve(page, `<form><button type="button" aria-label="Item" aria-haspopup="listbox" aria-controls="items" aria-expanded="false">Choose</button>
 <div id="items" role="listbox" hidden style="height:200px;overflow-y:auto;position:relative">

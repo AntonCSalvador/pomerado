@@ -1,5 +1,6 @@
+import { Schema } from "effect";
 import { describe, expect, test } from "vitest";
-import { pickRefusal } from "../../src/browser/picker.js";
+import { PickOutcome, pickRefusal } from "../../src/browser/picker.js";
 import { rankChoices, type PickerChoice } from "../../src/browser/picker-rank.js";
 import { foldChoiceText } from "../../src/runtime/text.js";
 
@@ -93,5 +94,20 @@ describe("pickRefusal", () => {
       "customer",
     );
     expect(refusal).toMatchObject({ field: "customer", available: ["Acme A", "Acme B"], kind: "option_ambiguous" });
+  });
+});
+
+describe("PickOutcome", () => {
+  const picked = { picked: true, kind: "select", label: "Springfield", value: "spf-il", rank: "exact", refills: 0 } as const;
+
+  test("keeps the options that tied when tie first took the first of them", () => {
+    const tied = { ...picked, tied: ["Springfield [spf-il]", "Springfield [spf-mo]"] };
+    expect(Schema.decodeUnknownSync(PickOutcome)(tied)).toEqual(tied);
+  });
+
+  test("still decodes a pick with no tie and a refusal as before", () => {
+    expect(Schema.decodeUnknownSync(PickOutcome)(picked)).toEqual(picked);
+    const refused = { picked: false, reason: "option_ambiguous", wanted: "Springfield", available: ["Springfield", "Shelbyville"], matches: ["Springfield [spf-il]", "Springfield [spf-mo]"] };
+    expect(Schema.decodeUnknownSync(PickOutcome)(refused)).toEqual(refused);
   });
 });
