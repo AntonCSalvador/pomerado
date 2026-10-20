@@ -388,7 +388,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   // An obvious refusal settles the caller's run at once; one from the tool's own empty read never
   // claims to be obvious.
   [
-    "core",
+    "caller-input",
     'When the refusal is obvious, start the message with "Caller input error:" so the caller gets it at once.',
   ],
   // A record whose name differs from the caller's only in case or in a usual form of the same name
@@ -841,17 +841,17 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["bef4d560346a7ecb9bcc181f9c8574d86dbe5917c08482b8a6a1ef94d53e3b5d", "core"],
-    ["0d2259dda1fd5a909a036b6b10b918c0d1b4a88da3aa3486cc06027312ceb39d", "search"],
-    ["a7fc96fde666bc71ed3be8c86c79907b176da291aa02da20e5896f1caa7cd23e", "auth"],
-    ["48300e60493a84560bbef0cd8d9f3b2f97246983588a0b154a8749df1f775bff", "testing"],
+    ["71266d358734292ecaa03b79d6c2be0f00eb8a6884802d961bf9a6b8a7a54f05", "core"],
+    ["9fe0598c1dc41354e5dbddd42a372c6b628eecd206cf5ea9a3cf0fcbf10a6410", "search"],
+    ["7e50c86ea30964f0e3610e090c7bd7d78aac6f59a7f644644c1ad99577d59f5f", "auth"],
+    ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
-    ["394d10aa956561fdb3eafc9c8fd5a2b35d19ed5263ee83a96faef2bc9051ce0f", "forms"],
-    ["0214f314c0a79436f8446dca8b3338b13c67f6cda07be03399f4513ee5782ea4", "writes"],
+    ["5d6d582812ab26cab6dfbba0f189fa538264f52108e15a48cd52b8fca350d786", "forms"],
+    ["6a3426b664481c8f215977ec3ea4ef03cafdec29acbd6b0f93ddba23648438b7", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["a3a3b9de15fe58391adc4e5185e4bff3fa7f01a95b89a9cc6a87852f749d346e", "caller-input"],
-    ["e28cae70ae518c1fe27fc94108fd488ccfe873c0888256ca732b430a360470c2", "publication"],
-    ["4e9426c412fb3cb1cb1d5c2bd9b7b588eef87252d53b811d70fa87c8a8b05f61", "workspace/AGENTS.md"],
+    ["13dddd8a8506d196fadad2d5c8eaf74487eb0ad0c667044ee66ce81799774e7a", "caller-input"],
+    ["4334eb48b34d5464550242d55a6c6b75963bcce22c3e5f0090ea1addbe550f47", "publication"],
+    ["ca25d414d25ba51222fbd7014de75173308bc46d6fc237cc527f47837b1992fc", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
@@ -941,7 +941,7 @@ const loadAuthoring = async (
 /*
  * A host turns the search URL fast path on with `searchUrlFastPath`. Off, which is also what
  * omitting it gives, renders the URL guidance as it stood before; on renders the fast path's
- * text, whose workspace guide digest is the one pinned before the flag. Either way the search
+ * text. Either way the search
  * skill's page-data paragraph ends with the same data-request sentence, once. Every other file
  * renders the same either way.
  */
@@ -971,8 +971,8 @@ it("renders the search URL fast path only when a host turns it on", async () => 
     ...on.digests.filter(([, name]) => name === "search"),
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
-    ["3eab0c3ce4fe41164a06d06ffaa9544c66c85870e618fb5d1ae48a553cf98b06", "search"],
-    ["18fac54156211e1463e3a3ff3d1b091084ffe239b6b5eb51ceb98b7e4c640462", "workspace/AGENTS.md"],
+    ["ee7e45fcc9cb8ae5d2969538754841c34d07b20baf12371143e8ad081651fbfb", "search"],
+    ["957b0dd8a40a455582a99b28ee2f487cb6c3aecf165ba25d4bcfe6659aefd9c6", "workspace/AGENTS.md"],
   ]);
   expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(
     off.digests.filter(([, name]) => name !== "search"),

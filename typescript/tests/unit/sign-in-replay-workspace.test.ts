@@ -1,7 +1,7 @@
 import { Duration, Effect, Either } from "effect";
 import { expect, it } from "vitest";
 import type { AutofillInspection, AutofillSignedInCheck } from "../../src/destinations/autofill-step.js";
-import type { SignInRecipe, SignInRequest } from "../../src/destinations/sign-in-recipe.js";
+import type { SignInRecipe } from "../../src/destinations/sign-in-recipe.js";
 import { makeInputAsker } from "../../src/inputs/callback.js";
 import { makeRunSecrets } from "../../src/inputs/secrets.js";
 import type { InputAnswers, Question } from "../../src/runtime/input-request.js";
@@ -58,7 +58,6 @@ const fakeSite = (options: SiteOptions = {}) => {
   const fills: string[] = [];
   const checkedOn: (string | undefined)[] = [];
   const opened: string[] = [];
-  const listeners = new Set<(request: SignInRequest) => void>();
   const trusted = (url: URL) => sameSite(site, url);
   const shows = (selector: string) => (screens[state.at.pathname] ?? []).includes(selector);
   const page = () => `${state.at.origin}${state.at.pathname}`;
@@ -110,15 +109,6 @@ const fakeSite = (options: SiteOptions = {}) => {
       Effect.sync(() => {
         const filledOn = page();
         fills.push(filledOn);
-        const request: SignInRequest = {
-          url: filledOn,
-          method: "POST",
-          body: new URLSearchParams(values.map((value, index) => [`field${index}`, value])).toString(),
-          channel: "navigation",
-          frame: "main",
-          resourceType: "document",
-        };
-        for (const listener of [...listeners]) listener(request);
         if (state.at.pathname === "/login") {
           const username = values[0] ?? "";
           const next = options.passwordOn?.(username) ?? `${accounts[username] ?? site}/login/password`;
@@ -154,10 +144,6 @@ const fakeSite = (options: SiteOptions = {}) => {
           ? { signedIn: true, url }
           : { signedIn: false, failed: "indicator_not_visible", url };
       }),
-    onRequest: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
     authenticationOrigins: [],
     open: (url) =>
       Effect.sync(() => {
