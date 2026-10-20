@@ -78,11 +78,11 @@ export interface EffectJournal {
   /**
    * The page proved that the named step's latest click saved nothing, such as one that left the
    * same step showing with a required field flagged empty: the mark reads `not_sent` again, as
-   * before that `enteringCommit`. A step goes back once a run, and only when this run entered it
-   * from `not_sent` with no confirmation since; any other call for an entered step, or a second
-   * call for the same step, fails with `CommitAlreadySent` and leaves it as it was. A step never
-   * entered stays `not_sent`. A host journal made before this existed has
-   * none, and a script's call then fails the same way.
+   * before that `enteringCommit`. A declared step goes back once a run, and only when this run
+   * entered it from `not_sent` with no confirmation since; any other call for an entered step, a
+   * second call for the same step, or a call for a step `declareCommits` did not name fails with
+   * `CommitAlreadySent` and leaves it as it was. A declared step never entered stays `not_sent`.
+   * A host journal made before this existed has none, and a script's call then fails the same way.
    */
   readonly notCommitted?: (name: string) => Effect.Effect<void, CommitAlreadySent>;
   /** The operation's declared marks, in order; `executeOperation` records them before it runs. */
@@ -105,8 +105,9 @@ export const makeEffectJournalWith = (options: {
     const commits = yield* Ref.make<readonly CommitMark[]>([]);
     // Each entered step's state just before its latest entering; a confirmation clears them all.
     const enteredFrom = yield* Ref.make<ReadonlyMap<string, CommitMarkState>>(new Map());
-    // The steps already put back once this run.
+    // The steps already put back once this run, and the ones the operation declared.
     const reverted = yield* Ref.make<ReadonlySet<string>>(new Set());
+    const declared = yield* Ref.make<ReadonlySet<string>>(new Set());
     const withMark = (name: string, next: (current: CommitMarkState) => CommitMarkState) =>
       Ref.update(commits, (marks) =>
         marks.some((mark) => mark.name === name)
@@ -148,11 +149,11 @@ export const makeEffectJournalWith = (options: {
               yield* withMark(name, () => "sent");
               yield* Ref.set(state, "may_have_dispatched");
             }),
-      // Back to unsent once, only from the one entering that found it unsent; never past a
-      // confirmation.
+      // Back to unsent once, only for a declared step and from the one entering that found it
+      // unsent; never past a confirmation.
       notCommitted: (name) =>
         Effect.gen(function* () {
-          if ((yield* Ref.get(reverted)).has(name))
+          if ((yield* Ref.get(reverted)).has(name) || !(yield* Ref.get(declared)).has(name))
             return yield* Effect.fail(new CommitAlreadySent({ name }));
           const current = (yield* Ref.get(commits)).find((mark) => mark.name === name)?.state;
           if (current === undefined || current === "not_sent") return;
@@ -167,7 +168,11 @@ export const makeEffectJournalWith = (options: {
           yield* withMark(name, () => "not_sent");
         }),
       declareCommits: (names) =>
-        Effect.forEach(names, (name) => withMark(name, (current) => current), { discard: true }),
+        Ref.update(declared, (known) => new Set([...known, ...names])).pipe(
+          Effect.zipRight(
+            Effect.forEach(names, (name) => withMark(name, (current) => current), { discard: true }),
+          ),
+        ),
       commits: Ref.get(commits),
     };
   });

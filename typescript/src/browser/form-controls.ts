@@ -103,12 +103,14 @@ export const CalendarDate = Schema.String.pipe(
  *   combobox with two options of one label, and a card, password, one-time code or identity
  *   number field, by its `autocomplete` (`cc-…`, `current-password`, `new-password`,
  *   `one-time-code`) or by a label, name or id such as card number, card #, credit card, security
- *   code, card verification, CVV, CVN, CID, SSN, verification, authentication or SMS code, OTP, a
- *   6-digit code, a PIN (not a PIN code, which can be a postcode), password, and a few of their
+ *   code, card verification, CVV, CVN, CID, a card's expiry, SSN, verification, authentication or
+ *   SMS code, OTP, a 6-digit code, a PIN (not a PIN code, which can be a postcode), password,
+ *   passport, driver's licence, national ID or national insurance number, tax ID (TIN, EIN, VAT
+ *   number), IBAN, bank account or account number, routing number or sort code, and a few of their
  *   German, Spanish and French names.
- * - `visibleFieldLabels(scope, { timeout }?)`: the labels of every field the form shows now, named
- *   as `unfilledRequiredFields` names them. Read them in the marked call just before the click, for
- *   `blockingRequiredFields`.
+ * - `visibleFieldLabels(scope, { timeout }?)`: every field the form shows now, by its label, as
+ *   `unfilledRequiredFields` names it, and by each name and id it carries. Read them in the marked
+ *   call just before the click, for `blockingRequiredFields`.
  * - `blockingRequiredFields(scope, before, { timeout }?)`: after a click that should have saved or
  *   moved on, whether the page proves the click saved nothing. `before` is what
  *   `visibleFieldLabels` read just before the click; without it, it throws `labels_missing`. It
@@ -116,7 +118,9 @@ export const CalendarDate = Schema.String.pipe(
  *   an empty required field a site-field question can ask, as `unfilledRequiredFields` lists
  *   them, that was not on the page before the click. Otherwise it returns `null`, such as when the
  *   form is gone, nothing is flagged, a filled or unsupported field is flagged too, or a flagged
- *   field was already showing, which a save may have cleared or the page may have flagged before.
+ *   field was already showing, by its label, name or id, which a save may have cleared or the page
+ *   may have flagged before. A flagged field whose label reads as an error message, such as "This
+ *   field is required.", counts as one already showing.
  *   Call it only once the click's wait found no confirmation and the form flagged a field, as a
  *   `{ invalid }` outcome of `waitForOutcomeResult` does.
  * - `fillRequiredField(scope, label, answer, { timeout }?)`: fills the one supported field
@@ -125,6 +129,8 @@ export const CalendarDate = Schema.String.pipe(
  */
 export const formControlsCode = String.raw`
 const formControlFailure = (reason) => Object.assign(new Error(reason), { name: "FormControlFailure" });
+/** Words of a validation message, such as "This field is required.", rather than a field's name. */
+const formControlMessageWords = /\b(?:is|are) (?:required|missing|not valid)\b|\bthis field\b|\bplease (?:enter|select|choose|provide|fill|complete|correct)\b|\benter a valid\b|\bmust (?:be|contain|have|match)\b|\bcan(?:not|'t|’t| not) be (?:blank|empty)\b|\binvalid\b|\bist erforderlich\b|\bes (?:obligatorio|requerido)\b|\best (?:obligatoire|requis)\b/i;
 /** Folds case, accents, spacing and punctuation, so "Joe’s Café" and "joes cafe" name the same option. */
 const formControlText = ${String(foldChoiceText)};
 const formControlFrame = async (control, options) => {
@@ -372,8 +378,9 @@ const formControlTextTypes = new Set(["", "text", "email", "tel", "url", "number
  * select's or combobox's options when it lists 1 to 50 now, whether the page flagged it, and its
  * control. A control inside another one, such as a combobox's own text box, is that one, and
  * its required mark, flag and value count as that one's. Mode "flagged" keeps only the flagged
- * ones and counts the flagged controls that are not empty; mode "labels" returns the labels of
- * every visible control instead.
+ * ones, each with its keys (its label and every name and id it and its inner controls carry), and
+ * counts the flagged controls that are not empty; mode "labels" returns the keys of every visible
+ * control instead.
  */
 const formControlRequiredFields = async (scope, timeout, mode = "required") => {
   const candidates = scope.locator(formControlFieldSelector);
@@ -383,7 +390,9 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
     // protected forms, never a site-field question.
     const secretTokens = /^(cc-.*|current-password|new-password|one-time-code)$/;
     // A PIN code or pincode is a postcode in some countries, so only a PIN alone counts.
-    const secretWords = /\b(?:card ?(?:number|no)|cc ?(?:number|num)|credit card|card verification|security ?code|cvv2?|cvc2?|csc|cvn|cid|ssn|social security|verification ?code|authentication code|sms ?code|otp|\d[- ]?digit code|pass ?word|passcode|kartennummer|n[uú]mero de tarjeta|num[eé]ro de carte|passwort|kennwort|contrase[nñ]a|mot de passe)\b|\bcard ?#|\bpin\b(?! ?code)/i;
+    const secretWords = /\b(?:card ?(?:number|no)|cc ?(?:number|num)|credit card|card verification|security ?code|cvv2?|cvc2?|csc|cvn|cid|ssn|social security|verification ?code|authentication code|sms ?code|otp|\d[- ]?digit code|pass ?word|passcode|passport|driv(?:er|ing).?s? ?licen[cs]e|national ?(?:insurance|id|identity|identification)|tax ?(?:id|identification|number)|vat ?(?:number|no|id)|iban|bank ?account|account ?(?:number|no)|routing|sort ?code|swift|expiry|expiration|exp ?date|valid ?(?:thru|through|until)|mm ?\/ ?yy|kartennummer|n[uú]mero de tarjeta|num[eé]ro de carte|passwort|kennwort|contrase[nñ]a|mot de passe|reisepass|pasaporte|passeport|f[uü]hrerschein|(?:permiso|licencia|carn[eé]) de conducir|permis de conduire|personalausweis|ausweisnummer|documento de identidad|carte d.identit|sozialversicherung|seguridad social|s[eé]curit[eé] sociale|steuer ?(?:id|nummer|identifikationsnummer)|ust ?id|umsatzsteuer|n[uú]mero de identificaci[oó]n fiscal|num[eé]ro fiscal|num[eé]ro de tva|kontonummer|bankleitzahl|n[uú]mero de cuenta|cuenta bancaria|num[eé]ro de compte|ablaufdatum|g[uü]ltig bis|caducidad|vencimiento|date d.expiration)\b|\bcard ?#|\bpin\b(?! ?code)/i;
+    // Short codes that are ordinary words in some languages count only in capitals.
+    const secretCodes = /\b(?:EIN|TIN|DNI|NIE|NIF|BIC)\b/;
     const spaced = (text) => words(String(text ?? "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\-.[\]]+/g, " "));
     const flagMarks = '[aria-invalid="true"], .is-invalid' +
       (globalThis.CSS?.supports?.("selector(:user-invalid)") ? ", :user-invalid" : "");
@@ -436,12 +445,19 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
     };
     const shown = (element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
     const outer = elements.filter((element) => !elements.some((other) => other !== element && other.contains(element)));
-    if (labelsOnly) return { labels: outer.filter(shown).map(nameOf) };
+    const partsOf = (element) => [element, ...elements.filter((other) => other !== element && element.contains(other))];
+    // A field is known by its label and by each name and id it and its inner controls carry, so
+    // one whose label the page rewrites when it flags it is still the same field.
+    const keysOf = (element) =>
+      [nameOf(element), ...partsOf(element).flatMap((part) => [part.getAttribute("name"), part.id])].filter(
+        (key) => typeof key === "string" && key !== "",
+      );
+    if (labelsOnly) return { labels: outer.filter(shown).flatMap(keysOf) };
     let flaggedFilled = 0;
     const fields = elements.flatMap((element, index) => {
       if (!outer.includes(element)) return [];
       // A combobox's own text box, inside it, carries its required mark, flag and value.
-      const parts = [element, ...elements.filter((other) => other !== element && element.contains(other))];
+      const parts = partsOf(element);
       const enabled = !element.matches(":disabled") && element.getAttribute("aria-disabled") !== "true";
       const flagged = parts.some((part) => part.matches(flagMarks));
       const required = flagged || parts.some((part) => part.required === true || part.getAttribute("aria-required") === "true");
@@ -461,9 +477,12 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
         input: element instanceof HTMLInputElement ? element.type : undefined,
         secret:
           tokens.some((token) => secretTokens.test(token)) ||
-          [label, element.getAttribute("name"), element.id].some((text) => secretWords.test(spaced(text))),
+          [label, element.getAttribute("name"), element.id].some(
+            (text) => secretWords.test(spaced(text)) || secretCodes.test(spaced(text)),
+          ),
         readOnly: element.readOnly === true,
         flagged,
+        keys: keysOf(element),
       }];
     });
     return { fields, flaggedFilled };
@@ -484,6 +503,7 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
       shape,
       ...(supported && shape !== "text" && field.options !== undefined ? { options: field.options } : {}),
       ...(supported ? {} : { unsupported: true }),
+      ...(mode === "flagged" ? { keys: field.keys } : {}),
       control,
     });
   }
@@ -498,11 +518,14 @@ const blockingRequiredFields = async (scope, before, options = {}) => {
   const timeout = options.timeout ?? 10000;
   if ((await scope.count()) !== 1 || !(await scope.isVisible())) return null;
   const { fields, flaggedFilled } = await formControlRequiredFields(scope, timeout, "flagged");
-  // A field the page already showed before the click may have been cleared or flagged by a save.
+  // A field the page already showed before the click, by its label, name or id, may have been
+  // cleared or flagged by a save. A label that reads as the page's error message, such as one
+  // that names the field's error beside it, may be such a field too.
   const seen = new Set(before.map(String));
-  if (fields.length === 0 || flaggedFilled > 0 || fields.some((field) => field.unsupported || seen.has(field.label)))
+  const stale = (field) => field.keys.some((key) => seen.has(key)) || formControlMessageWords.test(field.label);
+  if (fields.length === 0 || flaggedFilled > 0 || fields.some((field) => field.unsupported || stale(field)))
     return null;
-  return { fields: fields.map(({ control, ...field }) => field) };
+  return { fields: fields.map(({ control, keys, ...field }) => field) };
 };
 const fillRequiredField = async (scope, label, answer, options = {}) => {
   const timeout = options.timeout ?? 10000;

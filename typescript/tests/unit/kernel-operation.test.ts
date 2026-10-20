@@ -1103,12 +1103,12 @@ describe("browser calls while the host signs in", () => {
 // with a required field flagged empty, marks that step unsent again, so the run reports it as
 // never sent; a step that may have saved never goes back.
 describe("a commit step whose click saved nothing", () => {
-  it("reads unsent again once, only when this run entered it from unsent and nothing confirmed it since", async () => {
+  it("reads unsent again once, only for a declared step this run entered from unsent and nothing confirmed since", async () => {
     const journal = await Effect.runPromise(makeEffectJournal);
     const revert = (name: string) =>
       Effect.runSync(Effect.either(journal.notCommitted?.(name) ?? Effect.die("no notCommitted")));
     const commits = () => Effect.runSync(journal.commits);
-    Effect.runSync(journal.declareCommits(["save-details", "place-order"]));
+    Effect.runSync(journal.declareCommits(["save-details", "place-order", "confirm-terms"]));
     Effect.runSync(journal.enteringDispatch);
     // An earlier step that saved stays sent; only the step whose click was refused goes back.
     Effect.runSync(journal.enteringCommit("save-details"));
@@ -1117,6 +1117,7 @@ describe("a commit step whose click saved nothing", () => {
     expect(commits()).toEqual([
       { name: "save-details", state: "sent" },
       { name: "place-order", state: "not_sent" },
+      { name: "confirm-terms", state: "not_sent" },
     ]);
     // A step goes back once a run: asked again, even while it reads unsent, it refuses.
     const refused = Either.left(
@@ -1127,10 +1128,20 @@ describe("a commit step whose click saved nothing", () => {
     Effect.runSync(journal.enteringCommit("place-order"));
     expect(revert("place-order")).toEqual(refused);
     expect(commits()).toContainEqual({ name: "place-order", state: "sent" });
-    // A step never entered stays as it is.
+    // A declared step never entered stays as it is.
     expect(revert("confirm-terms")).toEqual(Either.right(undefined));
+    // A step the operation never declared can't go back, so another name is no second revert.
+    Effect.runSync(journal.enteringCommit("place-order-2"));
+    expect(revert("place-order-2")).toEqual(
+      Either.left(expect.objectContaining({ _tag: "CommitAlreadySent", name: "place-order-2" })),
+    );
+    expect(revert("never-entered")).toEqual(
+      Either.left(expect.objectContaining({ _tag: "CommitAlreadySent", name: "never-entered" })),
+    );
+    expect(commits()).toContainEqual({ name: "place-order-2", state: "sent" });
     // Entered twice without going back between, the second click may have saved.
     const twice = await Effect.runPromise(makeEffectJournal);
+    Effect.runSync(twice.declareCommits(["place-order"]));
     Effect.runSync(twice.enteringCommit("place-order"));
     Effect.runSync(twice.enteringCommit("place-order"));
     expect(Effect.runSync(Effect.either(twice.notCommitted?.("place-order") ?? Effect.void))).toEqual(
@@ -1138,6 +1149,7 @@ describe("a commit step whose click saved nothing", () => {
     );
     // A confirmed step saved, even once a later call reopens it.
     const confirmedJournal = await Effect.runPromise(makeEffectJournal);
+    Effect.runSync(confirmedJournal.declareCommits(["place-order"]));
     Effect.runSync(confirmedJournal.enteringCommit("place-order"));
     Effect.runSync(confirmedJournal.confirmed("message"));
     Effect.runSync(confirmedJournal.enteringDispatch);
@@ -1158,7 +1170,7 @@ describe("a commit step whose click saved nothing", () => {
         enteringCommit("place-order");
         await kernel.browsers.playwright.execute(sessionId, { code: "return click();", timeout_sec: 10 });
         notCommitted("place-order");
-        throw new errors.OperationFailure("delivery_phone_unanswered", { dispatch: "not_sent" });
+        throw new errors.OperationFailure("stopped_before_second_click", { dispatch: "not_sent" });
       },
     );
     const kernel = fakeKernel(() => ({ success: true, result: null }));

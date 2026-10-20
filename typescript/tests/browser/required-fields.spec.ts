@@ -150,6 +150,49 @@ test("fillRequiredField fills a text field, a select and a combobox by label, an
 test("unfilledRequiredFields never offers a card, code, password or identity number field as a question", async ({
   page,
 }) => {
+  // Identity, tax and bank numbers and a card's expiry, by their label in each language covered.
+  const identityLabels = [
+    "Passport number",
+    "Driver's licence",
+    "Driving license number",
+    "National insurance number",
+    "National ID",
+    "Tax ID",
+    "TIN",
+    "EIN",
+    "VAT number",
+    "IBAN",
+    "Bank account number",
+    "Account number",
+    "Routing number",
+    "Sort code",
+    "SWIFT",
+    "BIC",
+    "Expiry date",
+    "Expiration (MM/YY)",
+    "Exp. date",
+    "Valid thru",
+    "Reisepass",
+    "Führerschein",
+    "Personalausweis",
+    "Steuer-ID",
+    "USt-IdNr.",
+    "Kontonummer",
+    "Ablaufdatum",
+    "Pasaporte",
+    "Permiso de conducir",
+    "DNI",
+    "NIF",
+    "Número de cuenta",
+    "Fecha de caducidad",
+    "Passeport",
+    "Permis de conduire",
+    "Carte d'identité",
+    "Numéro de sécurité sociale",
+    "Numéro de TVA",
+    "Numéro de compte",
+    "Date d'expiration",
+  ];
   // Each is asked by the host's own protected forms, never as a site field, whatever its type.
   await page.setContent(`<form>
   <label>Number<input type="tel" name="n1" autocomplete="cc-number" required></label>
@@ -183,10 +226,13 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
   <label>Kennwort<input name="n28" required></label>
   <label>Contraseña<input name="n29" required></label>
   <label>Mot de passe<input name="n30" required></label>
+  ${identityLabels.map((label, index) => `<label>${label}<input name="id${index}" required></label>`).join("")}
   <label>Reference<input name="ref" required readonly></label>
   <label>Card message<input name="note" required></label>
   <label>PIN code<input name="postal" required></label>
   <label>Pincode<input name="postal2" required></label>
+  <label>Nationality<input name="nationality" required></label>
+  <label>Tin colour<input name="colour" required></label>
 </form>`);
   expect(await call(page, `return await unfilledRequiredFields(page.locator("form"));`)).toEqual({
     result: [
@@ -222,6 +268,7 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
         "Kennwort",
         "Contraseña",
         "Mot de passe",
+        ...identityLabels,
       ].map((label) => ({ label, shape: "other", unsupported: true })),
       // A read-only box is not one the caller's answer can go into.
       { label: "Reference", shape: "other", unsupported: true },
@@ -229,6 +276,9 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
       { label: "Card message", shape: "text" },
       { label: "PIN code", shape: "text" },
       { label: "Pincode", shape: "text" },
+      // A nationality is no national ID, and a short code counts only in capitals.
+      { label: "Nationality", shape: "text" },
+      { label: "Tin colour", shape: "text" },
     ],
   });
 });
@@ -320,7 +370,7 @@ test("blockingRequiredFields proves a click saved nothing only when every flag i
   page,
 }) => {
   const form = `page.getByRole("form", { name: "Review" })`;
-  // The labels the form showed just before the click, then the page as the click left it.
+  // The fields the form showed just before the click, then the page as the click left it.
   const before = () => call(page, `return await visibleFieldLabels(${form});`);
   const reveal = (flag: string) =>
     page.evaluate((selector) => {
@@ -335,7 +385,7 @@ test("blockingRequiredFields proves a click saved nothing only when every flag i
     blockedReview(`<label>Delivery phone<input name="phone" aria-describedby="phone-error"></label>
     <p id="phone-error">Enter a phone number for the courier</p>`),
   );
-  expect(await before()).toEqual({ result: ["Item"] });
+  expect(await before()).toEqual({ result: ["Item", "item"] });
   await reveal("[name=phone]");
   expect(await blocking(["Item"])).toEqual({ result: { fields: [{ label: "Delivery phone", shape: "text" }] } });
   // A framework's class, and the browser's own check after a submit, flag a new field too.
@@ -363,8 +413,31 @@ test("blockingRequiredFields proves a click saved nothing only when every flag i
   // A field that was on the page before the click proves nothing once flagged: an app may have
   // saved and cleared it, or the page flagged it before the click.
   await page.setContent(blockedReview("", `<label>Contact email<input name="email" aria-invalid="true"></label>`));
-  expect(await before()).toEqual({ result: ["Item", "Contact email"] });
-  expect(await blocking(["Item", "Contact email"])).toEqual({ result: null });
+  expect(await before()).toEqual({ result: ["Item", "item", "Contact email", "email"] });
+  expect(await blocking(["Item", "item", "Contact email", "email"])).toEqual({ result: null });
+  // So is one whose label the page rewrites as it flags it, still known by its name or its id.
+  await page.setContent(
+    blockedReview("", `<label>Contact email<input name="email"></label><span id="ph-l">Phone</span><input id="phone" aria-labelledby="ph-l">`),
+  );
+  const shown = ((await before()) as { result: string[] }).result;
+  expect(shown).toEqual(["Item", "item", "Contact email", "email", "Phone", "phone"]);
+  await page.evaluate(() => {
+    const email = document.querySelector("[name=email]");
+    email?.insertAdjacentText("afterend", " Enter an email address");
+    email?.setAttribute("aria-invalid", "true");
+  });
+  expect(await blocking(shown)).toEqual({ result: null });
+  await page.evaluate(() => {
+    document.querySelector("[name=email]")?.removeAttribute("aria-invalid");
+    const label = document.querySelector("#ph-l");
+    if (label !== null) label.textContent = "Mobile";
+    document.querySelector("#phone")?.setAttribute("aria-invalid", "true");
+  });
+  expect(await blocking(shown)).toEqual({ result: null });
+  // A new field whose label reads as the page's error message may be an old one renamed by it.
+  await page.setContent(blockedReview(`<label>Please enter a phone number<input></label>`));
+  await reveal("#later input");
+  expect(await blocking(["Item", "item"])).toEqual({ result: null });
   // A flagged value the site refused, beside the empty field, may be the site's answer to a save.
   await page.setContent(
     blockedReview(`<label>Delivery phone<input name="phone"></label>

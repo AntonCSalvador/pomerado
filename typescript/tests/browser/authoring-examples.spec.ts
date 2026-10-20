@@ -43,7 +43,7 @@ import {
   type ListCursorScope,
 } from "../../src/runtime/list-cursor.js";
 
-import { commitEvidenceOf, unenteredWrite } from "../../src/runtime/run-outcome.js";
+import { commitEvidenceOf, commitRetryRefusal, unenteredWrite } from "../../src/runtime/run-outcome.js";
 import { runExample, failure, localFiles } from "./authoring-fixture.js";
 
 const dialogPickerFixture = async (page: Page, mode: "success" | "ambiguous" | "no_commit") => {
@@ -1556,7 +1556,7 @@ test("write-session example asks nothing after a click whose page may have saved
   expect(orders).toEqual(["sofa"]);
 });
 
-test("write-session example leaves the order unsent when nobody answers the field a click proved missing", async ({
+test("write-session example keeps the order possibly sent when nobody answers the field a click proved missing", async ({
   page,
 }) => {
   const origin = "https://shop.example.invalid";
@@ -1567,25 +1567,25 @@ test("write-session example leaves the order unsent when nobody answers the fiel
     siteOrigin: origin,
   });
   expect(failure(unanswered.result)).toMatchObject({ _tag: "ScriptInputFailure", code: "Unavailable" });
-  // The same evidence as a question asked before the mark: every commit step unsent.
-  expect(unanswered.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
-  expect(commitEvidenceOf(unanswered.commits)).toBe("not_entered");
-  expect(unenteredWrite(unanswered.effect, unanswered.commits)).toBe(true);
+  // The step goes back only once the answer is in, so a run that ends on the question reports
+  // the click possibly sent, as it would without the question, and refuses a retry.
+  expect(unanswered.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  expect(commitRetryRefusal(commitEvidenceOf(unanswered.commits))).toBe("commit_entered");
+  expect(unenteredWrite(unanswered.effect, unanswered.commits)).toBe(false);
   expect(orders).toEqual([]);
 });
 
 /**
- * Review pages whose Place order click does save, by a fetch, and then leave a field flagged
- * that was already on the page before the click: an app that clears its form for the next order
- * (`reset`), a form that skips the browser's check and has a stray `required` on an optional field
- * (`novalidate`), and a field the page flagged before the click while the confirmation is slow
- * (`processing`). The confirmation shows only later.
+ * A review page after the checkout. Its form holds `fields`; Place order runs `refuseFirst` in
+ * the page instead of saving on the first click when set, and otherwise saves the order by a
+ * fetch and then runs `afterSave`, with `form`, the order's `number` and `confirm(ms)`, which
+ * shows the confirmation that many milliseconds later.
  */
-const savingReviewSite = async (
+const reviewSite = async (
   page: Page,
   origin: string,
   orders: string[],
-  variant: "reset" | "novalidate" | "processing",
+  site: { fields: string; afterSave?: string; refuseFirst?: string; novalidate?: boolean },
 ) => {
   await page.route(`${origin}/**`, async (route) => {
     const request = route.request();
@@ -1602,55 +1602,109 @@ const savingReviewSite = async (
     if (url.pathname === "/checkout/review") {
       const item = url.searchParams.get("item") ?? "";
       const quantity = url.searchParams.get("quantity") ?? "1";
-      const field = {
-        reset: `<label>Contact email<input type="email" name="email" required value="sam@example.com"></label>`,
-        novalidate: `<label>Company<input name="company" required></label>`,
-        processing: `<label>Delivery instructions<input name="instructions" aria-required="true" aria-invalid="true"></label>`,
-      }[variant];
-      const confirm = (delay: number) => `setTimeout(() => {
-            const shown = document.createElement("p");
-            shown.setAttribute("role", "status");
-            shown.setAttribute("aria-label", "Order confirmation");
-            shown.textContent = "Order " + number + " is placed.";
-            document.body.append(shown);
-          }, ${delay});`;
-      const saved = {
-        reset: `form.querySelector("[name=email]").value = ""; ${confirm(800)}`,
-        novalidate: confirm(400),
-        processing: `document.body.insertAdjacentHTML("beforeend", "<p>Processing your order</p>"); ${confirm(4000)}`,
-      }[variant];
       return route.fulfill({
         contentType: "text/html",
         body: `<p aria-label="Item">${item}</p><p aria-label="Order total">$${(Number(quantity) * 12.5).toFixed(2)}</p>
-          <form aria-label="Review" ${variant === "novalidate" ? "novalidate" : ""}>
+          <form aria-label="Review" ${site.novalidate === true ? "novalidate" : ""}>
           <input type="hidden" name="item" value="${item}"><input type="hidden" name="quantity" value="${quantity}">
-          ${field}<button>Place order</button></form>
+          ${site.fields}<button>Place order</button></form>
           <script>
             const form = document.forms[0];
+            let number = "";
+            const confirm = (delay) => setTimeout(() => {
+              const shown = document.createElement("p");
+              shown.setAttribute("role", "status");
+              shown.setAttribute("aria-label", "Order confirmation");
+              shown.textContent = "Order " + number + " is placed.";
+              document.body.append(shown);
+            }, delay);
+            let refused = ${site.refuseFirst === undefined ? "true" : "false"};
             form.addEventListener("submit", async (event) => {
               event.preventDefault();
+              if (!refused) {
+                refused = true;
+                ${site.refuseFirst ?? ""}
+                return;
+              }
               const answer = await fetch("/orders", { method: "POST", body: new URLSearchParams(new FormData(form)) });
-              const number = await answer.text();
-              ${saved}
+              number = await answer.text();
+              ${site.afterSave ?? ""}
             });
           </script>`,
       });
     }
     if (url.pathname === "/orders" && request.method() === "POST") {
-      orders.push(new URLSearchParams(request.postData() ?? "").get("item") ?? "");
+      const posted = new URLSearchParams(request.postData() ?? "");
+      const extra = [...posted.keys()].filter((key) => !["item", "quantity"].includes(key));
+      orders.push([posted.get("item") ?? "", ...extra.map((key) => `${key}=${posted.get(key)}`)].join("|"));
       return route.fulfill({ contentType: "text/plain", body: `ORD-${1000 + orders.length}` });
     }
     return route.fulfill({ status: 404, body: "Not found" });
   });
 };
 
-for (const variant of ["reset", "novalidate", "processing"] as const)
+/**
+ * Review pages whose Place order click does save and then leave a field flagged that was already
+ * on the page before the click, some with its label rewritten as they flag it. The confirmation
+ * shows only later.
+ */
+const savingReviews = {
+  // An app that clears its form for the next order.
+  reset: {
+    fields: `<label>Contact email<input type="email" name="email" required value="sam@example.com"></label>`,
+    afterSave: `form.querySelector("[name=email]").value = ""; confirm(800);`,
+  },
+  // A form that skips the browser's check and has a stray required on an optional field.
+  novalidate: {
+    novalidate: true,
+    fields: `<label>Company<input name="company" required></label>`,
+    afterSave: `confirm(400);`,
+  },
+  // A field the page flagged before the click, while the confirmation is slow.
+  processing: {
+    fields: `<label>Delivery instructions<input name="instructions" aria-required="true" aria-invalid="true"></label>`,
+    afterSave: `document.body.insertAdjacentHTML("beforeend", "<p>Processing your order</p>"); confirm(4000);`,
+  },
+  // The cleared field's error message, written inside its label.
+  "message in the label": {
+    fields: `<label>Contact email <input type="email" name="email" required value="sam@example.com"></label>`,
+    afterSave: `const email = form.querySelector("[name=email]"); email.value = ""; email.setAttribute("aria-invalid", "true");
+      email.parentElement.insertAdjacentHTML("beforeend", '<span class="error">Enter an email address</span>'); confirm(800);`,
+  },
+  // A validator's error label, pointed at the field with for, which then names it.
+  "error label for the field": {
+    novalidate: true,
+    fields: `<label>Company <input id="company" name="company" required></label>`,
+    afterSave: `const company = form.querySelector("#company"); company.setAttribute("aria-invalid", "true");
+      company.parentElement.insertAdjacentHTML("afterend", '<label id="company-error" class="error" for="company">This field is required.</label>'); confirm(400);`,
+  },
+  // "(required)" added to the label of the field it flags.
+  "label marked required": {
+    fields: `<label for="instr">Delivery instructions</label><input id="instr" name="instructions" aria-required="true" aria-invalid="true">`,
+    afterSave: `document.body.insertAdjacentHTML("beforeend", "<p>Processing your order</p>");
+      document.querySelector("label[for=instr]").textContent = "Delivery instructions (required)"; confirm(4000);`,
+  },
+  // A field with no label before the click, named by the aria-label it gets when flagged.
+  "label given on flag": {
+    novalidate: true,
+    fields: `<input name="phone" placeholder="Phone" required>`,
+    afterSave: `const phone = form.querySelector("[name=phone]"); phone.setAttribute("aria-label", "Phone number"); phone.setAttribute("aria-invalid", "true"); confirm(400);`,
+  },
+  // aria-labelledby that gains the error's id, so its label becomes "Phone is required".
+  "error joins the label": {
+    fields: `<span id="ph-l">Phone</span><input name="phone" aria-labelledby="ph-l" required value="555-0100">`,
+    afterSave: `const phone = form.querySelector("[name=phone]"); phone.value = ""; phone.setAttribute("aria-invalid", "true");
+      phone.insertAdjacentHTML("afterend", '<span id="ph-e">is required</span>'); phone.setAttribute("aria-labelledby", "ph-l ph-e"); confirm(800);`,
+  },
+};
+
+for (const [variant, site] of Object.entries(savingReviews))
   test(`write-session example never clicks again when a field on the page before the click is flagged after it (${variant})`, async ({
     page,
   }) => {
     const origin = "https://shop.example.invalid";
     const orders: string[] = [];
-    await savingReviewSite(page, origin, orders, variant);
+    await reviewSite(page, origin, orders, site);
     await page.goto("about:blank");
     const asked: InputRequest[] = [];
     const saved = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
@@ -1661,11 +1715,69 @@ for (const variant of ["reset", "novalidate", "processing"] as const)
       },
     });
     // The flagged field was there before the click, so nothing proves the click saved nothing.
-    expect(orders).toEqual(["lamp"]);
+    expect(orders).toHaveLength(1);
     expect(asked).toEqual([]);
     expect(saved.commits).toEqual([{ name: "place-order", state: "sent" }]);
     expect(failure(saved.result)).toMatchObject({ _tag: "OperationFailure", message: "not_confirmed" });
   });
+
+test("write-session example keeps a saved order possibly sent when nobody answers a field the save showed", async ({
+  page,
+}) => {
+  // The save resets the form to pickup, which shows a required store the page never showed before
+  // the click: no check can tell that from a refused click, but nobody answered, so it stays sent.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<label>Delivery method<select name="method"><option selected>Delivery</option><option>Pickup</option></select></label>
+      <label>Delivery address<input name="address" required value="1 Main St"></label>
+      <label hidden>Pickup store<select name="store"><option value="">Choose</option><option>North</option><option>South</option></select></label>`,
+    afterSave: `form.querySelector("[name=method]").value = "Pickup";
+      const address = form.querySelector("[name=address]"); address.parentElement.hidden = true; address.value = ""; address.required = false;
+      const store = form.querySelector("[name=store]"); store.parentElement.hidden = false; store.required = true; store.setAttribute("aria-invalid", "true");
+      confirm(800);`,
+  });
+  await page.goto("about:blank");
+  const unanswered = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+  });
+  expect(failure(unanswered.result)).toMatchObject({ _tag: "ScriptInputFailure", code: "Unavailable" });
+  expect(orders).toHaveLength(1);
+  expect(unanswered.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  expect(commitRetryRefusal(commitEvidenceOf(unanswered.commits))).toBe("commit_entered");
+});
+
+test("write-session example checks the review again before its second click when the answer changes the total", async ({
+  page,
+}) => {
+  // The click is refused until a delivery speed is chosen, and express adds 5.00 to the total.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<label hidden>Delivery speed<select name="speed"><option value="">Choose</option><option>Express</option><option>Standard</option></select></label>`,
+    refuseFirst: `const speed = form.querySelector("[name=speed]"); speed.parentElement.hidden = false; speed.setAttribute("aria-invalid", "true");
+      speed.addEventListener("change", () => {
+        const total = document.querySelector("[aria-label='Order total']");
+        total.textContent = speed.value === "Express" ? "$17.50" : "$12.50";
+      });`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o1" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([["Delivery speed"]]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["lamp|speed=Express"]);
+});
 
 test("write-session example refuses a total over the caller's limit before its commit mark", async ({
   page,

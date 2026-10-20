@@ -163,8 +163,8 @@ const readTotal = `
 `;
 
 /**
- * Every check that can refuse runs here, before the commit mark: the review shows the item asked
- * for, and its total is within the caller's limit. Nothing here changes the site.
+ * Every check that can refuse runs here, before each marked click: the review shows the item
+ * asked for, and its total is within the caller's limit. Nothing here changes the site.
  */
 export const checkReview = async ({ kernel, sessionId, input, errors }: Context) => {
   const answer = await kernel.browsers.playwright.execute(sessionId, {
@@ -262,12 +262,15 @@ export const placeAndConfirm = async (context: FillContext, checkedTotal: number
   let result = await clickPlace(context, checkedTotal);
   if ("blocked" in result) {
     // The review stayed, and its only flags are fields it showed on the click, left empty: that
-    // click saved nothing. Record it before asking, so a caller who never answers leaves the
-    // order unsent, then fill the answers and click once more.
-    notCommitted("place-order");
+    // click saved nothing. Ask for them and fill them, and check the review again, since an
+    // answer such as a delivery speed may change the total. Until the step is entered again it
+    // reads sent, so a caller who never answers leaves the order possibly sent, as without the
+    // question. Only then record that the click saved nothing, and click once more.
     await fillBlocked(context, await askFields(askOne, result.blocked));
+    const recheckedTotal = await checkReview(context);
+    notCommitted("place-order");
     enteringCommit("place-order");
-    result = await clickPlace(context, checkedTotal);
+    result = await clickPlace(context, recheckedTotal);
   }
   // A review that still stops the order after its answers is the site's refusal, never resubmitted.
   if ("blocked" in result)
