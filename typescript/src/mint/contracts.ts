@@ -1802,10 +1802,17 @@ export interface MintHarnessSnapshot {
   /**
    * A host check refused a step the build needs in this attempt: a publication its checks refused,
    * a sign-in the host refused, or a task update the host refused. The refusal a `host_refused`
-   * block needs. Optional, so an older worker ignores it and a newer one
-   * restores an older checkpoint.
+   * block needs. A later finish_build that got past the host's checks to Guardian's review clears
+   * it. Optional, so an older worker ignores it and a newer one restores an older checkpoint.
    */
   readonly hostRefused?: true;
+  /**
+   * A host check refused a step earlier in this attempt, and a later finish_build got past the
+   * host's checks to Guardian's review, clearing `hostRefused`: a `host_refused` block is refused
+   * as `host_refusal_passed` until a host check refuses a step again. Optional, so an older worker
+   * ignores it and a newer one restores an older checkpoint.
+   */
+  readonly hostRefusalPassed?: true;
   /**
    * Unanswered questions handed back to the minter as no answer in this build, which a
    * `question_unanswered` block stands on. Optional so a rollout's old and new workers each restore the other's
@@ -1993,6 +2000,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   blockedReviewUnavailable: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   guardianRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   hostRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  hostRefusalPassed: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   noAnswerHandBacks: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
   loginHeld: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   loginDeclined: Schema.optionalWith(LoginDecline, { exact: true }),
