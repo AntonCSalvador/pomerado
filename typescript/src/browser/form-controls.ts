@@ -139,12 +139,14 @@ const formControlDateCandidates = (iso, format, locale) => {
  */
 const formControlPick = (options, wanted, short) => {
   const names = new Set(wanted.map(formControlText).filter((name) => name !== ""));
+  const spellings = wanted.filter((name) => formControlText(name) !== "");
   const words = (label) => label.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   const ranks = [
     (option) => names.has(option.label),
     (option) => option.value !== "" && names.has(option.value),
     (option) => [...names].some((name) => (" " + words(option.label).join(" ") + " ").includes(" " + name + " ")),
-    (option) => short && [...names].some((name) => formControlSameName(option.label, name)),
+    // The label as the page wrote it, so sameText still sees an email or file name.
+    (option) => short && spellings.some((name) => formControlSameName(option.text, name)),
   ];
   for (const rank of ranks) {
     const matched = options.filter(rank);
@@ -167,7 +169,7 @@ const formControlChooseNative = async (control, wanted, timeout, short) => {
     { timeout },
   );
   const picked = formControlPick(
-    options.map((option) => ({ ...option, label: formControlText(option.label), value: formControlText(option.value) })),
+    options.map((option) => ({ ...option, text: option.label, label: formControlText(option.label), value: formControlText(option.value) })),
     wanted,
     short,
   );
@@ -238,15 +240,16 @@ const formControlChooseCustom = async (control, wanted, timeout, short) => {
   let picked = { failure: "option_missing" };
   let options = [];
   let stuck = 0;
-  // A short label counts only once the whole list is read, so an equal label further down wins
-  // and two short labels anywhere in it are ambiguous.
+  // A short label counts only once the whole list is read, so an equal label further down wins.
+  // Two short labels are ambiguous wherever they are in a list that keeps its options as it
+  // scrolls; one that drops them compares only the options it shows at the end.
   let whole = false;
   while (true) {
     const before = options.length;
     options = await formControlOptions(listbox);
     if (options.length !== before) stuck = 0;
     picked = formControlPick(
-      options.map((option) => ({ ...option, label: formControlText(option.label), value: formControlText(option.value) })),
+      options.map((option) => ({ ...option, text: option.label, label: formControlText(option.label), value: formControlText(option.value) })),
       wanted,
       short && whole,
     );

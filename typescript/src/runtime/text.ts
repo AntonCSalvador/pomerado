@@ -55,7 +55,7 @@ export const foldChoiceText = (text: unknown): string => {
  */
 export const sameText = (shown: string, wanted: string): boolean => {
   const fold = (text: string) => {
-    const raw = String(text ?? "");
+    const raw = String(text ?? "").replace(/[\u00AD\u200B\u2060\uFEFF]/gu, "");
     const folded = raw
       .normalize("NFKD")
       .replace(/[\u0300-\u036f]/gu, "")
@@ -70,16 +70,18 @@ export const sameText = (shown: string, wanted: string): boolean => {
   // The page's word writes the wanted one short: same first letter, its letters in order in the
   // wanted word, and at most half as long. Never the other way round.
   const shortens = (short: string, full: string) => {
-    if (!/^\p{L}+$/u.test(short + full) || short[0] !== full[0] || short.length * 2 > full.length)
-      return false;
+    const latin = /^\p{Script=Latin}+$/u.test(short + full);
+    if (!latin || short[0] !== full[0] || short.length * 2 > full.length) return false;
     let next = 0;
     for (const letter of full) if (letter === short[next]) next++;
     return next === short.length;
   };
+  // An email, domain or file name is a literal: none of its words reads as short for another.
+  const literal = /@|\p{L}\.\p{L}/u.test(String(shown ?? "") + " " + String(wanted ?? ""));
   const a = fold(shown).split(" ");
   const b = fold(wanted).split(" ");
   return (
     a.length === b.length &&
-    a.every((word, index) => word === b[index] || shortens(word, b[index] ?? ""))
+    a.every((word, index) => word === b[index] || (!literal && shortens(word, b[index] ?? "")))
   );
 };

@@ -81,6 +81,29 @@ it("never matches a short wanted word against a longer word the page shows", () 
     expect(sameText(shown, wanted), `shown ${shown} | wanted ${wanted}`).toBe(false);
 });
 
+it("reads no short form inside an email, domain or file name, or in a word outside Latin letters", () => {
+  // Each pair is what the page shows, then the caller's wanted text.
+  const pairs: Pairs = [
+    ["a.smith@acme.com", "alan.smith@acme.com"],
+    ["www.a.com", "www.amazon.com"],
+    ["a.pdf", "annual.pdf"],
+    ["北京", "北京大学"],
+    ["中国", "中国银行"],
+    ["田中", "田中太郎"],
+    ["Мск", "Москва"],
+    ["क", "कमल"],
+  ];
+  for (const [shown, wanted] of pairs)
+    expect(sameText(shown, wanted), `shown ${shown} | wanted ${wanted}`).toBe(false);
+  // Latin letters beyond A to Z still read short.
+  expect(sameText("Øst", "Østergade")).toBe(true);
+});
+
+it("drops characters that never show, as normalizeText does", () => {
+  expect(sameText("St\u200B-Jean", "Saint-Jean")).toBe(true);
+  expect(sameText("Jo\u00ADhn Smith", "\uFEFFJohn\u2060 Smith")).toBe(true);
+});
+
 it("still matches a page that shows a short word for a different longer wanted word, a known limit", () => {
   expect(sameText("Ms", "Miss")).toBe(true);
   expect(sameText("XL", "XXXL")).toBe(true);

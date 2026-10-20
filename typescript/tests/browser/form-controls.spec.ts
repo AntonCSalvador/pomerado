@@ -569,6 +569,22 @@ test("chooseOption never reads a wanted code or title as short for a longer labe
   expect(await submitted(page)).toEqual({ country: "", title: "" });
 });
 
+test("chooseOption never reads an email or file name as short for another", async ({ page }) => {
+  await page.setContent(`<form><label>Assignee<select name="assignee">
+<option value="">Choose</option><option value="1">a.smith@acme.com</option><option value="2">b.jones@acme.com</option>
+</select></label><label>File<select name="file">
+<option value="">Choose</option><option value="1">a.pdf</option><option value="2">b.pdf</option></select></label></form>`);
+  for (const [control, wanted] of [
+    ["Assignee", "alan.smith@acme.com"],
+    ["File", "annual.pdf"],
+  ] as const)
+    expect(
+      await call(page, `return await chooseOption(page.getByLabel("${control}"), "${wanted}");`),
+      wanted,
+    ).toEqual({ error: "option_missing" });
+  expect(await submitted(page)).toEqual({ assignee: "", file: "" });
+});
+
 /** St-Jean first, then other towns, then the wanted spelling further down a list that renders as it scrolls. */
 const scrolledTowns = (later: string) => [
   ["SJ", "St-Jean"] as const,
@@ -591,6 +607,16 @@ test("chooseOption takes a short label in a custom dropdown only once it has rea
     await call(page, `return await chooseOption(page.getByLabel("Place"), "Saint Jean");`),
   ).toEqual({ error: "option_ambiguous" });
   expect(await submitted(page)).toEqual({ Town: "LJ", Place: "" });
+});
+
+// A date part never reads an option as short for its name: Jn would otherwise stand for June.
+test("fillDate never reads a month option as short for the month's name", async ({ page }) => {
+  await page.setContent(`<html lang="en-US"><body><form><label>Month<select name="month">
+<option value="">Choose</option><option>Jn</option><option>Jl</option></select></label></form></body></html>`);
+  expect(
+    await call(page, `return await fillDate(page.getByLabel("Month"), "1990-06-04", "MMMM");`),
+  ).toEqual({ error: "option_missing" });
+  expect(await submitted(page)).toEqual({ month: "" });
 });
 
 // Another language's month name is never read as short for the page's own: an en-US page has
