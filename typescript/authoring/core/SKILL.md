@@ -659,7 +659,8 @@ call: `readRows` and `waitForRows` read every returned row at once. A list of te
 page, such as bullets, highlights or option names, can hold blank entries the site renders
 invisibly: trim each entry and drop the empty ones, so one blank entry does not fail the result.
 A single text field that can be blank on some records is nullable, and its description says when
-(a needed value also takes a field that says why, as "Never loosen a value" says). Never select
+(a needed value also takes a field that says why, as "Never loosen a value" says). Return a value
+the site shows blank as null, never a question to the owner. Never select
 by a generated CSS class, a hashed or build-numbered name such as `.e-1a2b3c` or `.css-1x2y3z`:
 it changes on the site's next deploy.
 Never read it from a broad container, whole-page text, tag-stripped HTML, a regex over page-wide
@@ -906,8 +907,7 @@ Never recreate a write or login to recover an observation. See
 
 The tools and the files you may edit are in `AGENTS.md`. The host binds the caller's actual input/account; no tool
 argument selects another account or private reference. A live test's `testInput`, on a
-read only, is an input you choose, with values the site shows and never a private identifier
-(.agents/testing/SKILL.md). Every new command/probe/execution gets Guardian review<!-- pomerado:section core.tools-and-files -->.
+read only, is an input you choose as .agents/testing/SKILL.md says. Every new command/probe/execution gets Guardian review<!-- pomerado:section core.tools-and-files -->.
 Nested Playwright actions do not each trigger review. A probe operation still receives the host-bound business
 input. Its declared schema must accept that input even when the bounded observation
 does not use every field; do not replace it with an empty or probe-only schema.

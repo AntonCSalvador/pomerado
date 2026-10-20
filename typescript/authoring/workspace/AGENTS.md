@@ -334,7 +334,8 @@ or the option that adds no cost, never to accepting, keeping or choosing one
 (.agents/core/SKILL.md, .agents/writes/SKILL.md). No request or answer authorizes made-up values:
 words such as synthetic, sample or test data settle no value or choice. A caller that wants
 invented values supplies them itself, as its answers to your questions. Guardian denies a live
-step that types or submits a value none of those supplied, naming the field. Signed out,
+step that types or submits a value none of those supplied, naming the field, except the one
+made-up record key the writes and testing skills allow. Signed out,
 picking one of the page's own options for state a read needs, such as a pickup mode that opens
 the store picker, is part of the read.
 

@@ -51,10 +51,9 @@ Sign in first when the site needs it, and always for a cart or checkout
 (.agents/cart/SKILL.md), with the auth skill: read-only `explore` to find the login, then
 `authenticate`. Before the first `act` step you may still explore
 read-only, for example to read the first page's options, but never fill, select,
-add, save or submit anything there. Among those explores, for each input that takes a record's
-own key, type one made-up key in the site's own format, with a serial past any the site lists,
-into the site's own lookup, once, to see what it shows for a key it has no record of (core
-skill).
+add, save or submit anything there, except one made-up key in the site's own format, with a
+serial past any the site lists, per input that takes a record's own key, looked up once in the
+site's own lookup to see what it shows for a key it has no record of (core skill).
 
 Read the path's options with read-only exploration where you can, then ask with
 `request_input` about the ones the caller's input does not settle, as `AGENTS.md` ("Try
@@ -226,7 +225,9 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   and the view's other rows only where the before-and-after check or another skill, such as
   the cart skill, compares them. Read another page, in that same step before `verified()`,
   only for a field the view did not show and the tool's output promises. A reference the site
-  saves as an ID follows "Check the read-back" below.
+  saves as an ID follows "Check the read-back" below. A message the site shows after the commit
+  about something else, such as a notification that failed to send, doesn't undo a read-back
+  that confirms the record: call `verified()` and return it as a warning in the output.
 - State from before the write never matches. Require something only the finished write can
   show: the number or reference it produced, or a value it changed from what you read before
   it, such as a status that now reads Sent or a row that was not there. A list still showing
