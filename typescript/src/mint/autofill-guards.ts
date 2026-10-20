@@ -51,7 +51,7 @@ const namesIdentityOrSharedMask = (text: string, values: readonly string[]) => {
   );
 };
 
-/** Whether the check names a known identity value, or a placeholder the minter saw for one. */
+/** Whether the check names a known identity value, or one of the shared masks. */
 const holdsIdentity = (indicator: AutofillSignedIn, values: readonly string[]) =>
   namesIdentityOrSharedMask(
     [indicator.selector, indicator.urlPath, indicator.openPath]
