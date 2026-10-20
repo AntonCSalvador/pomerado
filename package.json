@@ -286,6 +286,31 @@
       "import": "./dist/typescript/src/mcp/schema.js",
       "default": "./dist/typescript/src/mcp/schema.js"
     },
+    "./core/mint/autofill-account-rejected": {
+      "types": "./dist/typescript/src/mint/autofill-account-rejected.d.ts",
+      "import": "./dist/typescript/src/mint/autofill-account-rejected.js",
+      "default": "./dist/typescript/src/mint/autofill-account-rejected.js"
+    },
+    "./core/mint/autofill-filled": {
+      "types": "./dist/typescript/src/mint/autofill-filled.d.ts",
+      "import": "./dist/typescript/src/mint/autofill-filled.js",
+      "default": "./dist/typescript/src/mint/autofill-filled.js"
+    },
+    "./core/mint/autofill-guards": {
+      "types": "./dist/typescript/src/mint/autofill-guards.d.ts",
+      "import": "./dist/typescript/src/mint/autofill-guards.js",
+      "default": "./dist/typescript/src/mint/autofill-guards.js"
+    },
+    "./core/mint/autofill-rejected": {
+      "types": "./dist/typescript/src/mint/autofill-rejected.d.ts",
+      "import": "./dist/typescript/src/mint/autofill-rejected.js",
+      "default": "./dist/typescript/src/mint/autofill-rejected.js"
+    },
+    "./core/mint/autofill-results": {
+      "types": "./dist/typescript/src/mint/autofill-results.d.ts",
+      "import": "./dist/typescript/src/mint/autofill-results.js",
+      "default": "./dist/typescript/src/mint/autofill-results.js"
+    },
     "./core/mint/contracts": {
       "types": "./dist/typescript/src/mint/contracts.d.ts",
       "import": "./dist/typescript/src/mint/contracts.js",
@@ -305,6 +330,11 @@
       "types": "./dist/typescript/src/mint/harness.d.ts",
       "import": "./dist/typescript/src/mint/harness.js",
       "default": "./dist/typescript/src/mint/harness.js"
+    },
+    "./core/mint/held-rejections": {
+      "types": "./dist/typescript/src/mint/held-rejections.d.ts",
+      "import": "./dist/typescript/src/mint/held-rejections.js",
+      "default": "./dist/typescript/src/mint/held-rejections.js"
     },
     "./core/mint/incident-contracts": {
       "types": "./dist/typescript/src/mint/incident-contracts.d.ts",
@@ -420,6 +450,11 @@
       "types": "./dist/typescript/src/mint/sign-in-version.d.ts",
       "import": "./dist/typescript/src/mint/sign-in-version.js",
       "default": "./dist/typescript/src/mint/sign-in-version.js"
+    },
+    "./core/mint/signed-in-marker": {
+      "types": "./dist/typescript/src/mint/signed-in-marker.d.ts",
+      "import": "./dist/typescript/src/mint/signed-in-marker.js",
+      "default": "./dist/typescript/src/mint/signed-in-marker.js"
     },
     "./core/mint/site-access-contracts": {
       "types": "./dist/typescript/src/mint/site-access-contracts.d.ts",
