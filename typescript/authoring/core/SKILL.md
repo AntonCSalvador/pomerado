@@ -653,7 +653,8 @@ call: `readRows` and `waitForRows` read every returned row at once. A list of te
 page, such as bullets, highlights or option names, can hold blank entries the site renders
 invisibly: trim each entry and drop the empty ones, so one blank entry does not fail the result.
 A single text field that can be blank on some records is nullable, and its description says when
-(a needed value also takes a field that says why, as "Never loosen a value" says). Never select
+(a needed value also takes a field that says why, as "Never loosen a value" says). Return a value
+the site shows blank as null, never a question to the owner. Never select
 by a generated CSS class, a hashed or build-numbered name such as `.e-1a2b3c` or `.css-1x2y3z`:
 it changes on the site's next deploy.
 Never read it from a broad container, whole-page text, tag-stripped HTML, a regex over page-wide
