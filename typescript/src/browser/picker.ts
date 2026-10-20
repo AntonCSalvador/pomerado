@@ -500,8 +500,9 @@ const pickerPageCode = String.raw`(element, args) => {
  * Matching (see `rankChoices`): a name or value as written, then ignoring case and spacing, then
  * accents and punctuation, then the option whose names share the most words with the value, by
  * BM25 (`rankByWords`), so words in another order or a date written another way still match. An
- * option sharing no word never matches. An option's names are its text, first line, accessible
- * name, `title` and, for a table row, each cell, and its value is
+ * option sharing no word never matches, nor does a native select's empty-valued prompt by its
+ * words. An option's names are its text, first line, accessible name, `title` and, for a table
+ * row, each cell, and its value is
  * `data-value`, `value`, `data-id`, `data-key` or `data-code` (put others first with
  * `options.valueAttributes`). Two options at the best rank are ambiguous; an "Add ..." or
  * "Create ..." row is never matched.
@@ -511,7 +512,9 @@ const pickerPageCode = String.raw`(element, args) => {
  * "Loading" or "Searching" row), no request the picker's actions started is in flight, and they
  * have held still for `settleMs`; with no reaction at all, the field is typed again key by key
  * (a popup's search box first gets its Search button, or Enter when it is in no form).
- * A list for a stale query that lacks the value is typed once more. A list that renders or loads
+ * A list for a stale query that lacks the value, or matches it only by shared words, is typed
+ * once more, and a match by shared words stands only when those tries end, so a list from before
+ * the results, such as recent picks, is never taken early. A list that renders or loads
  * as it scrolls is read to its end before matching, so a tie further down is never missed; one too
  * long for two thirds of the budget is narrowed with its search box, or fails as `options_loading`.
  * Requests count only when the action caused them: a repeat of an earlier identical request, such
@@ -835,13 +838,16 @@ const pickerType = async (s, field, query, step, scan) => {
 };
 // Types each query in turn into the field and reads what the list answers. A field that shows
 // no reaction is typed the next way; a list that reacted but lacks the value may hold the answer
-// to an older query that landed last, so the value is typed once more.
+// to an older query that landed last, so the value is typed once more. A match by shared words
+// waits the same way, since the list may still be one from before the text, such as recent picks,
+// and stands when the query's tries end with the list still matching by words.
 const pickerQuery = async (s, field, wanted, seenAvailable = []) => {
   const queries = s.options.query ? [String(s.options.query)] : wanted;
   let lastFound = null;
   const available = [...seenAvailable];
   for (const query of queries) {
     let retyped = false;
+    let byWords = null;
     for (let step = 0; step < 3; step++) {
       const snapshot = await pickerEval(s, "snapshot", { near: s.kind === "dropdown" });
       const before = snapshot.signature;
@@ -851,7 +857,8 @@ const pickerQuery = async (s, field, wanted, seenAvailable = []) => {
       const found = await pickerCollect(s, scan, wanted);
       lastFound = found;
       if (!found.complete) throw pickerFailure("options_loading");
-      if (found.ranking.status !== "missing") return { found, field };
+      if (found.ranking.status !== "missing" && found.ranking.rank !== "words") return { found, field };
+      byWords = found.ranking.status === "missing" ? null : found;
       available.push(...pickerAvailable(found.list));
       // A tag input that may create values and shows nothing for the text is a free-entry field.
       if (!reacted && s.options.create) break;
@@ -863,6 +870,7 @@ const pickerQuery = async (s, field, wanted, seenAvailable = []) => {
       }
       break;
     }
+    if (byWords !== null) return { found: byWords, field };
   }
   const found = lastFound ?? { ranking: { status: "missing" }, list: [] };
   return { found, field, available: [...new Set(available)].slice(0, 100) };

@@ -1,14 +1,14 @@
 import { describe, expect, test } from "vitest";
 import { pickRefusal } from "../../src/browser/picker.js";
 import { rankChoices, type PickerChoice } from "../../src/browser/picker-rank.js";
-import { foldChoiceText } from "../../src/runtime/text.js";
+import { foldChoiceText, rankByWords } from "../../src/runtime/text.js";
 
 const choice = (names: string | readonly string[], value = "", disabled = false): PickerChoice => {
   const list = typeof names === "string" ? [names] : names;
   return { names: list, value, disabled, key: `${list.join("|")}#${value}` };
 };
 const rank = (choices: readonly PickerChoice[], ...wanted: string[]) =>
-  rankChoices(choices, wanted, foldChoiceText);
+  rankChoices(choices, wanted, foldChoiceText, rankByWords);
 
 describe("rankChoices", () => {
   test("a name as written beats one that matches only once case and spacing are ignored", () => {
@@ -114,6 +114,30 @@ describe("rankChoices", () => {
     expect(rank([choice("UK"), choice("USA")], "Ukraine")).toEqual({ status: "missing" });
     expect(rank([choice("Mr"), choice("Mrs"), choice("Miss")], "Ms")).toEqual({ status: "missing" });
     expect(rank([choice("Order 1251")], "1250")).toEqual({ status: "missing" });
+  });
+
+  test("a native select's empty-valued prompt is never picked by shared words", () => {
+    const native = (name: string, value: string): PickerChoice => ({ ...choice(name, value), native: true });
+    const towns = [native("Choose a town", ""), native("Exempleton", "1"), native("Autre-Ville", "2")];
+    expect(rank(towns, "Old Town")).toEqual({ status: "missing" });
+    expect(rank([...towns, native("Old Town Hall", "3")], "Old Town")).toEqual({ status: "picked", index: 3, rank: "words" });
+    // A custom option with no value is no prompt, so it still counts.
+    expect(rank([choice("Choose a town"), choice("Exempleton", "1")], "Old Town")).toEqual({ status: "picked", index: 0, rank: "words" });
+  });
+
+  test("a name an option repeats counts once, so repeats never outweigh another option's words", () => {
+    // A native option often carries its label again as its text and title.
+    const acme = choice(["Acme South", "Acme South", "Acme South"], "1");
+    expect(rank([acme, choice("Beta North", "2")], "Acme North")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "words" });
+    const spelled = choice(["Acme South", "ACME  SOUTH", "Acme-South"], "1");
+    expect(rank([spelled, choice("Beta North", "2")], "Acme North")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "words" });
+  });
+
+  test("embeds as self-contained source, with the scorer passed in", () => {
+    expect(String(rankChoices)).not.toContain("rankByWords");
+    const embedded = new Function(`return ${String(rankChoices)};`)() as typeof rankChoices;
+    const choices = [choice("Hillcrest"), choice("Exemple Bay"), choice("Exemple")];
+    expect(embedded(choices, ["Bay Exemple"], foldChoiceText, rankByWords)).toEqual({ status: "picked", index: 1, rank: "words" });
   });
 
   test("an empty or blank value matches nothing", () => {

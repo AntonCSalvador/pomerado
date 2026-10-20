@@ -55,6 +55,51 @@ test("pickValue picks a typeahead suggestion that holds the value's words in ano
   expect(await submitted(page)).toEqual({ person: "1" });
 });
 
+// A combobox that lists recent picks when the field gets focus or a click. The results for what was
+// typed arrive 3 s after the first keystroke, as from a slow server.
+const slowCountries = `
+<form><label for="country">Country</label>
+<input id="country" role="combobox" aria-expanded="false" aria-controls="country-list" autocomplete="off">
+<div role="listbox" id="country-list" hidden></div><input type="hidden" name="country"></form>
+<script>
+const input = document.getElementById("country"), list = document.getElementById("country-list"), hidden = document.querySelector("[name=country]");
+const show = (options) => {
+  list.innerHTML = options.map(([value, label]) => '<div role="option" data-value="' + value + '">' + label + '</div>').join("");
+  list.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+};
+const recent = () => { if (list.hidden) show([["ZA", "South Africa"], ["US", "USA"]]); };
+input.addEventListener("focus", recent);
+input.addEventListener("click", recent);
+let answering = false;
+input.addEventListener("input", () => {
+  if (answering) return;
+  answering = true;
+  const query = input.value.toLowerCase();
+  setTimeout(() => {
+    answering = false;
+    show([["ZA", "South Africa"], ["KR", "South Korea"], ["US", "USA"]].filter(([, label]) => query !== "" && label.toLowerCase().startsWith(query)));
+  }, 3000);
+});
+list.addEventListener("mousedown", (event) => event.preventDefault());
+list.addEventListener("click", (event) => {
+  const option = event.target.closest("[role=option]");
+  if (!option) return;
+  hidden.value = option.dataset.value;
+  input.value = option.textContent;
+  list.hidden = true;
+  input.setAttribute("aria-expanded", "false");
+});
+</script>`;
+
+test("pickValue waits for a typeahead's results instead of taking a recent pick that shares a word", async ({ page }) => {
+  await serve(page, slowCountries);
+  expect(
+    await call(page, `return await pickValue(page.getByRole("combobox", { name: "Country" }), "South Korea");`),
+  ).toEqual({ result: { picked: true, kind: "typeahead", label: "South Korea", value: "KR", rank: "exact", refills: 0 } });
+  expect(await submitted(page)).toEqual({ country: "KR" });
+});
+
 test("pickValue picks a native select's option by label, value or another spelling", async ({ page }) => {
   await serve(page, `<form><label>State <select name="state">
 <option value="">Choose a state</option><option value="CA">California</option><option value="NV">Nevada</option>
@@ -113,6 +158,34 @@ test("pickValue reports options tied for the most shared words as ambiguous, in 
     },
   });
   expect(await submitted(page)).toEqual({ town: "" });
+});
+
+// A native select's empty-valued prompt, such as "Choose a town", is no option to pick by words.
+test("pickValue never picks a native select's empty-valued prompt by shared words", async ({ page }) => {
+  await serve(page, `<form><label>Town <select name="town">
+<option value="">Choose a town</option><option value="1">Exempleton</option><option value="2">Autre-Ville</option></select></label></form>`);
+  expect(await call(page, `return await pickValue(page.getByLabel("Town"), "Old Town", fast);`)).toEqual({
+    result: { picked: false, reason: "option_missing", wanted: "Old Town", available: ["Exempleton", "Autre-Ville"], matches: [] },
+  });
+  expect(await submitted(page)).toEqual({ town: "" });
+});
+
+// A native option's label, text and title often repeat one name, which counts once, so pickValue
+// agrees with chooseOption.
+test("pickValue counts a name an option repeats once", async ({ page }) => {
+  await serve(page, `<form><label>Branch <select name="branch">
+<option value="">Choose a branch</option><option value="1" title="Acme South">Acme South</option>
+<option value="2">Beta North</option></select></label></form>`);
+  expect(await call(page, `return await pickValue(page.getByLabel("Branch"), "Acme North", fast);`)).toEqual({
+    result: {
+      picked: false,
+      reason: "option_ambiguous",
+      wanted: "Acme North",
+      available: ["Acme South", "Beta North"],
+      matches: ["Acme South", "Beta North"],
+    },
+  });
+  expect(await submitted(page)).toEqual({ branch: "" });
 });
 
 test("pickValue prefers an exact match and reports options that tie once case is ignored", async ({ page }) => {

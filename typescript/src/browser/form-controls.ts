@@ -88,9 +88,12 @@ export const CalendarDate = Schema.String.pipe(
  *   A label that equals one wins over a value that does, which wins over the label that shares the
  *   most words with one, by BM25 (`rankByWords`); an option sharing no word never matches, and two
  *   different options at the winning rank, such as two tied for the most shared words, are
- *   ambiguous. A custom dropdown is opened, its own listbox found through `aria-controls`
- *   or `aria-owns` (else the one visible listbox), typed into when it filters as you type, and
- *   scrolled when it renders its options as you scroll. Returns `{ shape, label, value }`.
+ *   ambiguous. A match by shared words never takes a native select's empty-valued prompt, and in
+ *   a dropdown that filters as you type it waits, as a missing option does, for a list other than
+ *   the one shown before typing. A custom dropdown is opened, its own listbox found through
+ *   `aria-controls` or `aria-owns` (else the one visible listbox), typed into when it filters as
+ *   you type, and scrolled when it renders its options as you scroll. Returns
+ *   `{ shape, label, value }`.
  * - `unfilledRequiredFields(scope, { timeout, before }?)`: the empty required fields a form shows
  *   now, in page order, such as ones it adds once an earlier answer is in. A field counts when it
  *   is visible, enabled, empty and marked `required` or `aria-required="true"`, or flagged invalid
@@ -177,7 +180,8 @@ const formControlDateCandidates = (iso, format, locale) => {
 };
 /**
  * The one option a choice names, by rank: its folded label, then its folded value, then the label
- * as shown, its text, that shares the most words with a wanted name, by BM25.
+ * as shown, its text, that shares the most words with a wanted name, by BM25, never a native
+ * select's empty-valued prompt. Its words flag says that last rank decided.
  */
 const formControlPick = (options, wanted) => {
   const names = new Set(wanted.map(formControlText).filter((name) => name !== ""));
@@ -188,20 +192,22 @@ const formControlPick = (options, wanted) => {
     (option, index) => {
       if (best === undefined) {
         const scores = options.map(() => 0);
+        const ranked = options.flatMap((each, at) => (each.native && each.value === "" ? [] : [at]));
         for (const name of wanted)
-          formControlRankWords(name, options.map((each) => each.text)).forEach((score, at) => {
-            scores[at] = Math.max(scores[at], score);
+          formControlRankWords(name, ranked.map((at) => options[at].text)).forEach((score, entry) => {
+            scores[ranked[entry]] = Math.max(scores[ranked[entry]], score);
           });
         best = { scores, top: Math.max(0, ...scores) };
       }
       return best.top > 0 && best.top - best.scores[index] < 1e-9;
     },
   ];
-  for (const rank of ranks) {
+  for (const [at, rank] of ranks.entries()) {
     const matched = options.filter(rank);
     if (matched.length === 0) continue;
-    if (matched.length > 1) return { failure: "option_ambiguous" };
-    return matched[0].disabled ? { failure: "option_disabled" } : { option: matched[0] };
+    const words = at === ranks.length - 1;
+    if (matched.length > 1) return { failure: "option_ambiguous", words };
+    return matched[0].disabled ? { failure: "option_disabled", words } : { option: matched[0], words };
   }
   return { failure: "option_missing" };
 };
@@ -227,7 +233,7 @@ const formControlChooseNative = async (control, wanted, timeout) => {
     { timeout },
   );
   const picked = formControlPick(
-    options.map((option) => ({ ...option, text: option.label, label: formControlText(option.label), value: formControlText(option.value) })),
+    options.map((option) => ({ ...option, native: true, text: option.label, label: formControlText(option.label), value: formControlText(option.value) })),
     wanted,
   );
   if (picked.failure) throw formControlFailure(picked.failure);
@@ -297,6 +303,11 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
   let picked = { failure: "option_missing" };
   let options = [];
   let stuck = 0;
+  // The options listed before typing. A match by shared words in a field that takes typing waits
+  // for a list other than this one, as a missing option waits: until then the list may still be
+  // one from before the text, such as recent picks.
+  const listed = (found) => JSON.stringify(found.map((option) => [option.label, option.value]));
+  let untyped = listed([]);
   while (true) {
     const before = options.length;
     options = await formControlOptions(listbox);
@@ -305,9 +316,11 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
       options.map((option) => ({ ...option, text: option.label, label: formControlText(option.label), value: formControlText(option.value) })),
       wanted,
     );
-    if (picked.failure !== "option_missing" || Date.now() >= until) break;
+    const early = picked.words && editable && (!typed || listed(options) === untyped);
+    if ((picked.failure !== "option_missing" && !early) || Date.now() >= until) break;
     // A dropdown that filters as you type shows its options for the typed text.
     if (editable && !typed) {
+      untyped = listed(options);
       await formControlFill(control, wanted[0], timeout);
       typed = true;
       continue;

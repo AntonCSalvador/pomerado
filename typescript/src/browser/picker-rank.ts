@@ -1,5 +1,3 @@
-import { rankByWords } from "../runtime/text.js";
-
 /** One option a picker listed, as `rankChoices` reads it. */
 export interface PickerChoice {
   /** Every name the option shows or carries: its text, first line, accessible name, title, cells. */
@@ -9,6 +7,8 @@ export interface PickerChoice {
   readonly disabled: boolean;
   /** Options with one key are one option seen twice; different keys are different options. */
   readonly key: string;
+  /** True for a native select's or datalist's option, whose empty value marks a prompt such as "Choose...". */
+  readonly native?: boolean;
 }
 
 /** How closely the winning option matched, best first. */
@@ -29,21 +29,22 @@ export type PickerRanking =
  * The one option `wanted` names, a list of spellings of one choice, by rank: a name or the value
  * as written (trimmed), then ignoring case and spacing, then also ignoring accents and
  * punctuation (`fold`), then the option whose names share the most words with a spelling, by
- * BM25 (`words`, `rankByWords` unless given). A name beats the value at each rank. Options at the
+ * BM25 (`words`, such as `rankByWords`). A name beats the value at each rank. Options at the
  * first rank that matches decide: one option (by key) is picked, or reported disabled when every
  * copy of it is; two or more, such as options tied for the most shared words, are ambiguous,
- * listed in the list's order, never guessed. An option that shares no word never matches. A
- * weaker rank never overrules a stronger one, so a disabled exact match is not replaced by a
- * looser one.
+ * listed in the list's order, never guessed. An option that shares no word never matches. For
+ * shared words, a name an option repeats counts once, and a native option with an empty value,
+ * a prompt such as "Choose...", never matches. A weaker rank never overrules a stronger one, so a
+ * disabled exact match is not replaced by a looser one.
  *
- * It is pure and self-contained apart from `words`: the page code of `pickerCode` embeds this same
- * function with `fold` set to `foldChoiceText` and `words` to `rankByWords`.
+ * It is pure and self-contained: the page code of `pickerCode` embeds this same function with
+ * `fold` set to `foldChoiceText` and `words` to `rankByWords`.
  */
 export const rankChoices = (
   choices: readonly PickerChoice[],
   wanted: readonly string[],
   fold: (text: string) => string,
-  words: (query: string, texts: readonly string[]) => readonly number[] = rankByWords,
+  words: (query: string, texts: readonly string[]) => readonly number[],
 ): PickerRanking => {
   const squash = (text: string) => String(text ?? "").replace(/\s+/gu, " ").trim();
   const lower = (text: string) => squash(text).toLowerCase();
@@ -67,9 +68,15 @@ export const rankChoices = (
     [
       "words",
       (_choice, index) => {
-        // Each option's best BM25 score over its names and the spellings, scored once.
+        // Each option's best BM25 score over its names and the spellings, scored once. A name an
+        // option repeats, as a native option's label, text and title often do, counts once, and a
+        // native select's prompt is left out.
         if (best === undefined) {
-          const names = choices.flatMap((choice, at) => choice.names.map((name) => ({ at, name })));
+          const names = choices.flatMap((choice, at) =>
+            choice.native === true && choice.value === ""
+              ? []
+              : [...new Map(choice.names.map((name) => [fold(name), name])).values()].map((name) => ({ at, name })),
+          );
           const scores = choices.map(() => 0);
           for (const spelling of spellings) {
             const found = words(spelling, names.map((entry) => entry.name));

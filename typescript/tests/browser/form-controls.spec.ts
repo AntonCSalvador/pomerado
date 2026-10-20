@@ -574,12 +574,14 @@ test("chooseOption picks the date a list writes its own way", async ({ page }) =
   expect(await submitted(page)).toEqual({ day: "5" });
 });
 
-test("chooseOption waits for a typeahead's results instead of taking a short label it showed before", async ({
-  page,
-}) => {
-  // Opening lists recent picks; the results for what was typed arrive 3 s later, as from a slow
-  // server.
-  await page.setContent(`<form><label for="country">Country</label>
+/**
+ * A combobox that lists `recent` picks when clicked. The `results` that start with what was typed
+ * arrive 3 s later, as from a slow server.
+ */
+const slowCombobox = (
+  recent: readonly (readonly [string, string])[],
+  results: readonly (readonly [string, string])[],
+) => `<form><label for="country">Country</label>
 <input id="country" role="combobox" aria-expanded="false" aria-controls="country-list" autocomplete="off">
 <div role="listbox" id="country-list" hidden></div><input type="hidden" name="country"></form>
 <script>
@@ -590,13 +592,13 @@ const show = (options) => {
   list.innerHTML = options.map(([value, label]) => '<div role="option" data-value="' + value + '">' + label + '</div>').join("");
 };
 input.addEventListener("click", () => {
-  show([["UK", "UK"], ["US", "USA"]]);
+  show(${JSON.stringify(recent)});
   list.hidden = false;
   input.setAttribute("aria-expanded", "true");
 });
 input.addEventListener("input", () => {
   const query = input.value.toLowerCase();
-  setTimeout(() => show([["UA", "Ukraine"]].filter(([, label]) => label.toLowerCase().startsWith(query))), 3000);
+  setTimeout(() => show(${JSON.stringify(results)}.filter(([, label]) => label.toLowerCase().startsWith(query))), 3000);
 });
 list.addEventListener("click", (event) => {
   const option = event.target.closest("[role=option]");
@@ -606,11 +608,54 @@ list.addEventListener("click", (event) => {
   list.hidden = true;
   input.setAttribute("aria-expanded", "false");
 });
-</script>`);
+</script>`;
+
+test("chooseOption waits for a typeahead's results instead of taking a short label it showed before", async ({
+  page,
+}) => {
+  await page.setContent(slowCombobox([["UK", "UK"], ["US", "USA"]], [["UA", "Ukraine"]]));
   expect(
     await call(page, `return await chooseOption(page.getByLabel("Country"), "Ukraine");`),
   ).toEqual({ result: { shape: "combobox", label: "Ukraine", value: "UA" } });
   expect(await submitted(page)).toEqual({ country: "UA" });
+});
+
+test("chooseOption waits for a typeahead's results instead of taking a recent pick that shares a word", async ({
+  page,
+}) => {
+  // South Africa shares South with the wanted country, but the list is the one from before typing.
+  await page.setContent(
+    slowCombobox(
+      [["ZA", "South Africa"], ["US", "USA"]],
+      [["ZA", "South Africa"], ["KR", "South Korea"]],
+    ),
+  );
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Country"), "South Korea");`),
+  ).toEqual({ result: { shape: "combobox", label: "South Korea", value: "KR" } });
+  expect(await submitted(page)).toEqual({ country: "KR" });
+});
+
+// A native select's empty-valued prompt, such as "Choose a town", is no option to pick by words.
+test("chooseOption never picks a native select's empty-valued prompt by shared words", async ({ page }) => {
+  await page.setContent(`<form><label>Town<select name="town">
+<option value="">Choose a town</option><option value="1">Exempleton</option><option value="2">Autre-Ville</option>
+</select></label></form>`);
+  expect(await call(page, `return await chooseOption(page.getByLabel("Town"), "Old Town");`)).toEqual({
+    error: "option_missing",
+  });
+  expect(await submitted(page)).toEqual({ town: "" });
+});
+
+// A name an option repeats, as a native option's label and title, counts once, as pickValue counts it.
+test("chooseOption counts a name an option repeats once", async ({ page }) => {
+  await page.setContent(`<form><label>Branch<select name="branch">
+<option value="">Choose a branch</option><option value="1" title="Acme South">Acme South</option>
+<option value="2">Beta North</option></select></label></form>`);
+  expect(await call(page, `return await chooseOption(page.getByLabel("Branch"), "Acme North");`)).toEqual({
+    error: "option_ambiguous",
+  });
+  expect(await submitted(page)).toEqual({ branch: "" });
 });
 
 // A wanted code or title is never read as short for a longer label either.
