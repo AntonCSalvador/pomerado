@@ -48,10 +48,9 @@ inputs use (see "Apply and read back").
 
 ## Apply and read back
 
-On every run, set each input the site has a control for through that control, through the
-results URL when the site's URL reliably carries it (`AGENTS.md`, "Work through the page's own
-controls"), or through the data request the site itself uses for it when the control is
-unreliable (testing skill), never by filtering the returned rows, then read it back from the site's committed state: the
+On every run, set each input the site has a control for through that control, or through the URL
+or data request the site itself uses for it when the control is unreliable (testing skill), never
+by filtering the returned rows, then read it back from the site's committed state: the
 applied-filter chips, the selected sort, an option the site shows selected, or the results header.
 A URL naming the input does not show it applied. When a filter did not apply, the tool throws
 `OperationFailure` naming it, so the run fails and the tool gets repaired; it never returns
@@ -136,13 +135,14 @@ version's answer echoes.
 A search should answer in seconds. Every click and wait runs on every call, so a run does only
 what its inputs need.
 
-Try the fast path first. While exploring, check whether the results page loads directly by URL
-with the inputs encoded (`AGENTS.md`, "Work through the page's own controls"), and whether the
-page's own data request or embedded data carries the result fields. When both hold, the default
-design is: set a location or store through the page's controls first if the URL cannot carry it,
-load the results URL, then read that data in the same session (`page.evaluate(() => fetch(...))`
-for a data request, core skill), reading the applied location back from the page or that
-answer. Drive the search form and read rendered rows only when they don't.
+Try the fast path first. While exploring, check whether the page's own data request or embedded
+data carries the result fields. When it does, the default design is: reach the results through
+the page's controls, then read that data in the same session, reading the applied location back
+from the page or that answer. Read rendered rows only when it doesn't. For a data request, prefer
+catching the page's own answer in the same call as the step that sends it
+(`Promise.all([page.waitForResponse(...), button.click()])`, core skill). Fetching it in the page
+(`page.evaluate(() => fetch(...))`) is fine to speed things up or when that answer can't be
+caught, once the page itself has reached the results, not as the only step.
 
 - The main path visits only the controls an input sets: a filter, sort, quick switch or other
   optional control the caller left unset is never opened, clicked or waited on, so a run with

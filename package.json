@@ -86,6 +86,11 @@
       "import": "./dist/typescript/src/browser/index.js",
       "default": "./dist/typescript/src/browser/index.js"
     },
+    "./core/browser/pagination": {
+      "types": "./dist/typescript/src/browser/pagination.d.ts",
+      "import": "./dist/typescript/src/browser/pagination.js",
+      "default": "./dist/typescript/src/browser/pagination.js"
+    },
     "./core/browser/outcome-wait": {
       "types": "./dist/typescript/src/browser/outcome-wait.d.ts",
       "import": "./dist/typescript/src/browser/outcome-wait.js",
