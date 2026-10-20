@@ -89,42 +89,35 @@ caller's answer picks an option but does not show which exist. Prefer matching a
 record by a fuzzy match on its name (core skill), and prefer never picking an "Add new"
 row when an existing record matches.
 
-Fill every dropdown and date control with the SDK's form controls: import
-`formControlsCode` from the runtime, put it at the top of the call's code, and call its
-functions on your verified locators. `chooseOption(control, wanted)` chooses the one
-option of a native select or a custom ARIA dropdown (a combobox, or a button that opens a
-listbox) whose label or value is one of `wanted`, a list of the input's spellings
-(`["CA", "California"]`), ignoring case, accents, spacing and punctuation, or whose label
-holds one as whole words. It opens the dropdown, searches only the listbox it owns, types
-into one that filters as you type, scrolls one that renders options as it scrolls, refuses
-a missing, disabled or ambiguous option, and reads back the committed choice.
-`fillDate(control, isoDate, format)` fills an ISO date into whatever date control the page
-has: a native date input, a text box in `format` (typed key by key when an input mask
-rewrites it), or one part of a split date (`MM`, `MMMM`, `D`, `YYYY` and so on) in a text
-box, a select or a dropdown, whose option it matches by number or month name. Each
-throws an `Error` named `FormControlFailure` whose message is a fixed reason, never a
-value. `references/dates-and-dropdowns.ts` fills a split date and a custom dropdown, and
-`references/selection.ts` a native select. A picker whose options come from the server
-for each typed query needs its fresh-query signal: `references/custom-selection.ts`
-handles one observed combobox that owns one visible ARIA listbox through `aria-controls`.
-It searches only that listbox, waits for the site's current-query marker, clicks one
-option by stable key and reads the committed choice from the site. A dialog launcher and its inner
-query field have different roles: establish their ownership and mechanics first.
-The compiled `references/dialog-picker.ts` example shows one observed dialog-style
-picker with a separate launcher and inner query input. It waits for the active
-named dialog, fills its query field, waits for the site's current-query marker,
-requires one active matching option, and verifies the committed key after one
-click. These examples complete one selection, so their committed-state readback
-validates that final result. Their names and `data-query` marker are synthetic site
-observations, not selectors or readiness rules for other websites. When adapting a
-picker into a larger flow, establish its popup ownership and fresh-query signal to
-choose the right option; read the committed state during exploration, when the next
-action needs it, or as part of validating the requested final outcome.
+Fill dates with the SDK's form controls and choose values with its picker: import
+`formControlsCode` and `pickerCode` from the runtime, put each once at the top of the call's
+code, and call their functions on your verified locators. `fillDate(control, isoDate, format)`
+fills an ISO date into whatever date control the page has: a native date input, a text box in
+`format` (typed key by key when an input mask rewrites it), or one part of a split date (`MM`,
+`MMMM`, `D`, `YYYY` and so on) in a text box, a select or a dropdown, whose option it matches by
+number or month name. It throws an `Error` named `FormControlFailure` whose message is a fixed
+reason, never a value.
 
-Preserve add/replace and single/multiple intent. Query aliases
-are alternate searches for one stable choice, not extra selections. Demonstrate
-portal ownership, query-generation freshness and complete/windowed option coverage;
-virtualized options require bounded traversal with stable keys. An ambiguous choice
+`pickValue(control, wanted, options)` chooses one value in any picker: a native select, a
+datalist, an autocomplete or typeahead, an ARIA combobox, a dropdown built from divs, or a
+lookup dialog with a search box and a results table. `wanted` is the input's value or a list of
+its spellings (`["CA", "California"]`). `pickValues` adds or replaces chips and tags in a
+multi-select, and `pickerOptions` returns the options a picker lists, for a caller question.
+They wait for suggestions to settle, scroll lists that render as they scroll, match the value
+exactly, then loosely, never pick an "Add" or "Create" row, and confirm the field kept the choice,
+picking again when the page reverts it. A value the picker lacks, or several options that tie,
+comes back as `{ picked: false, reason, available, matches }`: decode it with `PickOutcome` and
+throw `pickRefusal(outcome, field)`, or ask the caller to choose among `matches`. Handle a site's
+quirk with the helper's options, such as `query`, `answered`, `committed`, `commit: "keyboard"` or
+`blur: "tab"`, never with a picker of your own. `references/picker.ts` picks a typeahead value
+and refuses a missing one, `references/dates-and-dropdowns.ts` fills a split date and
+`references/selection.ts` a native select. `references/custom-selection.ts` and
+`references/dialog-picker.ts` write out a combobox and a dialog picker step by step, for a
+control the helper cannot drive; report that gap with what the page showed.
+
+Preserve add/replace and single/multiple intent. `pickValues`' `mode` keeps or replaces
+the chips already chosen. Query aliases
+are alternate spellings of one stable choice, not extra selections. An ambiguous choice
 needs a resolver or a `request_input` question, as `AGENTS.md`'s "Try hard, then
 ask" says; take the site's default only when the choice is not a write and is easy
 to reverse, and list it in `finish_build` `assumptions`. Do not claim uncaptured
@@ -139,15 +132,15 @@ action, for the exact option within that popup. A zero count directly
 after a click does not establish absence. Inspect the post-action accessibility
 snapshot before changing the selector or attempting another action.
 
-A filled query plus a visible listbox can still show the previous response.
-Wait for observed current-query readiness and the relevant owned option, such as
-`waitForChange` on the options with the typing as its `action`; do not
-label an old result window with the new query generation. A matching old option
-alone does not establish it.
+A filled query plus a visible listbox can still show the previous response. `pickValue`
+waits for the list to settle and types again when it lacks the value; when the site marks
+which query its options answer, pass that check as `answered`. A matching old option alone
+does not establish the answer.
 
 When an overlay such as a cookie or consent banner covers the target, dismiss it with its
 control that declines optional cookies, such as Reject all or Necessary only, when the banner
-shows one, and otherwise with any of its controls, accept included.
+shows one, and otherwise with any of its controls, accept included. Name that control as `dismiss` of
+`waitForReady` (core skill) to close the banner before the action, and one that opens later.
 
 Decide whether each pop-up, banner or interstitial is conditional or always triggered. A
 conditional one shows only for some accounts, states or visits, such as a cookie banner, a
@@ -175,8 +168,8 @@ Date ranges, calendar-only pickers, validation messages, uploads, staged forms a
 autosave need site-specific semantic checks. A date field that takes typing goes
 through `fillDate`; one that opens a calendar and takes no typing does not.
 `references/dates-and-files.ts` picks a calendar date by full `data-date` within an
-owned popup, attaches a file and downloads one. Beyond the SDK's form controls, do not
-invent a universal widget resolver. A field change, file upload or draft creation may
+owned popup, attaches a file and downloads one. Beyond the SDK's form controls and
+picker, do not invent a universal widget resolver. A field change, file upload or draft creation may
 already be a website write.
 
 A file never travels as bytes in code, input or output. Type a file input field as the
@@ -242,6 +235,6 @@ does not authorize another submit.
 
 ## Standalone fixture checks
 
-Use the same supplied-input/observed-control rules and browser helper APIs. A read signed out may check pure parsers with `pureFiles` and supplied fixtures (testing skill); a signed-in read proves its form flow with its example and its combined case, and a write with its act session, and neither builds fixture checks. Never invent a live field value merely to test a control.
+Use the same supplied-input/observed-control rules and browser helper APIs. A read signed out may check pure parsers with `pureFiles` and supplied fixtures (testing skill); a signed-in read proves its form flow with its example and its signed-in cases, and a write with its act session, and neither builds fixture checks. Never invent a live field value merely to test a control.
 
 pomerado:section forms.fixture-checks:end -->

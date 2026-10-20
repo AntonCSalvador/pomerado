@@ -5,10 +5,13 @@ import {
   DateControl,
   DateOfBirthFormat,
   IdentifierKinds,
+  maximumCodeBoxes,
   maximumStepFields,
   RejectedMarker,
   SecretSlots,
   SignInMethodChoice,
+  stepFieldsFit,
+  stepFieldsMessage,
   SubmitKey,
 } from "./autofill-contracts.js";
 import type { AutofillField } from "./autofill-step.js";
@@ -53,7 +56,10 @@ const RecipeStep = Schema.Struct({
     Schema.Array(RejectedMarker).pipe(Schema.maxItems(maximumStepFields)),
   ),
   page: Schema.String.pipe(Schema.maxLength(2_000)),
-  fields: Schema.Array(RecipeField).pipe(Schema.maxItems(maximumStepFields)),
+  fields: Schema.Array(RecipeField).pipe(
+    Schema.maxItems(maximumStepFields + maximumCodeBoxes),
+    Schema.filter(stepFieldsFit, { message: () => stepFieldsMessage }),
+  ),
   submit: Schema.optional(Selector),
   submittedBy: Schema.optional(Schema.Literal("host", "minter")),
   methods: Schema.optional(

@@ -1,11 +1,18 @@
 import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { publicationDelta, publicationRound } from "../../src/guardian/publication-delta.js";
+import {
+  ReviewFailure,
+  type PendingExecution,
+  type ReviewTurn,
+} from "../../src/guardian/review.js";
 import { MintFailure } from "../../src/mint/contracts.js";
 import {
   exampleInputFeedback,
   exampleOutputEvidence,
   exampleOutputRecord,
+  inlineFilesNote,
+  inlinePublicationPaths,
   missingRequestedNames,
   outputDigest,
   outputDigestNote,
@@ -17,6 +24,7 @@ import {
   reviewPublication,
   sessionEvidenceFiles,
   unlistedExampleInputKeys,
+  withInlineFiles,
   type PublicationCandidate,
   type PublicationReview,
 } from "../../src/mint/publication-review.js";
@@ -560,6 +568,143 @@ describe("the evidence index", () => {
     expect(write).toContain("declared write confirmation (readback)");
     expect(write).toContain("and the caller's own input decodes against it.");
     expect(write.endsWith("Do not call for another run of the write.")).toBe(true);
+  });
+});
+
+describe("the files a publication review's request carries inline", () => {
+  const definition = '{\n  "name": "read_totals"\n}';
+  /** 16 KiB exactly, with a two-byte character, so the limit counts bytes. */
+  const atLimit = `é${"x".repeat(16 * 1024 - 2)}`;
+
+  it("lists the definition, the entrypoint, the digest and a read's output that fit in 16 KiB", () => {
+    expect(
+      inlinePublicationPaths({
+        definition,
+        entrypoint: "src/tool.mjs",
+        files: new Map([
+          ["src/tool.mjs", atLimit],
+          ["src/help.mjs", "export {};"],
+        ]),
+        digest: "{}",
+        exampleOutput: '{"state":"available"}',
+      }),
+    ).toEqual([
+      "publication/definition.json",
+      "operation/src/tool.mjs",
+      outputDigestPath,
+      "publication/example-output.json",
+    ]);
+  });
+
+  it("leaves out a file past 16 KiB, an empty one and what the review has none of", () => {
+    expect(
+      inlinePublicationPaths({
+        definition,
+        entrypoint: "src/tool.mjs",
+        files: new Map([["src/tool.mjs", `${atLimit}x`]]),
+        digest: undefined,
+        exampleOutput: "",
+      }),
+    ).toEqual(["publication/definition.json"]);
+    // A write's session output is never one of them.
+    expect(
+      inlinePublicationPaths({ definition, entrypoint: "src/save.mjs", files: new Map() }),
+    ).toEqual(["publication/definition.json"]);
+  });
+
+  it("tells the review the inline files need no read", () => {
+    expect(inlineFilesNote).toBe(
+      "Each file in trusted_publication.inline, by its path, is exactly as read_source returns it, a JSON file parsed; there is no need to read those again, and any other file is read as usual.",
+    );
+  });
+
+  const pending: PendingExecution = {
+    invocationId: "invocation_1",
+    attemptId: "attempt_1",
+    entrypoint: "operation/src/tool.mjs",
+    screenedIntent: "Read the totals",
+    screenedInput: "{}",
+    screenedObservations: "",
+    accountScope: "account_1",
+    allowedOrigins: ["https://site.invalid"],
+    allowedEffects: ["Publish"],
+    publication: publicationScope(
+      new Map([["src/tool.mjs", "export default 1;"]]),
+      new Map([["publication/definition.json", definition]]),
+    ),
+  };
+  /** Guardian's reads: one chunk each, or two for `split`, and a failure for any other path. */
+  const reads =
+    (files: ReadonlyMap<string, string>, split = new Set<string>()): ReviewTurn["readSource"] =>
+    (path, offset) => {
+      const source = files.get(path);
+      return source === undefined
+        ? Effect.fail(new ReviewFailure({ code: "SourceUnavailable" }))
+        : Effect.succeed(
+            JSON.stringify({
+              kind: "untrusted_source",
+              path,
+              byteOffset: offset,
+              nextOffset: Buffer.byteLength(source),
+              hasMore: split.has(path),
+              source,
+            }),
+          );
+    };
+
+  it("puts each file in the request as read_source returns it, a JSON file parsed", async () => {
+    const files = new Map([
+      ["publication/definition.json", definition],
+      ["operation/src/tool.mjs", "export default 1;"],
+      ["publication/example-output.json", "{not json"],
+    ]);
+    const inlined = await Effect.runPromise(
+      withInlineFiles(pending, reads(files), [...files.keys()]),
+    );
+    expect(inlined.publication).toEqual({
+      ...pending.publication,
+      inline: [
+        { path: "publication/definition.json", content: { name: "read_totals" } },
+        { path: "operation/src/tool.mjs", content: "export default 1;" },
+        { path: "publication/example-output.json", content: "{not json" },
+      ],
+    });
+    expect(Object.keys(inlined.publication ?? {})).toEqual(["files", "inline"]);
+  });
+
+  it("leaves a file for the review to read when its read fails or takes more than one chunk", async () => {
+    const files = new Map([
+      ["publication/definition.json", definition],
+      ["operation/src/tool.mjs", "export default 1;"],
+    ]);
+    const inlined = await Effect.runPromise(
+      withInlineFiles(pending, reads(files, new Set(["operation/src/tool.mjs"])), [
+        "publication/output-digest.json",
+        "operation/src/tool.mjs",
+        "publication/definition.json",
+      ]),
+    );
+    expect(inlined.publication?.inline).toEqual([
+      { path: "publication/definition.json", content: { name: "read_totals" } },
+    ]);
+  });
+
+  it("leaves the request as it was when nothing fits, or when it is no publication review", async () => {
+    const files = new Map([["publication/definition.json", definition]]);
+    expect(await Effect.runPromise(withInlineFiles(pending, reads(files), []))).toBe(pending);
+    expect(
+      await Effect.runPromise(
+        withInlineFiles(pending, reads(new Map()), ["operation/src/tool.mjs"]),
+      ),
+    ).toBe(pending);
+    expect(await Effect.runPromise(withInlineFiles(pending, reads(files), undefined))).toBe(
+      pending,
+    );
+    const { publication, ...execution } = pending;
+    expect(publication).toBeDefined();
+    expect(
+      await Effect.runPromise(withInlineFiles(execution, reads(files), [...files.keys()])),
+    ).toBe(execution);
   });
 });
 

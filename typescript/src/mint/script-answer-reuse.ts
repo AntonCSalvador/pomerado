@@ -45,7 +45,7 @@ const KeptAnswers = Schema.Record({
  * Validates kept answers, each `{ type, value }`, by the same rules as the caller's own answer
  * values.
  */
-const validateKeptAnswers = (
+export const validateKeptAnswers = (
   request: InputRequest,
   kept: unknown,
 ): Either.Either<ValidAnswers, InvalidAnswer> => {
