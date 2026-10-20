@@ -209,7 +209,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   ["core", "- The code works for every value the schema accepts."],
   [
     "core",
-    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime` matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one with a word added or dropped. Prefer it for confirming the pick, so the read-back agrees with the choice, but not for choosing from a list, where a short label can match a longer name it isn't, such as UK for Ukraine. When more than one option matches, list them for the caller instead of picking one.",
+    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime` matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one with a word added or dropped. Prefer `readBackMatches`, which builds on it, for confirming the pick, so the read-back agrees with the choice, but not for choosing from a list, where a short label can match a longer name it isn't, such as UK for Ukraine. When more than one option matches, list them for the caller instead of picking one.",
   ],
   ["core", "Take the site origin from the context's `siteOrigin`."],
   ["core", "The tools and the files you may edit are in `AGENTS.md`."],
@@ -754,7 +754,7 @@ it("has a write confirm from its first matching read-back, never from state befo
     " ",
   );
   expect(writes).toContain(
-    "- When a read-back is needed, the first one that matches confirms the write; stop there. It matches when it shows the written record after the write, found by something the write produced or entered (its number, its own reference or the values entered), and every field the caller asked for that the view shows agrees (the read before the commit already checked what you entered). Sites reformat what they save, such as line breaks, spaces and dates in the viewer's format, so compare text after the commit with `sameText`, as before it (the core skill's Confirm step). Compare a chosen option's value only where the view shows that value; otherwise compare the label it shows. When the write changed state that already existed, the same read is also the after read of the before-and-after comparison, which runs after `verified()` (\"Check the read-back\"). Write each read-back step to check the requested fields in its own code and call `verified()` when they hold, so the first one that matches is the confirming step. Read one confirmation, list or detail view: find the record there by that identity, never by its position, such as the first or newest row, and prefer finding each value in it by a stable id, its column header or a `data-` attribute over its cell's position. Read only that record, and the view's other rows only where the before-and-after check or another skill, such as the cart skill, compares them. Read another page, in that same step before `verified()`, only for a field the view did not show and the tool's output promises.",
+    "- When a read-back is needed, the first one that matches confirms the write; stop there. It matches when it shows the written record after the write, found by something the write produced or entered (its number, its own reference or the values entered), and every field the caller asked for that the view shows agrees (the read before the commit already checked what you entered). Sites reformat what they save, such as line breaks, spaces and dates in the viewer's format, so compare text after the commit with `readBackMatches`, as before it (the core skill's Confirm step). Compare a chosen option's value only where the view shows that value; otherwise compare the label it shows. When the write changed state that already existed, the same read is also the after read of the before-and-after comparison, which runs after `verified()` (\"Check the read-back\"). Write each read-back step to check the requested fields in its own code and call `verified()` when they hold, so the first one that matches is the confirming step. Read one confirmation, list or detail view: find the record there by that identity, never by its position, such as the first or newest row, and prefer finding each value in it by a stable id, its column header or a `data-` attribute over its cell's position. Read only that record, and the view's other rows only where the before-and-after check or another skill, such as the cart skill, compares them. Read another page, in that same step before `verified()`, only for a field the view did not show and the tool's output promises.",
   );
   // Entered values find a record but never prove it new.
   expect(writes).toContain(
@@ -841,13 +841,13 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["2a1efbb3a7171e6840baabe28e56fc2b4df6d181c6ee884312184486f2ef763a", "core"],
+    ["9040372993bb6fc3e56eb814f2a87bcfc9303bfc9b98b682908dda5a0926b759", "core"],
     ["9fe0598c1dc41354e5dbddd42a372c6b628eecd206cf5ea9a3cf0fcbf10a6410", "search"],
     ["7e50c86ea30964f0e3610e090c7bd7d78aac6f59a7f644644c1ad99577d59f5f", "auth"],
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["5d6d582812ab26cab6dfbba0f189fa538264f52108e15a48cd52b8fca350d786", "forms"],
-    ["26a4bdf2c43624087a41022a59828d1782a528d46d9e11dc044de13aa7f6f14d", "writes"],
+    ["8018ec41efdcf32cf479f4789029800635802c63e8557462364b3b11a9870547", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["8903953de05282963469a5aebff90fa2b724c943b6ca373bd4a786db680c73cb", "caller-input"],
     ["4334eb48b34d5464550242d55a6c6b75963bcce22c3e5f0090ea1addbe550f47", "publication"],
