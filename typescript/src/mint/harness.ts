@@ -95,6 +95,7 @@ import type {
   PublicationDecision,
   PublicationRecovery,
   SpentSignIn,
+  UnansweredQuestion,
   WeakenedOutput,
 } from "./contracts.js";
 import { pickedOption, type LoginDecline, type ValidAnswers } from "../runtime/input-request.js";
@@ -1741,6 +1742,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           // write repair's write, the build is signed in or holds a login, or it already handed
           // back its limit: then the build ends as no_response.
           if (evidence.noResponse !== undefined && !handedBack && !stopUnavailableHost()) {
+            const asked = evidence.scriptQuestion?.requestId;
+            yield* suspendUnanswered({
+              step: "execution",
+              executionId: evidence.executionId,
+              ...(asked === undefined ? {} : { requestId: asked }),
+              possibleCommit: evidence.noResponse.possibleCommit,
+            });
             noResponse ??= evidence.noResponse;
             terminal ??= {
               build: "incomplete",
@@ -2149,12 +2157,68 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             }),
           ),
         );
-      /** The build's owner left a question that decides what it may do unanswered: it ends. */
-      const unanswered = (error: MintFailure, step: string) =>
-        Effect.sync(() => {
-          noResponse ??= {
-            possibleCommit: error.noResponse?.possibleCommit === true || possibleCommit(),
-          };
+      /** Completed once the host suspended the build: the model run then stops with no outcome. */
+      const suspended = yield* Deferred.make<void>();
+      /** Set once the model run ended: only a running model can be stopped for a suspension. */
+      let modelRunEnded = false;
+      /**
+       * Offers the host to suspend the build on a question its owner left unanswered, where the
+       * build would otherwise end as no_response. Once the host suspended it, this never returns:
+       * the run stops, and the call that asked stays unreturned for a resumed attempt to rejoin.
+       */
+      const suspendUnanswered = (question: UnansweredQuestion) =>
+        Effect.gen(function* () {
+          const suspend = dependencies.suspendUnanswered;
+          if (suspend === undefined || terminal !== undefined || modelRunEnded) return;
+          const decision = yield* suspend(question).pipe(
+            Effect.catchAllDefect((error) =>
+              Effect.fail(
+                new MintFailure({
+                  code: "Unavailable",
+                  failureDetail: failureDetail("mint_host_dependency_failed", {
+                    operation: "suspendUnanswered",
+                    error,
+                  }),
+                }),
+              ),
+            ),
+            // The build ends as no_response, as it would without the hook.
+            Effect.catchAll((error) =>
+              diagnose({ phase: "suspend_unanswered", code: failureCode(error) }).pipe(
+                Effect.zipRight(
+                  reportFailure(error, {
+                    component: "mint",
+                    operation: "suspendUnanswered",
+                    phase: "suspend_unanswered",
+                    subCause: "mint_host_dependency_failed",
+                    correlation: dependencies.reportCorrelation ?? "process",
+                  }),
+                ),
+                Effect.as("not_suspended" as const),
+              ),
+            ),
+          );
+          if (decision !== "suspended") return;
+          yield* Deferred.succeed(suspended, undefined);
+          return yield* Effect.never;
+        });
+      /** The id of the question the minter is asking, while it waits for the answer. */
+      let askingId: string | undefined;
+      /**
+       * The build's owner left a question that decides what it may do unanswered: it ends, unless
+       * the host suspends it to resume later.
+       */
+      const unanswered = (
+        error: MintFailure,
+        step: string,
+        question: Omit<UnansweredQuestion, "possibleCommit">,
+      ) =>
+        Effect.gen(function* () {
+          const possible = error.noResponse?.possibleCommit === true || possibleCommit();
+          // An owner's cancel is a choice to stop, never one to resume from.
+          if (error.ownerCancelled !== true)
+            yield* suspendUnanswered({ ...question, possibleCommit: possible });
+          noResponse ??= { possibleCommit: possible };
           terminal ??= {
             build: "incomplete",
             summary: `A question to the build's owner while ${step} was not answered in time, so the build stopped. No build was published. Recorded effects and receipts are preserved.`,
@@ -4542,7 +4606,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               // The owner never answered a sign-in request: the build ends as no_response.
               Effect.catchIf(
                 (error) => error.noResponse !== undefined && !stopUnavailableHost(),
-                (error) => unanswered(error, "signing in to the website"),
+                (error) => unanswered(error, "signing in to the website", { step: "sign_in" }),
               ),
               // The owner declined the login the sign-in asked for: their answer, not a failed
               // sign-in, so the minter builds without signing in and nothing is left unresolved.
@@ -5577,6 +5641,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       : "Reword the question using the rationale, or withdraw it and continue. Do not ask again for a value you were already given or that the site shows. A reworded question is reviewed again.",
                   });
               }
+              askingId = requestId;
               const answers = yield* dependencies.askInput(submitted, {
                 requestId,
                 ...(reviewId === undefined ? {} : { reviewId }),
@@ -5589,7 +5654,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 (error) =>
                   error.ownerCancelled !== true && handsBackNoAnswer()
                     ? noAnswer()
-                    : unanswered(error, "asking a question"),
+                    : unanswered(error, "asking a question", {
+                        step: "question",
+                        ...(askingId === undefined ? {} : { requestId: askingId }),
+                      }),
+              ),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  askingId = undefined;
+                }),
               ),
               // error-reporting-allow: typed-recovery an invalid request is the model's to correct, told as its result
               Effect.catchIf(
@@ -6365,7 +6438,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       }),
                   ...(agentRecovery.initial === undefined
                     ? {}
-                    : { initial: agentRecovery.initial.agent }),
+                    : {
+                        initial: agentRecovery.initial.agent,
+                        ...(agentRecovery.initial.resumeMessage === undefined
+                          ? {}
+                          : { resumeMessage: agentRecovery.initial.resumeMessage }),
+                      }),
                   save: (agent) => agentRecovery.save(agent, captureHarness()),
                 },
               }),
@@ -6494,10 +6572,19 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         })
         .pipe(
           Effect.exit,
+          // A build the host suspended stops its model run here, before any further call starts.
+          Effect.raceFirst(Deferred.await(suspended).pipe(Effect.as(undefined))),
+          Effect.ensuring(
+            Effect.sync(() => {
+              modelRunEnded = true;
+            }),
+          ),
           Effect.ensuring(Scope.close(toolScope, Exit.void)),
           // A model that ended before registering its run state leaves the archive to read.
           Effect.ensuring(Deferred.done(historyRegistered, Exit.void)),
         );
+      // Suspended to resume later: no outcome is decided or recorded, and the run ends interrupted.
+      if (modelResult === undefined) return yield* Effect.interrupt;
       const modelFailure = Exit.isFailure(modelResult)
         ? Option.getOrUndefined(Cause.failureOption(modelResult.cause))
         : undefined;
