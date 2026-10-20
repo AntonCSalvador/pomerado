@@ -30,11 +30,11 @@ export const liveTestsEvidencePath = "publication/tests.json";
 export const maximumBatchCases = 50;
 /**
  * The most distinct inputs a signed-in read runs live tests on in one build or repair, beyond its
- * example: one combined case that sets every optional input the example left unset, and one more
- * for inputs that cannot be set with the others. Running a counted input again, after a fix or on
- * the HTTP version, is free. A read signed out has no such limit.
+ * example, chosen as the testing skill says: its combined case first, then the cases that cover the
+ * most, such as one made-up key for an input that takes a record's own key. Running a counted input
+ * again, after a fix or on the HTTP version, is free. A read signed out has no such limit.
  */
-export const signedInTestInputLimit = 2;
+export const signedInTestInputLimit = 4;
 
 /**
  * A test input's identity for the signed-in limit: its JSON with object keys sorted, so the same
@@ -63,7 +63,7 @@ export const signedInTestInputRefusal = (
   const added = uncountedTestInputs(counted, inputs).length;
   if (added === 0 || counted.length + added <= signedInTestInputLimit) return undefined;
   const left = Math.max(0, signedInTestInputLimit - counted.length);
-  return `A signed-in read runs live tests on at most ${signedInTestInputLimit} distinct inputs in a build or repair, beyond its example: one combined case that sets every optional input the example left unset, and one more only when those inputs cannot all be set together. It has run ${counted.length}, and this would add ${added}${left === 0 ? "" : `; ${left} more may run`}. Running an input it already ran again, after a fix or on src/tool-http.mjs, is free. Merge the inputs into the cases already run, or list the rest under notTested and in coverage. Nothing was executed.`;
+  return `A signed-in read runs live tests on at most ${signedInTestInputLimit} distinct inputs in a build or repair, beyond its example, as the testing skill says. It has run ${counted.length}, and this would add ${added}${left === 0 ? "" : `; ${left} more may run`}. Running an input it already ran again, after a fix or on src/tool-http.mjs, is free. Merge the inputs into the cases already run, or list the rest under notTested and in coverage. Nothing was executed.`;
 };
 
 /** Which version of a read a case ran on. */
@@ -1224,7 +1224,7 @@ export const liveTestsEvidence = (options: {
       ...(signedIn
         ? {
             signedIn: true,
-            signedInNote: `This read signed in. It runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, each on the build's own signed-in browser, so none runs cold: a combined case that sets the optional inputs the example left unset, and one more only when those cannot be set together. Results list only cases run signed in; a case not_run, and notTested, is disclosure, not a gap.`,
+            signedInNote: `This read signed in. It runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, each on the build's own signed-in browser, so none runs cold. Results list only cases run signed in; a case not_run, and notTested, is disclosure, not a gap.`,
           }
         : {}),
       ...(outOfTime ? { outOfTime: true } : {}),

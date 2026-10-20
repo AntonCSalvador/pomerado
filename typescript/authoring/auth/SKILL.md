@@ -319,9 +319,11 @@ signed-out flow cannot reach, corroborated by the live business example. Generic
 account chrome alone does not establish access to the caller's workflow. The signed-in marker you
 send is a separate check, of presence only (`auth.sign-in-check`): for it, a site-wide account menu
 or sign-out control is the right choice once `check_signed_in_marker` shows the signed-out page
-lacks it. Call `authenticate` with `signInStep: { signedIn: { selector } }`. When the landing page
+lacks it. <!-- pomerado:section auth.signed-in-page:start
+Call `authenticate` with `signInStep: { signedIn: { selector } }`. When the landing page
 shows no such marker, add `openPath`, the observed path of an account page that does, and the host
-opens it and checks there; never guess a protected route. The host checks that the submitted
+opens it and checks there; never guess a protected route.
+pomerado:section auth.signed-in-page:end --> The host checks that the submitted
 sign-in's recorded controls/form no longer show a password entry awaiting sign-in; unrelated
 password controls on the account page do not fail this check. It also checks that this sign-in
 submitted the login's identifier with its password, code or protected approval, then marks it
@@ -378,10 +380,12 @@ shows.
 - Never send a `urlPath` alone on a single-page app, or for a page the site also serves signed
   out; never the login page's path.
 - Test it with `check_signed_in_marker` and choose another until every check passes:
-  `signedOutSnapshot` absent (the host saved the page it saw before the sign-in sent anything, and
+  <!-- pomerado:section auth.marker-checks:start
+`signedOutSnapshot` absent (the host saved the page it saw before the sign-in sent anything, and
   your explores from before signing in count too), `signedInNow`, `freshLoad` (the host opens
   `openPath`, else `urlPath`, else the site's front page in a new tab) and `secondPage`. Your own
-  tab stays as it was. When it reports the signed-out page unchecked, as for a browser that
+  tab stays as it was.
+pomerado:section auth.marker-checks:end --> When it reports the signed-out page unchecked, as for a browser that
   started from a saved profile, compare the marker yourself against what a signed-out visitor
   sees.
 - The host repeats these checks when you send `signedIn`. It refuses a marker a signed-out page
