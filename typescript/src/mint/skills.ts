@@ -40,13 +40,14 @@ const catalog = [
     name: "pagination",
     description:
       "Read before settling the schema of any tool that returns a list: page size, the cursor, numbered pages, next links, load more, infinite scroll, the site's own list API, changed lists and when to stop",
-    references: ["pagination.ts"],
+    references: ["pagination.ts", "pager.ts"],
   },
   {
     name: "forms",
     description: "Native/custom selection, resolvers, staged forms and expected terms",
     references: [
       "dates-and-dropdowns.ts",
+      "picker.ts",
       "custom-selection.ts",
       "dialog-picker.ts",
       "dates-and-files.ts",

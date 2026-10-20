@@ -169,9 +169,9 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   control, such as Save, Send, Submit, Book or Pay, in its own step. In the same call as
   that click, wait for the site's response to the request it sends, matched by the method
   and path the session saw carry the commit on the site, and by its body where the body
-  shows the caller's values, as `references/write-readback.ts` does. Wait too for every way
-  the page can answer with `waitForOutcome`, listing the site's error or validation message
-  first. The write went through when that response is 2xx or 3xx, a body the call can read
+  shows the caller's values, as `references/write-readback.ts` does: a `{ response }` answer of
+  `waitForOutcomeResult`, beside every way the page can answer, listing the site's error or
+  validation message (`{ invalid: form }`) first. The write went through when that response is 2xx or 3xx, a body the call can read
   shows no error, and the page shows no error or validation message after it. A 201 whose
   Location names the new record went through as soon as it arrives, with no wait for the
   page. A 200 whose

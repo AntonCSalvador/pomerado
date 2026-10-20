@@ -342,6 +342,17 @@ it.each([
     "change_unknown after 8000 ms, 8000 ms without progress: total missing; no progress seen",
     "BrowserActionTimeout",
   ],
+  [
+    false,
+    "ReadyWaitFailure: not_ready after 8100 ms, 8000 ms without progress: it is disabled; no progress seen",
+    "BrowserActionTimeout",
+  ],
+  [
+    false,
+    "ready_timeout after 30000 ms: covered by div.overlay; progress seen: loading sign 0.0 s–30.0 s",
+    "BrowserActionTimeout",
+  ],
+  [false, "ready_ambiguous after 8000 ms, 8000 ms without progress: 2 visible elements match", "OperationFailure"],
   [false, "values_unavailable after 300 ms: price", "OperationFailure"],
   [false, "outcome_ambiguous: results 2 visible of 2", "OperationFailure"],
   [true, "TimeoutError: locator.waitFor: Timeout 5000ms exceeded", "OperationFailure"],

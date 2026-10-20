@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { sameText } from "../runtime/text.js";
+import { foldChoiceText, sameText } from "../runtime/text.js";
 
 /**
  * The shape of a form control, as the page code reads it: a native date input, a text box, a
@@ -95,18 +95,7 @@ export const CalendarDate = Schema.String.pipe(
 export const formControlsCode = String.raw`
 const formControlFailure = (reason) => Object.assign(new Error(reason), { name: "FormControlFailure" });
 /** Folds case, accents, spacing and punctuation, so "Joe’s Café" and "joes cafe" name the same option. */
-const formControlText = (text) => {
-  const folded = String(text ?? "")
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .normalize("NFC")
-    .replace(/(?<!\p{N})['‘’ʼ](?!\p{N})/gu, "")
-    .replace(/(?<!\p{N})[.,\-‐‑‒–—](?!\p{N})/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-  return folded === "" ? String(text ?? "").trim() : folded;
-};
+const formControlText = ${String(foldChoiceText)};
 const formControlSameName = ${String(sameText)};
 const formControlFrame = async (control, options) => {
   const handle = await control.elementHandle(options);

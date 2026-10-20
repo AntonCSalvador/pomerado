@@ -20,6 +20,28 @@ export const normalizeText = (text: string, options: { readonly lines?: boolean 
     .join(options.lines === true ? "\n" : " ");
 
 /**
+ * A choice's name folded for matching: case, accents and runs of spaces ignored, apostrophes
+ * dropped and the punctuation `.`, `,`, hyphens and dashes read as a space, except next to a
+ * digit, so "Joe’s Café" and "joes cafe" name the same option while "-1.5" keeps its sign and
+ * point. Text that folds to nothing is kept as written, trimmed.
+ *
+ * It is pure and self-contained: the page code of `formControlsCode` and `pickerCode` embeds this
+ * same function, so every option match folds names alike.
+ */
+export const foldChoiceText = (text: unknown): string => {
+  const folded = String(text ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/gu, "")
+    .normalize("NFC")
+    .replace(/(?<!\p{N})['\u2018\u2019\u02bc](?!\p{N})/gu, "")
+    .replace(/(?<!\p{N})[.,\-\u2010\u2011\u2012\u2013\u2014](?!\p{N})/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .toLowerCase();
+  return folded === "" ? String(text ?? "").trim() : folded;
+};
+
+/**
  * Whether two texts name the same thing as a person reads them. Case, accents and other marks,
  * spacing, and punctuation between letters are ignored, and a word written short, such as St for
  * Saint or Blvd for Boulevard, matches the full word when it starts with the same letter, keeps
