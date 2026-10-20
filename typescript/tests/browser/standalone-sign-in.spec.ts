@@ -2271,6 +2271,186 @@ test("a login URL that holds the login's email is refused at publication, naming
   });
 });
 
+/**
+ * A read build that signs in on the shop's one-screen sign-in with `loginUrl` as its login URL,
+ * runs its example and finishes, then goes on as `more` says; what the minter read and the build.
+ */
+const loginUrlBuild = async (
+  shop: Shop,
+  endpoint: string,
+  loginUrl: string,
+  more: readonly (Output | ((request: ModelRequest) => Output))[],
+  authenticationOrigins?: readonly string[],
+) => {
+  const mintRequests: ModelRequest[] = [];
+  const asked: InputRequest[] = [];
+  const minter = provider((request, index) => {
+    const steps: (Output | ((request: ModelRequest) => Output))[] = [
+      [...patch, create("explore/login.mjs", openPage("open_login", "/login"), "patch_login")],
+      [loginUrlSignIn(loginUrl, "sign_in")],
+      [signInStep({ signedIn: { selector: "#account" } }, "signed_in")],
+      [execute("example", {}, "example")],
+      (current) => finishRead(current, "finish_first"),
+      ...more,
+    ];
+    const step = steps[index];
+    return step === undefined
+      ? [message("Built.")]
+      : typeof step === "function"
+        ? step(request)
+        : step;
+  }, mintRequests);
+  const built = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* createPomerado({
+          browser: { endpoint },
+          minterProvider: minter,
+          guardianProvider: guardian(),
+          outcomeReviewerProvider: quietReviewer,
+          ask: answers(asked),
+          timeoutMs: 30_000,
+        });
+        return yield* service.mint({
+          url: `${shop.origin}/login`,
+          intent: "Read the account",
+          input: {},
+          effect: "read",
+          ...(authenticationOrigins === undefined ? {} : { authenticationOrigins }),
+        });
+      }),
+    ),
+  );
+  return { built, mintRequests, asked };
+};
+/** The shop's one-screen sign-in, recorded with `loginUrl` as the login URL to publish. */
+const loginUrlSignIn = (loginUrl: string, callId: string) =>
+  execute(
+    "authenticate",
+    {
+      signInStep: {
+        fields: [
+          { selector: "input[name=username]", accepts: ["username"] },
+          { selector: "input[name=password]", slot: "password" },
+        ],
+        submit: "button",
+      },
+      loginUrl,
+    },
+    callId,
+  );
+/** `finish_build` for the account reader, on the example's execution receipt. */
+const finishRead = (request: ModelRequest, callId: string): Output => {
+  const receipt = objects(
+    objects(request.input).find(
+      (item) => item["type"] === "function_call_result" && item["callId"] === "example",
+    ),
+  ).find((item) => typeof item["executionId"] === "string");
+  if (receipt === undefined) throw new Error("No example receipt to finish with");
+  return [
+    call(
+      "finish_build",
+      {
+        intent: "Return the account reader",
+        entrypoint: "src/tool.mjs",
+        executionId: receipt["executionId"],
+        metadata: { name: "read_account", description: "Read whether the account shows" },
+        coverage: "One live example, signed in",
+      },
+      callId,
+    ),
+  ];
+};
+
+test("a sign-in whose login URL is on another site is refused at publication by the sign-in version check, naming the rule and part and never a value, and a new sign-in from the site's own page publishes", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Original SDKs, Chromium and a scripted build with two host sign-ins",
+  });
+  test.setTimeout(90_000);
+  await withShop(async (shop, endpoint) => {
+    const offSite = `https://${identityHost}:${shop.port}/login`;
+    const { built, mintRequests } = await loginUrlBuild(shop, endpoint, offSite, [
+      [
+        execute(
+          "explore",
+          { entrypoint: "explore/login.mjs", intent: "Open the sign-in page" },
+          "explore_login",
+        ),
+      ],
+      [loginUrlSignIn(`${shop.origin}/login`, "sign_in_again")],
+      [signInStep({ signedIn: { selector: "#account" } }, "signed_in_again")],
+      (current) => finishRead(current, "finish_published"),
+    ]);
+    const result = toolResult(mintRequests, "finish_first");
+    const refused = objects(result).find((item) => item["status"] === "not_published");
+    expect(refused).toMatchObject({
+      code: "PublicationUnavailable",
+      reason: "sign_in_version_refused",
+      signInFindings: [{ rule: "foreign_origin", part: "entryUrl" }],
+    });
+    expect(String(refused?.["instruction"])).toContain(
+      "Not published: the sign-in this tool would publish fails the host's sign-in version check. signInFindings names each rule and the part of the sign-in recipe or login URL it refused, never a value. The host changed nothing. Run authenticate again so the sign-in records without those parts: start from the site's stable sign-in page as loginUrl, name no account in a selector, page or marker, leave out any step or account page that signs out, and use a signed-in marker that only signed-in pages show. Then call finish_build again with the same executionId. The host refuses every time until the sign-in passes.",
+    );
+    // The refusal names no value: neither the login URL nor its host, nor the login.
+    for (const value of [identityHost, shopAccount.username, shopAccount.password])
+      expect(JSON.stringify(result)).not.toContain(value);
+    expect(built.build, JSON.stringify(built)).toBe("published");
+    expect(built.artifact?.signIn?.entryUrl).toBe(`${shop.origin}/login`);
+  });
+});
+
+test("a sign-in whose login URL is on a sign-in origin the request declares is refused at publication too", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Original SDKs, Chromium and a scripted build with a host sign-in",
+  });
+  test.setTimeout(60_000);
+  await withShop(async (shop, endpoint) => {
+    const identityOrigin = `https://${identityHost}:${shop.port}`;
+    const { built, mintRequests } = await loginUrlBuild(
+      shop,
+      endpoint,
+      `${identityOrigin}/login`,
+      [],
+      [identityOrigin],
+    );
+    // The request trusts the origin for sign-in, but a published sign-in starts on the site.
+    expect(
+      objects(toolResult(mintRequests, "finish_first")).find(
+        (item) => item["status"] === "not_published",
+      ),
+    ).toMatchObject({
+      reason: "sign_in_version_refused",
+      signInFindings: [{ rule: "foreign_origin", part: "entryUrl" }],
+    });
+    expect(built.build, JSON.stringify(built)).not.toBe("published");
+    expect(built.artifact).toBeUndefined();
+  });
+});
+
+test("a one-time login URL is asked about once, and finishing again publishes it as it is", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Original SDKs, Chromium and a scripted build with a host sign-in",
+  });
+  test.setTimeout(60_000);
+  await withShop(async (shop, endpoint) => {
+    // A random state of hex digits, as most are, holds four digits in a row.
+    const oneTime = `${shop.origin}/login?state=8f14e45fceea1670`;
+    const { built, mintRequests } = await loginUrlBuild(shop, endpoint, oneTime, [
+      (current) => finishRead(current, "finish_again"),
+    ]);
+    expect(
+      objects(toolResult(mintRequests, "finish_first")).find(
+        (item) => item["status"] === "not_published",
+      ),
+    ).toMatchObject({ reason: "login_url_one_time", oneTimeParameters: ["state"] });
+    expect(built.build, JSON.stringify(built)).toBe("published");
+    expect(built.artifact?.signIn?.entryUrl).toBe(oneTime);
+  });
+});
+
 test("a second sign-in screen whose form posts to a URL holding the password is refused after the first screen's typing", async () => {
   test.info().annotations.push({
     type: "slow",

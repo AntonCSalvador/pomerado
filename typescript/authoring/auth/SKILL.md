@@ -12,9 +12,10 @@ the first screen. If a step fails, inspect the site and correct the steps in thi
 
 A code the site sends as part of signing in, by text message, email or an authenticator app, is
 part of the sign-in: map its screen as a `signInStep` with a `code` field and let `authenticate`
-get the code. Never ask for it separately with `request_input`. A `request_input` secret question
-for a code is only for a later protected action after sign-in, when the site asks for another code
-to confirm it.
+get the code, which the host fills or asks the caller for. Never ask for it separately with
+`request_input`. A `request_input` secret question for a code is only for a later protected action
+after sign-in, when the site asks for another code to confirm it; `authenticate` is never started
+just for such a code.
 
 On a one-time-code screen, prefer one read that finds the code fields, the submit and any
 remember-this-device box with its checked state. Then send the code step at once. Codes expire in
@@ -59,7 +60,9 @@ query, fragment or path, since a host refuses such a link for a workspace site.
    member login from provider or employer login, registration and password reset by evidence.
    Read the chosen link's `href` before the click: it is usually the login route to record.
 3. Check that the page is on the site before one click that only opens the login page. A sign-in on
-   the site's own registrable domain needs no permission; another site's is checked by the host.
+   the site's own registrable domain, such as login.example.com for www.example.com, is the
+   site's own and needs no permission; only an origin on a different site needs host
+   configuration, which the host checks during `authenticate`.
 4. Read the first sign-in screen, the first step whose form signs in with a username, email,
    phone-number, account-number, password, code, date-of-birth, ZIP or recovery-code field,
    including an identifier-only first step. Its fields for the first `signInStep` come from a
@@ -69,7 +72,7 @@ query, fragment or path, since a host refuses such a link for a workspace site.
    submit, Next, Continue or send-code control during exploration: that is signing in, which only
    `authenticate` does (the one exception, after the host's own submit click failed, is below).
    Other controls on the page, such as a site search or a cookie banner, are not the sign-in.
-   After a failed sign-in, reopening the login route in an `explore` to read it again is fine.
+   Reopening the login route in an `explore` to read it again is fine, after a failed sign-in too.
    `references/auth-entry.ts` shows a bounded second probe that reads a login form's controls.
 
 When the entry offers mutually exclusive account or plan types, decide before clicking one: take
@@ -319,9 +322,11 @@ signed-out flow cannot reach, corroborated by the live business example. Generic
 account chrome alone does not establish access to the caller's workflow. The signed-in marker you
 send is a separate check, of presence only (`auth.sign-in-check`): for it, a site-wide account menu
 or sign-out control is the right choice once `check_signed_in_marker` shows the signed-out page
-lacks it. Call `authenticate` with `signInStep: { signedIn: { selector } }`. When the landing page
+lacks it. <!-- pomerado:section auth.signed-in-page:start
+Call `authenticate` with `signInStep: { signedIn: { selector } }`. When the landing page
 shows no such marker, add `openPath`, the observed path of an account page that does, and the host
-opens it and checks there; never guess a protected route. The host checks that the submitted
+opens it and checks there; never guess a protected route.
+pomerado:section auth.signed-in-page:end --> The host checks that the submitted
 sign-in's recorded controls/form no longer show a password entry awaiting sign-in; unrelated
 password controls on the account page do not fail this check. It also checks that this sign-in
 submitted the login's identifier with its password, code or protected approval, then marks it
@@ -378,10 +383,12 @@ shows.
 - Never send a `urlPath` alone on a single-page app, or for a page the site also serves signed
   out; never the login page's path.
 - Test it with `check_signed_in_marker` and choose another until every check passes:
-  `signedOutSnapshot` absent (the host saved the page it saw before the sign-in sent anything, and
+  <!-- pomerado:section auth.marker-checks:start
+`signedOutSnapshot` absent (the host saved the page it saw before the sign-in sent anything, and
   your explores from before signing in count too), `signedInNow`, `freshLoad` (the host opens
   `openPath`, else `urlPath`, else the site's front page in a new tab) and `secondPage`. Your own
-  tab stays as it was. When it reports the signed-out page unchecked, as for a browser that
+  tab stays as it was.
+pomerado:section auth.marker-checks:end --> When it reports the signed-out page unchecked, as for a browser that
   started from a saved profile, compare the marker yourself against what a signed-out visitor
   sees.
 - The host repeats these checks when you send `signedIn`. It refuses a marker a signed-out page

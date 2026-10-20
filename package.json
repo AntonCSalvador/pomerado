@@ -86,6 +86,11 @@
       "import": "./dist/typescript/src/browser/index.js",
       "default": "./dist/typescript/src/browser/index.js"
     },
+    "./core/browser/pagination": {
+      "types": "./dist/typescript/src/browser/pagination.d.ts",
+      "import": "./dist/typescript/src/browser/pagination.js",
+      "default": "./dist/typescript/src/browser/pagination.js"
+    },
     "./core/browser/outcome-wait": {
       "types": "./dist/typescript/src/browser/outcome-wait.d.ts",
       "import": "./dist/typescript/src/browser/outcome-wait.js",
@@ -440,6 +445,11 @@
       "types": "./dist/typescript/src/mint/sign-in-failure.d.ts",
       "import": "./dist/typescript/src/mint/sign-in-failure.js",
       "default": "./dist/typescript/src/mint/sign-in-failure.js"
+    },
+    "./core/mint/sign-in-version": {
+      "types": "./dist/typescript/src/mint/sign-in-version.d.ts",
+      "import": "./dist/typescript/src/mint/sign-in-version.js",
+      "default": "./dist/typescript/src/mint/sign-in-version.js"
     },
     "./core/mint/signed-in-marker": {
       "types": "./dist/typescript/src/mint/signed-in-marker.d.ts",

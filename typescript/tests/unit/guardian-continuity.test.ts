@@ -428,6 +428,44 @@ it("gives a restored conversation's next review the current entrypoint source, s
   });
 });
 
+it("tells a restored conversation the host's resume note once, before its next request", async () => {
+  const note = "The build was paused and resumed. Its browser is new; review as usual.";
+  const requests: ModelRequest[] = [];
+  provide([[message()], [message()], [message()]], requests);
+  let saved: typeof GuardianSessionSnapshot.Type | undefined;
+  const reviewer = makeOpenAIReviewer("Synthetic policy {{ tenant_policy_config }}", false, native);
+  const save = (snapshot: typeof GuardianSessionSnapshot.Type) =>
+    Effect.sync(() => {
+      saved = Schema.decodeUnknownSync(GuardianSessionSnapshot)(
+        JSON.parse(JSON.stringify(snapshot)),
+      );
+    });
+  const files = inspector({ [pending.entrypoint]: "export default 1" });
+  await Effect.runPromise(makeGuardian(reviewer, undefined, { save }).review(pending, files));
+  const resumed = makeGuardian(reviewer, undefined, {
+    initial: Schema.decodeUnknownSync(GuardianSessionSnapshot)(saved),
+    resumeNote: note,
+    save,
+  });
+  await Effect.runPromise(resumed.review({ ...pending, attemptId: "resumed" }, files));
+  await Effect.runPromise(resumed.review({ ...pending, attemptId: "resumed" }, files));
+
+  const notes = (request: ModelRequest | undefined) => {
+    const input = request?.input;
+    return (Array.isArray(input) ? input : []).flatMap((item, index) =>
+      "role" in item && item.role === "user" && item.content === note ? [index] : [],
+    );
+  };
+  expect(notes(requests[0])).toEqual([]);
+  // The note comes once, right before the resumed attempt's first request.
+  const firstResumed = requests[1]?.input;
+  expect(notes(requests[1])).toEqual([Array.isArray(firstResumed) ? firstResumed.length - 2 : -1]);
+  expect(inlinedEntrypoint(requests[1])?.source).toBe("export default 1");
+  // The conversation keeps it in place, and nothing adds it again.
+  expect(notes(requests[2])).toEqual(notes(requests[1]));
+  expect(JSON.stringify(saved?.history)).toContain(note);
+});
+
 it("masks a registered secret in the entrypoint source the request carries", async () => {
   const secret = "synthetic-registered-entrypoint-secret";
   const secrets = makeRunSecrets();

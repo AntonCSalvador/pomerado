@@ -447,7 +447,7 @@ export const mintSessionSignInFailure = (failed: SessionSignInFailed): MintFailu
  * account page checks that page first, as `stillSignedIn` does, waiting for a marker drawn late
  * (`settledMarkerCheck`), and signs nothing in when the marker shows there. Otherwise, and on a
  * new browser, it replays. A recipe with a workspace relation always replays, since only the
- * replay learns the login's workspace.
+ * replay finds the workspace host the session is on.
  */
 export const runSignInBefore = <E>(
   typed: () => boolean,

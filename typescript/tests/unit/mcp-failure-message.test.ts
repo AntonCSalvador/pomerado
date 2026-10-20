@@ -1,3 +1,4 @@
+import { APIError } from "openai";
 import { Cause, Effect } from "effect";
 import { expect, it } from "vitest";
 import { SignInRunFailed } from "../../src/runtime/sign-in-replay.js";
@@ -17,6 +18,42 @@ it("gives a run's fallback failure no model, because a run makes no model reques
   const message = mcpFailureMessage(Cause.fail(new Error("Unclassified failure")), "run");
   expect(message).toBe(runFallback);
   expect(message).not.toContain("model");
+});
+
+it("names a model key the provider rejects, and a rate limit, from the provider's own error", () => {
+  const authentication =
+    "Model provider authentication failed. Check the server's model configuration.";
+  const rejected = { message: "Incorrect API key provided: sk_live_FAKEabcdefghijkl" };
+  expect(
+    mcpFailureMessage(
+      Cause.fail(
+        APIError.generate(
+          401,
+          { error: { ...rejected, code: "invalid_api_key" } },
+          undefined,
+          new Headers(),
+        ),
+      ),
+    ),
+  ).toBe(authentication);
+  // The provider's code survives the message's credential redaction, with no status beside it.
+  expect(
+    mcpFailureMessage(
+      Cause.fail(Object.assign(new Error(rejected.message), { code: "invalid_api_key" })),
+    ),
+  ).toBe(authentication);
+  expect(
+    mcpFailureMessage(
+      Cause.fail(
+        APIError.generate(
+          429,
+          { error: { message: "Rate limit reached." } },
+          undefined,
+          new Headers(),
+        ),
+      ),
+    ),
+  ).toBe("Model provider quota or rate limit was reached.");
 });
 
 it("reports a failed run job with the run message", async () => {

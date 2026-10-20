@@ -27,6 +27,7 @@ import { holdsFileHandle } from "../mint/file-handles.js";
 import { fileReadback } from "../mint/file-readback.js";
 import { cardReadback } from "../mint/card-readback.js";
 import type { PublishedSignIn } from "../mint/sign-in-recorder.js";
+import { checkSignInVersion } from "../mint/sign-in-version.js";
 import { sourceDigest } from "../mint/step-checks.js";
 import { liveTestsEvidencePath } from "../mint/live-tests.js";
 import { checkWriteSession } from "../mint/write-session.js";
@@ -201,6 +202,36 @@ export const screenedSignIn = <E>(
     return signIn;
   });
 
+/**
+ * The build's verified sign-in as the sign-in version check judges it (`checkSignInVersion`),
+ * refused every time it fails, naming each rule and part, never a value. A one-time login URL the
+ * host already asked about passes, so finishing again publishes it as before. The host passes no
+ * identity values or signed-out pages: it no longer holds the login, and the recorder already
+ * applied the identity guards to each screen and compared the marker with the build's signed-out
+ * pages as it recorded the sign-in. A login URL, page or popup off the site's registrable domain
+ * is refused (`foreign_origin`), on a sign-in origin the request declares in
+ * `authenticationOrigins` too, and one that is not https (`insecure_origin`).
+ */
+const signInVersionRefusal = (
+  signIn: PublishedSignIn,
+  siteOrigin: string,
+  oneTimeLoginUrlsAsked: ReadonlySet<string>,
+): MintFailure | undefined => {
+  const findings = checkSignInVersion({
+    siteOrigin,
+    version: signIn,
+    signedOutSnapshots: [],
+    entryUrlAsked: oneTimeLoginUrlsAsked.has(signIn.entryUrl),
+  });
+  return findings.length === 0
+    ? undefined
+    : new MintFailure({
+        code: "PublicationUnavailable",
+        reason: "sign_in_version_refused",
+        publicationFeedback: { signInFindings: findings },
+      });
+};
+
 export const mintPublication =
   (state: MintState): MintDependencies["publish"] =>
   (publication, evidence, hostEvidence) =>
@@ -232,6 +263,11 @@ export const mintPublication =
           secrets.assertAbsent,
           state.oneTimeLoginUrlsAsked,
         );
+        const versionRefused =
+          signIn === undefined
+            ? undefined
+            : signInVersionRefusal(signIn, context.siteOrigin, state.oneTimeLoginUrlsAsked);
+        if (versionRefused !== undefined) return yield* Effect.fail(versionRefused);
         // Published code never holds a handle: no saved file the operation could run may hold one,
         // whatever its extension. That is every saved file when Node could load one its imports
         // don't name (see runnableOperationFiles). Otherwise a probe no import reaches, saved only

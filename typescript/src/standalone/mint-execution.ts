@@ -590,6 +590,7 @@ const authoredExecution = (
                 decideDialog: keepingAcceptedConfirms(
                   makeDialogDecider(mintAsk, secrets.redact),
                   accepted,
+                  input,
                 ),
                 ...(live
                   ? {

@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { isSecret } from "../runtime/autofill-state.js";
 import type { AutofillSignInState } from "../runtime/autofill-state.js";
 import { type AutofillHost, autofillRecovery, refusedStep, result } from "./autofill-results.js";
+import { namesMaskedContact } from "./sign-in-guards.js";
 
 // What an autofill sign-in publishes with the tool never names one account: a signed-in check runs
 // for every login, and a method's selector is copied into the recipe.
@@ -38,8 +39,11 @@ const identityValues = (
   ].flatMap((value) => (value === undefined || value.length < 3 ? [] : [value.toLowerCase()]));
 };
 
-/** Whether a text names a known identity value, or a placeholder the minter saw for one. */
-const namesIdentity = (text: string, values: readonly string[]) => {
+/**
+ * Whether a text names a known identity value, or one of the shared masks (`[password]`, `[code]`,
+ * `[recovery_code]`). The local `[private]` mask is the local recorder's own check (`holdsMask`).
+ */
+const namesIdentityOrSharedMask = (text: string, values: readonly string[]) => {
   const lower = text.toLowerCase();
   return (
     values.some((value) => lower.includes(value)) ||
@@ -47,9 +51,9 @@ const namesIdentity = (text: string, values: readonly string[]) => {
   );
 };
 
-/** Whether the check names a known identity value, or a placeholder the minter saw for one. */
+/** Whether the check names a known identity value, or one of the shared masks. */
 const holdsIdentity = (indicator: AutofillSignedIn, values: readonly string[]) =>
-  namesIdentity(
+  namesIdentityOrSharedMask(
     [indicator.selector, indicator.urlPath, indicator.openPath]
       .filter((part) => part !== undefined)
       .join(" "),
@@ -69,17 +73,11 @@ export const identityRefusal = (h: Host, open: AutofillSignInState, indicator: A
       })
     : undefined;
 
-/**
- * A selector that copies a masked contact detail, as choice buttons show one ("Text (***) ***-1234",
- * "j•••@example.com"): a run of mask characters, or four or more digits in a row.
- */
-const namesContact = (selector: string) => /[*•●]{2,}|\d{4,}/u.test(selector);
-
 /** A refusal of a method choice whose selector copies a masked contact detail, or undefined. */
 export const maskedMethodRefusal = (h: Host, step: Pick<AutofillStep, "methods" | "submit">) => {
   if (step.methods === undefined) return undefined;
-  const masked = step.methods.findIndex((option) => namesContact(option.selector));
-  if (masked === -1 && !namesContact(step.submit ?? "")) return undefined;
+  const masked = step.methods.findIndex((option) => namesMaskedContact(option.selector));
+  if (masked === -1 && !namesMaskedContact(step.submit ?? "")) return undefined;
   return refusedStep(
     h,
     "selector_names_contact",
@@ -110,12 +108,12 @@ export const stepIdentityRefusal = (
     ...(step.submit === undefined ? [] : [step.submit]),
     ...(step.methods ?? []).map((option) => option.selector),
   ];
-  const named = selectors.findIndex((selector) => namesIdentity(selector, values));
+  const named = selectors.findIndex((selector) => namesIdentityOrSharedMask(selector, values));
   if (named !== -1)
     return refusedStep(h, "selector_names_contact", named, identityNotices.selectors);
   // An address may carry a value percent-encoded, such as an email's `@` as `%40`.
   const encoded = values.map((value) => encodeURIComponent(value).toLowerCase());
-  if (namesIdentity(page, [...values, ...encoded]))
+  if (namesIdentityOrSharedMask(page, [...values, ...encoded]))
     return refusedStep(
       h,
       "page_names_contact",

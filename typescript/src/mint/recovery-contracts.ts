@@ -32,6 +32,11 @@ export const MintAgentSnapshot = Schema.Struct({
 export type MintAgentSnapshot = typeof MintAgentSnapshot.Type;
 export interface MintAgentRecovery {
   readonly initial?: MintAgentSnapshot;
+  /**
+   * With `initial` only: one user message the restored run adds before its next model call. A
+   * saved `response` replays first, with its tool calls, and the message follows their results.
+   */
+  readonly resumeMessage?: string;
   /** Rejoins a fenced retained execution or reads its result. Must never dispatch the action. */
   readonly recoverTool?: (
     call: RecoveryToolCall,
