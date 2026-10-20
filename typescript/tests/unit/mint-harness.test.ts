@@ -802,26 +802,28 @@ it("marks the decision ledger partial after a takeover from a checkpoint without
   expect(ledgers).toEqual([{ partial: true, denials: [], testFailures: [] }]);
 });
 
+const hostCheckRefusal = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "autofill_recipe_not_verified",
+});
 /**
- * The reply to a takeover's host_refused report after its predecessor's publication was refused by
- * a host check, from the predecessor's checkpoint as `edit` leaves it.
+ * The reply to a takeover's host_refused report after its predecessor finished once per publish
+ * decision in `decisions`, in order, from the predecessor's checkpoint as `edit` leaves it.
  */
-const hostRefusedAfterTakeover = async (edit: (checkpoint: Record<string, unknown>) => void) => {
+const hostRefusedAfterTakeover = async (
+  edit: (checkpoint: Record<string, unknown>) => void,
+  decisions: readonly MintFailure[] = [hostCheckRefusal],
+) => {
   let capture: (() => MintHarnessSnapshot) | undefined;
+  let published = 0;
   const first = await fixture(
     (turn) =>
       Effect.gen(function* () {
         yield* turn.actions.execute(execution);
-        yield* turn.actions.finish(publication);
+        for (const _ of decisions) yield* turn.actions.finish(publication);
       }),
     {
-      publish: () =>
-        Effect.fail(
-          new MintFailure({
-            code: "PublicationUnavailable",
-            reason: "autofill_recipe_not_verified",
-          }),
-        ),
+      publish: () => Effect.fail(decisions[published++] ?? hostCheckRefusal),
       agentRecovery: {
         bindHarness: (bound) =>
           Effect.sync(() => {
@@ -869,6 +871,35 @@ it.each([
   },
 ])("keeps a host refusal across a takeover from $checkpoint checkpoint", async ({ edit, status }) => {
   expect(await hostRefusedAfterTakeover(edit)).toEqual([expect.objectContaining({ status })]);
+});
+
+// A host refusal a later finish_build got past to Guardian's review stays cleared after a takeover,
+// so the takeover refuses host_refused as the build that cleared it did.
+it("keeps a host refusal a later finish_build got past cleared across a takeover", async () => {
+  const kept: Record<string, unknown>[] = [];
+  const replies = await hostRefusedAfterTakeover(
+    (checkpoint) => {
+      kept.push({ ...checkpoint });
+    },
+    [
+      new MintFailure({ code: "PublicationUnavailable", reason: "variants_unsupported" }),
+      new MintFailure({
+        code: "ReviewDenied",
+        review: {
+          outcome: "deny",
+          reason: "source_correction",
+          reviewId: "review_correction",
+          rationale: "Read the total from the invoice table.",
+          findings: [],
+        },
+      }),
+    ],
+  );
+  expect(kept[0]).not.toHaveProperty("hostRefused");
+  expect(kept[0]).toHaveProperty("hostRefusalPassed", true);
+  expect(replies).toEqual([
+    expect.objectContaining({ status: "blocked_refused", reason: "host_refusal_passed" }),
+  ]);
 });
 
 /**
