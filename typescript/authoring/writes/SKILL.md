@@ -225,9 +225,7 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   and the view's other rows only where the before-and-after check or another skill, such as
   the cart skill, compares them. Read another page, in that same step before `verified()`,
   only for a field the view did not show and the tool's output promises. A reference the site
-  saves as an ID follows "Check the read-back" below. A message the site shows after the commit
-  about something else, such as a notification that failed to send, doesn't undo a read-back
-  that confirms the record: call `verified()` and return it as a warning in the output.
+  saves as an ID follows "Check the read-back" below.
 - State from before the write never matches. Require something only the finished write can
   show: the number or reference it produced, or a value it changed from what you read before
   it, such as a status that now reads Sent or a row that was not there. A list still showing
