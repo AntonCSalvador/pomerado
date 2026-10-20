@@ -14,6 +14,7 @@ import {
 import type {
   AgentInputRequest,
   ExecutionEvidence,
+  MintDependencies,
   MintTurn,
   PublicationDecision,
   PublicationRequest,
@@ -876,19 +877,20 @@ it.each([
  */
 const declinedAfterUnconfirmedSignIn = async (
   edit: (checkpoint: Record<string, unknown>) => void,
+  signIn: MintDependencies["reviewAndExecute"] = () =>
+    Effect.succeed({
+      executionId: "sign_in_screen",
+      status: "completed" as const,
+      effect: "possible" as const,
+      resultRef: "screen_result",
+      observations: { step: { outcome: "filled", submit: "clicked" } },
+    }),
 ) => {
   let capture: (() => MintHarnessSnapshot) | undefined;
   const first = await fixture(
     (turn) => turn.actions.execute({ ...execution, purpose: "authenticate", target: "liveBrowser" }),
     {
-      reviewAndExecute: () =>
-        Effect.succeed({
-          executionId: "sign_in_screen",
-          status: "completed" as const,
-          effect: "possible" as const,
-          resultRef: "screen_result",
-          observations: { step: { outcome: "filled", submit: "clicked" } },
-        }),
+      reviewAndExecute: signIn,
       agentRecovery: {
         bindHarness: (bound) =>
           Effect.sync(() => {
@@ -939,6 +941,38 @@ it.each([
   "keeps an unconfirmed sign-in across a takeover from $checkpoint checkpoint",
   async ({ edit, status }) => {
     expect(await declinedAfterUnconfirmedSignIn(edit)).toEqual([
+      expect.objectContaining({ status }),
+    ]);
+  },
+);
+
+// Guardian's final refusal of a predecessor's sign-in still stands alone after a takeover; a
+// checkpoint from an older worker, which kept no such record, leaves the report as it was.
+it.each([
+  { checkpoint: "this worker's", edit: () => undefined, status: "sign_in_unavailable" },
+  {
+    checkpoint: "an older worker's",
+    edit: (checkpoint: Record<string, unknown>) => {
+      delete checkpoint["signInRefusalOnly"];
+    },
+    status: "blocked",
+  },
+])(
+  "keeps a refused sign-in across a takeover from $checkpoint checkpoint",
+  async ({ edit, status }) => {
+    const refused = () =>
+      Effect.fail(
+        new MintFailure({
+          code: "ReviewDenied",
+          review: {
+            outcome: "deny",
+            reviewId: "review_sign_in",
+            rationale: "This sign-in may not run.",
+            refusal: "final",
+          },
+        }),
+      );
+    expect(await declinedAfterUnconfirmedSignIn(edit, refused)).toEqual([
       expect.objectContaining({ status }),
     ]);
   },
