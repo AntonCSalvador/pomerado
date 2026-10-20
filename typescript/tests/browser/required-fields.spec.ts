@@ -438,6 +438,25 @@ test("blockingRequiredFields proves a click saved nothing only when every flag i
   await page.setContent(blockedReview(`<label>Please enter a phone number<input></label>`));
   await reveal("#later input");
   expect(await blocking(["Item", "item"])).toEqual({ result: null });
+  await page.setContent(blockedReview(`<label>Phone number (required)<input></label>`));
+  await reveal("#later input");
+  expect(await blocking(["Item", "item"])).toEqual({ result: null });
+  // So may one with no name or id whose label begins with a label shown before the click.
+  await page.setContent(blockedReview("", `<label>Contact phone <input type="tel"></label>`));
+  const unnamed = ((await before()) as { result: string[] }).result;
+  expect(unnamed).toEqual(["Item", "item", "Contact phone"]);
+  await page.evaluate(() => {
+    const phone = document.querySelector("[type=tel]");
+    phone?.insertAdjacentText("afterend", " Enter a phone number for the courier");
+    phone?.setAttribute("aria-invalid", "true");
+  });
+  expect(await blocking(unnamed)).toEqual({ result: null });
+  // A label that only begins with the same letters as one shown before is a new field.
+  await page.setContent(blockedReview(`<label>Contactless note<input name="note"></label>`, `<label>Contact<input name="contact" value="Sam"></label>`));
+  await reveal("[name=note]");
+  expect(await blocking(["Item", "item", "Contact", "contact"])).toEqual({
+    result: { fields: [{ label: "Contactless note", shape: "text" }] },
+  });
   // A flagged value the site refused, beside the empty field, may be the site's answer to a save.
   await page.setContent(
     blockedReview(`<label>Delivery phone<input name="phone"></label>

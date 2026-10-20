@@ -119,8 +119,9 @@ export const CalendarDate = Schema.String.pipe(
  *   them, that was not on the page before the click. Otherwise it returns `null`, such as when the
  *   form is gone, nothing is flagged, a filled or unsupported field is flagged too, or a flagged
  *   field was already showing, by its label, name or id, which a save may have cleared or the page
- *   may have flagged before. A flagged field whose label reads as an error message, such as "This
- *   field is required.", counts as one already showing.
+ *   may have flagged before. A flagged field whose label begins with a label shown before, as when
+ *   the page writes its error inside the label, or reads as an error message, such as "Required"
+ *   or "This field is required.", counts as one already showing.
  *   Call it only once the click's wait found no confirmation and the form flagged a field, as a
  *   `{ invalid }` outcome of `waitForOutcomeResult` does.
  * - `fillRequiredField(scope, label, answer, { timeout }?)`: fills the one supported field
@@ -129,8 +130,8 @@ export const CalendarDate = Schema.String.pipe(
  */
 export const formControlsCode = String.raw`
 const formControlFailure = (reason) => Object.assign(new Error(reason), { name: "FormControlFailure" });
-/** Words of a validation message, such as "This field is required.", rather than a field's name. */
-const formControlMessageWords = /\b(?:is|are) (?:required|missing|not valid)\b|\bthis field\b|\bplease (?:enter|select|choose|provide|fill|complete|correct)\b|\benter a valid\b|\bmust (?:be|contain|have|match)\b|\bcan(?:not|'t|’t| not) be (?:blank|empty)\b|\binvalid\b|\bist erforderlich\b|\bes (?:obligatorio|requerido)\b|\best (?:obligatoire|requis)\b/i;
+/** Words of a validation message, such as "Required" or "This field is required.", rather than a field's name. */
+const formControlMessageWords = /\brequired\b|\b(?:is|are) (?:missing|not valid)\b|\bthis field\b|\bplease (?:enter|select|choose|provide|fill|complete|correct)\b|\benter a valid\b|\bmust (?:be|contain|have|match)\b|\bcan(?:not|'t|’t| not) be (?:blank|empty)\b|\binvalid\b|\bist erforderlich\b|\bes (?:obligatorio|requerido)\b|\best (?:obligatoire|requis)\b/i;
 /** Folds case, accents, spacing and punctuation, so "Joe’s Café" and "joes cafe" name the same option. */
 const formControlText = ${String(foldChoiceText)};
 const formControlFrame = async (control, options) => {
@@ -519,10 +520,13 @@ const blockingRequiredFields = async (scope, before, options = {}) => {
   if ((await scope.count()) !== 1 || !(await scope.isVisible())) return null;
   const { fields, flaggedFilled } = await formControlRequiredFields(scope, timeout, "flagged");
   // A field the page already showed before the click, by its label, name or id, may have been
-  // cleared or flagged by a save. A label that reads as the page's error message, such as one
-  // that names the field's error beside it, may be such a field too.
+  // cleared or flagged by a save. So may one whose label begins with a label shown before, as
+  // when the page writes its error inside the label, or whose label reads as an error message.
   const seen = new Set(before.map(String));
-  const stale = (field) => field.keys.some((key) => seen.has(key)) || formControlMessageWords.test(field.label);
+  const extended = (label) =>
+    [...seen].some((key) => label.length > key.length && label.startsWith(key) && !/[\p{L}\p{N}]/u.test(label.charAt(key.length)));
+  const stale = (field) =>
+    field.keys.some((key) => seen.has(key)) || extended(field.label) || formControlMessageWords.test(field.label);
   if (fields.length === 0 || flaggedFilled > 0 || fields.some((field) => field.unsupported || stale(field)))
     return null;
   return { fields: fields.map(({ control, keys, ...field }) => field) };

@@ -1718,6 +1718,12 @@ const savingReviews = {
     fields: `<input name="phone" placeholder="Phone" required>`,
     afterSave: `const phone = form.querySelector("[name=phone]"); phone.setAttribute("aria-label", "Phone number"); phone.setAttribute("aria-invalid", "true"); confirm(400);`,
   },
+  // A field with no name or id, whose label gains the error message the save writes inside it.
+  "unnamed field's label gains its error": {
+    fields: `<label>Contact phone <input type="tel" required value="555-0100"></label>`,
+    afterSave: `const phone = form.querySelector("[type=tel]"); phone.value = ""; phone.setAttribute("aria-invalid", "true");
+      phone.parentElement.insertAdjacentHTML("beforeend", '<span class="error">Required</span>'); confirm(1500);`,
+  },
   // aria-labelledby that gains the error's id, so its label becomes "Phone is required".
   "error joins the label": {
     fields: `<span id="ph-l">Phone</span><input name="phone" aria-labelledby="ph-l" required value="555-0100">`,
