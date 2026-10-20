@@ -90,9 +90,9 @@ export const CalendarDate = Schema.String.pipe(
  *   rank are ambiguous. A custom dropdown is opened, its own listbox found through `aria-controls`
  *   or `aria-owns` (else the one visible listbox), typed into when it filters as you type, and
  *   scrolled when it renders its options as you scroll. Returns `{ shape, label, value }`.
- * - `unfilledRequiredFields(scope, { timeout }?)`: the empty required fields a form shows now, in
- *   page order, such as ones it adds once an earlier answer is in. A field counts when it is
- *   visible, enabled, empty and marked `required` or `aria-required="true"`, or flagged invalid
+ * - `unfilledRequiredFields(scope, { timeout, before }?)`: the empty required fields a form shows
+ *   now, in page order, such as ones it adds once an earlier answer is in. A field counts when it
+ *   is visible, enabled, empty and marked `required` or `aria-required="true"`, or flagged invalid
  *   (`aria-invalid="true"`, the `is-invalid` class or the browser's own check after a submit). A
  *   control inside another one, such as a combobox's own text box, counts as that one, with its
  *   required mark, flag and value. Each is `{ label, shape, options? }`, its label from its
@@ -107,10 +107,13 @@ export const CalendarDate = Schema.String.pipe(
  *   thru), SSN, verification, authentication or SMS code, OTP, a 6-digit code, a PIN (not a PIN
  *   code, which can be a postcode), password, passport, driver's licence, national ID or national
  *   insurance number, a TIN or EIN, IBAN, bank account, routing number or sort code, and a few of
- *   their German, Spanish and French names.
- * - `visibleFieldLabels(scope, { timeout }?)`: every field the form shows now, by its label, as
- *   `unfilledRequiredFields` names it, and by each name and id it carries. Read them in the marked
- *   call just before the click, for `blockingRequiredFields`.
+ *   their German, Spanish and French names. With `before`, what `visibleFieldLabels(scope,
+ *   { enabledOnly: true })` read before some answers were filled, it lists only the labelled
+ *   fields those answers showed or enabled: none whose label, name or id is among `before`.
+ * - `visibleFieldLabels(scope, { timeout, enabledOnly }?)`: every field the form shows now, by its
+ *   label, as `unfilledRequiredFields` names it, and by each name and id it carries. Read them in
+ *   the marked call just before the click, for `blockingRequiredFields`. With `enabledOnly: true`
+ *   it leaves out disabled fields, for `unfilledRequiredFields`' `before`.
  * - `blockingRequiredFields(scope, before, { timeout }?)`: after a click that should have saved or
  *   moved on, whether the page proves the click saved nothing. `before` is what
  *   `visibleFieldLabels` read just before the click; without it, it throws `labels_missing`. It
@@ -381,11 +384,11 @@ const formControlTextTypes = new Set(["", "text", "email", "tel", "url", "number
  * its required mark, flag and value count as that one's. Mode "flagged" keeps only the flagged
  * ones, each with its keys (its label and every name and id it and its inner controls carry), and
  * counts the flagged controls that are not empty; mode "labels" returns the keys of every visible
- * control instead.
+ * control instead, and mode "enabled labels" those of every visible, enabled one.
  */
 const formControlRequiredFields = async (scope, timeout, mode = "required") => {
   const candidates = scope.locator(formControlFieldSelector);
-  const found = await candidates.evaluateAll((elements, labelsOnly) => {
+  const found = await candidates.evaluateAll((elements, mode) => {
     const words = (text) => String(text ?? "").replace(/[\s\u200b]+/g, " ").trim();
     // A card, a password, a one-time code or an identity number goes through the host's own
     // protected forms, never a site-field question.
@@ -453,13 +456,15 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
       [nameOf(element), ...partsOf(element).flatMap((part) => [part.getAttribute("name"), part.id])].filter(
         (key) => typeof key === "string" && key !== "",
       );
-    if (labelsOnly) return { labels: outer.filter(shown).flatMap(keysOf) };
+    const enabledOf = (element) => !element.matches(":disabled") && element.getAttribute("aria-disabled") !== "true";
+    if (mode === "labels" || mode === "enabled labels")
+      return { labels: outer.filter((element) => shown(element) && (mode === "labels" || enabledOf(element))).flatMap(keysOf) };
     let flaggedFilled = 0;
     const fields = elements.flatMap((element, index) => {
       if (!outer.includes(element)) return [];
       // A combobox's own text box, inside it, carries its required mark, flag and value.
       const parts = partsOf(element);
-      const enabled = !element.matches(":disabled") && element.getAttribute("aria-disabled") !== "true";
+      const enabled = enabledOf(element);
       const flagged = parts.some((part) => part.matches(flagMarks));
       const required = flagged || parts.some((part) => part.required === true || part.getAttribute("aria-required") === "true");
       if (!shown(element) || !enabled || !required) return [];
@@ -487,8 +492,8 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
       }];
     });
     return { fields, flaggedFilled };
-  }, mode === "labels");
-  if (mode === "labels") return found.labels;
+  }, mode);
+  if (mode === "labels" || mode === "enabled labels") return found.labels;
   const fields = [];
   for (const field of found.fields) {
     if (mode === "flagged" && !field.flagged) continue;
@@ -504,16 +509,23 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
       shape,
       ...(supported && shape !== "text" && field.options !== undefined ? { options: field.options } : {}),
       ...(supported ? {} : { unsupported: true }),
-      ...(mode === "flagged" ? { keys: field.keys } : {}),
+      keys: field.keys,
       control,
     });
   }
   return mode === "flagged" ? { fields, flaggedFilled: found.flaggedFilled } : fields;
 };
-const unfilledRequiredFields = async (scope, options = {}) =>
-  (await formControlRequiredFields(scope, options.timeout ?? 10000)).map(({ control, ...field }) => field);
+const unfilledRequiredFields = async (scope, options = {}) => {
+  const { before } = options;
+  if (before !== undefined && !Array.isArray(before)) throw formControlFailure("labels_missing");
+  // With before, only a labelled field none of whose keys it holds: one shown or enabled since.
+  const seen = new Set((before ?? []).map(String));
+  return (await formControlRequiredFields(scope, options.timeout ?? 10000))
+    .filter((field) => before === undefined || (field.label !== "" && !field.keys.some((key) => seen.has(key))))
+    .map(({ control, keys, ...field }) => field);
+};
 const visibleFieldLabels = async (scope, options = {}) =>
-  formControlRequiredFields(scope, options.timeout ?? 10000, "labels");
+  formControlRequiredFields(scope, options.timeout ?? 10000, options.enabledOnly === true ? "enabled labels" : "labels");
 const blockingRequiredFields = async (scope, before, options = {}) => {
   if (!Array.isArray(before)) throw formControlFailure("labels_missing");
   const timeout = options.timeout ?? 10000;

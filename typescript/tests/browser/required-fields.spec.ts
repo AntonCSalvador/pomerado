@@ -527,3 +527,60 @@ test("blockingRequiredFields proves a click saved nothing only when every flag i
   await page.setContent(`${blockedReview("", `<input aria-label="Delivery phone" aria-invalid="true">`)}${blockedReview("")}`);
   expect(await blocking(["Item"])).toEqual({ result: null });
 });
+
+test("unfilledRequiredFields with before lists only the labelled fields that answers showed or enabled", async ({
+  page,
+}) => {
+  // A courier needs a phone, shown greyed out until the courier is chosen; it also makes the
+  // quantity required and renames it, and makes an unlabelled box required.
+  await page.setContent(`
+<form aria-label="Checkout">
+  <label>Quantity<input name="quantity" value="1"></label>
+  <label>Delivery<select name="delivery" required><option value="">Choose</option><option>Courier</option><option>Post</option></select></label>
+  <label>Courier phone<input type="tel" name="phone" disabled></label>
+  <input class="ref">
+  <label hidden>Courier note<input name="note"></label>
+</form>
+<script>
+  document.querySelector("[name=delivery]").addEventListener("change", (event) => {
+    const courier = event.target.value === "Courier";
+    const phone = document.querySelector("[name=phone]");
+    phone.disabled = !courier;
+    phone.required = courier;
+    const quantity = document.querySelector("[name=quantity]");
+    quantity.value = "";
+    quantity.required = true;
+    quantity.parentElement.firstChild.textContent = "Quantity (max 2 by courier)";
+    document.querySelector(".ref").required = true;
+    const note = document.querySelector("[name=note]");
+    note.parentElement.hidden = false;
+    note.required = true;
+  });
+</script>`);
+  const form = `page.getByRole("form", { name: "Checkout" })`;
+  // Without enabledOnly the greyed-out phone counts as shown; with it, it does not.
+  expect(await call(page, `return await visibleFieldLabels(${form});`)).toEqual({
+    result: ["Quantity", "quantity", "Delivery", "delivery", "Courier phone", "phone"],
+  });
+  const before = await call(page, `return await visibleFieldLabels(${form}, { enabledOnly: true });`);
+  expect(before).toEqual({ result: ["Quantity", "quantity", "Delivery", "delivery"] });
+  await page.locator("[name=delivery]").selectOption("Courier");
+  // The renamed quantity is still known by its name, and the unlabelled box is left out.
+  expect(
+    await call(page, `return await unfilledRequiredFields(${form}, { before: ${JSON.stringify(before.result)} });`),
+  ).toEqual({
+    result: [
+      { label: "Courier phone", shape: "text" },
+      { label: "Courier note", shape: "text" },
+    ],
+  });
+  // Without before, it still lists every empty required field.
+  expect(
+    ((await call(page, `return await unfilledRequiredFields(${form});`)) as { result: { label: string }[] }).result.map(
+      ({ label }) => label,
+    ),
+  ).toEqual(["Quantity (max 2 by courier)", "Courier phone", "", "Courier note"]);
+  expect(await call(page, `return await unfilledRequiredFields(${form}, { before: "Delivery" });`)).toEqual({
+    error: "labels_missing",
+  });
+});
