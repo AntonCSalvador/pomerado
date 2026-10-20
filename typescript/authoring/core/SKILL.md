@@ -226,17 +226,14 @@ exception: it is optional unless the task can't run without it (below).
   shows on its own pages, such as a product number, is not internal). A closed list
   of options stays an enum of the site's options, as above. When the options come from a
   query, as in a search box, autocomplete, typeahead or searchable combobox, look the value
-  up the way a person would. Type the caller's value into the site's own search and read
-  every suggestion or result it shows. Prefer matching names loosely, ignoring case,
-  accents, spacing, punctuation, apostrophe style and a location the site adds to the
-  name, such as a
-  neighborhood or an airport code in brackets, over waiting for an element named exactly as
-  the caller typed it. A whole-name or code match outranks a partial one, so an airport code
-  picks that airport, not its city. Then count the matches at the best rank. With none,
-  throw `InvalidInput` at once, saying the site has no match, with `field` and `available`,
-  the closest entries it showed. With one, use it. With several, ask the caller which one with
-  a declared choice question whose options are those matches as the site labels them
-  (.agents/caller-input/SKILL.md).
+  up the way a person would, with `pickValue` from `pickerCode` (forms skill). It types the
+  caller's value into the site's own search, reads every suggestion, matches names loosely
+  (case, accents, spacing, punctuation, and whole words, so a name with a neighborhood or an
+  airport code in brackets still matches) with a whole-name or code match outranking a partial
+  one, and counts the matches at the best rank. With none, throw its `pickRefusal`, an
+  `InvalidInput` with `field` and `available`, the entries the site showed. With one, it picks
+  it. With several, ask the caller which one with a declared choice question whose options are
+  its `matches` (.agents/caller-input/SKILL.md).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
   match that accepts the usual forms of the same name, such as a name with or without its
   accents (Abaca for Abacá), a city alone or with its state and country, or a company with

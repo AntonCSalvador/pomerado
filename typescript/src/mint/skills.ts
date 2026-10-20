@@ -47,6 +47,7 @@ const catalog = [
     description: "Native/custom selection, resolvers, staged forms and expected terms",
     references: [
       "dates-and-dropdowns.ts",
+      "picker.ts",
       "custom-selection.ts",
       "dialog-picker.ts",
       "dates-and-files.ts",
