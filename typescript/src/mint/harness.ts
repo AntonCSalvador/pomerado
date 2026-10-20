@@ -932,6 +932,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const answeredQuestions = new Map<string, AnsweredQuestion>(
         (recovered?.answeredQuestions ?? []).map(({ id, answer }) => [id, answer]),
       );
+      /**
+       * Whether the owner's latest request_input kept an answer Guardian reads, with no other tool
+       * call since: what `owner_ended` stands on. A secret or sign-in answer is never kept.
+       */
+      let ownerAnsweredLast = false;
       // A write build's one live session: its first act step takes the example claim and the
       // step that records the site's confirmation closes it. A takeover restores this session;
       // an unrelated attempt with an existing claim keeps it closed.
@@ -1510,6 +1515,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 if (entry === undefined) return;
                 answeredQuestions.delete(question.id);
                 answeredQuestions.set(question.id, entry);
+                ownerAnsweredLast = true;
               }),
             ),
           ),
@@ -3062,8 +3068,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
-        // one of those takes its name, so neither ever ends as policy. `owner_ended` needs an
-        // answer the owner gave in this build.
+        // one of those takes its name, so neither ever ends as policy. `owner_ended` needs the
+        // owner's latest answer with nothing run since, so a build that went on from an answer
+        // never ends as the owner's choice.
         const ownerRefused =
           loginDeclined !== undefined ||
           [...answeredQuestions.values()].some(
@@ -3081,10 +3088,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "no_question_unanswered",
             "No question went unanswered in this build, so the build has not ended. Use question_unanswered only after a question you asked came back as no answer and the build cannot go on without it.",
           );
-        if (reason === "owner_ended" && answeredQuestions.size === 0)
+        if (reason === "owner_ended" && !ownerAnsweredLast)
           return refused(
             "owner_not_ended",
-            "The owner answered no question in this build, so the build has not ended. Use owner_ended only after the owner chose in an answer to end the build.",
+            "The owner gave no answer since this build's last step that could end it, so the build has not ended. Use owner_ended only right after the owner chose in an answer to end the build.",
           );
         if (reason === "host_refused" && !hostRefused)
           return refused(
@@ -6207,12 +6214,54 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         return notices.length === 0 ? undefined : notices;
       };
       const published = () => terminal?.build === "published";
+      // Any tool call but a question or a blocked report is work after the owner's latest answer,
+      // so `owner_ended` no longer stands on it. Cleared before and after, so a call queued behind
+      // the question still counts.
+      const working =
+        <A extends readonly unknown[]>(
+          action: (...args: A) => Effect.Effect<string, MintFailure>,
+        ) =>
+        (...args: A) =>
+          Effect.suspend(() => {
+            ownerAnsweredLast = false;
+            return action(...args);
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                ownerAnsweredLast = false;
+              }),
+            ),
+          );
       const reviewedActions: MintActions = {
         ...actions,
+        ...(actions.retainCapture === undefined
+          ? {}
+          : { retainCapture: working(actions.retainCapture) }),
+        readSource: working(actions.readSource),
+        execute: working(actions.execute),
+        requestInput: (input) =>
+          Effect.suspend(() => {
+            ownerAnsweredLast = false;
+            return actions.requestInput(input);
+          }),
+        ...(actions.updateTask === undefined ? {} : { updateTask: working(actions.updateTask) }),
+        ...(actions.captchaState === undefined
+          ? {}
+          : { captchaState: working(actions.captchaState) }),
+        ...(actions.liveTests === undefined ? {} : { liveTests: working(actions.liveTests) }),
+        ...(actions.requestBrowserRecovery === undefined
+          ? {}
+          : { requestBrowserRecovery: working(actions.requestBrowserRecovery) }),
+        ...(actions.checkSignedInMarker === undefined
+          ? {}
+          : { checkSignedInMarker: working(actions.checkSignedInMarker) }),
+        ...(actions.abandonSignIn === undefined
+          ? {}
+          : { abandonSignIn: working(actions.abandonSignIn) }),
         // A published build with a write unresolved gives the reviewer its last turn;
         // publication itself never waits for it.
         finish: (input) =>
-          actions.finish(input).pipe(
+          working(actions.finish)(input).pipe(
             Effect.tap((result) =>
               Effect.sync(() => {
                 publications.push(result);

@@ -998,6 +998,77 @@ it("ends a policy report that stands on the owner's no as owner_declined after a
   });
 });
 
+// owner_ended stands only on the owner's latest answer with nothing run since: an answer the build
+// went on from, such as a date it then tried on a site that failed, never ends it as the owner's
+// choice, and neither does a secret answer, which Guardian never sees, or a sign-in after the answer.
+const failedSiteStep = {
+  executionId: "example_failed",
+  status: "failed" as const,
+  effect: "not_sent" as const,
+  resultRef: "example_failed_result",
+  observations: { error: "The site showed an error page." },
+};
+const stopAnswer = { next: { type: "choice", value: "stop" } } as const;
+it.each([
+  {
+    after: "a step that failed on the site after a date answer",
+    steps: [
+      call("request_input", {
+        questions: [{ id: "start", type: "text", prompt: "Which start date should the example use?" }],
+      }),
+      call("execute", pureExample),
+    ],
+    answers: { start: { type: "text", value: "2026-11-02" } },
+  },
+  {
+    after: "a secret answer after the owner chose to stop",
+    steps: [
+      call("request_input", stopChoice),
+      call(
+        "request_input",
+        {
+          questions: [
+            { id: "note", type: "secret", secretKind: "private_text", prompt: "Which reference?" },
+          ],
+        },
+        "secret",
+      ),
+    ],
+    answers: { ...stopAnswer, note: { type: "secret", value: "private-reference" } },
+  },
+  {
+    after: "a sign-in after the owner chose to stop",
+    steps: [call("request_input", stopChoice), signIn],
+    answers: stopAnswer,
+  },
+] as const)("refuses owner_ended after $after", async ({ steps, answers }) => {
+  const explanation = "You chose to stop because the start date is unknown.";
+  const f = await fixture(
+    (_request, index) =>
+      [...steps, call("report_blocked", { reason: "owner_ended", explanation })][index] ??
+      prose("Stopping."),
+    {
+      reviewAndExecute: (submitted, beforeDispatch = () => Effect.void) =>
+        submitted.purpose === "authenticate"
+          ? beforeDispatch({ reviewId: "review_sign_in", action: "authentication" }).pipe(
+              Effect.as(submittedScreen),
+            )
+          : Effect.succeed(failedSiteStep),
+      askInput: (request) =>
+        Effect.succeed(
+          Object.fromEntries(
+            request.questions.flatMap((question) =>
+              question.id in answers ? [[question.id, answers[question.id as keyof typeof answers]]] : [],
+            ),
+          ),
+        ),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome).not.toMatchObject({ blocked: { reason: "owner_ended" } });
+  expect(JSON.stringify(f.requests[steps.length + 1]?.input ?? null)).toContain("owner_not_ended");
+});
+
 // The owner's own choice to end the build keeps its ending, sign-in or not, as their no does.
 it("keeps owner_ended after an unconfirmed sign-in", async () => {
   const f = await fixture(
