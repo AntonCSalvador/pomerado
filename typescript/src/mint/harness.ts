@@ -938,8 +938,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         (recovered?.answeredQuestions ?? []).map(({ id, answer }) => [id, answer]),
       );
       /**
-       * Whether the owner's latest request_input kept an answer Guardian reads, with no other tool
-       * call since: what `owner_ended` stands on. A secret or sign-in answer is never kept.
+       * Whether the owner's latest request_input kept an answer Guardian reads, with no other call
+       * through the turn's actions since: what `owner_ended` stands on. A secret or sign-in answer
+       * is never kept.
        */
       let ownerAnsweredLast = false;
       // A write build's one live session: its first act step takes the example claim and the
@@ -6243,9 +6244,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         return notices.length === 0 ? undefined : notices;
       };
       const published = () => terminal?.build === "published";
-      // Any tool call but a question or a blocked report is work after the owner's latest answer,
-      // so `owner_ended` no longer stands on it. Cleared before and after, so a call queued behind
-      // the question still counts.
+      // Any call through the turn's actions but a question or a blocked report is work after the
+      // owner's latest answer, so `owner_ended` no longer stands on it. Cleared before and after, so
+      // a call queued behind the question still counts. Sandbox commands and file edits are not
+      // actions and leave it as it is.
       const working =
         <A extends readonly unknown[]>(
           action: (...args: A) => Effect.Effect<string, MintFailure>,
@@ -6459,6 +6461,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           ...(dependencies.hostToolDescriptions === undefined
             ? {}
             : { hostToolDescriptions: dependencies.hostToolDescriptions }),
+          ...(dependencies.compactionSkillsNote === undefined
+            ? {}
+            : { compactionSkillsNote: dependencies.compactionSkillsNote }),
           actions: withHostNotices(
             dependencies.retainCapture === undefined
               ? (({ retainCapture: _capture, ...available }) => available)(reviewedActions)
