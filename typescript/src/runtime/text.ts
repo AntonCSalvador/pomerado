@@ -78,8 +78,10 @@ export const sameText = (shown: string, wanted: string): boolean => {
     for (const letter of full) if (letter === short[next]) next++;
     return next === short.length;
   };
-  // An email, domain or file name is a literal: none of its words reads as short for another.
-  const literal = /@|\p{L}\.\p{L}/u.test(String(shown ?? "") + " " + String(wanted ?? ""));
+  // An email, domain or file name is a literal: none of its words reads as short for another. A
+  // period before two letters marks one; an abbreviation's own periods, as in D.C., do not.
+  const both = String(shown ?? "") + " " + String(wanted ?? "");
+  const literal = /@|[\p{L}\p{N}]\.\p{L}{2}/u.test(both);
   const a = fold(shown).split(" ");
   const b = fold(wanted).split(" ");
   return (

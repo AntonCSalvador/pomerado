@@ -571,11 +571,11 @@ test("chooseOption never reads a wanted code or title as short for a longer labe
 
 test("chooseOption never reads an email or file name as short for another", async ({ page }) => {
   await page.setContent(`<form><label>Assignee<select name="assignee">
-<option value="">Choose</option><option value="1">a.smith@acme.com</option><option value="2">b.jones@acme.com</option>
+<option value="">Choose</option><option value="1">j.smith@example.com</option><option value="2">b.jones@example.com</option>
 </select></label><label>File<select name="file">
 <option value="">Choose</option><option value="1">a.pdf</option><option value="2">b.pdf</option></select></label></form>`);
   for (const [control, wanted] of [
-    ["Assignee", "alan.smith@acme.com"],
+    ["Assignee", "jo.smith@example.com"],
     ["File", "annual.pdf"],
   ] as const)
     expect(

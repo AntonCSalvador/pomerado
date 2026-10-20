@@ -71,8 +71,8 @@ it("never matches a short wanted word against a longer word the page shows", () 
     ["XL", "XXXL"],
     ["5 m", "5 mm"],
     ["10 g", "10 gal"],
-    ["a.smith@acme.com", "alan.smith@acme.com"],
-    ["user@acme.com", "user@acme.community"],
+    ["j.smith@example.com", "jo.smith@example.com"],
+    ["user@example.com", "user@example.community"],
     ["Row A", "Row AA"],
     ["York", "Yorkshire"],
     ["北京", "北京大学"],
@@ -84,9 +84,11 @@ it("never matches a short wanted word against a longer word the page shows", () 
 it("reads no short form inside an email, domain or file name, or in a word outside Latin letters", () => {
   // Each pair is what the page shows, then the caller's wanted text.
   const pairs: Pairs = [
-    ["a.smith@acme.com", "alan.smith@acme.com"],
-    ["www.a.com", "www.amazon.com"],
+    ["j.smith@example.com", "jo.smith@example.com"],
+    ["www.e.com", "www.example.com"],
     ["a.pdf", "annual.pdf"],
+    ["Rpt 2024.pdf", "Receipt 2024.pdf"],
+    ["a 2024.pdf", "annual 2024.pdf"],
     ["北京", "北京大学"],
     ["中国", "中国银行"],
     ["田中", "田中太郎"],
@@ -97,6 +99,9 @@ it("reads no short form inside an email, domain or file name, or in a word outsi
     expect(sameText(shown, wanted), `shown ${shown} | wanted ${wanted}`).toBe(false);
   // Latin letters beyond A to Z still read short.
   expect(sameText("Øst", "Østergade")).toBe(true);
+  // An abbreviation's own periods, as in D.C. or U.S., leave short forms on.
+  expect(sameText("100 Main Ave, Washington, D.C.", "100 Main Avenue, Washington, D.C.")).toBe(true);
+  expect(sameText("U.S. Hwy 1", "U.S. Highway 1")).toBe(true);
 });
 
 it("drops characters that never show, as normalizeText does", () => {
