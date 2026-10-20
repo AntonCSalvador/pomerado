@@ -55,29 +55,28 @@ export const sameText = (shown: string, wanted: string): boolean => {
     const raw = String(text ?? "");
     const folded = raw
       .normalize("NFKD")
-      .replace(/\p{M}/gu, "")
+      .replace(/[\u0300-\u036f]/gu, "")
       .normalize("NFC")
       .toLowerCase()
-      .replace(/(?<!\p{N})['‘’ʼ](?!\p{N})/gu, "")
-      .replace(/(?<!\p{N})[.,\-‐‑‒–—](?!\p{N})/gu, " ")
+      .replace(/(?<!\p{N})['\u2018\u2019\u02bc](?!\p{N})/gu, "")
+      .replace(/(?<!\p{N})[.,\-\u2010\u2011\u2012\u2013\u2014](?!\p{N})/gu, " ")
       .replace(/\s+/gu, " ")
       .trim();
     return folded === "" ? raw.trim() : folded;
   };
-  const shortens = (x: string, y: string) => {
-    const [short, long] = x.length <= y.length ? [x, y] : [y, x];
-    if (!/^\p{L}+$/u.test(short + long) || short[0] !== long[0] || short.length * 2 > long.length)
+  // The page's word writes the wanted one short: same first letter, its letters in order in the
+  // wanted word, and at most half as long. Never the other way round.
+  const shortens = (short: string, full: string) => {
+    if (!/^\p{L}+$/u.test(short + full) || short[0] !== full[0] || short.length * 2 > full.length)
       return false;
     let next = 0;
-    for (const letter of long) if (letter === short[next]) next++;
+    for (const letter of full) if (letter === short[next]) next++;
     return next === short.length;
   };
   const a = fold(shown).split(" ");
   const b = fold(wanted).split(" ");
-  if (a.length !== b.length) return false;
-  const collator = new Intl.Collator("und", { sensitivity: "base" });
-  return a.every((word, index) => {
-    const other = b[index] ?? "";
-    return word === other || collator.compare(word, other) === 0 || shortens(word, other);
-  });
+  return (
+    a.length === b.length &&
+    a.every((word, index) => word === b[index] || shortens(word, b[index] ?? ""))
+  );
 };

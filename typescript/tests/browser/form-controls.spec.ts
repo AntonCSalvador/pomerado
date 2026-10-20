@@ -546,6 +546,70 @@ test("chooseOption picks and reads back a short label in a custom dropdown", asy
   expect(await submitted(page)).toEqual({ Town: "SJ" });
 });
 
+// Only a label that writes the wanted name short counts, never a wanted short form of a longer
+// label.
+test("chooseOption never reads a wanted code or title as short for a longer label", async ({
+  page,
+}) => {
+  await page.setContent(`<form><label>Country<select name="country">
+<option value="">Choose</option><option value="US">United States</option><option value="UZ">Uzbekistan</option>
+<option value="AE">United Arab Emirates</option><option value="UA">Ukraine</option>
+</select></label><label>Title<select name="title">
+<option value="">Choose</option><option value="1">Mr</option><option value="2">Mrs</option>
+<option value="3">Miss</option><option value="4">Dr</option></select></label></form>`);
+  for (const [control, wanted] of [
+    ["Country", "USA"],
+    ["Country", "UAE"],
+    ["Title", "Ms"],
+  ] as const)
+    expect(
+      await call(page, `return await chooseOption(page.getByLabel("${control}"), "${wanted}");`),
+      wanted,
+    ).toEqual({ error: "option_missing" });
+  expect(await submitted(page)).toEqual({ country: "", title: "" });
+});
+
+/** St-Jean first, then other towns, then the wanted spelling further down a list that renders as it scrolls. */
+const scrolledTowns = (later: string) => [
+  ["SJ", "St-Jean"] as const,
+  ...Array.from({ length: 18 }, (_, index) => [`P${index}`, `Place ${index}`] as const),
+  ["LJ", later] as const,
+];
+
+test("chooseOption takes a short label in a custom dropdown only once it has read the whole list", async ({
+  page,
+}) => {
+  await page.setContent(
+    `<form>${dropdown("Town", scrolledTowns("Saint-Jean"), "virtual")}${dropdown("Place", scrolledTowns("St. Jean"), "virtual")}</form>`,
+  );
+  // An equal label further down beats the short one near the top.
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Town"), "Saint-Jean");`),
+  ).toEqual({ result: { shape: "combobox", label: "Saint-Jean", value: "LJ" } });
+  // Two short labels anywhere in the list are ambiguous.
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Place"), "Saint Jean");`),
+  ).toEqual({ error: "option_ambiguous" });
+  expect(await submitted(page)).toEqual({ Town: "LJ", Place: "" });
+});
+
+// Another language's month name is never read as short for the page's own: an en-US page has
+// none of these months' English names.
+for (const [language, months, iso] of [
+  ["Polish", ["styczeń", "luty", "marzec", "kwiecień", "maj", "czerwiec", "lipiec", "sierpień", "wrzesień", "październik", "listopad", "grudzień"], "1990-09-04"],
+  ["Finnish", ["tammikuu", "helmikuu", "maaliskuu", "huhtikuu", "toukokuu", "kesäkuu", "heinäkuu", "elokuu", "syyskuu", "lokakuu", "marraskuu", "joulukuu"], "1990-03-04"],
+  ["Finnish", ["tammikuu", "helmikuu", "maaliskuu", "huhtikuu", "toukokuu", "kesäkuu", "heinäkuu", "elokuu", "syyskuu", "lokakuu", "marraskuu", "joulukuu"], "1990-07-04"],
+] as const)
+  test(`fillDate never picks a ${language} month name for ${iso} on an en-US page`, async ({ page }) => {
+    const options = months.map((month) => `<option>${month}</option>`).join("");
+    await page.setContent(`<html lang="en-US"><body><form><label>Month<select name="month">
+<option value="">Choose</option>${options}</select></label></form></body></html>`);
+    expect(
+      await call(page, `return await fillDate(page.getByLabel("Month"), "${iso}", "MMMM");`),
+    ).toEqual({ error: "option_missing" });
+    expect(await submitted(page)).toEqual({ month: "" });
+  });
+
 test("chooseOption and fillDate fail within about their timeout, never 30 s, when what they read vanishes", async ({
   page,
 }) => {

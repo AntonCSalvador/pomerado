@@ -134,17 +134,17 @@ const formControlDateCandidates = (iso, format, locale) => {
   return [...new Set(candidates)];
 };
 /**
- * The one option a choice names, by rank: label, then value, then whole words of the label, then a
- * label sameText matches, such as one that writes the name short.
+ * The one option a choice names, by rank: label, then value, then whole words of the label, then,
+ * when short is true, a label that writes the name short as sameText reads it.
  */
-const formControlPick = (options, wanted) => {
+const formControlPick = (options, wanted, short) => {
   const names = new Set(wanted.map(formControlText).filter((name) => name !== ""));
   const words = (label) => label.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   const ranks = [
     (option) => names.has(option.label),
     (option) => option.value !== "" && names.has(option.value),
     (option) => [...names].some((name) => (" " + words(option.label).join(" ") + " ").includes(" " + name + " ")),
-    (option) => [...names].some((name) => formControlSameName(option.label, name)),
+    (option) => short && [...names].some((name) => formControlSameName(option.label, name)),
   ];
   for (const rank of ranks) {
     const matched = options.filter(rank);
@@ -155,7 +155,7 @@ const formControlPick = (options, wanted) => {
   return { failure: "option_missing" };
 };
 const formControlSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const formControlChooseNative = async (control, wanted, timeout) => {
+const formControlChooseNative = async (control, wanted, timeout, short) => {
   const options = await control.evaluate((select) =>
     Array.from(select.options).map((option, index) => ({
       index,
@@ -169,6 +169,7 @@ const formControlChooseNative = async (control, wanted, timeout) => {
   const picked = formControlPick(
     options.map((option) => ({ ...option, label: formControlText(option.label), value: formControlText(option.value) })),
     wanted,
+    short,
   );
   if (picked.failure) throw formControlFailure(picked.failure);
   await control.selectOption({ index: picked.option.index }, { timeout });
@@ -212,7 +213,7 @@ const formControlOptions = (listbox) =>
       disabled: option.getAttribute("aria-disabled") === "true",
     })),
   );
-const formControlChooseCustom = async (control, wanted, timeout) => {
+const formControlChooseCustom = async (control, wanted, timeout, short) => {
   const until = Date.now() + timeout;
   const frame = await formControlFrame(control, { timeout });
   if ((await control.getAttribute("aria-expanded", { timeout })) !== "true") await control.click({ timeout });
@@ -237,6 +238,9 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
   let picked = { failure: "option_missing" };
   let options = [];
   let stuck = 0;
+  // A short label counts only once the whole list is read, so an equal label further down wins
+  // and two short labels anywhere in it are ambiguous.
+  let whole = false;
   while (true) {
     const before = options.length;
     options = await formControlOptions(listbox);
@@ -244,8 +248,10 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
     picked = formControlPick(
       options.map((option) => ({ ...option, label: formControlText(option.label), value: formControlText(option.value) })),
       wanted,
+      short && whole,
     );
     if (picked.failure !== "option_missing" || Date.now() >= until) break;
+    if (whole && !editable) break;
     // A dropdown that filters as you type shows its options for the typed text.
     if (editable && !typed) {
       await control.fill(wanted[0], { timeout });
@@ -260,7 +266,7 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
     }, undefined, { timeout });
     // Options the scroll asked for can take a moment to arrive; a list that stays put has no more.
     if (moved) stuck = 0;
-    else if (!editable && ++stuck > 10) break;
+    else if (++stuck > 10) whole = true;
     await formControlSleep(50);
   }
   if (picked.failure) throw formControlFailure(picked.failure);
@@ -285,15 +291,16 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
     await formControlSleep(50);
   }
 };
-const chooseOption = async (control, wanted, options = {}) => {
-  const timeout = options.timeout ?? 10000;
-  const choices = (Array.isArray(wanted) ? wanted : [wanted]).map(String);
+/** Short labels count only when short is true: never for a date part, so no month name reads as short for another. */
+const formControlChoose = async (control, choices, timeout, short) => {
   if (choices.length === 0) throw formControlFailure("option_missing");
   const shape = await formControlShape(control, { timeout });
-  if (shape === "select") return formControlChooseNative(control, choices, timeout);
-  if (shape === "combobox") return formControlChooseCustom(control, choices, timeout);
+  if (shape === "select") return formControlChooseNative(control, choices, timeout, short);
+  if (shape === "combobox") return formControlChooseCustom(control, choices, timeout, short);
   throw formControlFailure("control_unsupported");
 };
+const chooseOption = async (control, wanted, options = {}) =>
+  formControlChoose(control, (Array.isArray(wanted) ? wanted : [wanted]).map(String), options.timeout ?? 10000, true);
 /** Letters and digits only: an input mask adds or drops separators, never the date itself. */
 const formControlSameText = (shown, expected) =>
   formControlText(shown).replace(/[^\p{L}\p{N}]/gu, "") === formControlText(expected).replace(/[^\p{L}\p{N}]/gu, "");
@@ -309,7 +316,7 @@ const fillDate = async (control, iso, format, options = {}) => {
     return { shape };
   }
   if (shape === "select" || shape === "combobox") {
-    await chooseOption(control, formControlDateCandidates(iso, format, locale), { timeout });
+    await formControlChoose(control, formControlDateCandidates(iso, format, locale), timeout, false);
     return { shape };
   }
   if (shape !== "text") throw formControlFailure("control_unsupported");
