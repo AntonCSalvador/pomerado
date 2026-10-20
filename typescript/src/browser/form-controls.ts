@@ -82,17 +82,19 @@ export const CalendarDate = Schema.String.pipe(
  *   character by character when an input mask rewrote it), or one part of a split date (`MM`, `DD`
  *   or `YYYY`) in a text box, a native select or a custom dropdown, matched by number or month name.
  *   It returns `{ shape }`, never the value.
- * - `chooseOption(control, wanted, { timeout }?)`: chooses the one option of a native select or a
- *   custom dropdown whose label or value is one of `wanted` (a string or a list of alternate
+ * - `chooseOption(control, wanted, { timeout, match }?)`: chooses the one option of a native select
+ *   or a custom dropdown whose label or value is one of `wanted` (a string or a list of alternate
  *   spellings, such as `["CA", "California"]`), ignoring case, accents, spacing and punctuation.
- *   A label that equals one wins over a value that does, which wins over the label that shares the
- *   most words with one, by BM25 (`rankByWords`); an option sharing no word never matches, and two
- *   different options at the winning rank, such as two tied for the most shared words, are
- *   ambiguous. A match by shared words never takes a native select's empty-valued prompt, and in
- *   a dropdown that filters as you type it waits, as a missing option does, for a list other than
- *   the one shown before typing. A custom dropdown is opened, its own listbox found through
- *   `aria-controls` or `aria-owns` (else the one visible listbox), typed into when it filters as
- *   you type, and scrolled when it renders its options as you scroll. Returns
+ *   A label that equals one wins over a value that does,
+ *   which wins over a label that holds it as whole words; two different options at the winning
+ *   rank are ambiguous. On a read, pass `match: "words"`: the last rank is then instead the label
+ *   that shares the most words with one, by BM25 (`rankByWords`). It never takes a label sharing no
+ *   word, one lacking a number of the wanted name, such as 7:00 PM for 7:30 PM, or a native select's
+ *   empty-valued prompt; labels tied for the most shared words are ambiguous; and in a dropdown
+ *   that filters as you type it waits, as a missing option does, for a list other than the one
+ *   shown before typing. A write keeps the default. A custom dropdown is opened, its own listbox
+ *   found through `aria-controls` or `aria-owns` (else the one visible listbox), typed into when it
+ *   filters as you type, and scrolled when it renders its options as you scroll. Returns
  *   `{ shape, label, value }`.
  * - `unfilledRequiredFields(scope, { timeout, before }?)`: the empty required fields a form shows
  *   now, in page order, such as ones it adds once an earlier answer is in. A field counts when it
@@ -179,17 +181,20 @@ const formControlDateCandidates = (iso, format, locale) => {
   return [...new Set(candidates)];
 };
 /**
- * The one option a choice names, by rank: its folded label, then its folded value, then the label
- * as shown, its text, that shares the most words with a wanted name, by BM25, never a native
- * select's empty-valued prompt. Its words flag says that last rank decided.
+ * The one option a choice names, by rank: its folded label, then its folded value, then whole words
+ * of the label. With byWords, a read's match "words", that last rank is instead the label as
+ * shown, its text, that shares the most words with a wanted name, by BM25, never a native select's
+ * empty-valued prompt, and the words flag says it decided.
  */
-const formControlPick = (options, wanted) => {
+const formControlPick = (options, wanted, byWords = false) => {
   const names = new Set(wanted.map(formControlText).filter((name) => name !== ""));
+  const split = (label) => label.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   let best;
   const ranks = [
     (option) => names.has(option.label),
     (option) => option.value !== "" && names.has(option.value),
     (option, index) => {
+      if (!byWords) return [...names].some((name) => (" " + split(option.label).join(" ") + " ").includes(" " + name + " "));
       if (best === undefined) {
         const scores = options.map(() => 0);
         const ranked = options.flatMap((each, at) => (each.native && each.value === "" ? [] : [at]));
@@ -205,7 +210,7 @@ const formControlPick = (options, wanted) => {
   for (const [at, rank] of ranks.entries()) {
     const matched = options.filter(rank);
     if (matched.length === 0) continue;
-    const words = at === ranks.length - 1;
+    const words = byWords && at === ranks.length - 1;
     if (matched.length > 1) return { failure: "option_ambiguous", words };
     return matched[0].disabled ? { failure: "option_disabled", words } : { option: matched[0], words };
   }
@@ -221,7 +226,7 @@ const formControlTypeKeys = (control, keys, timeout) =>
   control.pressSequentially(keys, { timeout }).catch(() => {
     throw formControlFailure("not_committed");
   });
-const formControlChooseNative = async (control, wanted, timeout) => {
+const formControlChooseNative = async (control, wanted, timeout, byWords) => {
   const options = await control.evaluate((select) =>
     Array.from(select.options).map((option, index) => ({
       index,
@@ -235,6 +240,7 @@ const formControlChooseNative = async (control, wanted, timeout) => {
   const picked = formControlPick(
     options.map((option) => ({ ...option, native: true, text: option.label, label: formControlText(option.label), value: formControlText(option.value) })),
     wanted,
+    byWords,
   );
   if (picked.failure) throw formControlFailure(picked.failure);
   await control.selectOption({ index: picked.option.index }, { timeout });
@@ -278,7 +284,7 @@ const formControlOptions = (listbox) =>
       disabled: option.getAttribute("aria-disabled") === "true",
     })),
   );
-const formControlChooseCustom = async (control, wanted, timeout) => {
+const formControlChooseCustom = async (control, wanted, timeout, byWords) => {
   const until = Date.now() + timeout;
   const frame = await formControlFrame(control, { timeout });
   if ((await control.getAttribute("aria-expanded", { timeout })) !== "true") await control.click({ timeout });
@@ -303,9 +309,9 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
   let picked = { failure: "option_missing" };
   let options = [];
   let stuck = 0;
-  // The options listed before typing. A match by shared words in a field that takes typing waits
-  // for a list other than this one, as a missing option waits: until then the list may still be
-  // one from before the text, such as recent picks.
+  // The options listed before typing. With match "words", a match by shared words in a field that
+  // takes typing waits for a list other than this one, as a missing option waits: until then the
+  // list may still be one from before the text, such as recent picks.
   const listed = (found) => JSON.stringify(found.map((option) => [option.label, option.value]));
   let untyped = listed([]);
   while (true) {
@@ -315,6 +321,7 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
     picked = formControlPick(
       options.map((option) => ({ ...option, text: option.label, label: formControlText(option.label), value: formControlText(option.value) })),
       wanted,
+      byWords,
     );
     const early = picked.words && editable && (!typed || listed(options) === untyped);
     if ((picked.failure !== "option_missing" && !early) || Date.now() >= until) break;
@@ -363,8 +370,9 @@ const chooseOption = async (control, wanted, options = {}) => {
   const choices = (Array.isArray(wanted) ? wanted : [wanted]).map(String);
   if (choices.length === 0) throw formControlFailure("option_missing");
   const shape = await formControlShape(control, { timeout });
-  if (shape === "select") return formControlChooseNative(control, choices, timeout);
-  if (shape === "combobox") return formControlChooseCustom(control, choices, timeout);
+  const byWords = options.match === "words";
+  if (shape === "select") return formControlChooseNative(control, choices, timeout, byWords);
+  if (shape === "combobox") return formControlChooseCustom(control, choices, timeout, byWords);
   throw formControlFailure("control_unsupported");
 };
 /** Letters and digits only: an input mask adds or drops separators, never the date itself. */

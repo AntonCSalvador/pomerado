@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "playwright";
 import { formControlsCode } from "../../src/browser/form-controls.js";
-import { readBackMatches } from "../../src/runtime/text.js";
+import { readBackMatches, sameText } from "../../src/runtime/text.js";
 import { makeLocalKernel } from "../../src/testing/local-kernel.js";
 
 // The authoring library's date and dropdown helpers, run as a Kernel call body runs them (`page` in
@@ -340,9 +340,12 @@ test("chooseOption picks the one label that holds the whole phrase", async ({ pa
   expect(await call(page, `return await chooseOption(${customer}, "Acme insurance");`)).toEqual({
     result: { shape: "select", label: "Acme insurance Customer", value: "7" },
   });
-  // Only whole words count: part of a word matches nothing, so "Acme insur" shares only Acme, which
-  // both labels hold, and the tie is refused.
+  // Only whole words count: part of a word matches nothing.
   expect(await call(page, `return await chooseOption(${customer}, "Acme insur");`)).toEqual({
+    error: "option_missing",
+  });
+  // On a read, "Acme insur" shares only Acme, which both labels hold, and the tie is refused.
+  expect(await call(page, `return await chooseOption(${customer}, "Acme insur", { match: "words" });`)).toEqual({
     error: "option_ambiguous",
   });
   expect(await submitted(page)).toEqual({ customer: "7" });
@@ -363,6 +366,8 @@ for (const [wanted, labels] of [
   ["C++", ["C", "Java"]],
   ["C#", ["C"]],
   ["+", ["&"]],
+  // The label's words drop its symbols.
+  ["C++", ["C++ Developer", "Java"]],
 ] as const)
   test(`chooseOption finds no option for ${wanted} among ${labels.join(", ")}`, async ({ page }) => {
     const options = labels.map((label, index) => `<option value="${index + 1}">${label}</option>`);
@@ -374,11 +379,11 @@ for (const [wanted, labels] of [
     expect(await submitted(page)).toEqual({ skill: "" });
   });
 
-test("chooseOption picks a label that holds the name with its symbols", async ({ page }) => {
+test("chooseOption on a read picks a label that holds the name with its symbols", async ({ page }) => {
   await page.setContent(`<form><label>Skill<select name="skill">
 <option value="">Choose</option><option value="1">C++ Developer</option><option value="2">C Developer</option>
 <option value="3">Java</option></select></label></form>`);
-  expect(await call(page, `return await chooseOption(page.getByLabel("Skill"), "C++");`)).toEqual({
+  expect(await call(page, `return await chooseOption(page.getByLabel("Skill"), "C++", { match: "words" });`)).toEqual({
     result: { shape: "select", label: "C++ Developer", value: "1" },
   });
   expect(await submitted(page)).toEqual({ skill: "1" });
@@ -406,22 +411,27 @@ test("chooseOption still picks a label that holds the name as a word between sym
   expect(await submitted(page)).toEqual({ size: "m", color: "bg", month: "7" });
 });
 
-// A period, comma or dash before a digit belongs to a number, as in -5, 1.5 and 1-5. Labels that
-// share only another word, such as years, tie.
-for (const [wanted, labels, outcome] of [
-  ["5", ["+5", "0", "-5"], { error: "option_missing" }],
-  ["-5", ["5", "10"], { error: "option_missing" }],
-  ["1.5 years", ["1-5 years", "6-10 years"], { error: "option_ambiguous" }],
-  ["-5", ["-5", "5"], { result: { shape: "select", label: "-5", value: "a" } }],
+// A period, comma or dash before a digit belongs to a number, as in -5, 1.5 and 1-5. On a read,
+// matching by shared words, a number keeps its sign on either side, and a label lacking the
+// wanted number never matches, even when it shares another word, such as years.
+for (const [wanted, labels, outcome, read] of [
+  ["5", ["+5", "0", "-5"], { error: "option_ambiguous" }, false],
+  ["-5", ["5", "10"], { error: "option_missing" }, false],
+  ["1.5 years", ["1-5 years", "6-10 years"], { error: "option_missing" }, false],
+  ["-5", ["-5", "5"], { result: { shape: "select", label: "-5", value: "a" } }, false],
+  ["5", ["+5", "0", "-5"], { error: "option_missing" }, true],
+  ["-5", ["5", "10"], { error: "option_missing" }, true],
+  ["1.5 years", ["1-5 years", "6-10 years"], { error: "option_missing" }, true],
 ] as const)
-  test(`chooseOption keeps a number's sign and separators: ${wanted} among ${labels.join(", ")}`, async ({
+  test(`chooseOption keeps a number's sign and separators${read ? " on a read" : ""}: ${wanted} among ${labels.join(", ")}`, async ({
     page,
   }) => {
     const options = labels.map((label, index) => `<option value="${"abc"[index]}">${label}</option>`);
     await page.setContent(`<form><label>Amount<select name="amount">
 <option value="">Choose</option>${options.join("")}</select></label></form>`);
+    const match = read ? `, { match: "words" }` : "";
     expect(
-      await call(page, `return await chooseOption(page.getByLabel("Amount"), ${JSON.stringify(wanted)});`),
+      await call(page, `return await chooseOption(page.getByLabel("Amount"), ${JSON.stringify(wanted)}${match});`),
     ).toEqual(outcome);
     expect(await submitted(page)).toEqual({ amount: "result" in outcome ? outcome.result.value : "" });
   });
@@ -497,43 +507,111 @@ test("chooseOption keeps a value of punctuation alone as it is, never blank", as
   expect(await submitted(page)).toEqual({ code: "b" });
 });
 
-// A list may write a name short or in another order. With no label equal to the wanted name, the
-// label sharing the most words with it is picked; a label sharing no word, such as UK for Ukraine,
-// never is, and labels tied for the most shared words are refused.
+// A list may write a name short, as St-Jean for Saint-Jean, and a short label can also stand for
+// a longer name it is not, as UK for Ukraine. By default, as on a write, a pick never takes a short
+// label: it refuses, and sameText confirms the read-back of a pick made another way.
 const towns = (labels: readonly string[]) => {
   const options = labels.map((label, index) => `<option value="${index + 1}">${label}</option>`);
   return `<form><label>Town<select name="town">
 <option value="">Choose</option>${options.join("")}</select></label></form>`;
 };
 
-test("chooseOption takes the label sharing the most words with the wanted name, never one sharing none", async ({
+test("chooseOption never takes a label that writes the wanted name short", async ({ page }) => {
+  await page.setContent(towns(["St-Jean", "St-Jean-de-Luz", "Ste-Marie", "UK"]));
+  for (const wanted of ["Saint Jean", "Sainte-Marie", "Ukraine"])
+    expect(
+      await call(page, `return await chooseOption(page.getByLabel("Town"), "${wanted}");`),
+      wanted,
+    ).toEqual({ error: "option_missing" });
+  expect(await submitted(page)).toEqual({ town: "" });
+  await page.setContent(`<form>${dropdown("Town", [["SJ", "St-Jean"], ["SM", "Ste-Marie"]])}</form>`);
+  expect(
+    await call(page, `return await chooseOption(page.getByLabel("Town"), "Saint Jean");`),
+  ).toEqual({ error: "option_missing" });
+  expect(await submitted(page)).toEqual({ Town: "" });
+});
+
+test("chooseOption refuses a town the list writes short, and the read-back of the right pick confirms it", async ({
+  page,
+}) => {
+  await page.setContent(towns(["St-Exemple-sur-Lac"]));
+  const town = 'page.getByLabel("Town")';
+  // Asked for the caller's spelling, the pick refuses loudly instead of choosing the short label.
+  expect(await call(page, `return await chooseOption(${town}, "Saint-Exemple-sur-Lac");`)).toEqual({
+    error: "option_missing",
+  });
+  expect(await submitted(page)).toEqual({ town: "" });
+  // Once the right option is chosen, its read-back agrees with both the caller's spelling and
+  // the label picked.
+  expect(await call(page, `return await chooseOption(${town}, "St-Exemple-sur-Lac");`)).toEqual({
+    result: { shape: "select", label: "St-Exemple-sur-Lac", value: "1" },
+  });
+  const shown = await page
+    .getByLabel("Town")
+    .evaluate((select: HTMLSelectElement) => select.selectedOptions[0]?.label ?? "");
+  expect(sameText(shown, "Saint-Exemple-sur-Lac")).toBe(true);
+  expect(sameText(shown, "St-Exemple-sur-Lac")).toBe(true);
+});
+
+// By default, as on a write, an option that only shares some of the wanted words is never picked,
+// and the check before saving, sameText, refuses a word added or dropped.
+test("chooseOption by default never picks an option that only shares some words", async ({ page }) => {
+  const choices = (name: string, labels: readonly string[]) =>
+    `<form><label>${name}<select name="${name.toLowerCase()}"><option value="">Choose</option>${labels
+      .map((label, index) => `<option value="${index + 1}">${label}</option>`)
+      .join("")}</select></label></form>`;
+  for (const [name, labels, wanted] of [
+    ["City", ["Springfield, MO", "Columbia, MO"], "Springfield, IL"],
+    ["Cabin", ["Economy", "Business"], "Premium Economy"],
+    ["Fare", ["Refundable", "Flexible"], "Non-refundable"],
+    ["Guest", ["Lopez, Carlos", "Lopez, Catherine"], "Catherine Lopez"],
+  ] as const) {
+    await page.setContent(choices(name, labels));
+    expect(await call(page, `return await chooseOption(page.getByLabel("${name}"), "${wanted}");`), wanted).toEqual({
+      error: "option_missing",
+    });
+    expect(await submitted(page), wanted).toEqual({ [name.toLowerCase()]: "" });
+  }
+  await page.setContent(`<form>${dropdown("Cabin", [["E", "Economy"], ["B", "Business"]])}</form>`);
+  expect(await call(page, `return await chooseOption(page.getByLabel("Cabin"), "Premium Economy");`)).toEqual({
+    error: "option_missing",
+  });
+  expect(await submitted(page)).toEqual({ Cabin: "" });
+});
+
+// On a read, `match: "words"` takes, with no label equal to the wanted name, the label sharing the
+// most words with it. A label sharing no word, such as UK for Ukraine, or lacking a number of the
+// wanted name never is, and labels tied for the most shared words are refused.
+const read = `{ match: "words" }`;
+
+test("chooseOption on a read takes the label sharing the most words with the wanted name, never one sharing none", async ({
   page,
 }) => {
   await page.setContent(towns(["St-Exemple", "St-Exemple-de-Lac", "Ste-Autre", "UK"]));
   const town = 'page.getByLabel("Town")';
-  expect(await call(page, `return await chooseOption(${town}, "Ukraine");`)).toEqual({ error: "option_missing" });
+  expect(await call(page, `return await chooseOption(${town}, "Ukraine", ${read});`)).toEqual({ error: "option_missing" });
   expect(await submitted(page)).toEqual({ town: "" });
   // Both St-Exemple labels hold Exemple; the shorter holds more of the wanted name.
-  expect(await call(page, `return await chooseOption(${town}, "Saint Exemple");`)).toEqual({
+  expect(await call(page, `return await chooseOption(${town}, "Saint Exemple", ${read});`)).toEqual({
     result: { shape: "select", label: "St-Exemple", value: "1" },
   });
-  expect(await call(page, `return await chooseOption(${town}, "Sainte-Autre");`)).toEqual({
+  expect(await call(page, `return await chooseOption(${town}, "Sainte-Autre", ${read});`)).toEqual({
     result: { shape: "select", label: "Ste-Autre", value: "3" },
   });
   expect(await submitted(page)).toEqual({ town: "3" });
   await page.setContent(`<form>${dropdown("Town", [["SE", "St-Exemple"], ["SA", "Ste-Autre"]])}</form>`);
-  expect(await call(page, `return await chooseOption(page.getByLabel("Town"), "Saint Exemple");`)).toEqual({
+  expect(await call(page, `return await chooseOption(page.getByLabel("Town"), "Saint Exemple", ${read});`)).toEqual({
     result: { shape: "combobox", label: "St-Exemple", value: "SE" },
   });
   expect(await submitted(page)).toEqual({ Town: "SE" });
 });
 
-test("chooseOption picks a town the list writes short, and readBackMatches confirms its read-back", async ({
+test("chooseOption on a read picks a town the list writes short, and readBackMatches confirms its read-back", async ({
   page,
 }) => {
   await page.setContent(towns(["Autre-Ville", "St-Exemple-sur-Lac"]));
   const town = 'page.getByLabel("Town")';
-  expect(await call(page, `return await chooseOption(${town}, "Saint-Exemple-sur-Lac");`)).toEqual({
+  expect(await call(page, `return await chooseOption(${town}, "Saint-Exemple-sur-Lac", ${read});`)).toEqual({
     result: { shape: "select", label: "St-Exemple-sur-Lac", value: "2" },
   });
   expect(await submitted(page)).toEqual({ town: "2" });
@@ -546,29 +624,67 @@ test("chooseOption picks a town the list writes short, and readBackMatches confi
   expect(readBackMatches(shown, "Autre-Ville")).toBe(false);
 });
 
-test("chooseOption refuses labels tied for the most shared words, in a select and a dropdown", async ({
+test("chooseOption on a read picks a name the list writes in another order", async ({ page }) => {
+  await page.setContent(`<form><label>Guest<select name="guest">
+<option value="">Choose</option><option value="1">Lopez, Carlos</option><option value="2">Lopez, Catherine</option>
+</select></label></form>`);
+  expect(await call(page, `return await chooseOption(page.getByLabel("Guest"), "Catherine Lopez", ${read});`)).toEqual({
+    result: { shape: "select", label: "Lopez, Catherine", value: "2" },
+  });
+  expect(await submitted(page)).toEqual({ guest: "2" });
+});
+
+test("chooseOption on a read never picks an option that lacks a number of the wanted value", async ({ page }) => {
+  const choices = (name: string, labels: readonly string[]) =>
+    `<form><label>${name}<select name="${name.toLowerCase()}"><option value="">Choose</option>${labels
+      .map((label, index) => `<option value="${index + 1}">${label}</option>`)
+      .join("")}</select></label></form>`;
+  for (const [name, labels, wanted] of [
+    ["Time", ["7:00 PM", "9:15 AM"], "7:30 PM"],
+    ["Order", ["Order 1251", "Hillcrest"], "Order 1250"],
+    ["Room", ["Room 101", "Suite 200"], "Room 102"],
+  ] as const) {
+    await page.setContent(choices(name, labels));
+    expect(await call(page, `return await chooseOption(page.getByLabel("${name}"), "${wanted}", ${read});`), wanted).toEqual({
+      error: "option_missing",
+    });
+    expect(await submitted(page), wanted).toEqual({ [name.toLowerCase()]: "" });
+  }
+  // An option holding every number of the value is still picked by its words.
+  await page.setContent(choices("Room", ["Room 101", "Room 102, King bed"]));
+  expect(await call(page, `return await chooseOption(page.getByLabel("Room"), "Room 102", ${read});`)).toEqual({
+    result: { shape: "select", label: "Room 102, King bed", value: "2" },
+  });
+  await page.setContent(`<form>${dropdown("Time", [["7", "7:00 PM"], ["9", "9:15 AM"]])}</form>`);
+  expect(await call(page, `return await chooseOption(page.getByLabel("Time"), "7:30 PM", ${read});`)).toEqual({
+    error: "option_missing",
+  });
+  expect(await submitted(page)).toEqual({ Time: "" });
+});
+
+test("chooseOption on a read refuses labels tied for the most shared words, in a select and a dropdown", async ({
   page,
 }) => {
   // St-Exemple-sur-Lac shares Exemple, sur and Lac, and Saint-Autre-sur-Lac shares Saint, sur and
   // Lac: a tie, so the caller is asked rather than one picked.
   const tied = ["Autre-Ville", "St-Exemple-sur-Lac", "Saint-Autre-sur-Lac"];
   await page.setContent(towns(tied));
-  expect(await call(page, `return await chooseOption(page.getByLabel("Town"), "Saint-Exemple-sur-Lac");`)).toEqual({
+  expect(await call(page, `return await chooseOption(page.getByLabel("Town"), "Saint-Exemple-sur-Lac", ${read});`)).toEqual({
     error: "option_ambiguous",
   });
   expect(await submitted(page)).toEqual({ town: "" });
   await page.setContent(`<form>${dropdown("Town", tied.map((label, index) => [String(index + 1), label] as const))}</form>`);
-  expect(await call(page, `return await chooseOption(page.getByLabel("Town"), "Saint-Exemple-sur-Lac");`)).toEqual({
+  expect(await call(page, `return await chooseOption(page.getByLabel("Town"), "Saint-Exemple-sur-Lac", ${read});`)).toEqual({
     error: "option_ambiguous",
   });
   expect(await submitted(page)).toEqual({ Town: "" });
 });
 
-test("chooseOption picks the date a list writes its own way", async ({ page }) => {
+test("chooseOption on a read picks the date a list writes its own way", async ({ page }) => {
   await page.setContent(`<form><label>Day<select name="day">
 <option value="">Choose</option><option value="4">Wed, Nov 4, 2026</option><option value="5">Thu, Nov 5, 2026</option>
 </select></label></form>`);
-  expect(await call(page, `return await chooseOption(page.getByLabel("Day"), "2026-11-05");`)).toEqual({
+  expect(await call(page, `return await chooseOption(page.getByLabel("Day"), "2026-11-05", ${read});`)).toEqual({
     result: { shape: "select", label: "Thu, Nov 5, 2026", value: "5" },
   });
   expect(await submitted(page)).toEqual({ day: "5" });
@@ -620,7 +736,7 @@ test("chooseOption waits for a typeahead's results instead of taking a short lab
   expect(await submitted(page)).toEqual({ country: "UA" });
 });
 
-test("chooseOption waits for a typeahead's results instead of taking a recent pick that shares a word", async ({
+test("chooseOption on a read waits for a typeahead's results instead of taking a recent pick that shares a word", async ({
   page,
 }) => {
   // South Africa shares South with the wanted country, but the list is the one from before typing.
@@ -631,28 +747,28 @@ test("chooseOption waits for a typeahead's results instead of taking a recent pi
     ),
   );
   expect(
-    await call(page, `return await chooseOption(page.getByLabel("Country"), "South Korea");`),
+    await call(page, `return await chooseOption(page.getByLabel("Country"), "South Korea", ${read});`),
   ).toEqual({ result: { shape: "combobox", label: "South Korea", value: "KR" } });
   expect(await submitted(page)).toEqual({ country: "KR" });
 });
 
 // A native select's empty-valued prompt, such as "Choose a town", is no option to pick by words.
-test("chooseOption never picks a native select's empty-valued prompt by shared words", async ({ page }) => {
+test("chooseOption on a read never picks a native select's empty-valued prompt by shared words", async ({ page }) => {
   await page.setContent(`<form><label>Town<select name="town">
 <option value="">Choose a town</option><option value="1">Exempleton</option><option value="2">Autre-Ville</option>
 </select></label></form>`);
-  expect(await call(page, `return await chooseOption(page.getByLabel("Town"), "Old Town");`)).toEqual({
+  expect(await call(page, `return await chooseOption(page.getByLabel("Town"), "Old Town", ${read});`)).toEqual({
     error: "option_missing",
   });
   expect(await submitted(page)).toEqual({ town: "" });
 });
 
 // A name an option repeats, as a native option's label and title, counts once, as pickValue counts it.
-test("chooseOption counts a name an option repeats once", async ({ page }) => {
+test("chooseOption on a read counts a name an option repeats once", async ({ page }) => {
   await page.setContent(`<form><label>Branch<select name="branch">
 <option value="">Choose a branch</option><option value="1" title="Acme South">Acme South</option>
 <option value="2">Beta North</option></select></label></form>`);
-  expect(await call(page, `return await chooseOption(page.getByLabel("Branch"), "Acme North");`)).toEqual({
+  expect(await call(page, `return await chooseOption(page.getByLabel("Branch"), "Acme North", ${read});`)).toEqual({
     error: "option_ambiguous",
   });
   expect(await submitted(page)).toEqual({ branch: "" });

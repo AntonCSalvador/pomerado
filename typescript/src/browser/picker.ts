@@ -498,11 +498,13 @@ const pickerPageCode = String.raw`(element, args) => {
  * Select or OK button, or double-clicks the row, when a click alone leaves the dialog open).
  *
  * Matching (see `rankChoices`): a name or value as written, then ignoring case and spacing, then
- * accents and punctuation, then the option whose names share the most words with the value, by
- * BM25 (`rankByWords`), so words in another order or a date written another way still match. An
- * option sharing no word never matches, nor does a native select's empty-valued prompt by its
- * words. An option's names are its text, first line, accessible name, `title` and, for a table
- * row, each cell, and its value is
+ * accents and punctuation, then a name holding the value as whole words. On a read, pass
+ * `match: "words"`: the last rank is then instead the option whose names share the most words with
+ * the value, by BM25 (`rankByWords`), so words in another order or a date written another way
+ * still match. It never takes an option sharing no word with the value, one lacking a number of
+ * the value, such as 7:00 PM for 7:30 PM, or a native select's empty-valued prompt. A write keeps
+ * the default. An option's names are its text, first line, accessible name, `title` and, for a
+ * table row, each cell, and its value is
  * `data-value`, `value`, `data-id`, `data-key` or `data-code` (put others first with
  * `options.valueAttributes`). Two options at the best rank are ambiguous; an "Add ..." or
  * "Create ..." row is never matched.
@@ -512,9 +514,9 @@ const pickerPageCode = String.raw`(element, args) => {
  * "Loading" or "Searching" row), no request the picker's actions started is in flight, and they
  * have held still for `settleMs`; with no reaction at all, the field is typed again key by key
  * (a popup's search box first gets its Search button, or Enter when it is in no form).
- * A list for a stale query that lacks the value, or matches it only by shared words, is typed
- * once more, and a match by shared words stands only when those tries end, so a list from before
- * the results, such as recent picks, is never taken early. A list that renders or loads
+ * A list for a stale query that lacks the value, or with `match: "words"` matches it only by shared
+ * words, is typed once more, and a match by shared words stands only when those tries end, so a
+ * list from before the results, such as recent picks, is never taken early. A list that renders or loads
  * as it scrolls is read to its end before matching, so a tie further down is never missed; one too
  * long for two thirds of the budget is narrowed with its search box, or fails as `options_loading`.
  * Requests count only when the action caused them: a repeat of an earlier identical request, such
@@ -664,6 +666,8 @@ const pickerSession = async (control, options) => {
     idleMs: Math.max(settleMs * 2, 600),
     holdMs: options.holdMs ?? settleMs,
     refills: options.refills ?? 2,
+    // A read's opt-in: the last rank takes the option sharing the most words, by rankByWords.
+    words: options.match === "words" ? pickerRankWords : undefined,
   };
 };
 // The page function is installed once per document, through Playwright rather than the page's
@@ -780,7 +784,7 @@ const pickerCollect = async (s, scan, wanted) => {
     else if (latest.scroll.end || latest.scroll.top === at || ++stuck >= 3) complete = !latest.loading;
   }
   const list = [...seen.values()].filter((option) => !option.creation);
-  const ranking = wanted ? pickerRankChoices(pickerChoices(list), wanted, pickerFold, pickerRankWords) : { status: "missing" };
+  const ranking = wanted ? pickerRankChoices(pickerChoices(list), wanted, pickerFold, s.words) : { status: "missing" };
   return { list, ranking, scan: latest, complete: complete || seen.size >= 2000 };
 };
 // The enabled options as shown, never a native select's empty-valued prompt such as "Choose...".
@@ -838,9 +842,9 @@ const pickerType = async (s, field, query, step, scan) => {
 };
 // Types each query in turn into the field and reads what the list answers. A field that shows
 // no reaction is typed the next way; a list that reacted but lacks the value may hold the answer
-// to an older query that landed last, so the value is typed once more. A match by shared words
-// waits the same way, since the list may still be one from before the text, such as recent picks,
-// and stands when the query's tries end with the list still matching by words.
+// to an older query that landed last, so the value is typed once more. With match "words", a match
+// by shared words waits the same way, since the list may still be one from before the text, such
+// as recent picks, and stands when the query's tries end with the list still matching by words.
 const pickerQuery = async (s, field, wanted, seenAvailable = []) => {
   const queries = s.options.query ? [String(s.options.query)] : wanted;
   let lastFound = null;
@@ -857,7 +861,7 @@ const pickerQuery = async (s, field, wanted, seenAvailable = []) => {
       const found = await pickerCollect(s, scan, wanted);
       lastFound = found;
       if (!found.complete) throw pickerFailure("options_loading");
-      if (found.ranking.status !== "missing" && found.ranking.rank !== "words") return { found, field };
+      if (found.ranking.status !== "missing" && !(s.words && found.ranking.rank === "words")) return { found, field };
       byWords = found.ranking.status === "missing" ? null : found;
       available.push(...pickerAvailable(found.list));
       // A tag input that may create values and shows nothing for the text is a free-entry field.
@@ -1085,7 +1089,7 @@ const pickerNativeOptions = (control, s) =>
   }, undefined, s.act());
 const pickerNative = async (s, wanted) => {
   const list = await pickerNativeOptions(s.control, s);
-  const outcome = pickerOutcome({ ranking: pickerRankChoices(list, wanted, pickerFold, pickerRankWords), list }, wanted);
+  const outcome = pickerOutcome({ ranking: pickerRankChoices(list, wanted, pickerFold, s.words), list }, wanted);
   if (outcome.status === "refused") return outcome.refusal;
   const option = outcome.option;
   const force = !(await pickerEval(s, "select-shown"));
@@ -1102,7 +1106,7 @@ const pickerNative = async (s, wanted) => {
 };
 const pickerDatalist = async (s, wanted) => {
   const list = await pickerNativeOptions(s.control, s);
-  const outcome = pickerOutcome({ ranking: pickerRankChoices(list, wanted, pickerFold, pickerRankWords), list }, wanted);
+  const outcome = pickerOutcome({ ranking: pickerRankChoices(list, wanted, pickerFold, s.words), list }, wanted);
   if (outcome.status === "refused") return outcome.refusal;
   const option = outcome.option;
   for (let attempt = 0; attempt <= s.refills; attempt++) {
@@ -1163,7 +1167,7 @@ const pickerChips = (s) => pickerEval(s, "chips", { chips: s.options.chips ?? nu
 // A chip is the value only by its whole name (as written, or ignoring case, spacing, accents and
 // punctuation), never because its name holds the value as a word: "Blue Grey" is not "Blue".
 const pickerChipIs = (chips, wanted) => {
-  const ranking = pickerRankChoices(chips, wanted, pickerFold, pickerRankWords);
+  const ranking = pickerRankChoices(chips, wanted, pickerFold);
   return ranking.status === "picked" && ranking.rank !== "words" ? ranking : null;
 };
 const pickValues = async (control, values, options = {}) => {
@@ -1176,7 +1180,7 @@ const pickValues = async (control, values, options = {}) => {
       const all = await pickerNativeOptions(s.control, s);
       const picked = [];
       for (const wanted of list) {
-        const outcome = pickerOutcome({ ranking: pickerRankChoices(all, wanted, pickerFold, pickerRankWords), list: all }, wanted);
+        const outcome = pickerOutcome({ ranking: pickerRankChoices(all, wanted, pickerFold, s.words), list: all }, wanted);
         if (outcome.status === "refused") return { ...outcome.refusal, values: [] };
         picked.push(outcome.option);
       }

@@ -44,15 +44,24 @@ test("pickValue types into an ARIA combobox and clicks the matching option", asy
   expect(await submitted(page)).toEqual({ person: "3" });
 });
 
-test("pickValue picks a typeahead suggestion that holds the value's words in another order", async ({ page }) => {
+// On a read, `match: "words"` also takes the option sharing the most words with the value.
+const read = `{ ...fast, match: "words" }`;
+
+test("pickValue on a read picks a typeahead suggestion that holds the value's words in another order", async ({ page }) => {
   // This site suggests every name holding any word typed.
   const anyWord = "query.split(/\\s+/).some((word) => word !== '' && name.toLowerCase().includes(word))";
   expect(combobox).toContain("name.toLowerCase().includes(query)");
   await serve(page, combobox.replace("name.toLowerCase().includes(query)", anyWord));
   expect(
-    await call(page, `return await pickValue(page.getByRole("combobox", { name: "Assignee" }), "Hart Riley", fast);`),
+    await call(page, `return await pickValue(page.getByRole("combobox", { name: "Assignee" }), "Hart Riley", ${read});`),
   ).toEqual({ result: { picked: true, kind: "typeahead", label: "Riley Hart", value: "1", rank: "words", refills: 0 } });
   expect(await submitted(page)).toEqual({ person: "1" });
+  // By default, as on a write, words in another order are no match.
+  await serve(page, combobox.replace("name.toLowerCase().includes(query)", anyWord));
+  expect(
+    await call(page, `return await pickValue(page.getByRole("combobox", { name: "Assignee" }), "Hart Riley", fast);`),
+  ).toMatchObject({ result: { picked: false, reason: "option_missing", wanted: "Hart Riley" } });
+  expect(await submitted(page)).toEqual({ person: "" });
 });
 
 // A combobox that lists recent picks when the field gets focus or a click. The results for what was
@@ -92,10 +101,10 @@ list.addEventListener("click", (event) => {
 });
 </script>`;
 
-test("pickValue waits for a typeahead's results instead of taking a recent pick that shares a word", async ({ page }) => {
+test("pickValue on a read waits for a typeahead's results instead of taking a recent pick that shares a word", async ({ page }) => {
   await serve(page, slowCountries);
   expect(
-    await call(page, `return await pickValue(page.getByRole("combobox", { name: "Country" }), "South Korea");`),
+    await call(page, `return await pickValue(page.getByRole("combobox", { name: "Country" }), "South Korea", { match: "words" });`),
   ).toEqual({ result: { picked: true, kind: "typeahead", label: "South Korea", value: "KR", rank: "exact", refills: 0 } });
   expect(await submitted(page)).toEqual({ country: "KR" });
 });
@@ -119,17 +128,52 @@ test("pickValue picks a native select's option by label, value or another spelli
   });
 });
 
-// With no option equal to the value, the option sharing the most words with it is picked, so a town
-// the list writes short is found by the words it shares.
-test("pickValue picks the option sharing the most words, such as a town the list writes short", async ({ page }) => {
+// By default, as on a write, a list that writes the wanted town short is refused, never picked
+// without a word.
+test("pickValue refuses a town the list writes short", async ({ page }) => {
+  await serve(page, `<form><label>Town <select name="town">
+<option value="">Choose a town</option><option value="1">St-Exemple-sur-Lac</option></select></label></form>`);
+  expect(
+    await call(page, `return await pickValue(page.getByLabel("Town"), "Saint-Exemple-sur-Lac", fast);`),
+  ).toEqual({
+    result: {
+      picked: false,
+      reason: "option_missing",
+      wanted: "Saint-Exemple-sur-Lac",
+      available: ["St-Exemple-sur-Lac"],
+      matches: [],
+    },
+  });
+  expect(await submitted(page)).toEqual({ town: "" });
+});
+
+// By default, as on a write, an option that only shares some of the value's words is never picked.
+test("pickValue by default never picks an option that only shares some words", async ({ page }) => {
+  for (const [labels, wanted] of [
+    [["Springfield, MO", "Columbia, MO"], "Springfield, IL"],
+    [["Economy", "Business"], "Premium Economy"],
+    [["Refundable", "Flexible"], "Non-refundable"],
+    [["Lopez, Carlos", "Lopez, Catherine"], "Catherine Lopez"],
+  ] as const) {
+    await serve(page, dropdown(labels.map((label, index) => [String(index + 1), label] as const)));
+    expect(await call(page, `return await pickValue(page.getByRole("button", { name: "Customer" }), "${wanted}", fast);`), wanted).toEqual({
+      result: { picked: false, reason: "option_missing", wanted, available: [...labels], matches: [] },
+    });
+    expect(await submitted(page), wanted).toEqual({ customer: "" });
+  }
+});
+
+// On a read, with no option equal to the value, the option sharing the most words with it is
+// picked, so a town the list writes short is found by the words it shares.
+test("pickValue on a read picks the option sharing the most words, such as a town the list writes short", async ({ page }) => {
   await serve(page, `<form><label>Town <select name="town">
 <option value="">Choose a town</option><option value="1">Autre-Ville</option><option value="2">St-Exemple-sur-Lac</option></select></label></form>`);
   expect(
-    await call(page, `return await pickValue(page.getByLabel("Town"), "Saint-Exemple-sur-Lac", fast);`),
+    await call(page, `return await pickValue(page.getByLabel("Town"), "Saint-Exemple-sur-Lac", ${read});`),
   ).toEqual({ result: { picked: true, kind: "select", label: "St-Exemple-sur-Lac", value: "2", rank: "words", refills: 0 } });
   expect(await submitted(page)).toEqual({ town: "2" });
   // An option sharing no word is never picked.
-  expect(await call(page, `return await pickValue(page.getByLabel("Town"), "Lakeside", fast);`)).toEqual({
+  expect(await call(page, `return await pickValue(page.getByLabel("Town"), "Lakeside", ${read});`)).toEqual({
     result: {
       picked: false,
       reason: "option_missing",
@@ -142,12 +186,12 @@ test("pickValue picks the option sharing the most words, such as a town the list
 
 // Options tied for the most shared words are refused with the tied options as matches, in the
 // site's order, so a write asks the caller and a read can take the first.
-test("pickValue reports options tied for the most shared words as ambiguous, in the site's order", async ({ page }) => {
+test("pickValue on a read reports options tied for the most shared words as ambiguous, in the site's order", async ({ page }) => {
   await serve(page, `<form><label>Town <select name="town">
 <option value="">Choose a town</option><option value="1">Autre-Ville</option><option value="2">St-Exemple-sur-Lac</option>
 <option value="3">Saint-Autre-sur-Lac</option></select></label></form>`);
   expect(
-    await call(page, `return await pickValue(page.getByLabel("Town"), "Saint-Exemple-sur-Lac", fast);`),
+    await call(page, `return await pickValue(page.getByLabel("Town"), "Saint-Exemple-sur-Lac", ${read});`),
   ).toEqual({
     result: {
       picked: false,
@@ -161,10 +205,10 @@ test("pickValue reports options tied for the most shared words as ambiguous, in 
 });
 
 // A native select's empty-valued prompt, such as "Choose a town", is no option to pick by words.
-test("pickValue never picks a native select's empty-valued prompt by shared words", async ({ page }) => {
+test("pickValue on a read never picks a native select's empty-valued prompt by shared words", async ({ page }) => {
   await serve(page, `<form><label>Town <select name="town">
 <option value="">Choose a town</option><option value="1">Exempleton</option><option value="2">Autre-Ville</option></select></label></form>`);
-  expect(await call(page, `return await pickValue(page.getByLabel("Town"), "Old Town", fast);`)).toEqual({
+  expect(await call(page, `return await pickValue(page.getByLabel("Town"), "Old Town", ${read});`)).toEqual({
     result: { picked: false, reason: "option_missing", wanted: "Old Town", available: ["Exempleton", "Autre-Ville"], matches: [] },
   });
   expect(await submitted(page)).toEqual({ town: "" });
@@ -172,11 +216,11 @@ test("pickValue never picks a native select's empty-valued prompt by shared word
 
 // A native option's label, text and title often repeat one name, which counts once, so pickValue
 // agrees with chooseOption.
-test("pickValue counts a name an option repeats once", async ({ page }) => {
+test("pickValue on a read counts a name an option repeats once", async ({ page }) => {
   await serve(page, `<form><label>Branch <select name="branch">
 <option value="">Choose a branch</option><option value="1" title="Acme South">Acme South</option>
 <option value="2">Beta North</option></select></label></form>`);
-  expect(await call(page, `return await pickValue(page.getByLabel("Branch"), "Acme North", fast);`)).toEqual({
+  expect(await call(page, `return await pickValue(page.getByLabel("Branch"), "Acme North", ${read});`)).toEqual({
     result: {
       picked: false,
       reason: "option_ambiguous",
@@ -186,6 +230,41 @@ test("pickValue counts a name an option repeats once", async ({ page }) => {
     },
   });
   expect(await submitted(page)).toEqual({ branch: "" });
+});
+
+// On a read, every number of the value, read as rankByWords reads it, must be in the option.
+test("pickValue on a read never picks an option that lacks a number of the value", async ({ page }) => {
+  for (const [labels, wanted] of [
+    [["7:00 PM", "9:15 AM"], "7:30 PM"],
+    [["Order 1251", "Hillcrest"], "Order 1250"],
+    [["Room 101", "Suite 200"], "Room 102"],
+  ] as const) {
+    const options = labels.map((label, index) => `<option value="${index + 1}">${label}</option>`).join("");
+    await serve(page, `<form><label>Slot <select name="slot"><option value="">Choose</option>${options}</select></label></form>`);
+    expect(await call(page, `return await pickValue(page.getByLabel("Slot"), "${wanted}", ${read});`), wanted).toEqual({
+      result: { picked: false, reason: "option_missing", wanted, available: [...labels], matches: [] },
+    });
+    expect(await submitted(page), wanted).toEqual({ slot: "" });
+    await serve(page, dropdown(labels.map((label, index) => [String(index + 1), label] as const)));
+    expect(await call(page, `return await pickValue(page.getByRole("button", { name: "Customer" }), "${wanted}", ${read});`), wanted).toEqual({
+      result: { picked: false, reason: "option_missing", wanted, available: [...labels], matches: [] },
+    });
+    expect(await submitted(page), wanted).toEqual({ customer: "" });
+  }
+  // An option holding every number of the value is still picked by its words.
+  await serve(page, dropdown([["1", "Room 101"], ["2", "Room 102, King bed"]]));
+  expect(await call(page, `return await pickValue(page.getByRole("button", { name: "Customer" }), "Room 102", ${read});`)).toEqual({
+    result: { picked: true, kind: "dropdown", label: "Room 102, King bed", value: "2", rank: "words", refills: 0 },
+  });
+  expect(await submitted(page)).toEqual({ customer: "2" });
+});
+
+test("pickValue on a read picks a name the list writes in another order", async ({ page }) => {
+  await serve(page, dropdown([["1", "Lopez, Carlos"], ["2", "Lopez, Catherine"]]));
+  expect(await call(page, `return await pickValue(page.getByRole("button", { name: "Customer" }), "Catherine Lopez", ${read});`)).toEqual({
+    result: { picked: true, kind: "dropdown", label: "Lopez, Catherine", value: "2", rank: "words", refills: 0 },
+  });
+  expect(await submitted(page)).toEqual({ customer: "2" });
 });
 
 test("pickValue prefers an exact match and reports options that tie once case is ignored", async ({ page }) => {

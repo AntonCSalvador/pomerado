@@ -9,6 +9,8 @@ const choice = (names: string | readonly string[], value = "", disabled = false)
 };
 const rank = (choices: readonly PickerChoice[], ...wanted: string[]) =>
   rankChoices(choices, wanted, foldChoiceText, rankByWords);
+// Without a scorer, as a write picks: the last rank takes a name holding a spelling as whole words.
+const strict = (choices: readonly PickerChoice[], ...wanted: string[]) => rankChoices(choices, wanted, foldChoiceText);
 
 describe("rankChoices", () => {
   test("a name as written beats one that matches only once case and spacing are ignored", () => {
@@ -133,11 +135,57 @@ describe("rankChoices", () => {
     expect(rank([spelled, choice("Beta North", "2")], "Acme North")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "words" });
   });
 
+  test("without a scorer, whole words of a name match last, and a prefix never does", () => {
+    const choices = [choice("Chicago O'Hare (ORD)"), choice("Chicago Midway (MDW)")];
+    expect(strict(choices, "ORD")).toEqual({ status: "picked", index: 0, rank: "words" });
+    expect(strict(choices, "Chicago")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "words" });
+    expect(strict(choices, "Chic")).toEqual({ status: "missing" });
+    expect(strict([choice("Acme insurance Customer"), choice("Acme Bank Customer")], "Acme insur")).toEqual({ status: "missing" });
+  });
+
+  test("without a scorer, as on a write, an option that only shares some words is never picked", () => {
+    expect(strict([choice("Economy"), choice("Business")], "Premium Economy")).toEqual({ status: "missing" });
+    expect(strict([choice("Refundable"), choice("Flexible")], "Non-refundable")).toEqual({ status: "missing" });
+    expect(strict([choice("Springfield, MO"), choice("Columbia, MO")], "Springfield, IL")).toEqual({ status: "missing" });
+    expect(strict([choice("7:00 PM"), choice("9:15 AM")], "7:30 PM")).toEqual({ status: "missing" });
+    expect(strict([choice("Lopez, Carlos"), choice("Lopez, Catherine")], "Catherine Lopez")).toEqual({ status: "missing" });
+    expect(strict([choice("St-Exemple-sur-Lac"), choice("Autre-Ville")], "Saint-Exemple-sur-Lac")).toEqual({ status: "missing" });
+    // The stronger ranks match as they do with a scorer.
+    expect(strict([choice("Economy"), choice("Premium Economy")], "premium economy")).toEqual({
+      status: "picked",
+      index: 1,
+      rank: "normalized",
+    });
+  });
+
+  test("with a scorer, as on a read, an option that lacks a number of the value is never picked", () => {
+    expect(rank([choice("7:00 PM"), choice("9:15 AM")], "7:30 PM")).toEqual({ status: "missing" });
+    expect(rank([choice("Order 1251"), choice("Hillcrest")], "Order 1250")).toEqual({ status: "missing" });
+    expect(rank([choice("Room 101"), choice("Suite 200")], "Room 102")).toEqual({ status: "missing" });
+    // An option holding every number of the value still counts, and may add numbers of its own.
+    expect(rank([choice("Room 101"), choice("Room 102, Floor 1")], "Room 102")).toEqual({ status: "picked", index: 1, rank: "words" });
+    expect(rank([choice("Sat 7:00 PM"), choice("Sat 7:30 PM")], "7:30 PM")).toEqual({ status: "picked", index: 1, rank: "words" });
+  });
+
+  test("with a scorer, a read still picks a name in another order or written short", () => {
+    expect(rank([choice("Lopez, Carlos"), choice("Lopez, Catherine")], "Catherine Lopez")).toEqual({
+      status: "picked",
+      index: 1,
+      rank: "words",
+    });
+    expect(rank([choice("St-Exemple-sur-Lac"), choice("Autre-Ville")], "Saint-Exemple-sur-Lac")).toEqual({
+      status: "picked",
+      index: 0,
+      rank: "words",
+    });
+  });
+
   test("embeds as self-contained source, with the scorer passed in", () => {
     expect(String(rankChoices)).not.toContain("rankByWords");
     const embedded = new Function(`return ${String(rankChoices)};`)() as typeof rankChoices;
     const choices = [choice("Hillcrest"), choice("Exemple Bay"), choice("Exemple")];
     expect(embedded(choices, ["Bay Exemple"], foldChoiceText, rankByWords)).toEqual({ status: "picked", index: 1, rank: "words" });
+    expect(embedded(choices, ["Bay Exemple"], foldChoiceText)).toEqual({ status: "missing" });
   });
 
   test("an empty or blank value matches nothing", () => {

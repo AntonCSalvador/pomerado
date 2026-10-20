@@ -111,6 +111,10 @@ export const sameText = (shown: string, wanted: string): boolean => {
  * word, so 12 never matches 123 or 1.2, and 5 never matches -5. A run of single letters is one
  * word, so U.S.A. matches USA.
  *
+ * A text that lacks any word of the query holding a digit, read as above, scores 0 whatever else
+ * it shares, so 7:30 PM never matches 7:00 PM, Order 1250 never matches Order 1251 and Room 102
+ * never matches Room 101. A text may hold numbers the query lacks.
+ *
  * It is pure and self-contained: the page code of `formControlsCode` and `pickerCode` embeds this
  * same function.
  */
@@ -245,21 +249,25 @@ export const rankByWords = (query: string, texts: readonly string[]): number[] =
     }
     return sum;
   };
+  // Every number of the query, as read above, must be in the text.
+  const numbers = asked.filter((word) => /\p{N}/u.test(word));
   const own = score(asked);
-  return docs.map((doc) => (own === 0 ? 0 : score(doc) / own));
+  return docs.map((doc) => (own === 0 || numbers.some((word) => !doc.includes(word)) ? 0 : score(doc) / own));
 };
 
 /**
- * Whether text read back from the page, `shown`, confirms `wanted`, the option the tool picked or
- * the caller's value: `sameText(shown, wanted)` holds, or `shown` holds enough of `wanted`'s words,
- * a `rankByWords` score for `wanted` of 0.7 or more with `shown` as the only text. Case, accents,
- * spacing and punctuation between letters are ignored either way. The second step accepts the
- * wanted words in another order and among other words: a one-word value is confirmed by text
- * that adds up to two words to it, and text that drops one of the wanted words is not, unless the
- * value has eleven words or more. So a wanted name inside a longer one, such as Lakeside in North
- * Lakeside, is confirmed. Dates, phone numbers and amounts match as `rankByWords` reads them;
- * other numbers must be the same. It calls `sameText` and `rankByWords`, so page code that embeds
- * it embeds those two first.
+ * Whether text a read reads back from the page, `shown`, confirms `wanted`, the option the tool
+ * picked or the caller's value: `sameText(shown, wanted)` holds, or `shown` holds enough of
+ * `wanted`'s words, a `rankByWords` score for `wanted` of 0.7 or more with `shown` as the only
+ * text. Case, accents, spacing and punctuation between letters are ignored either way. The second
+ * step accepts the wanted words in another order and among other words: a one-word value is
+ * confirmed by text that adds up to two words to it, and text that drops one of the wanted words
+ * is not, unless the value has eleven words or more. So a wanted name inside a longer one, such as
+ * Lakeside in North Lakeside, is confirmed, and so is Premium Economy for Economy. `shown` must
+ * hold every number `wanted` holds: dates, phone numbers and amounts as `rankByWords` reads them,
+ * and other numbers the same. A write's check before it saves uses `sameText` alone, which
+ * refuses a word added or dropped. It calls `sameText` and `rankByWords`, so page code that
+ * embeds it embeds those two first.
  */
 export const readBackMatches = (shown: string, wanted: string): boolean =>
   sameText(shown, wanted) || (rankByWords(wanted, [shown])[0] ?? 0) >= 0.7;

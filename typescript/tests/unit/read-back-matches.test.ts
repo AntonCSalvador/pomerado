@@ -55,12 +55,49 @@ it("ignores characters that never show, and reads a combining accent as the lett
 });
 
 it("keeps a number, an email, a domain or a file name as one word", () => {
-  expect(rankByWords("Order 1250", ["Order 1251"])[0]).toBeLessThan(0.7);
+  expect(rankByWords("Order 1250", ["Order 1251"])).toEqual([0]);
   expect(rankByWords("12", ["123", "1.2", "12"])).toEqual([0, 0, 1]);
   expect(rankByWords("-5", ["5", "+5", "-5"])).toEqual([0, 0, 1]);
   expect(rankByWords("5-", ["5", "5-"])).toEqual([0, 1]);
   expect(rankByWords("jo.smith@example.com", ["j.smith@example.com", "jo smith example com"])).toEqual([0, 0]);
   expect(rankByWords("report-2024.pdf", ["report 2024 pdf"])).toEqual([0]);
+});
+
+it("scores 0 a text that lacks any number the query holds, reading numbers as above", () => {
+  expect(rankByWords("7:30 PM", ["7:00 PM", "7:30 PM", "Sat 7:30 PM"])).toEqual([0, 1, expect.any(Number)]);
+  expect(rankByWords("7:30 PM", ["Sat 7:30 PM"])[0]).toBeGreaterThan(0);
+  expect(rankByWords("Order 1250", ["Order 1251", "Order 1250"])).toEqual([0, 1]);
+  expect(rankByWords("Room 102", ["Room 101", "Room 102 Floor 1"])[0]).toBe(0);
+  expect(rankByWords("Room 102", ["Room 102 Floor 1"])[0]).toBeGreaterThan(0);
+  // A date, a phone or account number and an amount count as one number however they are written,
+  // and a sign stays with its number.
+  expect(rankByWords("2026-11-05", ["Thu, Nov 5, 2026", "Thu, Nov 12, 2026"])).toEqual([1, 0]);
+  expect(rankByWords("(555) 010-0199", ["+1 555 010 0199", "555 010 0198"])).toEqual([1, 0]);
+  expect(rankByWords("Refund $1,250.00", ["Refund 1250", "Refund 1,251"])).toEqual([1, 0]);
+  expect(rankByWords("-5 degrees", ["5 degrees", "-5 degrees"])).toEqual([0, 1]);
+});
+
+it("refuses a read-back that changes one number, however many other words match", () => {
+  const wanted = "Order 1250 for Exemple Supply Company shipped to the Exemple Street warehouse dock";
+  expect(readBackMatches(wanted.replace("1250", "1251"), wanted)).toBe(false);
+  const room = "Exemple Grand Hotel King Room 102 with ocean view and late checkout on the top floor";
+  expect(readBackMatches(room.replace("102", "101"), room)).toBe(false);
+  expect(readBackMatches(room, room.replace("Room 102 ", ""))).toBe(true);
+});
+
+it("leaves a write's check before it saves to sameText, which refuses a word added or dropped", () => {
+  // readBackMatches is for reads: it accepts the wanted words among other words. A write checks
+  // with sameText, so a page that shows another fare or another policy refuses.
+  expect(sameText("Premium Economy", "Economy")).toBe(false);
+  expect(sameText("Non-refundable", "Refundable")).toBe(false);
+  expect(sameText("Economy", "Premium Economy")).toBe(false);
+  expect(sameText("Refundable", "Non-refundable")).toBe(false);
+  expect(readBackMatches("Premium Economy", "Economy")).toBe(true);
+  expect(readBackMatches("Non-refundable", "Refundable")).toBe(true);
+  // A read still confirms a name in another order or written short.
+  expect(readBackMatches("Lopez, Catherine", "Catherine Lopez")).toBe(true);
+  expect(sameText("Lopez, Catherine", "Catherine Lopez")).toBe(false);
+  expect(readBackMatches("St-Exemple-sur-Lac", "Saint-Exemple-sur-Lac")).toBe(true);
 });
 
 it("embeds as self-contained source, so page code can use it", () => {
