@@ -215,9 +215,12 @@ already asked for, or to solve a CAPTCHA.
 
 The run waits with its browser open and its active budget stopped, and the next call
 starts on the same page. Continue from there. Do not reload, search again or repeat an
-earlier step, and never resubmit anything the run already submitted. The wait can be
-long, so in that next call confirm the page still shows the chosen option before acting
-on it.
+earlier step, and never resubmit anything the run already submitted. A second click on a
+marked step is not a resubmission when `blockingRequiredFields` returned the fields you
+asked for: fill the answers, check the step again, then call `notCommitted`, then
+`enteringCommit` again for that step, and click once, as the writes skill says. The wait
+can be long, so in that next call confirm the page still shows the chosen option before
+acting on it.
 
 ## When no answer comes
 

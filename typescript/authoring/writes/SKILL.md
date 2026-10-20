@@ -103,6 +103,13 @@ During the session:
   stop, as the cart skill's "Minimums and refusals" says. When they stop, or the session cannot
   reach the task's end, end with `report_blocked` (`site_declined` when the site refused this
   example). A build whose session never reached the end publishes nothing.
+- When a write's form adds required fields that depend on earlier answers, prefer declaring
+  the site-field question and asking it for a required field that no input covers, before that
+  step's commit mark, over refusing. When such a field shows only after the step's click, ask it
+  once `blockingRequiredFields` returns it, which proves the click saved nothing: fill the
+  answer, check the step again, then call `notCommitted`, then `enteringCommit` again with the
+  step's name, and click once. When a step shows several such fields at once, ask them in one
+  round, declaring one site-field question per field. It isn't for passwords, codes or logins.
 - A pop-up, banner or interstitial on the path, such as an upsell, is conditional unless the
   page always opens it in answer to an action: handle it as the forms skill says, so the tool
   still works for a caller who never sees it.
