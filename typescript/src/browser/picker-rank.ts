@@ -1,3 +1,5 @@
+import { rankByWords } from "../runtime/text.js";
+
 /** One option a picker listed, as `rankChoices` reads it. */
 export interface PickerChoice {
   /** Every name the option shows or carries: its text, first line, accessible name, title, cells. */
@@ -26,30 +28,28 @@ export type PickerRanking =
 /**
  * The one option `wanted` names, a list of spellings of one choice, by rank: a name or the value
  * as written (trimmed), then ignoring case and spacing, then also ignoring accents and
- * punctuation (`fold`), then a name holding a spelling as whole words. A name beats the value at
- * each rank. Options at the first rank that matches decide: one option (by key) is picked, or
- * reported disabled when every copy of it is; two or more are ambiguous, never guessed. A weaker
- * rank never overrules a stronger one, so a disabled exact match is not replaced by a looser one.
+ * punctuation (`fold`), then the option whose names share the most words with a spelling, by
+ * BM25 (`words`, `rankByWords` unless given). A name beats the value at each rank. Options at the
+ * first rank that matches decide: one option (by key) is picked, or reported disabled when every
+ * copy of it is; two or more, such as options tied for the most shared words, are ambiguous,
+ * listed in the list's order, never guessed. An option that shares no word never matches. A
+ * weaker rank never overrules a stronger one, so a disabled exact match is not replaced by a
+ * looser one.
  *
- * It is pure and self-contained: the page code of `pickerCode` embeds this same function with
- * `fold` set to `foldChoiceText`.
+ * It is pure and self-contained apart from `words`: the page code of `pickerCode` embeds this same
+ * function with `fold` set to `foldChoiceText` and `words` to `rankByWords`.
  */
 export const rankChoices = (
   choices: readonly PickerChoice[],
   wanted: readonly string[],
   fold: (text: string) => string,
+  words: (query: string, texts: readonly string[]) => readonly number[] = rankByWords,
 ): PickerRanking => {
   const squash = (text: string) => String(text ?? "").replace(/\s+/gu, " ").trim();
   const lower = (text: string) => squash(text).toLowerCase();
-  const phrase = (text: string) =>
-    " " +
-    fold(text)
-      .split(/[^\p{L}\p{N}]+/u)
-      .filter(Boolean)
-      .join(" ") +
-    " ";
   const spellings = wanted.map(squash).filter((spelling) => spelling !== "");
-  const tests: readonly (readonly [PickerRank, (choice: PickerChoice) => boolean])[] = [
+  let best: { readonly scores: readonly number[]; readonly top: number } | undefined;
+  const tests: readonly (readonly [PickerRank, (choice: PickerChoice, index: number) => boolean])[] = [
     ["exact", (choice) => choice.names.some((name) => spellings.includes(squash(name)))],
     ["exact", (choice) => choice.value !== "" && spellings.includes(squash(choice.value))],
     ...(
@@ -66,14 +66,26 @@ export const rankChoices = (
     }),
     [
       "words",
-      (choice) => {
-        const parts = spellings.map(phrase).filter((part) => part.trim() !== "");
-        return choice.names.some((name) => parts.some((part) => phrase(name).includes(part)));
+      (_choice, index) => {
+        // Each option's best BM25 score over its names and the spellings, scored once.
+        if (best === undefined) {
+          const names = choices.flatMap((choice, at) => choice.names.map((name) => ({ at, name })));
+          const scores = choices.map(() => 0);
+          for (const spelling of spellings) {
+            const found = words(spelling, names.map((entry) => entry.name));
+            found.forEach((score, entry) => {
+              const at = names[entry]?.at ?? 0;
+              scores[at] = Math.max(scores[at] ?? 0, score);
+            });
+          }
+          best = { scores, top: Math.max(0, ...scores) };
+        }
+        return best.top > 0 && best.top - (best.scores[index] ?? 0) < 1e-9;
       },
     ],
   ];
   for (const [rank, test] of tests) {
-    const matched = choices.flatMap((choice, index) => (test(choice) ? [index] : []));
+    const matched = choices.flatMap((choice, index) => (test(choice, index) ? [index] : []));
     if (matched.length === 0) continue;
     const keys = [...new Set(matched.map((index) => choices[index]?.key))];
     if (keys.length > 1) {

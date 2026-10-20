@@ -66,6 +66,56 @@ describe("rankChoices", () => {
     });
   });
 
+  test("with no name or value equal to a spelling, the option sharing the most words wins", () => {
+    // Words in another order, a word the list writes short, and a date the list writes its own way.
+    expect(rank([choice("Hillcrest"), choice("Exemple Bay")], "Bay Exemple")).toEqual({ status: "picked", index: 1, rank: "words" });
+    expect(rank([choice("St-Exemple-sur-Lac"), choice("Autre-Ville")], "Saint-Exemple-sur-Lac")).toEqual({
+      status: "picked",
+      index: 0,
+      rank: "words",
+    });
+    expect(rank([choice("Wed, Nov 4, 2026"), choice("Thu, Nov 5, 2026")], "2026-11-05")).toEqual({
+      status: "picked",
+      index: 1,
+      rank: "words",
+    });
+    // More of the wanted words beats fewer.
+    const choices = [choice("North Lakeside"), choice("Lakeside Park Road"), choice("Hillcrest")];
+    expect(rank(choices, "Lakeside Park")).toEqual({ status: "picked", index: 1, rank: "words" });
+    // Any of an option's names and any spelling of the value count.
+    const row = choice(["C-101 Acme Insurance Group Boston", "C-101", "Acme Insurance Group", "Boston"], "C-101");
+    expect(rank([choice("Acme Bank"), row], "Insurance Group Acme")).toEqual({ status: "picked", index: 1, rank: "words" });
+    expect(rank([choice("Exemple Bay"), choice("Hillcrest")], "Hill crest", "Hillcrest Road")).toEqual({
+      status: "picked",
+      index: 1,
+      rank: "words",
+    });
+  });
+
+  test("options that tie for the most shared words are ambiguous, in the list's order", () => {
+    const choices = [choice("Autre-Ville"), choice("St-Exemple-sur-Lac"), choice("Saint-Autre-sur-Lac")];
+    expect(rank(choices, "Saint-Exemple-sur-Lac")).toEqual({ status: "ambiguous", indexes: [1, 2], rank: "words" });
+    expect(rank([choice("Springfield North"), choice("Shelbyville"), choice("Springfield South")], "Springfield")).toEqual({
+      status: "ambiguous",
+      indexes: [0, 2],
+      rank: "words",
+    });
+  });
+
+  test("a disabled option sharing the most words is reported, never replaced by one sharing fewer", () => {
+    expect(rank([choice("Exemple Bay", "", true), choice("Exemple Bay Marina")], "Bay Exemple")).toEqual({
+      status: "disabled",
+      index: 0,
+      rank: "words",
+    });
+  });
+
+  test("an option sharing no word with the value is never picked, so a short label is missing", () => {
+    expect(rank([choice("UK"), choice("USA")], "Ukraine")).toEqual({ status: "missing" });
+    expect(rank([choice("Mr"), choice("Mrs"), choice("Miss")], "Ms")).toEqual({ status: "missing" });
+    expect(rank([choice("Order 1251")], "1250")).toEqual({ status: "missing" });
+  });
+
   test("an empty or blank value matches nothing", () => {
     expect(rank([choice("Anything"), choice("")], "")).toEqual({ status: "missing" });
     expect(rank([choice("Anything")], "   ")).toEqual({ status: "missing" });

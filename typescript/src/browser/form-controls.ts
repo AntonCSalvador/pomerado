@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { foldChoiceText } from "../runtime/text.js";
+import { foldChoiceText, rankByWords } from "../runtime/text.js";
 
 /**
  * The shape of a form control, as the page code reads it: a native date input, a text box, a
@@ -85,9 +85,10 @@ export const CalendarDate = Schema.String.pipe(
  * - `chooseOption(control, wanted, { timeout }?)`: chooses the one option of a native select or a
  *   custom dropdown whose label or value is one of `wanted` (a string or a list of alternate
  *   spellings, such as `["CA", "California"]`), ignoring case, accents, spacing and punctuation.
- *   A label that equals one wins over a value that does,
- *   which wins over a label that holds it as whole words; two different options at the winning
- *   rank are ambiguous. A custom dropdown is opened, its own listbox found through `aria-controls`
+ *   A label that equals one wins over a value that does, which wins over the label that shares the
+ *   most words with one, by BM25 (`rankByWords`); an option sharing no word never matches, and two
+ *   different options at the winning rank, such as two tied for the most shared words, are
+ *   ambiguous. A custom dropdown is opened, its own listbox found through `aria-controls`
  *   or `aria-owns` (else the one visible listbox), typed into when it filters as you type, and
  *   scrolled when it renders its options as you scroll. Returns `{ shape, label, value }`.
  * - `unfilledRequiredFields(scope, { timeout, before }?)`: the empty required fields a form shows
@@ -137,6 +138,7 @@ const formControlFailure = (reason) => Object.assign(new Error(reason), { name: 
 const formControlMessageWords = /\brequired\b|\b(?:is|are) (?:missing|not valid)\b|\bthis field\b|\bplease (?:enter|select|choose|provide|fill|complete|correct)\b|\benter a valid\b|\bmust (?:be|contain|have|match)\b|\bcan(?:not|'t|’t| not) be (?:blank|empty)\b|\binvalid\b|\bist erforderlich\b|\bes (?:obligatorio|requerido)\b|\best (?:obligatoire|requis)\b/i;
 /** Folds case, accents, spacing and punctuation, so "Joe’s Café" and "joes cafe" name the same option. */
 const formControlText = ${String(foldChoiceText)};
+const formControlRankWords = ${String(rankByWords)};
 const formControlFrame = async (control, options) => {
   const handle = await control.elementHandle(options);
   const frame = handle === null ? null : await handle.ownerFrame();
@@ -173,14 +175,27 @@ const formControlDateCandidates = (iso, format, locale) => {
   if (kind === "D") candidates.push(formControlOrdinal(iso.slice(8)));
   return [...new Set(candidates)];
 };
-/** The one option a choice names, by rank: label, then value, then whole words of the label. */
+/**
+ * The one option a choice names, by rank: its folded label, then its folded value, then the label
+ * as shown, its text, that shares the most words with a wanted name, by BM25.
+ */
 const formControlPick = (options, wanted) => {
   const names = new Set(wanted.map(formControlText).filter((name) => name !== ""));
-  const words = (label) => label.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  let best;
   const ranks = [
     (option) => names.has(option.label),
     (option) => option.value !== "" && names.has(option.value),
-    (option) => [...names].some((name) => (" " + words(option.label).join(" ") + " ").includes(" " + name + " ")),
+    (option, index) => {
+      if (best === undefined) {
+        const scores = options.map(() => 0);
+        for (const name of wanted)
+          formControlRankWords(name, options.map((each) => each.text)).forEach((score, at) => {
+            scores[at] = Math.max(scores[at], score);
+          });
+        best = { scores, top: Math.max(0, ...scores) };
+      }
+      return best.top > 0 && best.top - best.scores[index] < 1e-9;
+    },
   ];
   for (const rank of ranks) {
     const matched = options.filter(rank);
@@ -212,7 +227,7 @@ const formControlChooseNative = async (control, wanted, timeout) => {
     { timeout },
   );
   const picked = formControlPick(
-    options.map((option) => ({ ...option, label: formControlText(option.label), value: formControlText(option.value) })),
+    options.map((option) => ({ ...option, text: option.label, label: formControlText(option.label), value: formControlText(option.value) })),
     wanted,
   );
   if (picked.failure) throw formControlFailure(picked.failure);
@@ -287,7 +302,7 @@ const formControlChooseCustom = async (control, wanted, timeout) => {
     options = await formControlOptions(listbox);
     if (options.length !== before) stuck = 0;
     picked = formControlPick(
-      options.map((option) => ({ ...option, label: formControlText(option.label), value: formControlText(option.value) })),
+      options.map((option) => ({ ...option, text: option.label, label: formControlText(option.label), value: formControlText(option.value) })),
       wanted,
     );
     if (picked.failure !== "option_missing" || Date.now() >= until) break;

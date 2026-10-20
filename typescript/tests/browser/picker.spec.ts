@@ -44,6 +44,17 @@ test("pickValue types into an ARIA combobox and clicks the matching option", asy
   expect(await submitted(page)).toEqual({ person: "3" });
 });
 
+test("pickValue picks a typeahead suggestion that holds the value's words in another order", async ({ page }) => {
+  // This site suggests every name holding any word typed.
+  const anyWord = "query.split(/\\s+/).some((word) => word !== '' && name.toLowerCase().includes(word))";
+  expect(combobox).toContain("name.toLowerCase().includes(query)");
+  await serve(page, combobox.replace("name.toLowerCase().includes(query)", anyWord));
+  expect(
+    await call(page, `return await pickValue(page.getByRole("combobox", { name: "Assignee" }), "Hart Riley", fast);`),
+  ).toEqual({ result: { picked: true, kind: "typeahead", label: "Riley Hart", value: "1", rank: "words", refills: 0 } });
+  expect(await submitted(page)).toEqual({ person: "1" });
+});
+
 test("pickValue picks a native select's option by label, value or another spelling", async ({ page }) => {
   await serve(page, `<form><label>State <select name="state">
 <option value="">Choose a state</option><option value="CA">California</option><option value="NV">Nevada</option>
@@ -63,19 +74,42 @@ test("pickValue picks a native select's option by label, value or another spelli
   });
 });
 
-// A list that writes the wanted town short is refused, never picked without a word.
-test("pickValue refuses a town the list writes short", async ({ page }) => {
+// With no option equal to the value, the option sharing the most words with it is picked, so a town
+// the list writes short is found by the words it shares.
+test("pickValue picks the option sharing the most words, such as a town the list writes short", async ({ page }) => {
   await serve(page, `<form><label>Town <select name="town">
-<option value="">Choose a town</option><option value="1">St-Exemple-sur-Lac</option></select></label></form>`);
+<option value="">Choose a town</option><option value="1">Autre-Ville</option><option value="2">St-Exemple-sur-Lac</option></select></label></form>`);
+  expect(
+    await call(page, `return await pickValue(page.getByLabel("Town"), "Saint-Exemple-sur-Lac", fast);`),
+  ).toEqual({ result: { picked: true, kind: "select", label: "St-Exemple-sur-Lac", value: "2", rank: "words", refills: 0 } });
+  expect(await submitted(page)).toEqual({ town: "2" });
+  // An option sharing no word is never picked.
+  expect(await call(page, `return await pickValue(page.getByLabel("Town"), "Lakeside", fast);`)).toEqual({
+    result: {
+      picked: false,
+      reason: "option_missing",
+      wanted: "Lakeside",
+      available: ["Autre-Ville", "St-Exemple-sur-Lac"],
+      matches: [],
+    },
+  });
+});
+
+// Options tied for the most shared words are refused with the tied options as matches, in the
+// site's order, so a write asks the caller and a read can take the first.
+test("pickValue reports options tied for the most shared words as ambiguous, in the site's order", async ({ page }) => {
+  await serve(page, `<form><label>Town <select name="town">
+<option value="">Choose a town</option><option value="1">Autre-Ville</option><option value="2">St-Exemple-sur-Lac</option>
+<option value="3">Saint-Autre-sur-Lac</option></select></label></form>`);
   expect(
     await call(page, `return await pickValue(page.getByLabel("Town"), "Saint-Exemple-sur-Lac", fast);`),
   ).toEqual({
     result: {
       picked: false,
-      reason: "option_missing",
+      reason: "option_ambiguous",
       wanted: "Saint-Exemple-sur-Lac",
-      available: ["St-Exemple-sur-Lac"],
-      matches: [],
+      available: ["Autre-Ville", "St-Exemple-sur-Lac", "Saint-Autre-sur-Lac"],
+      matches: ["St-Exemple-sur-Lac", "Saint-Autre-sur-Lac"],
     },
   });
   expect(await submitted(page)).toEqual({ town: "" });
