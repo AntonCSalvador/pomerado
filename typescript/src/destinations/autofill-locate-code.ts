@@ -308,23 +308,30 @@ const readControls = async (founds) => {
 };
 // The controls found before one the call could not find, read through the handles found with no
 // wait, as each was read when found: one the page took away, or whose document is gone, is
-// skipped, and a read that fails fails the call.
+// skipped, and a read that fails fails the call. A frame's controls are read in one evaluation,
+// which throws when one of them is in a document the frame no longer shows; each is then read
+// alone, so only the ones whose document is gone are skipped.
 const checkReads = async (founds) => {
-  for (const [first, ...others] of frameGroups(founds)) {
-    const failed = await first.handle
-      .evaluate((element, others) => {
-        const readControl = ${controlReadCode};
-        for (const each of [element, ...others]) {
-          if (!each.isConnected) continue;
-          try {
-            readControl(each);
-          } catch {
-            return true;
-          }
-        }
-        return false;
-      }, others.map((found) => found.handle))
-      .catch(() => false);
+  const readFails = (element, others) => {
+    const readControl = ${controlReadCode};
+    for (const each of [element, ...others]) {
+      if (!each.isConnected) continue;
+      try {
+        readControl(each);
+      } catch {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (const group of frameGroups(founds)) {
+    const [first, ...others] = group;
+    let failed = await first.handle.evaluate(readFails, others.map((found) => found.handle)).catch(() => null);
+    if (failed === null)
+      for (const found of group) {
+        failed = await found.handle.evaluate(readFails, []).catch(() => false);
+        if (failed) break;
+      }
     if (failed) throw new Error("A control the call found could not be read");
   }
 };
