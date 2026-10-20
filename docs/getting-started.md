@@ -221,7 +221,8 @@ When a job needs something from you, `get_job` returns `"status": "input_require
 ## Server options
 
 - Add `--headed` to the `mint` arguments to watch Chromium work.
-- Add `--endpoint` and a native Playwright WebSocket URL to attach to a browser server you run. The server must support `chromium.connect()` at the same Playwright version. A Chromium remote debugging URL for `connectOverCDP()` won't work.
+- Add `--endpoint` and a native Playwright WebSocket URL to attach to a browser server you run. The server must support `chromium.connect()` at the same Playwright version.
+- Add `--cdp-endpoint` and a Chromium DevTools WebSocket URL instead to attach to a browser that is already running, such as one started with `--remote-debugging-port` or a cloud browser's CDP URL. Pomerado drives that browser's own page and opens no context of its own. Closing a job ends its connection and leaves the browser and its pages running.
 - To test an attached browser, start a local Playwright browser server from a clone of this repository. Use the endpoint it prints.
 
 ```sh

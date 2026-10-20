@@ -18,6 +18,7 @@ const usage = `Pomerado
 
 Options
   --endpoint URL          Attach to a native Playwright websocket endpoint
+  --cdp-endpoint URL      Attach over the DevTools protocol to a running Chromium's page
   --headed                Show locally launched Chromium
   --effect read|write|ask  Mint authority (default ask)
   --timeout-seconds N      Session budget (default 1200)
@@ -52,6 +53,7 @@ const readOptions = (args: readonly string[]) =>
           artifact: { type: "string" },
           input: { type: "string" },
           endpoint: { type: "string" },
+          "cdp-endpoint": { type: "string" },
           headed: { type: "boolean" },
           effect: { type: "string" },
           "timeout-seconds": { type: "string" },
@@ -65,6 +67,8 @@ const readOptions = (args: readonly string[]) =>
     }
     if ((command !== "mint" && command !== "run") || positionals.length !== 1)
       return yield* Effect.fail(new Error("Use mint or run. See --help."));
+    if (values.endpoint !== undefined && values["cdp-endpoint"] !== undefined)
+      return yield* Effect.fail(new Error("--endpoint and --cdp-endpoint cannot both be set."));
     if (values.url === undefined) return yield* Effect.fail(new Error("--url is required."));
     if (command === "mint" && values.intent === undefined)
       return yield* Effect.fail(new Error("--intent is required to mint."));
@@ -111,6 +115,7 @@ const runCli = (
         browser: {
           headless: !values.headed,
           ...(values.endpoint === undefined ? {} : { endpoint: values.endpoint }),
+          ...(values["cdp-endpoint"] === undefined ? {} : { cdp: { url: values["cdp-endpoint"] } }),
         },
       });
       if (command === "run") {

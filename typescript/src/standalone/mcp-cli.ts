@@ -18,6 +18,7 @@ const usage = `Pomerado MCP
 
 Options
   --endpoint URL     Attach to native Playwright
+  --cdp-endpoint URL Attach over the DevTools protocol to a running Chromium's page
   --headed           Show local Chromium
 
 The mint root defaults to ./integrations. Supply model credentials in the environment to
@@ -58,6 +59,7 @@ export const runMcpCli = (
               root: { type: "string" },
               artifact: { type: "string" },
               endpoint: { type: "string" },
+              "cdp-endpoint": { type: "string" },
               headed: { type: "boolean" },
             },
           }),
@@ -67,6 +69,8 @@ export const runMcpCli = (
         process.stderr.write(usage);
         return;
       }
+      if (values.endpoint !== undefined && values["cdp-endpoint"] !== undefined)
+        return yield* Effect.fail(new Error("--endpoint and --cdp-endpoint cannot both be set."));
       const mode = positionals[0];
       if (positionals.length !== 1 || (mode !== "mint" && mode !== "serve"))
         return yield* Effect.fail(new Error("Choose mint or serve. See --help."));
@@ -76,6 +80,7 @@ export const runMcpCli = (
           ...options.browser,
           ...(values.headed === undefined ? {} : { headless: !values.headed }),
           ...(values.endpoint === undefined ? {} : { endpoint: values.endpoint }),
+          ...(values["cdp-endpoint"] === undefined ? {} : { cdp: { url: values["cdp-endpoint"] } }),
         },
       };
       const directory = values.artifact === undefined ? undefined : resolve(values.artifact);
