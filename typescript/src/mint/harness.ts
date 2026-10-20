@@ -423,7 +423,10 @@ const refusalRecovery = (reason: string | undefined, write: boolean): Publicatio
   reason !== undefined &&
   (writeCompletionReasons.has(reason) || (write && contractReasons.has(reason)))
     ? "write_completion"
-    : reason !== undefined && newObservationReasons.has(reason)
+    : reason !== undefined &&
+        newObservationReasons.has(reason) &&
+        // A write restores its inputs in the source and publishes its session's execution again.
+        !(write && reason === "input_contract_changed")
       ? "new_observation"
       : "correct_source";
 /** A refusal the harness makes before publication runs, as its decision. */
@@ -3759,7 +3762,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         });
       const emptyCases: LiveTestCasesFile = { cases: [] };
       /** What a signed-in read designs, in place of a read signed out's suite. */
-      const signedInPlanInstruction = `This read signed in, so it runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, as the testing skill says: one combined case in ${liveTestCasesPath} that sets every optional input and filter the example left unset, with values the site shows (a picker's options, or values in the example's own rows, never a person's or record's name, number or email). Choose each value so at least one example row fails it while some rows still pass every filter, since a value every example row already satisfies passes even when the tool ignores it, and name in purpose the row each value excludes. Set next_page true when the tool pages. Add a second case only for inputs that cannot be set with the others. Then run it with live_tests action run and check that every row it returns satisfies each input it set, that the excluded rows are gone, and that page two holds new rows. Running it again after a fix, or on src/tool-http.mjs, is free.`;
+      const signedInPlanInstruction = `This read signed in, so it runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, as the testing skill says: one combined case in ${liveTestCasesPath} that sets every optional input and filter the example left unset, with values the site shows (a picker's options, or values in the example's own rows, never a person's or record's name, number or email). Choose each value so at least one example row fails it while some rows still pass every filter, since a value every example row already satisfies passes even when the tool ignores it, and name in purpose the row each value excludes. Set next_page true when the tool pages. Add a second case only for inputs that cannot be set with the others, and one made-up key for an input that takes a record's own key (testing skill). Then run it with live_tests action run and check that every row it returns satisfies each input it set, that the excluded rows are gone, and that page two holds new rows. Running it again after a fix, or on src/tool-http.mjs, is free.`;
       /** What the agent reads about its tests: its cases and their results. */
       const liveTestPlanView = (
         entrypoint: string,
@@ -5191,7 +5194,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     error.code,
                     error.reason,
                     { brokenInputs: error.brokenInputs ?? [] },
-                    inputContractChangedInstruction,
+                    inputContractChangedInstruction(buildEffect === "write"),
                   );
                 if (error.reason === "tool_name_taken")
                   return notPublished(
