@@ -239,7 +239,9 @@ exception: it is optional unless the task can't run without it (below).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
   match that accepts the usual forms of the same name, such as a name with or without its
   accents (Abaca for Abacá), a city alone or with its state and country, or a company with
-  or without Ltd. or Inc. Never require an exact match.
+  or without Ltd. or Inc. Never require an exact match. Prefer `sameText` from
+  `pomerado/runtime` for this match and for confirming it, so the choice and its read-back
+  agree; it also accepts a shortened word, such as St-Jean for Saint-Jean.
   When more than one option matches, list them for the caller instead of picking one.
 - On a write, every choice the session met is an input: each option on the path,
   add-ons and pre-selected defaults included, except one the request or an answer settled,
@@ -592,12 +594,13 @@ that depends on them:
    wait for the values that depend on it with `waitForChange`, passing that step as `action`:
    changed, or confirmed unchanged once the page's loading sign came and went; a value read
    before the page updates belongs to the previous choice. A choice already in the requested
-   state needs no step and no wait. Compare text read back with the caller's value normalized,
-   or for a proper noun with
-   the option it matched: ignore case, accents, repeated whitespace and punctuation such as
-   curly quotes, periods and hyphens, never exact case-sensitive equality, since a page may
-   echo a query or name in
-   its own case. When the page kept another value after the tool's bounded retries, throw
+   state needs no step and no wait. Compare text read back with `sameText(shown, wanted)` from
+   `pomerado/runtime`, `wanted` being the option the tool picked from the site's list when it
+   picked one, and the caller's value otherwise. It ignores case, accents, spacing and
+   punctuation and accepts a word the page shortened, such as St for Saint. Prefer it over
+   exact equality, since a page may echo a query or name in its own case or short form, and
+   prefer comparing numbers, dates and amounts as values. When the page kept another value
+   after the tool's bounded retries, throw
    `InputNotApplied` (above); never read on with the page's value. A number snapped to the
    nearest step inside the caller's bound and returned as applied, a filter group the page
    disables reported as not offered, and a broader choice that covers the value (search skill)

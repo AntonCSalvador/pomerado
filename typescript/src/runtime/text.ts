@@ -19,6 +19,15 @@ export const normalizeText = (text: string, options: { readonly lines?: boolean 
     .filter((line) => line !== "")
     .join(options.lines === true ? "\n" : " ");
 
+/**
+ * Whether two texts name the same thing as a person reads them. Case, accents and other marks,
+ * spacing, and punctuation between letters are ignored, and a word written short, such as St for
+ * Saint or Blvd for Boulevard, matches the full word when it starts with the same letter, keeps
+ * its letters in order and is at most half as long. Both texts need the same number of words in
+ * the same order, and a word holding a digit or symbol must be the same word, so 12 never matches
+ * 123 and C++ never matches C. Compare numbers, dates and amounts as values instead. It is pure
+ * and self-contained, so page code can embed it, as `formControlsCode` does.
+ */
 export const sameText = (shown: string, wanted: string): boolean => {
   const fold = (text: string) => {
     const raw = String(text ?? "");

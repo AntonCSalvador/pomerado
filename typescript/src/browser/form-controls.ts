@@ -86,7 +86,9 @@ export const CalendarDate = Schema.String.pipe(
  *   spellings, such as `["CA", "California"]`), ignoring case, accents, spacing and punctuation.
  *   A label that equals one wins over a value that does,
  *   which wins over a label that holds it as whole words; two different options at the winning
- *   rank are ambiguous. A custom dropdown is opened, its own listbox found through `aria-controls`
+ *   rank are ambiguous. When none matches at those ranks, an option whose label `sameText`
+ *   matches one of `wanted`, such as St-Jean for Saint-Jean, is the last rank. A custom
+ *   dropdown is opened, its own listbox found through `aria-controls`
  *   or `aria-owns` (else the one visible listbox), typed into when it filters as you type, and
  *   scrolled when it renders its options as you scroll. Returns `{ shape, label, value }`.
  */

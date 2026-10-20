@@ -95,9 +95,12 @@ functions on your verified locators. `chooseOption(control, wanted)` chooses the
 option of a native select or a custom ARIA dropdown (a combobox, or a button that opens a
 listbox) whose label or value is one of `wanted`, a list of the input's spellings
 (`["CA", "California"]`), ignoring case, accents, spacing and punctuation, or whose label
-holds one as whole words. It opens the dropdown, searches only the listbox it owns, types
-into one that filters as you type, scrolls one that renders options as it scrolls, refuses
-a missing, disabled or ambiguous option, and reads back the committed choice.
+holds one as whole words. When none matches that way, it takes the one option whose label
+`sameText` matches, such as St-Jean for Saint-Jean. It opens the dropdown, searches only the
+listbox it owns, types into one that filters as you type, scrolls one that renders options
+as it scrolls, refuses a missing, disabled or ambiguous option, and reads back the committed
+choice. It returns the picked option's `label`; prefer confirming a later read-back of that
+field against it, not the caller's text.
 `fillDate(control, isoDate, format)` fills an ISO date into whatever date control the page
 has: a native date input, a text box in `format` (typed key by key when an input mask
 rewrites it), or one part of a split date (`MM`, `MMMM`, `D`, `YYYY` and so on) in a text
