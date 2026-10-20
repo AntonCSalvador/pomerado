@@ -1323,8 +1323,11 @@ test("write example settles a delayed submit before its outer call expires", asy
 /**
  * The checkout the write-session example was written against: fill, review, place, confirm. The
  * review prices each unit at 12.50 and shows the total, under a membership offer while
- * `site.offer` is set. A pen adds a required engraving choice to the checkout once typed in. A
- * ring adds three at once, a size, a metal and an inscription, and gold then adds its karat.
+ * `site.offer` is set. A pen adds a required engraving choice to the checkout once typed in,
+ * and a full name then adds its text. A ring adds three at once, a size, a metal and an
+ * inscription, and gold then adds its karat. A watch adds a strap and a strap size, shown greyed
+ * out until a strap is chosen. A bracelet adds a charm, and a heart renames the quantity, clears
+ * it and makes it required.
  */
 const checkoutSite = async (
   page: Page,
@@ -1347,6 +1350,7 @@ const checkoutSite = async (
           <label hidden>Engraving<select name="engraving" required disabled>
             <option value="">Choose</option><option>Initials</option><option>Full name</option>
           </select></label>
+          <label hidden>Engraving text<input name="engraving_text" required disabled></label>
           <label hidden>Ring size<select name="size" required disabled>
             <option value="">Choose</option><option>Small</option><option>Medium</option><option>Large</option>
           </select></label>
@@ -1356,6 +1360,15 @@ const checkoutSite = async (
           <label hidden>Inscription<input name="inscription" required disabled></label>
           <label hidden>Gold karat<select name="karat" required disabled>
             <option value="">Choose</option><option>14k</option><option>18k</option>
+          </select></label>
+          <label hidden>Strap<select name="strap" required disabled>
+            <option value="">Choose</option><option>Leather</option><option>Steel</option>
+          </select></label>
+          <label hidden>Strap size<select name="strap_size" required disabled>
+            <option value="">Choose</option><option>Small</option><option>Large</option>
+          </select></label>
+          <label hidden>Charm<select name="charm" required disabled>
+            <option value="">Choose</option><option>Star</option><option>Heart</option>
           </select></label>
           <button>Continue</button>
         </form>
@@ -1368,9 +1381,25 @@ const checkoutSite = async (
           document.querySelector("[name=item]").addEventListener("input", (event) => {
             show("engraving", event.target.value === "pen");
             for (const name of ["size", "metal", "inscription"]) show(name, event.target.value === "ring");
+            show("strap", event.target.value === "watch");
+            document.querySelector("[name=strap_size]").parentElement.hidden = event.target.value !== "watch";
+            show("charm", event.target.value === "bracelet");
+          });
+          document.querySelector("[name=engraving]").addEventListener("change", (event) => {
+            show("engraving_text", event.target.value === "Full name");
           });
           document.querySelector("[name=metal]").addEventListener("change", (event) => {
             show("karat", event.target.value === "Gold");
+          });
+          document.querySelector("[name=strap]").addEventListener("change", (event) => {
+            document.querySelector("[name=strap_size]").disabled = event.target.value === "";
+          });
+          document.querySelector("[name=charm]").addEventListener("change", (event) => {
+            if (event.target.value !== "Heart") return;
+            const quantity = document.querySelector("[name=quantity]");
+            quantity.parentElement.firstChild.textContent = "Quantity (max 2 with a heart)";
+            quantity.value = "";
+            quantity.required = true;
           });
         </script>`,
       });
@@ -1652,6 +1681,86 @@ test("write-session example asks a field the form adds after an answer in a seco
     commits: [{ name: "place-order", state: "confirmed" }],
   });
   expect(orders).toEqual(["ring"]);
+});
+
+test("write-session example asks a field an answer enables after showing it greyed out", async ({ page }) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  const checkouts = await checkoutsOf(page, origin);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "watch", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o2" };
+    },
+  });
+  // The strap size shows from the start, but greyed out: it is asked once the strap enables it.
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Strap"],
+    ["Strap size"],
+  ]);
+  expect(checkouts).toEqual([{ item: "watch", quantity: "1", strap: "Steel", strap_size: "Large" }]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["watch"]);
+});
+
+test("write-session example asks a field an answer adds whose label begins with the one answered", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  const checkouts = await checkoutsOf(page, origin);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "pen", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: asked.length === 1 ? "o2" : "S R" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Engraving"],
+    ["Engraving text"],
+  ]);
+  expect(checkouts).toEqual([
+    { item: "pen", quantity: "1", engraving: "Full name", engraving_text: "S R" },
+  ]);
+  expect(placed).toMatchObject({ result: Either.right({ order_number: "ORD-1001" }) });
+  expect(orders).toEqual(["pen"]);
+});
+
+test("write-session example never asks for an input it fills when an answer renames that field", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  const checkouts = await checkoutsOf(page, origin);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const stopped = await runExample(page, placeOrder, { item: "bracelet", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    deadlineMs: 4_000,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: asked.length === 1 ? "o2" : "7" };
+    },
+  });
+  // The quantity is the caller's input, known by its name under its new label, so it is never
+  // asked: the checkout stops before anything saves.
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([["Charm"]]);
+  expect(failure(stopped.result)).toBeDefined();
+  expect(stopped.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
+  expect(checkouts).toEqual([]);
+  expect(orders).toEqual([]);
 });
 
 test("a tool that declares one site-field question and asks it once per field still runs as before", async ({
@@ -2099,6 +2208,72 @@ test("write-session example asks a field the review adds after an answer in a se
     commits: [{ name: "place-order", state: "confirmed" }],
   });
   expect(orders).toEqual(["lamp|method=Courier|phone=555-0100"]);
+});
+
+test("write-session example asks a field the review enables after an answer, then clicks once more", async ({
+  page,
+}) => {
+  // The courier phone shows greyed out from the start, and choosing a courier enables it.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<label hidden>Delivery method<select name="method"><option value="">Choose</option><option>Courier</option><option>Post</option></select></label>
+      <label>Courier phone<input type="tel" name="phone" disabled></label>`,
+    refuseFirst: `const method = form.querySelector("[name=method]"); method.parentElement.hidden = false; method.setAttribute("aria-invalid", "true");
+      method.addEventListener("change", () => {
+        const phone = form.querySelector("[name=phone]");
+        phone.disabled = method.value !== "Courier";
+        phone.required = !phone.disabled;
+      });`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: asked.length === 1 ? "o1" : "555-0100" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Delivery method"],
+    ["Courier phone"],
+  ]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["lamp|method=Courier|phone=555-0100"]);
+});
+
+test("write-session example asks no second round for a required box with no label", async ({ page }) => {
+  // The review has a required box with no label, name or id, which no question could ask.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<input class="reference" aria-required="true">
+      <label hidden>Delivery speed<select name="speed"><option value="">Choose</option><option>Express</option><option>Standard</option></select></label>`,
+    refuseFirst: `const speed = form.querySelector("[name=speed]"); speed.parentElement.hidden = false; speed.setAttribute("aria-invalid", "true");`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o1" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Delivery speed"],
+  ]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["lamp|speed=Express"]);
 });
 
 test("write-session example asks no second round for a required field the review showed before the answers", async ({
