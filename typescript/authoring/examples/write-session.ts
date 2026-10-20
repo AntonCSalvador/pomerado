@@ -64,27 +64,78 @@ const Confirmed = Schema.Union(
 );
 const Answer = Schema.Struct({ label: Schema.String, answer: Schema.String });
 type Answer = typeof Answer.Type;
+type Field = typeof RequiredField.Type;
+// One site-field question per field a step shows at once, so the caller answers them in one round.
+const fieldIds = ["extra_field", "extra_field_2", "extra_field_3"] as const;
+type FieldId = (typeof fieldIds)[number];
+const fieldQuestions: { readonly [Id in FieldId]: { readonly type: "site_field" } } = {
+  extra_field: { type: "site_field" },
+  extra_field_2: { type: "site_field" },
+  extra_field_3: { type: "site_field" },
+};
 type Context = Omit<KernelOperationContext<OrderInput>, "ask" | "askOne">;
-type FillContext = KernelOperationContext<
-  OrderInput,
-  { readonly extra_field: { readonly type: "site_field" } }
->;
+type FillContext = KernelOperationContext<OrderInput, typeof fieldQuestions>;
 
 // The act steps and the composed script share these calls, so the published script repeats
 // exactly what the session did.
 
-/** Asks the caller for each field the page requires and no input covers, by its label and options. */
-const askFields = async (
-  askOne: FillContext["askOne"],
-  fields: readonly (typeof RequiredField.Type)[],
-) => {
+/**
+ * Asks the caller for the fields the page requires and no input covers, in one round: a site-field
+ * question for each, in the page's order, by its label and options. Each answer comes back under
+ * its field's question. A step that shows more fields than there are questions asks the rest next.
+ */
+const askFields = async (ask: FillContext["ask"], fields: readonly Field[]) => {
   const answers: Answer[] = [];
-  for (const { label, options } of fields)
-    answers.push({
-      label,
-      answer: await askOne("extra_field", options === undefined ? { label } : { label, options }),
+  for (let start = 0; start < fields.length; start += fieldIds.length) {
+    const round = fieldIds.flatMap((id, index) => {
+      const field = fields[start + index];
+      return field === undefined ? [] : [{ id, field }];
     });
+    // `ask` answers exactly the questions it is given: one for each field of this round.
+    const answered = await ask(
+      Object.fromEntries(
+        round.map(({ id, field: { label, options } }) => [
+          id,
+          options === undefined ? { label } : { label, options },
+        ]),
+      ) as { readonly [Id in FieldId]: { readonly label: string } },
+    );
+    for (const { id, field } of round) answers.push({ label: field.label, answer: answered[id] });
+  }
   return answers;
+};
+
+/**
+ * Asks for the fields the form requires and no input covers, and fills each answer into its field.
+ * An answer can make the form show another required field, such as a karat once gold is chosen,
+ * so the form is read again after each round and such a field is asked in the next. It returns
+ * false when the form shows a field no site-field question can ask, or shows again a field it
+ * asked already.
+ */
+const askAndFill = async (context: FillContext, form: string, shown: readonly Field[]) => {
+  const { kernel, sessionId, errors, ask } = context;
+  const asked = new Set<string>();
+  for (let fields = shown; fields.length > 0; ) {
+    if (fields.some(({ label, unsupported }) => unsupported === true || asked.has(label)))
+      return false;
+    for (const { label } of fields) asked.add(label);
+    const answers = await askFields(ask, fields);
+    const filled = await kernel.browsers.playwright.execute(sessionId, {
+      timeout_sec: 30,
+      code: `
+        ${formControlsCode}
+        const form = page.getByRole("form", { name: ${JSON.stringify(form)}, exact: true });
+        const before = new Set(await visibleFieldLabels(form));
+        for (const { label, answer } of ${JSON.stringify(answers)}) await fillRequiredField(form, label, answer);
+        // Only a field the answers made the form show is new.
+        return (await unfilledRequiredFields(form)).filter((field) => !before.has(field.label));
+      `,
+    });
+    if (!filled.success)
+      throw new errors.OperationFailure(String(filled.error), { stderr: filled.stderr });
+    fields = Schema.decodeUnknownSync(Schema.Array(RequiredField))(filled.result);
+  }
+  return true;
 };
 
 // The membership offer shows only to some accounts, so it is conditional: decline it when it
@@ -100,7 +151,8 @@ const declineOffer = `
 `;
 
 /** From the site origin page: open the checkout, fill it from the input and stop at the review step. */
-const fillCheckout = async ({ kernel, sessionId, siteOrigin, input, errors, askOne }: FillContext) => {
+const fillCheckout = async (context: FillContext) => {
+  const { kernel, sessionId, siteOrigin, input, errors } = context;
   if (siteOrigin === undefined)
     throw new errors.OperationFailure("No site origin for a live run", { dispatch: "not_sent" });
   const answer = await kernel.browsers.playwright.execute(sessionId, {
@@ -125,16 +177,13 @@ const fillCheckout = async ({ kernel, sessionId, siteOrigin, input, errors, askO
     throw new errors.OperationFailure(filled.failure, { dispatch: "not_sent" });
   // A required field the item added, which no input covers, is asked with the site-field
   // question before anything saves. Another kind of field is a checkout this tool does not know.
-  if (filled.fields.some((field) => field.unsupported === true))
+  if (!(await askAndFill(context, "Checkout", filled.fields)))
     throw new errors.OperationFailure("checkout_changed", { dispatch: "not_sent" });
-  const answers = await askFields(askOne, filled.fields);
   const continued = await kernel.browsers.playwright.execute(sessionId, {
     timeout_sec: 60,
     code: `
-      ${formControlsCode}
       const form = page.getByRole("form", { name: "Checkout", exact: true });
       if ((await form.count()) !== 1) return { failure: "checkout_changed" };
-      for (const { label, answer } of ${JSON.stringify(answers)}) await fillRequiredField(form, label, answer);
       await form.getByRole("button", { name: "Continue", exact: true }).click({ timeout: 5000 });
       const place = page.getByRole("button", { name: "Place order", exact: true });
       await place.or(page.getByRole("dialog", { name: "Membership offer", exact: true })).first().waitFor({ timeout: 10000 });
@@ -236,27 +285,12 @@ const clickPlace = async ({ kernel, sessionId, errors }: Context, checkedTotal: 
   return Schema.decodeUnknownSync(Confirmed)(answer.result);
 };
 
-/** Fills the caller's answers into the fields the review flagged. It saves nothing. */
-const fillBlocked = async ({ kernel, sessionId, errors }: Context, answers: readonly Answer[]) => {
-  const filled = await kernel.browsers.playwright.execute(sessionId, {
-    timeout_sec: 30,
-    code: `
-      ${formControlsCode}
-      const review = page.getByRole("form", { name: "Review", exact: true });
-      for (const { label, answer } of ${JSON.stringify(answers)}) await fillRequiredField(review, label, answer);
-      return true;
-    `,
-  });
-  if (!filled.success)
-    throw new errors.OperationFailure(String(filled.error), { stderr: filled.stderr });
-};
-
 /**
  * The one commit, then the confirmation the site shows for it. It clicks a second time only when
  * the page proved the first click saved nothing, once the fields that stopped it are filled.
  */
 export const placeAndConfirm = async (context: FillContext, checkedTotal: number) => {
-  const { errors, verified, enteringCommit, notCommitted, askOne } = context;
+  const { errors, verified, enteringCommit, notCommitted } = context;
   // The call below can send the order, so its commit step is marked first.
   enteringCommit("place-order");
   let result = await clickPlace(context, checkedTotal);
@@ -266,7 +300,8 @@ export const placeAndConfirm = async (context: FillContext, checkedTotal: number
     // answer such as a delivery speed may change the total. Until the step is entered again it
     // reads sent, so a caller who never answers leaves the order possibly sent, as without the
     // question. Only then record that the click saved nothing, and click once more.
-    await fillBlocked(context, await askFields(askOne, result.blocked));
+    if (!(await askAndFill(context, "Review", result.blocked)))
+      throw new errors.OperationFailure("not_confirmed", { dispatch: "sent" });
     const recheckedTotal = await checkReview(context);
     notCommitted("place-order");
     enteringCommit("place-order");
@@ -289,7 +324,7 @@ export const fillStep = defineOperation(
   {
     name: "fill_checkout",
     input: OrderInput,
-    questions: { extra_field: { type: "site_field" } },
+    questions: fieldQuestions,
     output: Schema.Struct({
       review_shown: Schema.Boolean.annotations({ description: "True once the review step shows" }),
     }),
@@ -306,7 +341,7 @@ export const placeStep = defineOperation(
     name: "place_order",
     input: OrderInput,
     output: Placed,
-    questions: { extra_field: { type: "site_field" } },
+    questions: fieldQuestions,
   },
   async (context) => placeAndConfirm(context, await checkReview(context)),
 );
@@ -317,7 +352,7 @@ export default defineOperation(
     name: "place_order",
     input: OrderInput,
     output: Placed,
-    questions: { extra_field: { type: "site_field" } },
+    questions: fieldQuestions,
     write: { confirmation: "readback", commits: ["place-order"] },
   },
   async (context) => {
