@@ -32,6 +32,8 @@ import placeOrder, {
   placeAndConfirm,
   placeStep,
 } from "../../authoring/examples/write-session.js";
+import { asksAsDeclared } from "../../src/execution/declared-questions.js";
+import type { InputRequest } from "../../src/runtime/input-request.js";
 import { defineOperation } from "../../src/runtime/operation.js";
 import {
   admitListCursor,
@@ -1290,7 +1292,7 @@ test("write example settles a delayed submit before its outer call expires", asy
 /**
  * The checkout the write-session example was written against: fill, review, place, confirm. The
  * review prices each unit at 12.50 and shows the total, under a membership offer while
- * `site.offer` is set.
+ * `site.offer` is set. A pen adds a required engraving choice to the checkout once typed in.
  */
 const checkoutSite = async (
   page: Page,
@@ -1309,8 +1311,19 @@ const checkoutSite = async (
         contentType: "text/html",
         body: `<form aria-label="Checkout" method="get" action="/checkout/review">
           <label>Item<input name="item"></label><label>Quantity<input name="quantity"></label>
-          <label><input type="checkbox" name="giftWrap"> Gift wrap</label><button>Continue</button>
-        </form>`,
+          <label><input type="checkbox" name="giftWrap"> Gift wrap</label>
+          <label hidden>Engraving<select name="engraving" required disabled>
+            <option value="">Choose</option><option>Initials</option><option>Full name</option>
+          </select></label>
+          <button>Continue</button>
+        </form>
+        <script>
+          document.querySelector("[name=item]").addEventListener("input", (event) => {
+            const engraving = document.querySelector("[name=engraving]");
+            engraving.disabled = event.target.value !== "pen";
+            engraving.parentElement.hidden = engraving.disabled;
+          });
+        </script>`,
       });
     if (url.pathname === "/checkout/review")
       return route.fulfill({
@@ -1374,6 +1387,59 @@ test("write-session example commits once across its act steps and reads the site
   expect(composed).toMatchObject({ confirmation: "readback", effect: "verified" });
   expect(site.declined).toBe(2);
   expect(orders).toEqual(["lamp", "lamp"]);
+});
+
+test("write-session example asks for a required field the item added, before anything saves", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  const input = { item: "pen", quantity: 1, gift_wrap: false };
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, input, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o1" };
+    },
+  });
+  // The page's label and options reach the caller; the host words the question around them.
+  expect(asked.map((request) => request.questions)).toEqual([
+    [
+      {
+        id: "extra_field",
+        type: "choice",
+        prompt: "Engraving",
+        options: [
+          { id: "o1", label: "Initials" },
+          { id: "o2", label: "Full name" },
+        ],
+      },
+    ],
+  ]);
+  expect(asksAsDeclared(asked[0] as InputRequest, placeOrder.questions ?? {})).toBe(true);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["pen"]);
+});
+
+test("write-session example stops before its commit mark when the added field can't be asked", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const unanswered = await runExample(page, placeOrder, { item: "pen", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+  });
+  expect(failure(unanswered.result)).toMatchObject({ _tag: "ScriptInputFailure", code: "Unavailable" });
+  expect(unanswered.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
+  expect(orders).toEqual([]);
 });
 
 test("write-session example refuses a total over the caller's limit before its commit mark", async ({

@@ -1,9 +1,15 @@
 import { Schema } from "effect";
-import { defineOperation, normalizeText, timeoutDefaults } from "../../src/browser/index.js";
+import {
+  defineOperation,
+  formControlsCode,
+  normalizeText,
+  timeoutDefaults,
+} from "../../src/browser/index.js";
 import type { KernelOperationContext } from "../../src/browser/index.js";
 
 // Observed contract: /checkout fills item, quantity and a gift-wrap add-on the page offers
-// unchecked, Continue opens a review step showing the item and the order total, some accounts
+// unchecked, some items add a required field of their own, such as an engraving choice, once
+// filled in, Continue opens a review step showing the item and the order total, some accounts
 // get a membership offer over the review, and Place order shows "Order ORD-…" on its
 // confirmation page. Adapt every selector and condition from your own session's evidence.
 // Every on-path option is an input: the add-on is the caller's choice, never kept or cleared
@@ -28,7 +34,19 @@ const Placed = Schema.Struct({
     description: "Order number from the confirmation",
   }),
 });
+const RequiredField = Schema.Struct({
+  label: Schema.String,
+  shape: Schema.String,
+  options: Schema.optional(
+    Schema.Array(Schema.Struct({ value: Schema.String, label: Schema.String })),
+  ),
+  unsupported: Schema.optional(Schema.Boolean),
+});
 const Filled = Schema.Union(
+  Schema.Struct({ fields: Schema.Array(RequiredField) }),
+  Schema.Struct({ failure: Schema.Literal("checkout_changed") }),
+);
+const Continued = Schema.Union(
   Schema.Struct({ review_shown: Schema.Literal(true) }),
   Schema.Struct({ failure: Schema.Literal("checkout_changed") }),
 );
@@ -40,7 +58,11 @@ const Confirmed = Schema.Union(
   Schema.Struct({ order_number: Schema.NonEmptyTrimmedString }),
   Schema.Struct({ failure: Schema.Literal("review_missing", "total_changed", "not_confirmed") }),
 );
-type Context = KernelOperationContext<OrderInput>;
+type Context = Omit<KernelOperationContext<OrderInput>, "ask" | "askOne">;
+type FillContext = KernelOperationContext<
+  OrderInput,
+  { readonly extra_field: { readonly type: "site_field" } }
+>;
 
 // The act steps and the composed script share these calls, so the published script repeats
 // exactly what the session did.
@@ -58,12 +80,13 @@ const declineOffer = `
 `;
 
 /** From the site origin page: open the checkout, fill it from the input and stop at the review step. */
-const fillCheckout = async ({ kernel, sessionId, siteOrigin, input, errors }: Context) => {
+const fillCheckout = async ({ kernel, sessionId, siteOrigin, input, errors, askOne }: FillContext) => {
   if (siteOrigin === undefined)
     throw new errors.OperationFailure("No site origin for a live run", { dispatch: "not_sent" });
   const answer = await kernel.browsers.playwright.execute(sessionId, {
     timeout_sec: 60,
     code: `
+      ${formControlsCode}
       const checkout = ${JSON.stringify(new URL("/checkout", siteOrigin).href)};
       const input = ${JSON.stringify(input)};
       await page.goto(checkout, { waitUntil: "domcontentloaded", timeout: ${timeoutDefaults.navigation} });
@@ -72,6 +95,33 @@ const fillCheckout = async ({ kernel, sessionId, siteOrigin, input, errors }: Co
       await form.getByLabel("Item", { exact: true }).fill(input.item, { timeout: 5000 });
       await form.getByLabel("Quantity", { exact: true }).fill(String(input.quantity), { timeout: 5000 });
       await form.getByLabel("Gift wrap", { exact: true }).setChecked(input.gift_wrap, { timeout: 5000 });
+      return { fields: await unfilledRequiredFields(form) };
+    `,
+  });
+  if (!answer.success)
+    throw new errors.OperationFailure(String(answer.error), { stderr: answer.stderr });
+  const filled = Schema.decodeUnknownSync(Filled)(answer.result);
+  if ("failure" in filled)
+    throw new errors.OperationFailure(filled.failure, { dispatch: "not_sent" });
+  // A required field the item added, which no input covers, is asked with the site-field
+  // question before anything saves. Another kind of field is a checkout this tool does not know.
+  const answers: { readonly label: string; readonly answer: string }[] = [];
+  for (const field of filled.fields) {
+    if (field.unsupported === true)
+      throw new errors.OperationFailure("checkout_changed", { dispatch: "not_sent" });
+    const { label, options } = field;
+    answers.push({
+      label,
+      answer: await askOne("extra_field", options === undefined ? { label } : { label, options }),
+    });
+  }
+  const continued = await kernel.browsers.playwright.execute(sessionId, {
+    timeout_sec: 60,
+    code: `
+      ${formControlsCode}
+      const form = page.getByRole("form", { name: "Checkout", exact: true });
+      if ((await form.count()) !== 1) return { failure: "checkout_changed" };
+      for (const { label, answer } of ${JSON.stringify(answers)}) await fillRequiredField(form, label, answer);
       await form.getByRole("button", { name: "Continue", exact: true }).click({ timeout: 5000 });
       const place = page.getByRole("button", { name: "Place order", exact: true });
       await place.or(page.getByRole("dialog", { name: "Membership offer", exact: true })).first().waitFor({ timeout: 10000 });
@@ -80,15 +130,15 @@ const fillCheckout = async ({ kernel, sessionId, siteOrigin, input, errors }: Co
       return { review_shown: true };
     `,
   });
-  if (!answer.success)
-    throw new errors.OperationFailure(String(answer.error), { stderr: answer.stderr });
-  const filled = Schema.decodeUnknownSync(Filled)(answer.result);
+  if (!continued.success)
+    throw new errors.OperationFailure(String(continued.error), { stderr: continued.stderr });
+  const reviewed = Schema.decodeUnknownSync(Continued)(continued.result);
   // Filling sends nothing the site keeps: a changed form fails before any commit. That holds
   // only because this site's Continue was seen to open a review step without saving. A
   // Continue, Next or payment button whose next screen you have not seen may save or place
   // the order, so mark it with enteringCommit before the call, as placeAndConfirm does.
-  if ("failure" in filled)
-    throw new errors.OperationFailure(filled.failure, { dispatch: "not_sent" });
+  if ("failure" in reviewed)
+    throw new errors.OperationFailure(reviewed.failure, { dispatch: "not_sent" });
 };
 
 // The review's total in minor units, read the same way before the commit mark and inside it.
@@ -175,6 +225,7 @@ export const fillStep = defineOperation(
   {
     name: "fill_checkout",
     input: OrderInput,
+    questions: { extra_field: { type: "site_field" } },
     output: Schema.Struct({
       review_shown: Schema.Boolean.annotations({ description: "True once the review step shows" }),
     }),
@@ -197,6 +248,7 @@ export default defineOperation(
     name: "place_order",
     input: OrderInput,
     output: Placed,
+    questions: { extra_field: { type: "site_field" } },
     write: { confirmation: "readback", commits: ["place-order"] },
   },
   async (context) => {
