@@ -1546,6 +1546,12 @@ export interface MintTurn {
   readonly skills: readonly SkillDescriptor[];
   readonly actions: MintActions;
   readonly hostToolDescriptions?: HostToolDescriptions;
+  /**
+   * The host's own wording of the note the minter gets after a compaction, given the skills it
+   * read with `read_source` before it, in catalog order, never none. Absent, the minter's default
+   * note.
+   */
+  readonly compactionSkillsNote?: (skills: readonly string[]) => string;
   readonly screen: (value: unknown) => Effect.Effect<string, MintFailure>;
   readonly isComplete: () => boolean;
   readonly reportDiagnostic: (value: unknown) => Effect.Effect<void, MintFailure>;
@@ -2415,6 +2421,12 @@ export interface MintDependencies {
   readonly signInSessionLoss?: () => SessionLoss | undefined;
   /** The host's own descriptions of its optional tools, in place of the generic ones. */
   readonly hostToolDescriptions?: HostToolDescriptions;
+  /**
+   * The host's own wording of the note the minter gets after a compaction, given the skills it
+   * read with `read_source` before it, in catalog order, never none. Absent, the minter's default
+   * note.
+   */
+  readonly compactionSkillsNote?: (skills: readonly string[]) => string;
   readonly projection: MintProjection;
   /** The workspace AGENTS.md, installed at the workspace root and given as the instructions. */
   readonly instructions: string;
