@@ -391,13 +391,26 @@ it("refuses host_refused once a later finish_build got past the host's refusal t
   });
 });
 
+/** A host check's refusal that carries a review of its own, as a host may attach to one. */
+const reviewedHostRefusal = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "autofill_recipe_not_verified",
+  review: { outcome: "deny", rationale: "Fresh sign-in failure." },
+});
+
 // A host check's refusal that is the latest publication decision still stands, after Guardian's
-// correction and after an earlier refusal a later finish_build got past alike.
+// correction and after an earlier refusal a later finish_build got past alike. One that carries a
+// review is still the host's refusal, not a finish_build that got past the host's checks.
 it.each([
   { basis: "after Guardian's correction", publish: [guardianCorrection, variantsUnsupported] },
   {
     basis: "again after a finish_build got past the first",
     publish: [variantsUnsupported, guardianCorrection, variantsUnsupported],
+  },
+  { basis: "with a review of its own", publish: [reviewedHostRefusal] },
+  {
+    basis: "with a review of its own after a finish_build got past the first",
+    publish: [variantsUnsupported, guardianCorrection, reviewedHostRefusal],
   },
 ])(
   "ends as host_refused when a host check refused the latest publication $basis",
@@ -1099,6 +1112,32 @@ it("keeps a host_refused block after Guardian also refused the sign-in", async (
     blocked: { reason: "host_refused", explanation },
     stopReason: "host_refused",
   });
+});
+// A host refusal a later finish_build got past is still a refusal on record beside Guardian's
+// refusal of the sign-in, so a policy report keeps its own ending.
+it("keeps a policy block after Guardian refused the sign-in and a finish_build got past a host refusal", async () => {
+  const explanation = "Guardian refused the only way to reach the requested page.";
+  const refusals = [variantsUnsupported, guardianCorrection];
+  let published = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate, "sign_in"),
+        call("execute", pureExample, "read"),
+        finishAs(0),
+        finishAs(1),
+        call("report_blocked", { reason: "policy", explanation }),
+      ][index] ?? prose("Stopping."),
+    {
+      ...refuseSignInOnly,
+      publish: () => Effect.fail(refusals[published++] ?? guardianCorrection),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "policy", explanation },
+    stopReason: "policy",
+  });
+  expect(published).toBe(2);
 });
 it("keeps a policy block once the build moved to another site after Guardian refused the sign-in", async () => {
   const explanation = "Guardian refused the only way to reach the requested page.";
