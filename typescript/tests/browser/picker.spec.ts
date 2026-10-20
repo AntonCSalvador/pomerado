@@ -66,15 +66,15 @@ test("pickValue picks a native select's option by label, value or another spelli
 // A list that writes the wanted town short is refused, never picked without a word.
 test("pickValue refuses a town the list writes short", async ({ page }) => {
   await serve(page, `<form><label>Town <select name="town">
-<option value="">Choose a town</option><option value="1">St-Jean-sur-Richelieu</option></select></label></form>`);
+<option value="">Choose a town</option><option value="1">St-Exemple-sur-Lac</option></select></label></form>`);
   expect(
-    await call(page, `return await pickValue(page.getByLabel("Town"), "Saint-Jean-sur-Richelieu", fast);`),
+    await call(page, `return await pickValue(page.getByLabel("Town"), "Saint-Exemple-sur-Lac", fast);`),
   ).toEqual({
     result: {
       picked: false,
       reason: "option_missing",
-      wanted: "Saint-Jean-sur-Richelieu",
-      available: ["St-Jean-sur-Richelieu"],
+      wanted: "Saint-Exemple-sur-Lac",
+      available: ["St-Exemple-sur-Lac"],
       matches: [],
     },
   });

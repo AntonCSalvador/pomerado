@@ -514,23 +514,23 @@ test("chooseOption never takes a label that writes the wanted name short", async
 test("chooseOption refuses a town the list writes short, and the read-back of the right pick confirms it", async ({
   page,
 }) => {
-  await page.setContent(towns(["St-Jean-sur-Richelieu"]));
+  await page.setContent(towns(["St-Exemple-sur-Lac"]));
   const town = 'page.getByLabel("Town")';
   // Asked for the caller's spelling, the pick refuses loudly instead of choosing the short label.
-  expect(await call(page, `return await chooseOption(${town}, "Saint-Jean-sur-Richelieu");`)).toEqual({
+  expect(await call(page, `return await chooseOption(${town}, "Saint-Exemple-sur-Lac");`)).toEqual({
     error: "option_missing",
   });
   expect(await submitted(page)).toEqual({ town: "" });
   // Once the right option is chosen, its read-back agrees with both the caller's spelling and
   // the label picked.
-  expect(await call(page, `return await chooseOption(${town}, "St-Jean-sur-Richelieu");`)).toEqual({
-    result: { shape: "select", label: "St-Jean-sur-Richelieu", value: "1" },
+  expect(await call(page, `return await chooseOption(${town}, "St-Exemple-sur-Lac");`)).toEqual({
+    result: { shape: "select", label: "St-Exemple-sur-Lac", value: "1" },
   });
   const shown = await page
     .getByLabel("Town")
     .evaluate((select: HTMLSelectElement) => select.selectedOptions[0]?.label ?? "");
-  expect(sameText(shown, "Saint-Jean-sur-Richelieu")).toBe(true);
-  expect(sameText(shown, "St-Jean-sur-Richelieu")).toBe(true);
+  expect(sameText(shown, "Saint-Exemple-sur-Lac")).toBe(true);
+  expect(sameText(shown, "St-Exemple-sur-Lac")).toBe(true);
 });
 
 test("chooseOption waits for a typeahead's results instead of taking a short label it showed before", async ({

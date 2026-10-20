@@ -55,8 +55,8 @@ it("matches a word the page writes short when the wanted text has the full word"
 });
 
 it("confirms a town the list writes short against the caller's spelling and the label picked", () => {
-  expect(sameText("St-Jean-sur-Richelieu", "Saint-Jean-sur-Richelieu")).toBe(true);
-  expect(sameText("St-Jean-sur-Richelieu", "St-Jean-sur-Richelieu")).toBe(true);
+  expect(sameText("St-Exemple-sur-Lac", "Saint-Exemple-sur-Lac")).toBe(true);
+  expect(sameText("St-Exemple-sur-Lac", "St-Exemple-sur-Lac")).toBe(true);
 });
 
 it("never matches a short wanted word against a longer word the page shows", () => {
