@@ -64,7 +64,7 @@ it("confirms whatever sameText confirms, the short-word rule included", () => {
 });
 
 it("confirms text holding the wanted words in another order or among other words", () => {
-  expect(readBackMatches("Rivera Kim", "Kim Rivera")).toBe(true);
+  expect(readBackMatches("Bay Exemple", "Exemple Bay")).toBe(true);
   expect(readBackMatches("Exemple Bay Marina", "Exemple Bay")).toBe(true);
   expect(readBackMatches("Thu, Nov 5, 2026", "2026-11-05")).toBe(true);
   expect(readBackMatches("+1 (555) 010-0199", "555.010.0199")).toBe(true);
@@ -79,7 +79,7 @@ it("ignores case on both of its steps", () => {
   expect(sameText("ACME INSURANCE GROUP", "acme")).toBe(false);
   expect(readBackMatches("ACME INSURANCE GROUP", "acme")).toBe(true);
   expect(readBackMatches("acme insurance group", "ACME")).toBe(true);
-  expect(readBackMatches("RIVERA KIM", "kim rivera")).toBe(true);
+  expect(readBackMatches("BAY EXEMPLE", "exemple bay")).toBe(true);
 });
 
 it("confirms from a BM25 score of 0.7 up, and refuses below it", () => {

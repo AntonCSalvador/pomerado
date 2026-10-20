@@ -68,7 +68,7 @@ describe("rankChoices", () => {
 
   test("with no name or value equal to a spelling, the option sharing the most words wins", () => {
     // Words in another order, a word the list writes short, and a date the list writes its own way.
-    expect(rank([choice("Hillcrest"), choice("Kim Rivera")], "Rivera Kim")).toEqual({ status: "picked", index: 1, rank: "words" });
+    expect(rank([choice("Hillcrest"), choice("Exemple Bay")], "Bay Exemple")).toEqual({ status: "picked", index: 1, rank: "words" });
     expect(rank([choice("St-Exemple-sur-Lac"), choice("Autre-Ville")], "Saint-Exemple-sur-Lac")).toEqual({
       status: "picked",
       index: 0,
@@ -85,7 +85,7 @@ describe("rankChoices", () => {
     // Any of an option's names and any spelling of the value count.
     const row = choice(["C-101 Acme Insurance Group Boston", "C-101", "Acme Insurance Group", "Boston"], "C-101");
     expect(rank([choice("Acme Bank"), row], "Insurance Group Acme")).toEqual({ status: "picked", index: 1, rank: "words" });
-    expect(rank([choice("Kim Rivera"), choice("Hillcrest")], "Hill crest", "Hillcrest Road")).toEqual({
+    expect(rank([choice("Exemple Bay"), choice("Hillcrest")], "Hill crest", "Hillcrest Road")).toEqual({
       status: "picked",
       index: 1,
       rank: "words",
@@ -103,7 +103,7 @@ describe("rankChoices", () => {
   });
 
   test("a disabled option sharing the most words is reported, never replaced by one sharing fewer", () => {
-    expect(rank([choice("Kim Rivera", "", true), choice("Kim Rivera-Ortiz")], "Rivera Kim")).toEqual({
+    expect(rank([choice("Exemple Bay", "", true), choice("Exemple Bay Marina")], "Bay Exemple")).toEqual({
       status: "disabled",
       index: 0,
       rank: "words",
