@@ -45,10 +45,10 @@ export interface MintReviewHost {
   /** This build's tracked writes and their newest assessments; only execution reviews carry them. */
   readonly writes?: () => readonly WriteOutcome[];
   /**
-   * This attempt's latest judged live test batches (`LiveTestHost.bindBatches`); only execution
-   * reviews carry them.
+   * This attempt's latest judged live test batches (`LiveTestHost.bindBatches`), undefined until
+   * the harness binds them; only execution reviews carry them.
    */
-  readonly liveTests?: () => Effect.Effect<readonly ReviewedLiveTestBatch[]>;
+  readonly liveTests?: () => Effect.Effect<readonly ReviewedLiveTestBatch[]> | undefined;
 }
 
 /**
@@ -139,8 +139,8 @@ export const mintReviewContext = (
     const schema = reviewsSource ? host.inputSchema() : undefined;
     const signInCodes = currentExecution === undefined ? [] : host.signInCodes();
     const writes = currentExecution === undefined ? [] : (host.writes?.() ?? []);
-    const liveTests =
-      currentExecution === undefined ? [] : yield* host.liveTests?.() ?? Effect.succeed([]);
+    const readLiveTests = currentExecution === undefined ? undefined : host.liveTests?.();
+    const liveTests = readLiveTests === undefined ? undefined : yield* readLiveTests;
     return {
       repeatableRead: host.repeatableRead(),
       operationSources: [...step.sources.keys()],
@@ -158,7 +158,8 @@ export const mintReviewContext = (
         : { currentPage: page }),
       executions: [...host.executions()],
       ...(writes.length === 0 ? {} : { writes: trackedWrites(writes) }),
-      ...(liveTests.length === 0 ? {} : { liveTests: [...liveTests] }),
+      // Empty once bound, so a review after a takeover sees that no batch is on record now.
+      ...(liveTests === undefined ? {} : { liveTests: [...liveTests] }),
     };
   });
 

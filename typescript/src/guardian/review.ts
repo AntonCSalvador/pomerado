@@ -457,8 +457,8 @@ export interface PendingExecution {
     }[];
     /**
      * Execution reviews only: this attempt's latest live test batches, oldest first, as the
-     * harness judged them (`LiveTestHost.bindBatches`). Absent before a batch ran, after a
-     * takeover until the next one, and from a host that does not bind them.
+     * harness judged them (`LiveTestHost.bindBatches`). Empty before a batch ran in this attempt,
+     * a takeover's included; absent from a host that does not bind them.
      */
     readonly liveTests?: readonly ReviewedLiveTestBatch[];
   };

@@ -341,6 +341,9 @@ describe("mintReviewContext", () => {
     expect((await context(withBatches, live("example"))).liveTests).toStrictEqual(batches);
     expect(await context(withBatches)).not.toHaveProperty("liveTests");
     expect(await context(host, live("example"))).not.toHaveProperty("liveTests");
+    // Bound with none on record, as after a takeover: the review is told so.
+    const noneYet: MintReviewHost = { ...host, liveTests: () => Effect.succeed([]) };
+    expect((await context(noneYet, live("example"))).liveTests).toStrictEqual([]);
   });
 });
 

@@ -311,7 +311,7 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
     let liveTests: Effect.Effect<readonly ReviewedLiveTestBatch[]> | undefined;
     const host: MintReviewHost = {
       writes: () => writes?.() ?? [],
-      liveTests: () => liveTests ?? Effect.succeed([]),
+      liveTests: () => liveTests,
       repeatableRead: () => repeatableReadFor(buildEffect, claimed),
       browser: () => (navigated ? "active" : "not_opened"),
       // The page's place is redacted again on each read, as its capture is.
