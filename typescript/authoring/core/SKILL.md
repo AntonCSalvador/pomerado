@@ -203,10 +203,13 @@ exception: it is optional unless the task can't run without it (below).
   one, and counts the matches at the best rank. A read of a category or term passes `stem: true`
   so a caller's word also matches an option word it begins or that begins it, such as Dentist and
   Dentistry, and returns the option it used (forms skill). With none, throw its `pickRefusal`, an
-  `InvalidInput` with `field` and `available`, the entries the site showed. With one, use it.
-  With several, a read takes the first in the site's own order and returns the one it used, as
-  the site labels it. A write asks the caller which one with a declared choice question whose
-  options are those matches as the site labels them (.agents/caller-input/SKILL.md).
+  `InvalidInput` with `field` and `available`, the entries the site showed, except on a write
+  whose site offered exactly one suggestion for a free-text value the caller typed, never a
+  picker that selects a record: take it as the writes skill says for a value the site
+  rewrites. With one, use it. With several, a read takes the first in the site's own order and
+  returns the one it used, as the site labels it. A write asks the caller which one with a
+  declared choice question whose options are those matches as the site labels them
+  (.agents/caller-input/SKILL.md).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
   match that accepts the usual forms of the same name, such as a name with or without its
   accents (Abaca for Abacá), a city alone or with its state and country, or a company with
@@ -545,9 +548,11 @@ that depends on them:
    before the page updates belongs to the previous choice. A choice already in the requested
    state needs no step and no wait. Compare text read back with `sameText(shown, wanted)` from
    `pomerado/runtime`, `wanted` being the option the tool picked from the site's list when it
-   picked one, and the caller's value otherwise. It ignores case, accents, spacing,
-   apostrophes, and periods, commas and hyphens between letters, and accepts a word the page
-   shortened, such as St for Saint. Prefer it over
+   picked one, the site's version of a value a write typed and the site rewrote (writes skill),
+   and the caller's value otherwise. It ignores case, accents, spacing, apostrophes, periods,
+   commas and hyphens between letters, reads a space, hyphen, slash or parentheses between
+   digits as one separator while the groups still count, so 29 59 matches 29-59 but never 2959
+   or 2 959, and accepts a word the page shortened, such as St for Saint. Prefer it over
    exact equality, since a page may echo a query or name in its own case or short form, and
    prefer comparing numbers, dates and amounts as values. When the page kept another value
    after the tool's bounded retries, throw
@@ -602,7 +607,8 @@ call: `readRows` and `waitForRows` read every returned row at once. A list of te
 page, such as bullets, highlights or option names, can hold blank entries the site renders
 invisibly: trim each entry and drop the empty ones, so one blank entry does not fail the result.
 A single text field that can be blank on some records is nullable, and its description says when
-(a needed value also takes a field that says why, as "Never loosen a value" says). Never select
+(a needed value also takes a field that says why, as "Never loosen a value" says). Return a value
+the site shows blank as null, never a question to the owner. Never select
 by a generated CSS class, a hashed or build-numbered name such as `.e-1a2b3c` or `.css-1x2y3z`:
 it changes on the site's next deploy.
 Never read it from a broad container, whole-page text, tag-stripped HTML, a regex over page-wide
