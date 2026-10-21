@@ -114,6 +114,10 @@ it("refuses a saved value with any number other than the caller's", () => {
   expect(readBackMatches("Jane Exemple, 44 Elm Street, Hillcrest", "Jane Exemple, 42 Elm Street, Hillcrest")).toBe(
     false,
   );
+  // A long value sharing every other word would pass on words alone.
+  const house = (feet: string) => `Two storey brick house with slate roof, detached garage and ${feet} square feet`;
+  expect(readBackMatches(house("1240"), house("2150"))).toBe(false);
+  expect(readBackMatches(house("2,150"), house("2150"))).toBe(true);
 });
 
 it("ignores case on both of its steps", () => {
