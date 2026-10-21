@@ -1,4 +1,5 @@
 import { Effect, Option, Schema } from "effect";
+import { holdsFocusCode } from "./field-focus-code.js";
 
 /** Keyboard remains decodable for older control documents, but is temporarily unsupported. */
 export type CredentialTypingMode = "paste" | "keyboard";
@@ -29,7 +30,7 @@ export const InsertionRefusal = Schema.Literal(
   "frame_changed",
   /** That frame's origin is no longer the approved one. */
   "origin_changed",
-  /** Another element holds the document's focus. */
+  /** The bound field no longer holds its document's focus: another element, or none, does. */
   "focus_moved",
   /** The document itself does not hold the browser's focus. */
   "document_unfocused",
@@ -152,7 +153,8 @@ const atomicInsert = `function(key, origin, text) {
   if (field.ownerDocument !== document) return "document_changed";
   if (document.defaultView !== frame || frame.document !== document) return "frame_changed";
   if (frame.origin !== origin) return "origin_changed";
-  if (document.activeElement !== field) return "focus_moved";
+  const holdsFocus = ${holdsFocusCode};
+  if (!holdsFocus(field)) return "focus_moved";
   if (!document.hasFocus()) return "document_unfocused";
   if (binding.questionRequired &&
       (typeof binding.checkQuestion !== "function" || !binding.checkQuestion())) return "question_changed";
