@@ -410,10 +410,11 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "A build can't ask for a file. When the task needs one the request doesn't carry, say so in report_blocked, naming the file the owner should attach when they build again.",
   ],
   // The host takes `owner_declined` only after a confirm answered no, and a confirm asked after
-  // the owner picked a stop option repeats their answer, so a stop is asked as a confirm.
+  // the owner picked a stop option repeats their answer, so a plain go-on-or-stop decision is
+  // asked as a confirm. Going on with a changed task still needs an option pick or their words.
   [
     "workspace/AGENTS.md",
-    "When you ask the owner whether to stop the build, prefer a `confirm` question whose no stops it over a stop option in a `choice` question, so their no ends the build as `owner_declined`.",
+    "When the owner decides only whether to go on as asked or stop, prefer a `confirm` question whose no stops the build over a stop option in a `choice` question, so you can end it as `owner_declined` on their no.",
   ],
 ];
 
@@ -882,7 +883,7 @@ it("renders the pinned standalone authoring", async () => {
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["b878173156d608df50612163e73637f1e9129b1eb568b72c597af27adca06df9", "caller-input"],
     ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],
-    ["55d7d4f37b11fb37e39128900ca82c589147f129c6ab6a3461a132332e4a47be", "workspace/AGENTS.md"],
+    ["f81651e9fd497bb8085245524e1f9ff0362f68fa35ae6a6f39e86dd01c67f7b5", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
@@ -1003,7 +1004,7 @@ it("renders the search URL fast path only when a host turns it on", async () => 
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
     ["ee7e45fcc9cb8ae5d2969538754841c34d07b20baf12371143e8ad081651fbfb", "search"],
-    ["f394e4776b4b6d202e9def04200f7839deb6441c112146ffa1747877d19fd3e4", "workspace/AGENTS.md"],
+    ["b2472baebf7631398cc71cbb53b96cfe74f4355403c03d0a8061e42430c4e851", "workspace/AGENTS.md"],
   ]);
   expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(
     off.digests.filter(([, name]) => name !== "search"),
