@@ -294,6 +294,12 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "publication",
     "## Check before `finish_build` Before your first `finish_build`, prefer checking the tool against each rule the request states for its inputs, outputs and refusals.",
   ],
+  // Most extra publication rounds were defects the builder could find in its own source, so before
+  // every call, not only the first, it checks its fields, returns, caller values and live cases.
+  [
+    "publication",
+    "Before each `finish_build`, the first and every later one, prefer one pass over your own source with four questions: for each output field, which line fills it and whether its description says where that value comes from; for each branch that returns, whether it returns every required field with values read on this run; for each value the caller gave or answered through `ask`, whether the output labels it as caller input; and whether any live test case still ends failed or flaky on the source you publish. Fix what this finds before you call.",
+  ],
   [
     "publication",
     "- Published files are all of `src/`, the named entrypoints and any `explore/`, `test/` or `scratch/` module they import",
