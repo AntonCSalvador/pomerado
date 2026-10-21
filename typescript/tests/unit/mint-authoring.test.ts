@@ -27,6 +27,7 @@ import {
 } from "../../src/mint/skills.js";
 import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
 import { Deadline } from "../../src/runtime/deadline.js";
+import { readBackMatches, sameText } from "../../src/runtime/text.js";
 import { offlineKernel } from "../support/offline-kernel.js";
 import { executeKernelOperation } from "../../src/runtime/kernel-operation-run.js";
 import { runLocalOperation } from "../../src/execution/local-operation.js";
@@ -209,7 +210,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   ["core", "- The code works for every value the schema accepts."],
   [
     "core",
-    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime` matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one with a word added or dropped. Prefer it for confirming the pick, so the read-back agrees with the choice, but not for choosing from a list, where a short label can match a longer name it isn't, such as UK for Ukraine. When more than one option matches, list them for the caller instead of picking one.",
+    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime` matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one with a word added or dropped. Prefer it for confirming the pick, so the read-back agrees with the choice, but not for choosing from a list, where a short label can match a longer name it isn't, such as UK for Ukraine. When more than one option matches equally, a read takes the first in the site's order and returns the one it used, and a write lists them for the caller instead of picking one.",
   ],
   ["core", "Take the site origin from the context's `siteOrigin`."],
   ["core", "The tools and the files you may edit are in `AGENTS.md`."],
@@ -293,6 +294,12 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   [
     "publication",
     "## Check before `finish_build` Before your first `finish_build`, prefer checking the tool against each rule the request states for its inputs, outputs and refusals.",
+  ],
+  // Most extra publication rounds were defects the builder could find in its own source, so before
+  // every call, not only the first, it checks its fields, returns, caller values and live cases.
+  [
+    "publication",
+    "Before each `finish_build`, the first and every later one, prefer one pass over your own source with four questions: for each output field, which line fills it and whether its description says where that value comes from; for each branch that returns, whether it returns every required field with values read on this run; for each value the caller gave or answered through `ask`, whether the output labels it as caller input; and whether any live test case still ends failed or flaky on the source you publish. Fix what this finds before you call.",
   ],
   [
     "publication",
@@ -743,6 +750,33 @@ it("has the minter read back a write, accept recent-search saves and look before
 });
 
 /*
+ * A read's search step waited only for the site's results, so a value the site did not recognise
+ * timed out instead of returning the site's own no-match answer. Both hosts read the line once,
+ * right after the core skill's bullet on waiting for every answer a step can give.
+ */
+it("has a search step wait for the site's results or its own no-match state", async () => {
+  const line =
+    "- For a search step, wait for either the site's results or its own no-match state, and return the site's no-match answer with its message rather than waiting on results that may never appear.";
+  const root = await authoringCopy((_path, text) => text.replace(sectionMarker, ""));
+  try {
+    const hosts = [
+      await renderedTexts("typescript/authoring"),
+      await renderedTexts(root, (text) => {
+        if (text.includes("pomerado:")) throw new Error("Uncomposed section");
+        return text;
+      }),
+    ];
+    for (const texts of hosts) {
+      const core = (texts.get("core") ?? "").replace(/\s+/g, " ");
+      expect(core.split(line)).toHaveLength(2);
+      expect(core).toContain(`paste \`waitCode\` and call it. ${line} - Wait for a change`);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+/*
  * An accounting app's invoice list already showed the sent invoice, and the minter kept reading
  * other pages for minutes, some of them refused for not proving the record or for reading without
  * bound. The first bounded read-back that matches confirms the write, and nothing from before the
@@ -762,7 +796,7 @@ it("has a write confirm from its first matching read-back, never from state befo
   );
   // The rules on commit marks and uncertain outcomes stay as they were.
   expect(writes).toContain(
-    "- Mark only the step whose click saves or submits. Opening or filling an unsaved form is not a commit step.",
+    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler sends the caller's change to the site.",
   );
   expect(writes).toContain(
     "- Never repeat a step blindly. If an `act` step fails after the page sent a state-changing request or opened a socket, after it entered a commit mark, or without returning a result at all (its page was lost), the write may already be committed;",
@@ -771,6 +805,42 @@ it("has a write confirm from its first matching read-back, never from state befo
   expect(
     (await readFile("typescript/authoring/examples/write-readback.ts", "utf8")).replace(/\s+/g, " "),
   ).toContain("// The 201 with its Location confirmed the write. Record it now, with no further call.");
+});
+
+/*
+ * A write marked opening a form and typing an address as commits, then waited only for the
+ * address suggestions. For an address outside the area the site serves, the site showed a notice
+ * instead, so the run timed out with two marks entered and reported a possible change when
+ * nothing had been sent. Marks go only on steps that send, and a wait names every answer.
+ */
+it("has a write mark only the steps that send and wait for every answer the site can give", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  // A lookup, suggestion, validation or analytics call from a control's handler, such as an
+  // address autocomplete, sends no change, so it is never a commit.
+  expect(writes).toContain(
+    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler sends the caller's change to the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests show they save the caller's change, such as an autosave; a lookup, suggestion, validation or analytics request saves nothing. Place the first commit mark at the first step that saves on the site.",
+  );
+  expect(writes).toContain(
+    "or a control whose handler sends the caller's change to the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests show they save the caller's change, such as an autosave; a lookup, suggestion, validation or analytics request saves nothing. Mark every such step, including autosaves,",
+  );
+  expect(writes).toContain(
+    "- Mark the commit at the step that submits the booking or order; a hold that expires on its own, such as a reserved table or a cart timer, is not the commit.",
+  );
+  // The wait is its own rule, and a refusal it reads ends as the caller's input before any mark.
+  expect(writes).toContain(
+    "the next step uses. - When a step waits for the site's answer, wait for every answer the site can give, such as results, a no-results message or an out-of-area notice, and throw `InvalidInput` naming the field the site refused, with the options the site offers as `available` when it lists them, before the mark of the commit it guards, rather than waiting for results alone.",
+  );
+  // The narrower click-only rule it replaces is gone, so the two never disagree.
+  expect(writes).not.toContain("Mark only the step whose click saves or submits.");
+  expect(writes).not.toContain("Opening or filling an unsaved form is not a commit step.");
+  // These rules are hard rules, never a preference.
+  expect(writes).not.toContain("Prefer placing the first commit mark");
+  expect(writes).not.toContain("Prefer marking the commit");
+  expect(writes).not.toContain("a control whose handler calls the site");
+  expect(writes).not.toContain("return the site's refusal with the caller's options");
 });
 
 /*
@@ -821,6 +891,72 @@ it("teaches every write to call verified() with no argument and declare a read-b
   expect(bookSeat.write).toEqual({ confirmation: "readback", commits: ["book-seat"] });
 });
 
+/*
+ * A form saved over several pages: the first save of one page kept the site's own value for a
+ * number the caller gave, the next page did not show it, and the final commit went out with the
+ * site's value. A second save of that page keeps the caller's value. The write reads back each
+ * saved value the site shows before its final commit, saves the page once more when one differs
+ * and saving it again updates the same record, and stops when it still differs. A value the tool
+ * picked from the site's list is compared as the label it picked: a caller's CA picked as
+ * California reads back as California, which readBackMatches never confirms for CA.
+ */
+it("has a write read back each saved caller value before its final commit, and save a page again once", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  expect(writes).toContain(
+    "- On a form saved over several pages, before the final commit, read back what the site saved for the caller's values, from a summary, a review page or each saved page, in the session and in the composed script. Compare each value the site shows with `readBackMatches(shown, wanted)` from `pomerado/runtime`, against the option the tool picked when it picked one: `wanted` is that option's label, and the caller's value otherwise. It accepts the same value in another format or word order, and every number must match exactly, the same numbers in the same order. When the site kept a different value, save that page again once with the same entries and read it back again, but only when saving it again updates the same record or page, never when the save adds an item, such as a cart line or a row. Prefer `saveAndReadBack` from `pomerado/runtime` for such a page's save: it does both and returns the values that still differ. When one still differs, or a page whose save adds an item kept a different value, stop before the final commit's mark and throw `InputNotApplied` with its `field`, `requested` and `applied`.",
+  );
+  expect(readBackMatches("California", "California")).toBe(true);
+  expect(readBackMatches("California", "CA")).toBe(false);
+  expect(readBackMatches("Yes", "true")).toBe(false);
+});
+
+/*
+ * The read-back after a commit decides whether the tool calls verified(). It compares with
+ * sameText, which refuses a different value that holds the wanted one, such as Not paid for Paid.
+ * readBackMatches, for a page saved before the final commit, accepts it.
+ */
+it("has a write compare its read-back after the commit with sameText, which refuses Not paid for Paid", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  expect(writes).toContain(
+    "so compare text after the commit with `sameText`, as before it (the core skill's Confirm step).",
+  );
+  expect(writes).not.toContain("compare text after the commit with `readBackMatches`");
+  for (const [shown, wanted] of [
+    ["Not paid", "Paid"],
+    ["Premium Economy", "Economy"],
+    ["West Virginia", "Virginia"],
+    ["Jane Mary Doe", "Jane Doe"],
+  ] as const) {
+    expect(sameText(shown, wanted), `${shown} | ${wanted}`).toBe(false);
+    expect(readBackMatches(shown, wanted), `${shown} | ${wanted}`).toBe(true);
+  }
+});
+
+// A click that saved nothing but flagged a field no question may ask ends as the caller's refusal,
+// with the step unsent, never a second click.
+it("has a write refuse a field no site-field question may ask once its click saved nothing", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("writes")).toContain(
+    "When `blockingRequiredFields(form, before, { unaskable: true })` returns `{ unaskable: true }` after the step's first click, the click saved nothing but a field it flagged is one no site-field question may ask, such as a card or bank field: call `notCommitted` for the step, then throw `InvalidInput` that names the field by its label, and don't click again.",
+  );
+});
+
+// An access code is asked privately, as the site-field question's secret classification treats it.
+it("asks for an access code with a private secret question", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("caller-input")).toContain(
+    "Prefer a `secret` question of kind `private_text` for an access code, such as a gate, door, alarm or lockbox code.",
+  );
+});
+
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /*
@@ -841,16 +977,16 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["2a1efbb3a7171e6840baabe28e56fc2b4df6d181c6ee884312184486f2ef763a", "core"],
-    ["9fe0598c1dc41354e5dbddd42a372c6b628eecd206cf5ea9a3cf0fcbf10a6410", "search"],
+    ["b28c69bfdbfbd9b562c43b3423dc85162b70dd58e643e6ce691e18c468ad8f8d", "core"],
+    ["a896a59d7b924a2940a90437b8d4488cd515c4f4afc70da9fe14953b1583dd93", "search"],
     ["7e50c86ea30964f0e3610e090c7bd7d78aac6f59a7f644644c1ad99577d59f5f", "auth"],
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
-    ["5d6d582812ab26cab6dfbba0f189fa538264f52108e15a48cd52b8fca350d786", "forms"],
-    ["26a4bdf2c43624087a41022a59828d1782a528d46d9e11dc044de13aa7f6f14d", "writes"],
+    ["d71e45c5b1f13bcf26c6a22bc455b1da93c1276b8e73f5d7db6ec302f62a6a04", "forms"],
+    ["f3214392cca243dd3d796d96b20f766e68cc07c86d4cc9118e3fc793e7b1545d", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["8903953de05282963469a5aebff90fa2b724c943b6ca373bd4a786db680c73cb", "caller-input"],
-    ["4334eb48b34d5464550242d55a6c6b75963bcce22c3e5f0090ea1addbe550f47", "publication"],
+    ["a97a3bdb8a979d6f0230005ce8ae12b4789af3f5afccca8fb1ce4a450d8b668d", "caller-input"],
+    ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],
     ["ca25d414d25ba51222fbd7014de75173308bc46d6fc237cc527f47837b1992fc", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
@@ -971,7 +1107,7 @@ it("renders the search URL fast path only when a host turns it on", async () => 
     ...on.digests.filter(([, name]) => name === "search"),
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
-    ["ee7e45fcc9cb8ae5d2969538754841c34d07b20baf12371143e8ad081651fbfb", "search"],
+    ["ea3c3bc8472c8c9db7aa9dd9b99b682f525f5ab55c091b944946dcf75f5ec83e", "search"],
     ["957b0dd8a40a455582a99b28ee2f487cb6c3aecf165ba25d4bcfe6659aefd9c6", "workspace/AGENTS.md"],
   ]);
   expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(

@@ -9,6 +9,8 @@ import {
 } from "../runtime/failure-detail.js";
 import {
   maximumHostRefusals,
+  maximumSignInDenials,
+  repeatedDenialNotice,
   signInAnswer,
   signInFailureFeedback,
   signInFeedbackOf,
@@ -1112,6 +1114,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       let hostRefusals: { readonly refusal: HostRefusal; readonly count: number } | undefined;
       /** `hostRefusals` before the running authenticate, which a refusal of its own extends. */
       let priorHostRefusals: typeof hostRefusals;
+      /**
+       * Guardian's correctable denials in a row of one unchanged sign-in step: the step as sent
+       * and how many. An authenticate that ends any other way clears it; a step that runs nothing,
+       * such as one the host refuses before review, leaves it as it was.
+       */
+      let signInDenials: { readonly step: string; readonly count: number } | undefined;
+      /** `signInDenials` before the running authenticate, which a denial of its own extends. */
+      let priorSignInDenials: typeof signInDenials;
+      /** The running execute's sign-in step as sent, serialized; undefined for any other. */
+      let sentSignInStep: string | undefined;
       /**
        * Sign-in is unavailable in this build: the answer that said so, which a later authenticate
        * gets again, and the outcome the build ends with. A retained receipt that may still
@@ -2268,7 +2280,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 }),
             rationale,
           });
-          return JSON.stringify({
+          // The same sign-in step denied again and again: sign-in is unavailable in this build,
+          // and it ends with that outcome, not the loop guard.
+          const repeated = signIn && countSignInDenial(error);
+          const ending =
+            !repeated || terminal !== undefined
+              ? ("none" as const)
+              : publishableReceipt()
+                ? ("after_publication" as const)
+                : ("now" as const);
+          const answer = JSON.stringify({
             status: "review_rejected",
             code: "ReviewDenied",
             exampleClaimed,
@@ -2282,15 +2303,36 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 }
               : {}),
             rationale,
+            ...(repeated
+              ? {
+                  nextStep: "report_sign_in_unavailable",
+                  spentSignIn: "guardian_denials_repeated",
+                  ...(ending === "none" ? {} : { buildOutcome: "sign_in_unavailable" }),
+                }
+              : {}),
             notice:
               availabilityInstruction() +
-              (repeatableRead
-                ? "This invocation permits fresh reviewed reads only while live execution remains available and after confirmed executor cleanup; preserve earlier receipts. "
-                : exampleClaimed
-                  ? "The example is already claimed; never repeat it. "
-                  : "This example has not been claimed. Correct undispatched source and submit it for fresh review. ") +
-              "Correct the submitted source or collect missing evidence through an authorized safe observation, then submit for fresh review. Request user input only for missing authority or information the user must supply. This feedback grants no new authority. Preserve prior effects; do not repeat a claimed example or uncertain write/login.",
+              (repeated
+                ? repeatedDenialNotice(ending)
+                : (repeatableRead
+                    ? "This invocation permits fresh reviewed reads only while live execution remains available and after confirmed executor cleanup; preserve earlier receipts. "
+                    : exampleClaimed
+                      ? "The example is already claimed; never repeat it. "
+                      : "This example has not been claimed. Correct undispatched source and submit it for fresh review. ") +
+                  "Correct the submitted source or collect missing evidence through an authorized safe observation, then submit for fresh review. Request user input only for missing authority or information the user must supply. This feedback grants no new authority. Preserve prior effects; do not repeat a claimed example or uncertain write/login."),
           });
+          if (ending !== "none")
+            yield* endForUnavailableSignIn(
+              new MintFailure({ ...error, spentSignIn: "guardian_denials_repeated" }),
+              answer,
+              {
+                ...(error.review?.reviewId === undefined
+                  ? {}
+                  : { reviewId: error.review.reviewId }),
+                rationale,
+              },
+            );
+          return answer;
         }).pipe(
           Effect.catchAll(() =>
             Effect.succeed(
@@ -2307,6 +2349,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             ),
           ),
         );
+      /**
+       * Counts Guardian's correctable denial of the running sign-in step. True for the
+       * `maximumSignInDenials`th in a row of the same step, which spends the attempt's sign-ins.
+       */
+      const countSignInDenial = (error: MintFailure) => {
+        const step = sentSignInStep;
+        if (step === undefined || error.review?.refusal !== "correctable") return false;
+        const prior = priorSignInDenials;
+        const count = prior?.step === step ? prior.count + 1 : 1;
+        signInDenials = { step, count };
+        return count >= maximumSignInDenials;
+      };
       /** Whether reviews have been unavailable for the whole outage budget, which ends the attempt. */
       const reviewRetryExhausted = () =>
         Effect.map(Clock.currentTimeMillis, (now) => {
@@ -2767,9 +2821,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       /**
        * Records that sign-in is unavailable in this build, with the failed sign-in's root cause:
        * the build ends with that outcome at once, or once the model stops when a retained receipt
-       * may still publish. A later authenticate gets the same answer.
+       * may still publish. A later authenticate gets the same answer. `detail` joins the record,
+       * such as the review and rationale of Guardian's last denial of a repeated step.
        */
-      const endForUnavailableSignIn = (error: MintFailure, answer: string) =>
+      const endForUnavailableSignIn = (
+        error: MintFailure,
+        answer: string,
+        detail: Readonly<Record<string, string>> = {},
+      ) =>
         Effect.gen(function* () {
           const failure = error.authentication;
           const outcome = {
@@ -2799,6 +2858,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 }),
             spentSignIn: error.spentSignIn,
             sessionLoss: error.sessionLoss,
+            ...detail,
           });
         });
       /**
@@ -4429,6 +4489,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 });
               yield* active();
               const submitted = yield* decode(ExecutionRequest, input);
+              sentSignInStep =
+                submitted.purpose === "authenticate" && submitted.signInStep !== undefined
+                  ? JSON.stringify(submitted.signInStep)
+                  : undefined;
               yield* Effect.try({
                 try: () => relativeSourcePath(submitted.entrypoint),
                 catch: (error) =>
@@ -4511,6 +4575,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 unresolvedSignIn = undefined;
                 priorHostRefusals = hostRefusals;
                 hostRefusals = undefined;
+                priorSignInDenials = signInDenials;
+                signInDenials = undefined;
               }
               const effectful =
                 submitted.purpose === "example" ||
@@ -5444,7 +5510,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     (error.reason === "confirmation_undeclared"
                       ? "Not published: the composed script declares no write confirmation. Add write: {confirmation: 'message' | 'readback' | 'unverifiable'} to its defineOperation, matching what the session read, and call finish_build again with the same executionId."
                       : error.reason === "commit_marks_undeclared"
-                        ? "Not published: the composed script names none of its commit steps. List every step that can change the site (an autosave, a saved form step, the final submit) in order as write.commits, such as commits: ['save-address', 'place-order'], using short lowercase hyphenated names, and mark each with the context's enteringCommit(name) right before the execute call that can send it (an HTTP implementation calls journal.enteringCommit(name) before that request). Opening or filling an unsaved form is not a commit step. Then call finish_build again with the same executionId."
+                        ? "Not published: the composed script names none of its commit steps. List every step that can change the site (an autosave, a saved form step, the final submit) in order as write.commits, such as commits: ['save-address', 'place-order'], using short lowercase hyphenated names, and mark each with the context's enteringCommit(name) right before the execute call that can send it (an HTTP implementation calls journal.enteringCommit(name) before that request). Opening a form and typing into its fields are not commit steps unless the site's requests show they save the caller's change; a lookup, suggestion, validation or analytics request saves nothing. Then call finish_build again with the same executionId."
                         : error.reason === "commit_marks_unentered"
                           ? "Not published: the composed script declares a commit step that no act step of the session entered, so nothing shows its marks follow the real commit. Declare exactly the marks the session's act steps entered, marked by the same helper the composed script uses, and call finish_build again with the same executionId. If the session's steps entered none, it cannot publish: never run the write again for this; end the build and say its commit steps were not marked."
                           : error.reason === "confirmation_unrecorded"

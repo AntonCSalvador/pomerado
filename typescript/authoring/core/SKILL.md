@@ -84,6 +84,8 @@ answers `{ success, result, error, stderr }`. Throw
   result: name it, and throw `InvalidInput` with `field` and what the page shows, before any
   commit mark, never a readiness timeout; below says when it starts "Caller input error:". The waits paragraph below shows how to
   paste `waitCode` and call it.
+- For a search step, wait for either the site's results or its own no-match state, and return the
+  site's no-match answer with its message rather than waiting on results that may never appear.
 - Wait for a change (`waitForChange`, or a settle of your own) only after a step that changed the
   page or should have, such as a click, fill or navigation that loads new results. Skip it when no
   step changed the page since the last wait, such as after closing a panel without picking
@@ -197,9 +199,10 @@ exception: it is optional unless the task can't run without it (below).
   (case, accents, spacing, punctuation, and whole words, so a name with a neighborhood or an
   airport code in brackets still matches) with a whole-name or code match outranking a partial
   one, and counts the matches at the best rank. With none, throw its `pickRefusal`, an
-  `InvalidInput` with `field` and `available`, the entries the site showed. With one, it picks
-  it. With several, ask the caller which one with a declared choice question whose options are
-  its `matches` (.agents/caller-input/SKILL.md).
+  `InvalidInput` with `field` and `available`, the entries the site showed. With one, use it.
+  With several, a read takes the first in the site's own order and returns the one it used, as
+  the site labels it. A write asks the caller which one with a declared choice question whose
+  options are those matches as the site labels them (.agents/caller-input/SKILL.md).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
   match that accepts the usual forms of the same name, such as a name with or without its
   accents (Abaca for Abacá), a city alone or with its state and country, or a company with
@@ -209,7 +212,8 @@ exception: it is optional unless the task can't run without it (below).
   with a word added or dropped. Prefer it for confirming the pick, so the read-back agrees with
   the choice, but not for choosing from a list, where a short label can match a longer name it
   isn't, such as UK for Ukraine.
-  When more than one option matches, list them for the caller instead of picking one.
+  When more than one option matches equally, a read takes the first in the site's order and
+  returns the one it used, and a write lists them for the caller instead of picking one.
 - On a write, every choice the session met is an input, costly choices included, and any
   other option, such as a seat, is an optional input, as the writes skill says ("Compose and
   publish").
