@@ -78,7 +78,11 @@ import {
   TextQuestion,
 } from "../runtime/input-request.js";
 import type { InputRequest, ValidAnswers } from "../runtime/input-request.js";
-import type { PublicationFileBlock, ReviewFailure } from "../guardian/review.js";
+import type {
+  PublicationFileBlock,
+  ReviewedLiveTestBatch,
+  ReviewFailure,
+} from "../guardian/review.js";
 import type { RunnerFailure } from "./runner-failure.js";
 import type { HostAnomalySummary, MintAttemptOutcome } from "./incident-contracts.js";
 import type {
@@ -752,6 +756,13 @@ export interface LiveTestHost {
    * left before the batch's deadline, since no case could finish.
    */
   readonly caseTimeoutMs?: number;
+  /**
+   * Receives a reader of this attempt's latest live test batches as the harness judged them, for
+   * the host's Guardian execution reviews (`mintContext.liveTests`), so a review can confirm from
+   * host facts that a suite passed on the source it judges. Each read checks whether every
+   * batch's source is still the workspace's.
+   */
+  readonly bindBatches?: (read: Effect.Effect<readonly ReviewedLiveTestBatch[]>) => void;
 }
 
 /** How long one live test case may run when its host names no limit of its own. */
