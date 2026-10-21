@@ -127,10 +127,10 @@ export const CalendarDate = Schema.String.pipe(
  *   field was already showing, by its label, name or id, which a save may have cleared or the page
  *   may have flagged before. A flagged field whose label begins with a label shown before, as when
  *   the page writes its error inside the label, or reads as an error message, such as "Required"
- *   or "This field is required.", counts as one already showing. So does a click that hid or
- *   removed a field shown before it, by its label, name or id, as a save that resets the form to
- *   another option may: it gives `null`. A label the page only extended, as with its error, is
- *   still showing.
+ *   or "This field is required.", counts as one already showing. It also returns `null` when the
+ *   click hid or removed a field shown before it, by its label, name or id, as a save that resets
+ *   the form to another option may. A label the page only extended, as with its error, is still
+ *   showing.
  *   With `unaskable: true`, when every flagged field is such a new, empty, required field with a
  *   label, but one or more are a card, password, code or identity number field as
  *   `unfilledRequiredFields` names them, which no site-field question may ask, such as a card or
