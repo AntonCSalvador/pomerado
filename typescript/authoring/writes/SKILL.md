@@ -103,6 +103,10 @@ During the session:
   stop, as the cart skill's "Minimums and refusals" says. When they stop, or the session cannot
   reach the task's end, end with `report_blocked` (`site_declined` when the site refused this
   example). A build whose session never reached the end publishes nothing.
+- When the caller's own task asks for whatever the site ends up with, such as the product a
+  quote ended up on, follow the site's preselected substitute and return the value the site
+  used instead of throwing `InvalidInput`. Only the caller's task text counts this way; an
+  output field or description you wrote does not.
 - When a write's form adds required fields that depend on earlier answers, prefer declaring
   the site-field question and asking it for a required field that no input covers, before that
   step's commit mark, over refusing. When such a field shows only after the step's click, ask it
