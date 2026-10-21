@@ -68,8 +68,10 @@ they're far apart.
      `errors.LocationNotApplied` is an older name for the same error; write `InputNotApplied`.
      Not this error: a number on a stepped scale set to the nearest step inside the caller's
      bound and returned as applied, a filter group the page disables reported as not offered, a
-     broader choice that covers the value, or a search query the site corrected or rewrote,
-     returned with `applied_query` and `query_corrected` (core and search skills).
+     broader choice that covers the value, a search query the site corrected or rewrote,
+     returned with `applied_query` and `query_corrected` (core and search skills), or a value a
+     write typed that the site rewrote before any save, kept and reported as the writes skill
+     says.
    - An input that tailors the answer, such as a location, store or vehicle, that the site still
      won't apply, or a location it says it does not serve, on a read: not an error (core skill,
      the input schema, "Inputs that tailor the answer").

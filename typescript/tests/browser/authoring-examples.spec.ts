@@ -37,6 +37,7 @@ import { formControlsCode } from "../../src/browser/form-controls.js";
 import { asksAsDeclared } from "../../src/execution/declared-questions.js";
 import type { InputRequest } from "../../src/runtime/input-request.js";
 import { defineOperation } from "../../src/runtime/operation.js";
+import { sameText } from "../../src/runtime/text.js";
 import {
   admitListCursor,
   randomListCursorKeys,
@@ -2685,6 +2686,108 @@ test("a commit mark the script never declared is still reported once entered", a
   expect((await runExample(page, undeclared, {})).commits).toEqual([
     { name: "confirm-booking", state: "sent" },
   ]);
+});
+
+/**
+ * A write as the writes skill has it: it types an address, reads back the version the site kept
+ * on leaving the field, saves that version and reports the rewrite in `address_note`, worded by
+ * the rewrite check alone.
+ */
+const saveAddress = defineOperation(
+  {
+    name: "save_address",
+    input: Schema.Struct({ address: Schema.NonEmptyString }),
+    output: Schema.Struct({ address: Schema.String, address_note: Schema.optional(Schema.String) }),
+    write: { confirmation: "readback", commits: ["save-address"] },
+  },
+  async ({ kernel, sessionId, input, enteringCommit, verified, errors }) => {
+    const typed = input.address;
+    const read = await kernel.browsers.playwright.execute(sessionId, {
+      timeout_sec: 10,
+      code: `
+        const field = page.getByLabel("Address", { exact: true });
+        await field.fill(${JSON.stringify(typed)});
+        await field.press("Tab");
+        return await field.inputValue();
+      `,
+    });
+    if (!read.success) throw new errors.OperationFailure(String(read.error), { dispatch: "not_sent" });
+    const shown = String(read.result);
+    const note =
+      shown === typed
+        ? undefined
+        : sameText(shown, typed, { rewrite: true })
+          ? `The site reformatted "${typed}" as "${shown}".`
+          : `The site changed "${typed}" to "${shown}".`;
+    enteringCommit("save-address");
+    const saved = await kernel.browsers.playwright.execute(sessionId, {
+      timeout_sec: 10,
+      code: `
+        await page.getByRole("button", { name: "Save address", exact: true }).click();
+        const status = page.getByRole("status");
+        await status.waitFor({ timeout: 5000 });
+        return await status.textContent();
+      `,
+    });
+    if (!saved.success) throw new errors.OperationFailure(String(saved.error), { stderr: saved.stderr });
+    // The confirmation is compared against the site's version, not the caller's.
+    if (!sameText(String(saved.result), `Saved ${shown}`))
+      throw new errors.OperationFailure("not_saved", { dispatch: "sent" });
+    verified();
+    return note === undefined ? { address: shown } : { address: shown, address_note: note };
+  },
+);
+
+test("a write keeps the site's rewrite of a typed value and notes whether it only reformatted or changed it", async ({
+  page,
+}) => {
+  // The site standardizes an address when the field is left: one only reformatted, one changed.
+  const rewrites = {
+    "12 Elm Parkway, Suite 4": "12 ELM PKWY STE 4",
+    "1420 Larkspur Road": "1420 LARK RD",
+  };
+  const save = async (address: string) => {
+    await page.setContent(
+      [
+        "<label>Address<input name='address'></label>",
+        "<button type='button'>Save address</button><p role='status' hidden></p>",
+        // A block, so the next run's page declares its names again on the same window.
+        "<script>{",
+        `const rewrites = ${JSON.stringify(rewrites)};`,
+        "window.saved = [];",
+        "const field = document.querySelector('input');",
+        "field.addEventListener('change', () => { field.value = rewrites[field.value] ?? field.value; });",
+        "document.querySelector('button').onclick = () => {",
+        " window.saved.push(field.value);",
+        " const status = document.querySelector('[role=status]');",
+        " status.textContent = 'Saved ' + field.value; status.hidden = false;",
+        "};",
+        "}</script>",
+      ].join(""),
+    );
+    const run = await runExample(page, saveAddress, { address });
+    const saved = await page.evaluate(() => (window as unknown as { saved: string[] }).saved);
+    return { ...run, saved };
+  };
+  const reformatted = await save("12 Elm Parkway, Suite 4");
+  const tidied = Either.getOrThrow(reformatted.result);
+  expect(tidied.address).toBe("12 ELM PKWY STE 4");
+  expect(tidied.address_note).toContain("reformatted");
+  expect(reformatted.saved).toEqual(["12 ELM PKWY STE 4"]);
+  expect(reformatted.commits).toEqual([{ name: "save-address", state: "confirmed" }]);
+  // A rewrite that changed the caller's value is still saved, and the note names both values.
+  const changed = await save("1420 Larkspur Road");
+  const moved = Either.getOrThrow(changed.result);
+  expect(moved.address).toBe("1420 LARK RD");
+  expect(moved.address_note).not.toContain("reformatted");
+  expect(moved.address_note).toContain("1420 Larkspur Road");
+  expect(moved.address_note).toContain("1420 LARK RD");
+  expect(changed.saved).toEqual(["1420 LARK RD"]);
+  expect(changed.commits).toEqual([{ name: "save-address", state: "confirmed" }]);
+  // A value the site kept as typed needs no note.
+  const kept = await save("5 Birch Lane");
+  expect(kept.result).toEqual(Either.right({ address: "5 Birch Lane" }));
+  expect(kept.saved).toEqual(["5 Birch Lane"]);
 });
 
 /** A write that proves its effect, then optionally makes one more browser call. */
