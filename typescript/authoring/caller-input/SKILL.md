@@ -12,6 +12,11 @@ bad value before the tool touches the site, and fail loudly whenever the run can
 the caller asked for. Never return results computed without a value the caller supplied, except
 an input that tailors the answer, which a read returns labeled with the value the site applied.
 
+Apply each caller input the way the site applies it, and only that. Don't add your own
+constraints between inputs, filter them, or swap in a value the caller didn't give. For example,
+a store and a delivery ZIP that the site sets separately are both applied as given, even when
+they're far apart.
+
 1. Express in the input schema everything it can hold, so the host refuses a bad value before
    the script runs: each field's type, an enum of the site's full set of options when the
    options are fixed, a minimum and maximum for numbers, counts and lengths, a format such as a
@@ -94,8 +99,9 @@ an input that tailors the answer, which a read returns labeled with the value th
      never `InvalidInput` or `InputNotApplied`.
 
    Never pick another value for the caller, such as a near match, the page's default or the
-   first option, and never report a refused or unapplied value in the output instead of
-   throwing, such as a `sort_applied: false` flag or a "best-effort" or "lookup-only"
+   first option, except a read whose value matches several site entries equally, which takes
+   the first (core skill), and never report a refused or unapplied value in the output instead
+   of throwing, such as a `sort_applied: false` flag or a "best-effort" or "lookup-only"
    description. The cases
    above that return results with what applied are the only exceptions.
 
@@ -109,12 +115,13 @@ Try first. Ask only for what the page or the caller uniquely knows at that point
 - whether to take a paid add-on within the tool's purpose that the page shows on the way to a
   commit when the input leaves it open, asked before the commit mark; a paid upsell outside the
   tool's purpose is declined, never asked (writes skill);
-- which of several site entries the caller's value matches equally, such as a restaurant
-  with several locations or a city with several airports, with those entries as the options.
-  That is ambiguous, as is a near-miss name the site offers alternatives for: prefer not
-  starting a refusal of either with "Caller input error:" (above). A day or option the
-  page greys out, with or without a reason, is not ambiguous and never a question (core skill,
-  "Configure, then read");
+- for a write, which of several site entries the caller's value matches equally, such as a
+  restaurant with several locations or a city with several airports, with those entries as the
+  options. A read takes the first in the site's order instead and returns which one it used
+  (core skill). That is ambiguous, as is a near-miss name the site offers alternatives for:
+  prefer not starting a refusal of either with "Caller input error:" (above). A day or option
+  the page greys out, with or without a reason, is not ambiguous and never a question (core
+  skill, "Configure, then read");
 - a code the site sends to confirm a protected action after sign-in, such as a confirmation code
   by text or email, never a code that is part of signing in (auth skill);
 - a fact only the caller has that the site now asks for.
@@ -174,7 +181,8 @@ already asked for, or to solve a CAPTCHA.
      when your explore, test or `act` source runs live, and only where it is the whole
      string passed to `fill`, `type` or `pressSequentially` or a field of a request to this
      site (core skill); the published script never holds a handle and asks for the value
-     with `ask` instead.
+     with `ask` instead. Prefer a `secret` question of kind `private_text` for an access
+     code, such as a gate, door, alarm or lockbox code.
    - For a payment card the checkout requires, ask for every part its card form shows
      at once, in one request with one `secret` question for each part: `card_number`,
      `card_expiry`, `card_cvc` and `billing_postal_code`. Those handles go only into a
