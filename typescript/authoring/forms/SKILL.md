@@ -107,9 +107,9 @@ They wait for suggestions to settle, scroll lists that render as they scroll, ma
 exactly, then loosely, never pick an "Add" or "Create" row, and confirm the field kept the choice,
 picking again when the page reverts it. A value the picker lacks, or several options that tie,
 comes back as `{ picked: false, reason, available, matches }`: decode it with `PickOutcome` and
-throw `pickRefusal(outcome, field)`, or ask the caller to choose among `matches`; on a read, pass
-`tie: "first"` instead, so the picker takes the first of the tied options in the site's order and
-returns the one it used. Handle a site's quirk with the helper's options, such as `query`,
+throw `pickRefusal(outcome, field)`, or, on a write, ask the caller to choose among `matches`. On
+a read, pass `tie: "first"`, so the picker takes the first of the tied options in the site's order
+and returns the one it used. Handle a site's quirk with the helper's options, such as `query`,
 `answered`, `committed`, `commit: "keyboard"` or `blur: "tab"`, never with a picker of your own.
 `references/picker.ts` picks a typeahead value and refuses a missing one,
 `references/dates-and-dropdowns.ts` fills a split date and `references/selection.ts` a native
