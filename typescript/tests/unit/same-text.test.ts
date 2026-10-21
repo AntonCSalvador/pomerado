@@ -243,6 +243,15 @@ it("says a site's rewrite kept the typed value when it only reformatted, shorten
     ["46204-1234", "46204"],
     ["100 N Main St", "100 Main St"],
     ["(317) 555-1234", "3175551234"],
+    // A short form at most three fifths as long as the word it stands for.
+    ["100 Elm Trl", "100 Elm Trail"],
+    ["100 Elm Rte", "100 Elm Route"],
+    ["100 Elm Plz", "100 Elm Plaza"],
+    ["100 Elm Rdg", "100 Elm Ridge"],
+    ["100 Elm Ave", "100 Elm Avenue"],
+    ["100 Elm Blvd", "100 Elm Boulevard"],
+    ["100 Elm Ter", "100 Elm Terrace"],
+    ["Apt 4", "Apartment 4"],
     [
       "12 Elm Pkwy, Ste 4, Springfield, IL 62704-0001",
       "12 elm parkway suite 4 springfield il 62704",
@@ -263,6 +272,9 @@ it("says a site's rewrite changed the typed value when it dropped or changed wha
     ["100 Main St", "100 N Main St"],
     ["12 Elm", "12 Elm Pkwy"],
     ["Elm Pkwy 12", "12 Elm Pkwy"],
+    // A shorter word more than three fifths as long names another word, not a short form.
+    ["100 Martin St", "100 Main St"],
+    ["Marty Smith", "Mary Smith"],
     ["user@mail.example.com", "user@example.com"],
     ["Мск", "Москва"],
     ["12 Elm", ""],

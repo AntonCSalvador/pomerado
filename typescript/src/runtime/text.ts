@@ -62,8 +62,9 @@ export const foldChoiceText = (text: unknown): string => {
  * everything the caller gave, which tells a rewrite that only reformatted the value from one that
  * changed it. Every word and number of `wanted` must appear in `shown`, in order, and `shown` may
  * add its own, as 100 N Main St adds N to 100 Main St. A word may be written short or in full
- * either way, with the same first letter, its letters in order and no length limit, so Parkway
- * matches PKWY and St matches Street. A number may be split or joined at the separators above, and
+ * either way, with the same first letter, its letters in order and the short form at most three
+ * fifths as long, so Parkway matches PKWY, Suite matches STE and St matches Street, while Main
+ * never matches Martin. A number may be split or joined at the separators above, and
  * extended only after one, so 46204 matches 46204-1234 but 12 never matches 123. Other punctuation
  * is ignored. A dropped or changed word or number fails, so 1420 Oak Road, Springfield never
  * matches 1420 Oak Rd, Riverton. An email, domain or file name, or a `wanted` with no letter or
@@ -95,12 +96,13 @@ export const sameText = (
     text
       .replace(/\((?=\p{N}+\)[\s/\-\u2010-\u2014]*\p{N})/gu, "")
       .replace(/(?<=\p{N})[\s/()\-\u2010-\u2014]+(?=\p{N})/gu, "");
-  // One word writes another short: same first letter and its letters in order in the other word,
-  // at most half as long when `halfLength` holds.
+  // One word writes another short: same first letter, its letters in order in the other word,
+  // and at most half as long when `halfLength` holds, three fifths otherwise.
   const shortens = (short: string, full: string, halfLength: boolean) => {
     const latin = /^\p{Script=Latin}+$/u.test(short + full);
     if (!latin || short[0] !== full[0]) return false;
-    if (halfLength ? short.length * 2 > full.length : short.length >= full.length) return false;
+    if (halfLength ? short.length * 2 > full.length : short.length * 5 > full.length * 3)
+      return false;
     let next = 0;
     for (const letter of full) if (letter === short[next]) next++;
     return next === short.length;
