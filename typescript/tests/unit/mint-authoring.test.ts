@@ -409,6 +409,12 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "workspace/AGENTS.md",
     "A build can't ask for a file. When the task needs one the request doesn't carry, say so in report_blocked, naming the file the owner should attach when they build again.",
   ],
+  // The host takes `owner_declined` only after a confirm answered no, and a confirm asked after
+  // the owner picked a stop option repeats their answer, so a stop is asked as a confirm.
+  [
+    "workspace/AGENTS.md",
+    "When you ask the owner whether to stop the build, prefer a `confirm` question whose no stops it over a stop option in a `choice` question, so their no ends the build as `owner_declined`.",
+  ],
 ];
 
 /*
@@ -857,7 +863,7 @@ it("renders the pinned standalone authoring", async () => {
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["ea9d5d74105419ecb92233f65056b8fca62b4c5d70f1831e1ef2d8bb276f8fe7", "caller-input"],
     ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],
-    ["ca25d414d25ba51222fbd7014de75173308bc46d6fc237cc527f47837b1992fc", "workspace/AGENTS.md"],
+    ["55d7d4f37b11fb37e39128900ca82c589147f129c6ab6a3461a132332e4a47be", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
@@ -978,7 +984,7 @@ it("renders the search URL fast path only when a host turns it on", async () => 
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
     ["ee7e45fcc9cb8ae5d2969538754841c34d07b20baf12371143e8ad081651fbfb", "search"],
-    ["957b0dd8a40a455582a99b28ee2f487cb6c3aecf165ba25d4bcfe6659aefd9c6", "workspace/AGENTS.md"],
+    ["f394e4776b4b6d202e9def04200f7839deb6441c112146ffa1747877d19fd3e4", "workspace/AGENTS.md"],
   ]);
   expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(
     off.digests.filter(([, name]) => name !== "search"),

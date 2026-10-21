@@ -593,7 +593,9 @@ never with final text, which the host treats as unfinished work:
 - `site_declined`: the site offers what the task needs but declines this example's own facts,
   such as an applicant it will not quote. Name the reason the site gave in `explanation`.
 - `owner_declined`: the owner answered no to a `confirm` question, or declined to sign in, and
-  the build needs that step.
+  the build needs that step. When you ask the owner whether to stop the build, prefer a
+  `confirm` question whose no stops it over a stop option in a `choice` question, so their no
+  ends the build as `owner_declined`.
 - `question_unanswered`: a question you asked came back `no_answer`, and the build cannot go on
   without its answer.
 - `host_refused`: a host check refused a step the build needs, such as `finish_build`, a sign-in
