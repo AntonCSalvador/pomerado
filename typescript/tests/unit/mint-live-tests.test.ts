@@ -13,6 +13,7 @@ import {
   MintHarnessSnapshot,
   type PublicationDecision,
 } from "../../src/mint/contracts.js";
+import type { ReviewedLiveTestBatch } from "../../src/guardian/review.js";
 import type { LiveTestOutcome } from "../../src/mint/live-tests.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
 import type { MintAgentSnapshot, MintRecoveryFactory } from "../../src/mint/recovery-contracts.js";
@@ -385,6 +386,241 @@ it("marks results stale in the publication record when the source changed after 
     "stale",
     "stale",
   ]);
+});
+
+it("gives the example's review each judged batch, and whether its source is still the one it ran", async () => {
+  const { host } = liveTestHost({
+    nothing: { status: "completed", output: { results: [{ name: "Lamp" }], has_next_page: false, next_cursor: null } },
+  });
+  let batches: Effect.Effect<readonly ReviewedLiveTestBatch[]> | undefined;
+  const binding: LiveTestHost = {
+    ...host,
+    bindBatches: (read) => {
+      batches = read;
+    },
+  };
+  // What the host's review of each example would put in its trusted context.
+  const reviewed: (readonly ReviewedLiveTestBatch[])[] = [];
+  const reviewAndExecute: MintDependencies["reviewAndExecute"] = (input, beforeDispatch) =>
+    Effect.gen(function* () {
+      reviewed.push(yield* batches ?? Effect.succeed([]));
+      return yield* completedExample(input, beforeDispatch);
+    });
+  let root = "";
+  const f = await fixture(
+    async (_request, index) => {
+      // After the first example passes, the agent edits the source and runs the example again.
+      if (index === 2) await writeWorkspace(root, { "src/tool.ts": `${toolSource}// edited\n` });
+      return (
+        [
+          call("live_tests", runAll, "run"),
+          call("execute", example, "example"),
+          call("execute", example, "edited"),
+        ][index] ?? prose()
+      );
+    },
+    { liveTests: binding, deadline: Deadline.after(30 * 60_000), repeatableRead: true, reviewAndExecute },
+    read,
+  );
+  root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+  await f.run();
+
+  const batch = {
+    batchId: "review_batch",
+    entrypoint: "operation/src/tool.ts",
+    sourceDigest: expect.any(String),
+    cases: [
+      { id: "repeat-1", verdict: "pass", start: "warm" },
+      { id: "sort-price", verdict: "pass", start: "cold" },
+      { id: "nothing", verdict: "fail", start: "cold" },
+      { id: "page-2", verdict: "pass", start: "warm" },
+    ],
+  };
+  // The example right after the batch runs the source the batch ran; the one after the edit does not.
+  expect(reviewed).toEqual([
+    [{ ...batch, sourceUnchanged: true }],
+    [{ ...batch, sourceUnchanged: false }],
+  ]);
+});
+
+it("keeps a batch whose failure still stands on the source in the example review's window", async () => {
+  // `nothing` expects no results and gets some, so it fails every time it runs.
+  const { host } = liveTestHost({
+    nothing: { status: "completed", output: { results: [{ name: "Lamp" }], has_next_page: false, next_cursor: null } },
+  });
+  let batches: Effect.Effect<readonly ReviewedLiveTestBatch[]> | undefined;
+  const binding: LiveTestHost = {
+    ...host,
+    bindBatches: (read) => {
+      batches = read;
+    },
+  };
+  const reviewed: (readonly ReviewedLiveTestBatch[])[] = [];
+  const reviewAndExecute: MintDependencies["reviewAndExecute"] = (input, beforeDispatch) =>
+    Effect.gen(function* () {
+      reviewed.push(yield* batches ?? Effect.succeed([]));
+      return yield* completedExample(input, beforeDispatch);
+    });
+  const only = (ids: readonly string[]) => ({ ...runAll, cases: ids });
+  const f = await fixture(
+    (_request, index) =>
+      [
+        // The whole suite, with `nothing` failing; then only the passing cases, in later batches
+        // that would push the failing one out of a window of the latest four.
+        call("live_tests", runAll, "all"),
+        call("live_tests", only(["repeat-1", "sort-price", "page-2"]), "passing"),
+        call("live_tests", only(["repeat-1"]), "one"),
+        call("live_tests", only(["sort-price"]), "two"),
+        call("live_tests", only(["page-2"]), "three"),
+        call("execute", example, "example"),
+      ][index] ?? prose(),
+    { liveTests: binding, deadline: Deadline.after(30 * 60_000), reviewAndExecute },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+  await f.run();
+
+  // The example's review still sees `nothing` failing on the source it runs.
+  const failing = (reviewed[0] ?? []).flatMap((batch) =>
+    batch.sourceUnchanged ? batch.cases.filter((ran) => ran.verdict !== "pass").map((ran) => ran.id) : [],
+  );
+  expect(failing).toEqual(["nothing"]);
+});
+
+/**
+ * Runs `batches` in turn, each a list of case ids on an entrypoint, with each batch's outcomes by
+ * its index, then the example on src/tool.ts; returns the non-passing cases the example's review
+ * sees on unchanged source, with their verdicts.
+ */
+const failuresSeenByExample = async (
+  batches: readonly {
+    readonly entrypoint: string;
+    readonly cases: readonly string[];
+    /** src/tool.ts as the agent rewrites it before this batch runs. */
+    readonly source?: string;
+  }[],
+  outcomes: (batch: number) => Readonly<Record<string, LiveTestOutcome>>,
+  /** src/tool.ts as the agent leaves it before the example. */
+  sourceAtExample?: string,
+) => {
+  const { host } = liveTestHost(outcomes);
+  let bound: Effect.Effect<readonly ReviewedLiveTestBatch[]> | undefined;
+  const binding: LiveTestHost = {
+    ...host,
+    bindBatches: (batchesNow) => {
+      bound = batchesNow;
+    },
+  };
+  const reviewed: (readonly ReviewedLiveTestBatch[])[] = [];
+  const reviewAndExecute: MintDependencies["reviewAndExecute"] = (input, beforeDispatch) =>
+    Effect.gen(function* () {
+      reviewed.push(yield* bound ?? Effect.succeed([]));
+      return yield* completedExample(input, beforeDispatch);
+    });
+  let root = "";
+  const f = await fixture(
+    async (_request, index) => {
+      const source = index < batches.length ? batches[index]?.source : sourceAtExample;
+      if (index <= batches.length && source !== undefined)
+        await writeWorkspace(root, { "src/tool.ts": source });
+      return (
+        [
+          ...batches.map(({ entrypoint, cases: ids }, batch) =>
+            call("live_tests", { ...runAll, entrypoint, cases: ids }, `batch-${batch}`),
+          ),
+          call("execute", example, "example"),
+        ][index] ?? prose()
+      );
+    },
+    { liveTests: binding, deadline: Deadline.after(30 * 60_000), reviewAndExecute },
+    read,
+  );
+  root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/other.ts": `${toolSource}// another version\n`,
+    "test/cases.json": JSON.stringify(cases),
+  });
+  await f.run();
+  return (reviewed[0] ?? []).flatMap((batch) =>
+    batch.sourceUnchanged && batch.entrypoint === "operation/src/tool.ts"
+      ? batch.cases.filter((ran) => ran.verdict !== "pass").map((ran) => `${ran.id}:${ran.verdict}`)
+      : [],
+  );
+};
+const allCases = ["repeat-1", "sort-price", "nothing", "page-2"];
+const singles = ["repeat-1", "sort-price", "page-2"].map((id) => ({ entrypoint: "src/tool.ts", cases: [id] }));
+const resultsForNothing = {
+  nothing: { status: "completed", output: { results: [{ name: "Lamp" }], has_next_page: false, next_cursor: null } },
+} as const;
+/** `nothing` finds no results, as it expects, so it passes. */
+const nothingPasses = {
+  nothing: { status: "completed", output: { results: [], has_next_page: false, next_cursor: null } },
+} as const;
+
+it("keeps a failure in review when the case passes only on another entrypoint", async () => {
+  const failures = await failuresSeenByExample(
+    [
+      { entrypoint: "src/tool.ts", cases: allCases },
+      { entrypoint: "src/other.ts", cases: ["nothing"] },
+      ...singles,
+    ],
+    // `nothing` fails on the first batch and passes on the other entrypoint's.
+    (batch) => (batch === 0 ? resultsForNothing : nothingPasses),
+  );
+  expect(failures).toEqual(["nothing:fail"]);
+});
+
+it("shows the failure on the current source when the same case also failed on another", async () => {
+  const edited = `${toolSource}// edited\n`;
+  const failures = await failuresSeenByExample(
+    [
+      // `nothing` fails on the original source, again on the edited one, then the agent reverts
+      // exactly and runs only the passing cases.
+      { entrypoint: "src/tool.ts", cases: allCases },
+      { entrypoint: "src/tool.ts", cases: ["nothing"], source: edited },
+      ...singles.map((batch, index) => (index === 0 ? { ...batch, source: toolSource } : batch)),
+    ],
+    () => resultsForNothing,
+  );
+  expect(failures).toEqual(["nothing:fail"]);
+});
+
+it("keeps a failure in review when the source goes back to the one it failed on", async () => {
+  const edited = `${toolSource}// edited\n`;
+  const onEdited = (ids: readonly string[]) => ({ entrypoint: "src/tool.ts", cases: ids, source: edited });
+  const failures = await failuresSeenByExample(
+    [
+      // `nothing` fails on the original source, then on the edited one, then passes there.
+      { entrypoint: "src/tool.ts", cases: allCases },
+      onEdited(["nothing"]),
+      ...["repeat-1", "sort-price", "page-2", "repeat-1"].map((id) => onEdited([id])),
+      onEdited(["nothing"]),
+    ],
+    (batch) => (batch === 6 ? nothingPasses : resultsForNothing),
+    // The agent reverts the edit exactly before the example.
+    toolSource,
+  );
+  expect(failures).toEqual(["nothing:fail"]);
+});
+
+it("keeps a failure in review when its rerun on the same source was inconclusive", async () => {
+  const failures = await failuresSeenByExample(
+    [
+      { entrypoint: "src/tool.ts", cases: allCases },
+      { entrypoint: "src/tool.ts", cases: ["nothing"] },
+      ...singles,
+    ],
+    (batch) =>
+      batch === 0
+        ? resultsForNothing
+        : batch === 1
+          ? { nothing: { status: "inconclusive", reason: "challenge" } }
+          : {},
+  );
+  expect(failures).toEqual(["nothing:fail", "nothing:inconclusive"]);
 });
 
 it("tells the agent when the host could not read the schemas its verdicts and next pages need", async () => {
