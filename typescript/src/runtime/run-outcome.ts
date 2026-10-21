@@ -289,6 +289,11 @@ export interface RunEvidence {
   /** The run's own judgement that a step may have changed the website. */
   readonly possible_commit?: boolean | undefined;
   /**
+   * For `no_response`: the kind of question the run's caller left unanswered, as the host names
+   * it, such as `sign_in`, `login` or `other`. Absent when the host did not record one.
+   */
+  readonly unanswered_question?: string | undefined;
+  /**
    * The write returned, before committing, a refusal its output schema declares, as
    * `returnedRefusal` found it; its effect is then `rejected`, and its output says why.
    */
@@ -425,7 +430,10 @@ const unappliedRetryable = (view: RunEvidence) =>
 export const runError = (view: RunEvidence): RunFailure => {
   switch (view.failure_reason) {
     case "no_response":
-      return failure("no_response", { possible_commit: possibleCommit(view) });
+      return failure("no_response", {
+        possible_commit: possibleCommit(view),
+        ...(view.unanswered_question === undefined ? {} : { question: view.unanswered_question }),
+      });
     case "credentials_rejected":
       return failure("credentials_rejected", rejectedDetails(view, possibleCommit(view)));
     case "invalid_input":
