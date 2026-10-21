@@ -77,7 +77,8 @@ separately are both applied as given, even when they're far apart.
      the input schema, "Inputs that tailor the answer").
    - An option the page lists but greys out, such as a booked date or a sold-out size: not an
      error on a read, `InvalidInput` with `available` on a write (core skill, "Configure, then
-     read").
+     read"); a write follows the site's preselected substitute only when the caller's own task
+     asks for whatever the site ends up with (writes skill).
    - A write that declines the task because the caller's own limit or the page's state rules it
      out, such as a total over the caller's price limit, an item out of stock, a variant the
      page does not offer or a product number whose page names another item than the caller's:
