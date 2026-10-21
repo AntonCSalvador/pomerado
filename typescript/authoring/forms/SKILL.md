@@ -120,7 +120,7 @@ control the helper cannot drive; report that gap with what the page showed.
 Preserve add/replace and single/multiple intent. `pickValues`' `mode` keeps or replaces
 the chips already chosen. Query aliases
 are alternate spellings of one stable choice, not extra selections. An ambiguous choice
-needs a resolver or a `request_input` question, as `AGENTS.md`'s "Try hard, then
+on a write needs a resolver or a `request_input` question, as `AGENTS.md`'s "Try hard, then
 ask" says; take the site's default only when the choice is not a write and is easy
 to reverse, and list it in `finish_build` `assumptions`. Do not claim uncaptured
 options do not exist.

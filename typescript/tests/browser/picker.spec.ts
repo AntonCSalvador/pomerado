@@ -410,7 +410,7 @@ test("pickValue with tie first takes the first of the options that tie, in the s
       kind: "select",
       label: "Springfield, Illinois",
       value: "spf-il",
-      rank: "words",
+      rank: "leading",
       refills: 0,
       tied: ["Springfield, Illinois", "Springfield, Missouri"],
     },
@@ -430,6 +430,23 @@ test("pickValue with tie first takes the first of the options that tie, in the s
     },
   });
   expect(await submitted(page)).toEqual({ city: "shb" });
+});
+
+test("pickValue takes a city whose name before its comma is the value over one holding it as a word", async ({ page }) => {
+  await serve(page, `<form><label>City <select name="city">
+<option value="">Choose a city</option><option value="nyc">New York</option>
+<option value="yrk">York, UK</option><option value="ykt">Yorktown</option></select></label></form>`);
+  const city = 'page.getByLabel("City")';
+  // York, UK is York before its comma; New York only holds York as a word, so nothing ties.
+  for (const options of ["fast", '{ ...fast, tie: "first" }'])
+    expect(await call(page, `return await pickValue(${city}, "York", ${options});`)).toEqual({
+      result: { picked: true, kind: "select", label: "York, UK", value: "yrk", rank: "leading", refills: 0 },
+    });
+  expect(await submitted(page)).toEqual({ city: "yrk" });
+  expect(await call(page, `return await pickValue(${city}, "New York", fast);`)).toEqual({
+    result: { picked: true, kind: "select", label: "New York", value: "nyc", rank: "exact", refills: 0 },
+  });
+  expect(await submitted(page)).toEqual({ city: "nyc" });
 });
 
 test("pickValue with tie first picks options with one label by position, skipping a greyed-out one", async ({ page }) => {
@@ -504,6 +521,31 @@ list.addEventListener("click", (event) => {
     result: { picked: true, kind: "dropdown", label: "Springfield", value: "", rank: "exact", refills: 0, tied: ["Springfield", "Springfield"] },
   });
   expect(await submitted(page)).toEqual({ office: "1" });
+});
+
+test("pickValue with tie first clicks the first enabled of identical options in a dropdown when the first is greyed out", async ({ page }) => {
+  // The options carry no value and share one label, so only their position tells them apart; the
+  // first is greyed out and ignores clicks, and the page records the position of the one clicked.
+  await serve(page, `<form><button type="button" id="pick" aria-label="Office" aria-haspopup="listbox" aria-expanded="false" aria-controls="offices">Choose</button>
+<div id="offices" role="listbox" hidden><div role="option">Shelbyville</div><div role="option" aria-disabled="true">Springfield</div><div role="option">Springfield</div><div role="option">Springfield</div></div>
+<input type="hidden" name="office"></form>
+<script>
+const button = document.getElementById("pick"), list = document.getElementById("offices");
+button.addEventListener("click", () => { list.hidden = !list.hidden; button.setAttribute("aria-expanded", String(!list.hidden)); });
+list.addEventListener("click", (event) => {
+  const option = event.target.closest("[role=option]");
+  if (!option || option.getAttribute("aria-disabled") === "true") return;
+  button.textContent = option.textContent;
+  document.querySelector("[name=office]").value = String([...list.children].indexOf(option));
+  list.hidden = true;
+  button.setAttribute("aria-expanded", "false");
+});
+</script>`);
+  const office = 'page.getByRole("button", { name: "Office" })';
+  expect(await call(page, `return await pickValue(${office}, "Springfield", { ...fast, tie: "first" });`)).toEqual({
+    result: { picked: true, kind: "dropdown", label: "Springfield", value: "", rank: "exact", refills: 0, tied: ["Springfield", "Springfield", "Springfield"] },
+  });
+  expect(await submitted(page)).toEqual({ office: "2" });
 });
 
 test("pickValue scrolls a virtualized list to an option it has not rendered yet", async ({ page }) => {

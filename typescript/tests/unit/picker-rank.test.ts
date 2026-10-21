@@ -40,6 +40,19 @@ describe("rankChoices", () => {
     expect(rank(choices, "Chic")).toEqual({ status: "missing" });
   });
 
+  test("a name whose text before its first comma is the value beats one holding it as a word", () => {
+    const choices = [choice("New York, NY"), choice("York, UK"), choice("Yorkshire")];
+    expect(rank(choices, "York")).toEqual({ status: "picked", index: 1, rank: "leading" });
+    expect(rank(choices, "york")).toEqual({ status: "picked", index: 1, rank: "leading" });
+    expect(rank([choice("New York"), choice("York, UK")], "York")).toEqual({ status: "picked", index: 1, rank: "leading" });
+    // Two leading parts that are the value still tie, and with none only whole words match.
+    expect(rank([choice("York, UK"), choice("York, PA")], "York")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "leading" });
+    expect(rank([choice("New York"), choice("York Minster")], "York")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "words" });
+    // A whole name still beats a leading part, and a leading part is never a prefix of a word.
+    expect(rank([choice("York, UK"), choice("York")], "York")).toEqual({ status: "picked", index: 1, rank: "exact" });
+    expect(rank([choice("Yorktown, VA")], "York")).toEqual({ status: "missing" });
+  });
+
   test("any spelling of the value may match, but two spellings naming two options tie", () => {
     const choices = [choice("California", "CA"), choice("Canada", "CAN")];
     expect(rank(choices, "Calif.", "California")).toEqual({ status: "picked", index: 0, rank: "exact" });
