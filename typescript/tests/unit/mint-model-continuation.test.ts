@@ -1889,6 +1889,28 @@ it("retries a model call the provider could not answer with the same request, th
   expect(f.counts()).toEqual({ executed: 1, published: 1, asked: 0 });
 });
 
+it("retries a model call whose response stream was reset mid-flight, from the start", async () => {
+  // The HTTP client surfaces a connection reset after the headers as a bare TypeError whose
+  // cause carries the socket code, with none of the SDK's error names or statuses.
+  const reset = () =>
+    Object.assign(new TypeError("terminated"), {
+      cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    });
+  const f = await fixture(
+    (_request, index) => {
+      if (index === 0) throw reset();
+      return [call("execute", execution), call("finish_build", publication)][index - 1] ?? prose();
+    },
+    {},
+    {},
+    { modelRetry: quickModelRetry },
+  );
+  expect(await f.run()).toMatchObject({ build: "published", publicationRef: "published_revision" });
+  expect(f.requests).toHaveLength(3);
+  expect(JSON.stringify(f.requests[1]?.input)).toBe(JSON.stringify(f.requests[0]?.input));
+  expect(f.counts()).toEqual({ executed: 1, published: 1, asked: 0 });
+});
+
 it("does not retry a refused request", async () => {
   const f = await fixture(
     () => {

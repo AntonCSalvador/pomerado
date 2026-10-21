@@ -55,18 +55,25 @@ add, save or submit anything there, except one made-up key in the site's own for
 serial past any the site lists, per input that takes a record's own key, looked up once in the
 site's own lookup to see what it shows for a key it has no record of (core skill).
 
-Read the path's options with read-only exploration where you can, then ask with
+Read the path's options with read-only exploration where you can, and settle them before the
+first `act` step where possible: ask with
 `request_input` about the ones the caller's input does not settle, as `AGENTS.md` ("Try
 hard, then ask") says: each costly choice you saw, one that changes what the caller buys or
 pays or whether the action can be cancelled or refunded (each paid add-on and pre-selected paid
 option within the tool's purpose, a rate, fare or plan tier, a refundable or non-refundable
-option, shipping speed, the payment method and the delivery address), and any other option only when
+option, shipping speed, how much of a balance to pay, the payment method and the delivery
+address), and any other option only when
 the request's purpose clearly depends on it. An unasked optional field keeps the page's
-default and is still an optional input of the script. Ask only about options the site
-actually shows. Never keep, clear, accept or decline one of those unasked. A paid upsell
+default and is still an optional input of the script. Prefer keeping the value the page
+already shows in an optional field that adds no cost over asking the caller to confirm or
+correct it, and list it in `finish_build` `assumptions`. Ask only about options the site
+actually shows. A control with exactly one possible value (a select or radio group with a
+single option), or one the input or an earlier answer already settles, is no choice: never ask
+about it. An add-on toggle, a pre-selected checkbox or a lone saved payment method or address
+is still a choice to ask about. Never keep, clear, accept or decline one of those unasked. A paid upsell
 outside the tool's purpose, such as a membership, subscription or trial offered during a
 checkout, is not a question: the script declines it, and never accepts one without an input
-the caller set for it. A safety default (core skill) is
+the caller set for it. A safety default (core skill, "Safety defaults") is
 neither: never ask about it, and the script turns it off. Credentials never go through a
 question; the host's protected form owns them.
 
@@ -96,14 +103,22 @@ During the session:
   stop, as the cart skill's "Minimums and refusals" says. When they stop, or the session cannot
   reach the task's end, end with `report_blocked` (`site_declined` when the site refused this
   example). A build whose session never reached the end publishes nothing.
+- When a write's form adds required fields that depend on earlier answers, prefer declaring
+  the site-field question and asking it for a required field that no input covers, before that
+  step's commit mark, over refusing. When such a field shows only after the step's click, ask it
+  once `blockingRequiredFields` returns it, which proves the click saved nothing: fill the
+  answer, check the step again, then call `notCommitted`, then `enteringCommit` again with the
+  step's name, and click once. When a step shows several such fields at once, ask them in one
+  round, declaring one site-field question per field. It isn't for passwords, codes or logins.
 - A pop-up, banner or interstitial on the path, such as an upsell, is conditional unless the
   page always opens it in answer to an action: handle it as the forms skill says, so the tool
   still works for a caller who never sees it.
 - Before committing, read back from the page what you are about to submit and check each
-  value against the caller's input, normalized as the core skill's Confirm step says, in
-  the session and on every branch of the
-  composed script. Fail before the commit if one does not match. Never read back a
-  field filled with a secret handle.
+  value as the core skill's Confirm step says, against the option the tool picked when it
+  picked one, in the session and on every branch of the composed script. Fail if one does
+  not match, and prefer running this check before the step's commit mark, so a mismatch
+  stops the step before it sends anything. Never read back a field filled with a secret
+  handle.
 - When the write changes state that already exists, such as a saved record or a cart
   (.agents/cart/SKILL.md), read that state before the committing step and again after it,
   in the session and in the composed script. Fail when a field the input sets did not change
@@ -211,9 +226,8 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   number, its own reference or the values entered), and every field the caller asked
   for that the view shows agrees (the read before the commit already checked what you
   entered). Sites reformat what they save, such as line breaks, spaces and dates in the
-  viewer's format, so compare text after the commit normalized as before it (the core skill's
-  Confirm step): pass the caller's text through `normalizeText` from `pomerado/runtime`, as
-  `visibleText` already does with the page's. Compare a chosen option's value only where the
+  viewer's format, so compare text after the commit with `sameText`, as before it (the core
+  skill's Confirm step). Compare a chosen option's value only where the
   view shows that value; otherwise compare the label it shows. When the write changed state
   that already existed, the same read is also the after read of the before-and-after
   comparison, which runs after `verified()` ("Check the read-back"). Write each read-back step
@@ -249,7 +263,8 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   record in the site's list or search, then call `verified()`. If the
   write happened, call `verified()` there and publish against that step, never
   submitting it again. If nothing happened, do the write with the
-  caller's values and read its confirmation. The host refuses only an unchanged
+  caller's values, which is the first commit, not a repeat, and read its confirmation. If no
+  read-back can tell, never submit again: publish it as `unverifiable`. The host refuses only an unchanged
   commit step run again straight after it sent state-changing requests, and never
   resubmits for you. Make the composed script match what actually worked end to end.
 - A failed step that sent no state-changing request changes nothing: the next `act`
@@ -375,12 +390,15 @@ explicit, so the script never keeps, clears, accepts or declines one the input l
 asks with a declared question before the commit mark (the caller-input skill), offering a
 saved payment or address as an account-specific choice. The same holds for any choice that
 changes what the caller buys or pays, or whether the action can be cancelled or refunded, such
-as a rate, fare or plan tier, a refundable option or shipping speed (core skill). An owner's
-answer may make declining such an option, turning it off or the option that adds no cost the
-default of its optional input, never accepting, keeping or choosing one. Choosing the address and payment is
+as a rate, fare or plan tier, a refundable option, shipping speed or how much of a balance to pay. An owner's
+answer may make declining such an option, turning it off or the option that adds no cost and
+keeps the action cancellable the default of its optional input, never accepting, keeping or
+choosing one. Choosing the address and payment is
 part of a checkout's job, so the page's pre-selected one is never used silently. The request
 and the owner's answers settle such a choice for the session only: the published tool serves
-other callers, so it takes the choice as an input or asks, never hard-codes the build's answer.
+other callers, so it takes the choice as an input or asks, never hard-codes the build's answer,
+and never leaves it to the page's default. A costly choice the request, the caller or the owner
+declined still stays an input or a declared question, whose default may only decline it.
 An out-of-scope paid upsell is declined, as above. A safety default
 (core skill) is neither: never ask about it, and the script turns it off. An
 account-specific value, such as a passenger, loyalty number, saved card, address or
@@ -408,10 +426,10 @@ schema; the host re-reads the corrected schema offline. `write_not_submitted` me
 session has not demonstrated the requested write: no step recorded a confirmation, and no
 `act` step Guardian labelled a write reached the site unless the outcome review found it
 did not happen. Continue the remaining authorized work. If a step may already have
-committed, read back first, in a new file. If the write happened, publish with
-`readback`. The host runs a step that may have committed only once, unless the outcome
-review finds it did not happen. If no read-back can tell, never submit again: publish it
-as `unverifiable`. Filling a form or an offline example
+committed, read back first, in a new file, as "Never repeat a step blindly" says. If the write
+happened, publish with `readback`. The host runs
+a step that may have committed only once, unless the outcome review finds it did not happen.
+Filling a form or an offline example
 is not the write. An unreadable step output never justifies a run either: the write
 publishes with its output recorded as unavailable.
 
@@ -420,9 +438,8 @@ open (a commit that recorded its confirmation stays done), on the same browser, 
 in: read `page.url()` first, and prefer not to sign in again. Only after a publication whose
 capture failed do they run on a fresh browser on a new, empty profile: read `page.url()`
 first and sign in again when the build signs in. Before
-running a commit again, run an `act` step that only reads the site or the account to see
-whether the earlier commit landed, and never resubmit one that did. If no read-back can
-tell, never submit again. Guardian reviews every
+running a commit again, read back whether the earlier commit landed, as "Never repeat a step
+blindly" says. Guardian reviews every
 `act` step and denies one that would repeat a finished commit.
 
 Guardian labels each step it allows `read`, `write` or `authentication`, and every step

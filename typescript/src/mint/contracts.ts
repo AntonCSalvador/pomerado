@@ -1546,6 +1546,12 @@ export interface MintTurn {
   readonly skills: readonly SkillDescriptor[];
   readonly actions: MintActions;
   readonly hostToolDescriptions?: HostToolDescriptions;
+  /**
+   * The host's own wording of the note the minter gets after a compaction, given the skills it
+   * read with `read_source` before it, in catalog order, never none. Absent, the minter's default
+   * note.
+   */
+  readonly compactionSkillsNote?: (skills: readonly string[]) => string;
   readonly screen: (value: unknown) => Effect.Effect<string, MintFailure>;
   readonly isComplete: () => boolean;
   readonly reportDiagnostic: (value: unknown) => Effect.Effect<void, MintFailure>;
@@ -1796,10 +1802,17 @@ export interface MintHarnessSnapshot {
   /**
    * A host check refused a step the build needs in this attempt: a publication its checks refused,
    * a sign-in the host refused, or a task update the host refused. The refusal a `host_refused`
-   * block needs. Optional, so an older worker ignores it and a newer one
-   * restores an older checkpoint.
+   * block needs. A later finish_build that got past the host's checks to Guardian's review clears
+   * it. Optional, so an older worker ignores it and a newer one restores an older checkpoint.
    */
   readonly hostRefused?: true;
+  /**
+   * A host check refused a step earlier in this attempt, and a later finish_build got past the
+   * host's checks to Guardian's review, clearing `hostRefused`: a `host_refused` block is refused
+   * as `host_refusal_passed` until a host check refuses a step again. Optional, so an older worker
+   * ignores it and a newer one restores an older checkpoint.
+   */
+  readonly hostRefusalPassed?: true;
   /**
    * Unanswered questions handed back to the minter as no answer in this build, which a
    * `question_unanswered` block stands on. Optional so a rollout's old and new workers each restore the other's
@@ -1987,6 +2000,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   blockedReviewUnavailable: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   guardianRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   hostRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  hostRefusalPassed: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   noAnswerHandBacks: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
   loginHeld: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   loginDeclined: Schema.optionalWith(LoginDecline, { exact: true }),
@@ -2127,9 +2141,42 @@ export interface DecisionLedger {
   readonly omittedTestFailures?: number;
 }
 
+/**
+ * A question the build's owner left unanswered where the build would otherwise end as
+ * `no_response`, offered to `MintDependencies.suspendUnanswered`.
+ */
+export interface UnansweredQuestion {
+  /**
+   * Where it was asked: `question` is the minter's own `request_input`, the read-or-write and
+   * capability questions included; `sign_in` is a question a sign-in asked; `execution` is a
+   * question an execution's script asked.
+   */
+  readonly step: "question" | "sign_in" | "execution";
+  /** The id the question was asked under, when the harness knows it. */
+  readonly requestId?: string;
+  /** The execution whose script asked it (`execution` only). */
+  readonly executionId?: string;
+  /** Whether the build may have changed the website, as the ended build's `noResponse` says. */
+  readonly possibleCommit: boolean;
+}
+
 export interface MintDependencies {
   readonly agentRecovery?: {
-    readonly initial?: { readonly agent: MintAgentSnapshot; readonly harness: MintHarnessSnapshot };
+    readonly initial?: {
+      readonly agent: MintAgentSnapshot;
+      readonly harness: MintHarnessSnapshot;
+      /**
+       * Told to the restored minter once, as a user message before its next model call, such as
+       * why it stopped and what may have changed meanwhile. When the snapshot holds a saved model
+       * response, that response's tool calls replay first and the message follows their results,
+       * so every call keeps its result. The host's own text, sent as written.
+       * It joins the conversation with the next model call, so only checkpoints from that call on
+       * hold it: their `modelCalls` is above the restored snapshot's. A takeover that restores an
+       * earlier checkpoint, such as one written as a replayed call returned, passes it again; one
+       * that restores a later checkpoint must not, or the minter reads it twice.
+       */
+      readonly resumeMessage?: string;
+    };
     readonly bindHarness?: (capture: () => MintHarnessSnapshot) => Effect.Effect<void, MintFailure>;
     /**
      * Rejoins or reads a tool call a takeover found started but not returned. A recovered
@@ -2239,6 +2286,23 @@ export interface MintDependencies {
     request: AgentInputRequest,
     ids?: { readonly reviewId?: string; readonly requestId?: string },
   ) => Effect.Effect<ValidAnswers, MintFailure>;
+  /**
+   * Lets the host suspend the build, to resume it later, where an unanswered question would
+   * otherwise end it as `no_response`. The harness calls it only there: never for a question it
+   * hands back to the minter as no answer, and never for one the owner cancelled.
+   * - `suspended`: the host has made the state it resumes from durable. The run stops at once
+   *   with no outcome: the tool call that asked never returns, so the minter's checkpoint keeps
+   *   it started; no further model call starts; and the run ends interrupted, as
+   *   `attemptFinished` reports. A resumed attempt restores `agentRecovery.initial` and rejoins
+   *   that call through `agentRecovery.recoverTool`, such as with the answer the owner gave
+   *   meanwhile. Recovered evidence that still carries `noResponse` is unanswered again.
+   * - `not_suspended`, or a failure, which is recorded: the build ends as `no_response`. So does
+   *   `suspended` when the model run ended while the hook ran, which is recorded too.
+   * Absent, every such build ends as `no_response`.
+   */
+  readonly suspendUnanswered?: (
+    question: UnansweredQuestion,
+  ) => Effect.Effect<"suspended" | "not_suspended", MintFailure>;
   /**
    * Removes host-private values, such as the build's account reference, from text the agent
    * writes for its caller: each request's notice, prompts and option labels, and its blocked
@@ -2413,8 +2477,23 @@ export interface MintDependencies {
    * could not be signed in.
    */
   readonly signInSessionLoss?: () => SessionLoss | undefined;
+  /**
+   * Whether the host refused a sign-in screen because the sign-in under way already filled the
+   * login's password as often as the host allows (`credential_already_filled`, a step result,
+   * not a failure), and the password is still spent: no sign-in verified and no corrected login
+   * started its fills again since, so the host refuses every further screen that needs it. A
+   * `host_refused` block stands on it as on any host refusal of a sign-in. Absent, the harness
+   * knows only the refusals it was handed as failures.
+   */
+  readonly signInRefillRefused?: () => boolean;
   /** The host's own descriptions of its optional tools, in place of the generic ones. */
   readonly hostToolDescriptions?: HostToolDescriptions;
+  /**
+   * The host's own wording of the note the minter gets after a compaction, given the skills it
+   * read with `read_source` before it, in catalog order, never none. Absent, the minter's default
+   * note.
+   */
+  readonly compactionSkillsNote?: (skills: readonly string[]) => string;
   readonly projection: MintProjection;
   /** The workspace AGENTS.md, installed at the workspace root and given as the instructions. */
   readonly instructions: string;
