@@ -168,6 +168,22 @@ describe("run failures", () => {
       json: '{"code":"no_response","details":{"possible_commit":false}}',
     },
     {
+      run: evidence({
+        failure_reason: "no_response",
+        possible_commit: false,
+        unanswered_question: "sign_in",
+      }),
+      json: '{"code":"no_response","details":{"possible_commit":false,"question":"sign_in"}}',
+    },
+    {
+      run: evidence({
+        failure_reason: "no_response",
+        effect: "may_have_dispatched",
+        unanswered_question: "other",
+      }),
+      json: '{"code":"no_response","details":{"possible_commit":true,"question":"other"}}',
+    },
+    {
       run: evidence({ failure_reason: "credentials_rejected", rejected_field: "password" }),
       json: '{"code":"credentials_rejected","details":{"possible_commit":false,"field":"password"}}',
     },
