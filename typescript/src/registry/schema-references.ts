@@ -5,6 +5,57 @@ const isRecord = (value: unknown): value is Json =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 // Reference expansion can grow exponentially; one operation must not stall discovery.
 const inlinedSchemaNodeLimit = 10_000;
+/** Keywords that describe a schema without changing what it accepts. */
+const annotationKeywords = new Set([
+  "$comment",
+  "default",
+  "deprecated",
+  "description",
+  "examples",
+  "readOnly",
+  "title",
+  "writeOnly",
+]);
+/** Keywords whose meaning depends on other keywords in the same schema. */
+const dependentKeywords = new Set([
+  "additionalItems",
+  "additionalProperties",
+  "contains",
+  "else",
+  "if",
+  "items",
+  "maxContains",
+  "minContains",
+  "patternProperties",
+  "prefixItems",
+  "properties",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+const allOfIn = (schema: Json): readonly unknown[] =>
+  Array.isArray(schema["allOf"]) ? schema["allOf"] : [];
+/**
+ * One schema that accepts what both `target` and `siblings` accept, as `allOf` does: the
+ * referenced or sole `allOf` schema and the keywords beside it, each already inlined. They merge
+ * into one, `siblings` winning on annotations. Where both set a validation keyword differently,
+ * the merge keeps `target`'s value in `allOf` rather than drop it: just that keyword, when it
+ * holds on its own, or else all of `target`.
+ */
+const conjoined = (target: Json, siblings: Json): Json => {
+  const conflicts = Object.keys(siblings).filter(
+    (key) =>
+      Object.hasOwn(target, key) &&
+      !annotationKeywords.has(key) &&
+      JSON.stringify(target[key]) !== JSON.stringify(siblings[key]),
+  );
+  if (conflicts.length === 0) return { ...target, ...siblings };
+  if (conflicts.some((key) => dependentKeywords.has(key)))
+    return { ...siblings, allOf: [...allOfIn(siblings), target] };
+  const merged = { ...target, ...siblings };
+  const held = Object.fromEntries(conflicts.map((key) => [key, target[key]]));
+  return { ...merged, allOf: [...allOfIn(merged), held] };
+};
 /**
  * A published operation schema with its local references resolved against the schema's root,
  * so it can be read, or nested under another schema, without its `$defs`. A reference that
@@ -14,9 +65,14 @@ export const inlineLocalRefs = (schema: Record<string, unknown>): Record<string,
   let nodes = 0;
   const definitions = isRecord(schema["$defs"]) ? schema["$defs"] : {};
   const visit = (value: unknown, expanding: readonly unknown[]): unknown => {
-    if (!Array.isArray(value) && !isRecord(value)) return value;
+    if (Array.isArray(value)) {
+      if (++nodes > inlinedSchemaNodeLimit) throw new UnresolvedSchemaReference();
+      return value.map((child) => visit(child, expanding));
+    }
+    return isRecord(value) ? visitSchema(value, expanding) : value;
+  };
+  const visitSchema = (value: Json, expanding: readonly unknown[]): Json => {
     if (++nodes > inlinedSchemaNodeLimit) throw new UnresolvedSchemaReference();
-    if (Array.isArray(value)) return value.map((child) => visit(child, expanding));
     const reference = value["$ref"];
     if (typeof reference === "string") {
       const name = /^#\/\$defs\/([^/]+)$/.exec(reference)?.[1];
@@ -27,13 +83,14 @@ export const inlineLocalRefs = (schema: Record<string, unknown>): Record<string,
       if (!isRecord(target) || expanding.includes(target)) throw new UnresolvedSchemaReference();
       const siblings = { ...value };
       delete siblings["$ref"];
-      return visit({ ...target, ...siblings }, [...expanding, target]);
+      const inner = [...expanding, target];
+      return conjoined(visitSchema(target, inner), visitSchema(siblings, inner));
     }
     const allOf: unknown = value["allOf"];
     if (Array.isArray(allOf) && allOf.length === 1 && isRecord(allOf[0])) {
       const siblings = { ...value };
       delete siblings["allOf"];
-      return visit({ ...allOf[0], ...siblings }, expanding);
+      return conjoined(visitSchema(allOf[0], expanding), visitSchema(siblings, expanding));
     }
     return Object.fromEntries(
       Object.entries(value)
@@ -41,9 +98,7 @@ export const inlineLocalRefs = (schema: Record<string, unknown>): Record<string,
         .map(([key, child]) => [key, visit(child, expanding)]),
     );
   };
-  const inlined = visit(schema, []);
-  if (!isRecord(inlined)) throw new UnresolvedSchemaReference();
-  return inlined;
+  return visitSchema(schema, []);
 };
 
 /**
@@ -106,6 +161,36 @@ const subschemasIn = (
   return data(value);
 };
 
+/** Keywords about the schema document, which stay where they are beside a root reference. */
+const documentKeywords = new Set(["$schema", "$id", "$defs", "definitions"]);
+
+/**
+ * A published schema with each reference that has keywords beside it, such as a bound a
+ * refinement adds to a named schema, written as `allOf` that reference with those keywords beside
+ * it. Draft-07 ignores every keyword beside `$ref`, so a validator that follows it to the letter
+ * would drop those bounds; beside `allOf` they apply. The inliners here read both forms the same.
+ */
+export const withLoneReferences = (schema: Readonly<Json>): Json => {
+  const child = (value: unknown) => (isRecord(value) ? withLoneReferences(value) : value);
+  const node = Object.fromEntries(
+    Object.entries(schema).map(([key, value]) => [
+      key,
+      definitionContainers.has(key) && isRecord(value)
+        ? mapEntries(value, child)
+        : subschemasIn(key, value, child),
+    ]),
+  );
+  const reference = node["$ref"];
+  const beside = Object.keys(node).filter((key) => key !== "$ref" && !documentKeywords.has(key));
+  if (typeof reference !== "string" || beside.length === 0) return node;
+  return {
+    allOf: [{ $ref: reference }, ...allOfIn(node)],
+    ...Object.fromEntries(
+      Object.entries(node).filter(([key]) => key !== "$ref" && key !== "allOf"),
+    ),
+  };
+};
+
 /** The definition a canonical reference (`#/$defs/<name>`) names. */
 const definitionNamed = (reference: unknown) =>
   typeof reference === "string" ? /^#\/\$defs\/([^/]+)$/.exec(reference)?.[1] : undefined;
@@ -139,7 +224,7 @@ const without = (schema: Json, keyword: string) =>
 
 /**
  * `body` with each reference replaced by the definition it names, and a schema that is `allOf`
- * one schema merged with it, as `inlineLocalRefs` reads them; data as it is.
+ * one schema merged with it (`conjoined`), as `inlineLocalRefs` reads them; data as it is.
  */
 const inlined = (body: Json, definitions: Readonly<Record<string, Json | boolean>>): Json => {
   let nodes = 0;
@@ -156,11 +241,12 @@ const inlined = (body: Json, definitions: Readonly<Record<string, Json | boolean
     if (name !== undefined) {
       const target = definitions[name];
       if (!isRecord(target) || expanding.includes(name)) throw new KeepsReferences();
-      return inline({ ...target, ...without(schema, "$ref") }, [...expanding, name]);
+      const inner = [...expanding, name];
+      return conjoined(inline(target, inner), inline(without(schema, "$ref"), inner));
     }
     const allOf = schema["allOf"];
     if (Array.isArray(allOf) && allOf.length === 1 && isRecord(allOf[0]))
-      return inline({ ...allOf[0], ...without(schema, "allOf") }, expanding);
+      return conjoined(inline(allOf[0], expanding), inline(without(schema, "allOf"), expanding));
     return Object.fromEntries(
       Object.entries(schema).map(([key, value]) => [
         key,
