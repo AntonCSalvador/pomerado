@@ -666,6 +666,8 @@ describe("OpenAI reviewer policy and trusted authority", () => {
   // A public site's own button can log each query it runs, with a generated name, for anyone
   // viewing its data. Guardian allowed a read's browser steps that fire it, then denied its HTTP
   // version as a write once the request body showed the record. The write rule now settles it.
+  // The query itself is the record's content, so the rule names what it may not hold instead of
+  // saying "none of the caller's data", which the off-site rule reads as the submitted input too.
   it("tells Guardian a public site's own record of a view is not the caller's write", async () => {
     const requests = readThenDecide({
       outcome: "allow",
@@ -678,7 +680,7 @@ describe("OpenAI reviewer policy and trusted authority", () => {
     const anchor =
       "So is the same save sent the same way, a PUT or POST included, by a read's HTTP version before its query.";
     const sentence =
-      "A record a public site creates for itself whenever anyone views or queries its data, such as a query log, saved-search id or view counter, holding none of the caller's data and needing no sign-in, is not a write by the caller; judge the step as the read it serves.";
+      "A record a public site creates for itself whenever anyone views or queries its data, such as a query log, saved-search id or view counter, that the site's own page fires for that read, needs no sign-in, and holds nothing of the caller's beyond the query or view itself (no personal details, account data or owner's answer), is not a write by the caller; judge the step as the read it serves.";
     for (const policy of [
       requests[0]?.systemInstructions ?? "",
       guardianExecutionPolicy(otherHost),
@@ -690,6 +692,11 @@ describe("OpenAI reviewer policy and trusted authority", () => {
         "";
       expect(writeRule).toContain(`${anchor} ${sentence} `);
     }
+    // The action label agrees, beside its pointer to the signed-out session state.
+    const input = modelInput(requests) as { trusted_review: { policy: string } };
+    expect(input.trusted_review.policy).toContain(
+      "Changing a signed-out session's own state, as the execution policy lists it, is a read. So is a public site's own record of a view, as the execution policy says.",
+    );
   });
 
   // Guardian escalated example runs because it could not read an SDK helper the source imports,
