@@ -824,11 +824,11 @@ it("points a write's commit confirmation at confirmCommit", async () => {
     " ",
   );
   expect(writes).toContain(
-    "- Prefer confirming the final commit with `confirmCommit` from `pomerado/browser`, passing the `{ response }` answer of that click's `waitForOutcomeResult` and the page. It applies the commit-response and page-error rules above in one place, so prefer it over writing your own status and body checks, and call `verified()` only when it reports done.",
+    "- Prefer confirming the final commit with `confirmCommit(answer, page)`: import `confirmCommitCode` from `pomerado/runtime`, paste it after `waitCode` at the top of the commit call, before the click, and pass it the `{ response }` answer of that click's `waitForOutcomeResult` and the page. It applies the commit-response and page-error rules above in one place, so prefer it over writing your own status and body checks, and call `verified()` only when it reports done.",
   );
-  expect(await readFile("typescript/authoring/examples/write-readback.ts", "utf8")).toContain(
-    "await confirmCommit(answer, page)",
-  );
+  const reference = await readFile("typescript/authoring/examples/write-readback.ts", "utf8");
+  expect(reference).toContain("${confirmCommitCode}");
+  expect(reference).toContain("await confirmCommit(answer, page)");
 });
 
 // A write that passed the page's headings to `verified` lost its receipt. With no argument there
