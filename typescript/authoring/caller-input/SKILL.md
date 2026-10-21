@@ -92,8 +92,9 @@ an input that tailors the answer, which a read returns labeled with the value th
      never `InvalidInput` or `InputNotApplied`.
 
    Never pick another value for the caller, such as a near match, the page's default or the
-   first option, and never report a refused or unapplied value in the output instead of
-   throwing, such as a `sort_applied: false` flag or a "best-effort" or "lookup-only"
+   first option, except a read whose value matches several site entries equally, which takes
+   the first (core skill), and never report a refused or unapplied value in the output instead
+   of throwing, such as a `sort_applied: false` flag or a "best-effort" or "lookup-only"
    description. The cases
    above that return results with what applied are the only exceptions.
 
@@ -107,12 +108,13 @@ Try first. Ask only for what the page or the caller uniquely knows at that point
 - whether to take a paid add-on within the tool's purpose that the page shows on the way to a
   commit when the input leaves it open, asked before the commit mark; a paid upsell outside the
   tool's purpose is declined, never asked (writes skill);
-- which of several site entries the caller's value matches equally, such as a restaurant
-  with several locations or a city with several airports, with those entries as the options.
-  That is ambiguous, as is a near-miss name the site offers alternatives for: prefer not
-  starting a refusal of either with "Caller input error:" (above). A day or option the
-  page greys out, with or without a reason, is not ambiguous and never a question (core skill,
-  "Configure, then read");
+- for a write, which of several site entries the caller's value matches equally, such as a
+  restaurant with several locations or a city with several airports, with those entries as the
+  options. A read takes the first in the site's order instead and returns which one it used
+  (core skill). That is ambiguous, as is a near-miss name the site offers alternatives for:
+  prefer not starting a refusal of either with "Caller input error:" (above). A day or option
+  the page greys out, with or without a reason, is not ambiguous and never a question (core
+  skill, "Configure, then read");
 - a code the site sends to confirm a protected action after sign-in, such as a confirmation code
   by text or email, never a code that is part of signing in (auth skill);
 - a fact only the caller has that the site now asks for.
