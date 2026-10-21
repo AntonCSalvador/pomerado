@@ -1497,7 +1497,11 @@ export interface MintActions {
     path: string,
     range?: { readonly offset?: number; readonly limit?: number },
   ) => Effect.Effect<string, MintFailure>;
-  readonly execute: (input: unknown) => Effect.Effect<string, MintFailure>;
+  /**
+   * Reviews and runs one step. `agentNote` is the agent's own description of it, its execute
+   * call's intent, which Guardian reads as untrusted context and never as authority.
+   */
+  readonly execute: (input: unknown, agentNote?: string) => Effect.Effect<string, MintFailure>;
   readonly finish: (input: unknown) => Effect.Effect<string, MintFailure>;
   /** Asks the caller in place and returns their answers; the attempt continues. */
   readonly requestInput: (input: unknown) => Effect.Effect<string, MintFailure>;
@@ -2525,13 +2529,15 @@ export interface MintDependencies {
    * or the host's own authentication allow for a sign-in screen the host fills itself. A
    * successful result carries Guardian's allow, label included, as `review`. */
   readonly reviewAndExecute: (
-    request:
+    request: (
       | ExecutionRequest
       | {
           readonly purpose: "command";
           readonly target: "pureFiles";
           readonly command: string;
-        },
+        }
+    ) &
+      StepNote,
     beforeDispatch?: (allowed: AllowedExecution) => Effect.Effect<void, MintFailure>,
     exampleJournal?: ExampleJournal,
   ) => Effect.Effect<ExecutionEvidence, MintFailure>;
@@ -2566,6 +2572,15 @@ export interface MintDependencies {
   readonly outcomeReview?: OutcomeReviewHost;
   /** Host evidence of each publication decision; absent, reviews get none. */
   readonly publicationDecisions?: PublicationDecisionLog;
+}
+
+/**
+ * The agent's own description of a step, its execute call's intent. A host passes it to the
+ * step's execution review as `PendingExecution.agentNote`, screened like the input: untrusted
+ * context, never authority. Absent for a step the agent did not describe, such as a command.
+ */
+export interface StepNote {
+  readonly agentNote?: string;
 }
 
 /**
@@ -2611,6 +2626,8 @@ export type MintBrowserRecoveryResult =
       readonly outcome: "replaced" | "kept" | "lost";
       readonly notice: string;
       readonly reviewId: string;
+      /** Guardian's note on its allow, which never blocks the recovery. */
+      readonly advice?: string;
       readonly browserRecovery?: BrowserRecoverySummary;
     };
 
