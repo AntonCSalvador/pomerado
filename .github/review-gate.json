@@ -1,0 +1,42 @@
+{
+  "reviewer": "coderabbitai[bot]",
+  "lane": "coderabbit",
+  "coverageKinds": ["reviewed", "target_branch_merge_carry_forward"],
+  "blockingSeverities": ["Critical", "Major"],
+  "clearMergeRisks": ["Minimal", "Low", "Moderate"],
+  "maintainerReview": {
+    "maxChangedLines": 800,
+    "paths": [
+      ".github/**",
+      ".coderabbit.yaml",
+      ".coderabbit.yml",
+      ".coderabbit.config.ts",
+      "**/AGENTS.md",
+      "**/AGENT.md",
+      "**/CLAUDE.md",
+      "**/GEMINI.md",
+      "**/REVIEW.md",
+      "**/.cursorrules",
+      "**/.windsurfrules",
+      "**/.cursor/**",
+      "**/.claude/**",
+      "**/.clinerules/**",
+      "**/.rules/**",
+      "CONTRIBUTING.md",
+      "LICENSE",
+      "third-party/**",
+      "tools/**",
+      ".gitleaks.toml",
+      "package.json",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      ".npmrc",
+      "*.config.ts",
+      "tsconfig*.json",
+      "typescript/src/guardian/**",
+      "typescript/src/inputs/secrets.ts",
+      "typescript/src/destinations/**",
+      "typescript/src/privacy/**"
+    ]
+  }
+}
