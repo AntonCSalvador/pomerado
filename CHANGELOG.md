@@ -168,6 +168,8 @@
 
 ### Other changes
 
+- Guardian's publication policy finds more declared questions and schemas to correct, each a `source_correction`: a declared question that repeats one the build's caller already answered under the same id, unless that answer was only for that run, is personal or account-specific, or is a costly choice, which stays an input or a declared question, becomes an optional input defaulting to the answer; one about a free choice the site sets the same for everyone and the page already selects becomes an optional input that keeps the page's selection; one about a field the site requires and leaves empty, whose options the site fixes for everyone and that neither the request nor an answer settled, becomes a required input, though a `site_field` declaration for a field the form adds only when the page requires it stays. An input whose schema lacks a bound the captures show the site's own field stating, such as its maxlength, is a `schema_mismatch` finding. The core skill returns a value the site shows blank as null rather than asking the owner, and the writes skill keeps a confirmed read-back confirmed when the site shows an unrelated message after the commit, returning it as a warning.
+  - A recorded Guardian or minter response keyed on the exact text needs recording again.
 - The auth skill says a code box's step field never carries `codeBox` or any box number, since the host reads each box's place from the page: each box sends only `selector` and `slot`.
   - A recorded minter response keyed on the exact auth skill text needs recording again.
 - The writes skill has a `writes.several-saves` section a host can add its own guidance to. Its standalone text is unchanged.
