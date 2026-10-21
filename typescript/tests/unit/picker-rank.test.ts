@@ -82,17 +82,17 @@ describe("rankChoices word stems", () => {
     choice("General Dentistry (Dental Assistant)"),
   ];
 
-  test("a practitioner's word picks the one option named by its field's word", () => {
+  test("a word picks the one option whose word shares a long enough start with it", () => {
     expect(rank(dentistry, "Dentist")).toEqual({ status: "picked", index: 0, rank: "stem" });
+    expect(rank([choice("Cardiology"), choice("Neurology")], "Cardiologist")).toEqual({ status: "picked", index: 0, rank: "stem" });
     expect(rank([choice("Pediatric Dentistry"), choice("Pediatrics")], "Pediatrician")).toEqual({
       status: "picked",
       index: 1,
       rank: "stem",
     });
-    expect(rank([choice("Ophthalmology"), choice("Optometry")], "Optometrist")).toEqual({ status: "picked", index: 1, rank: "stem" });
-    expect(rank([choice("Cardiology"), choice("Neurology")], "cardiologist")).toEqual({ status: "picked", index: 0, rank: "stem" });
-    expect(rank([choice("Orthodontics")], "Orthodontists")).toEqual({ status: "picked", index: 0, rank: "stem" });
-    expect(rank([choice("Veterinary")], "Veterinarian")).toEqual({ status: "picked", index: 0, rank: "stem" });
+    expect(rank([choice("Orthodontics")], "Orthodontist")).toEqual({ status: "picked", index: 0, rank: "stem" });
+    expect(rank([choice("Dermatology")], "Dermatologist")).toEqual({ status: "picked", index: 0, rank: "stem" });
+    expect(rank([choice("Dentist")], "Dentists")).toEqual({ status: "picked", index: 0, rank: "stem" });
   });
 
   test("every word of the name must pair, in order", () => {
@@ -111,7 +111,11 @@ describe("rankChoices word stems", () => {
       indexes: [0, 1],
       rank: "stem",
     });
-    expect(rank([choice("Therapy"), choice("Therapies")], "Therapist")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "stem" });
+    expect(rank([choice("Cardiology"), choice("Cardiologists")], "Cardiologist")).toEqual({
+      status: "ambiguous",
+      indexes: [0, 1],
+      rank: "stem",
+    });
   });
 
   test("a match as written, by whole name or by whole word, outranks a stem", () => {
@@ -124,21 +128,18 @@ describe("rankChoices word stems", () => {
     });
   });
 
-  test("short words, words with digits and other endings never stem", () => {
+  test("a shared start under five letters or under 70% of the longer word never pairs", () => {
+    expect(rank([choice("Physics")], "Physician")).toEqual({ status: "missing" });
+    expect(rank([choice("Christy")], "Christian")).toEqual({ status: "missing" });
+    expect(rank([choice("Adams")], "Adam")).toEqual({ status: "missing" });
     expect(rank([choice("Ukraine"), choice("United Kingdom")], "UK")).toEqual({ status: "missing" });
-    expect(rank([choice("Army")], "Arm")).toEqual({ status: "missing" });
-    expect(rank([choice("Artistry")], "Artist")).toEqual({ status: "missing" });
-    expect(rank([choice("Room 10s")], "Room 10")).toEqual({ status: "missing" });
+    expect(rank([choice("Dental Hygienist")], "Dentist")).toEqual({ status: "missing" });
+    expect(rank([choice("Dental")], "Dentist")).toEqual({ status: "missing" });
   });
 
-  test("only a practitioner's word and its field's word pair, or one of them and its plural", () => {
-    expect(rank([choice("County")], "Count")).toEqual({ status: "missing" });
-    expect(rank([choice("Factory")], "Factor")).toEqual({ status: "missing" });
-    expect(rank([choice("Economics")], "Economy")).toEqual({ status: "missing" });
-    expect(rank([choice("Journal")], "Journalist")).toEqual({ status: "missing" });
-    expect(rank([choice("Adam")], "Adams")).toEqual({ status: "missing" });
-    expect(rank([choice("Christy")], "Christian")).toEqual({ status: "missing" });
-    expect(rank([choice("Lilly")], "Lillian")).toEqual({ status: "missing" });
+  test("a word with a digit, or with letters outside Latin, only pairs with itself", () => {
+    expect(rank([choice("Suite 12345")], "Suite 1234")).toEqual({ status: "missing" });
+    expect(rank([choice("Москвичка")], "Москвич")).toEqual({ status: "missing" });
   });
 
   test("a stem never matches an option's value", () => {
