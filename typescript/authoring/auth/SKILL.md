@@ -113,12 +113,6 @@ on the same page does not prove an account choice happened. Record an authorized
 following Continue as separate steps. Prefer exercising a chooser step from both starts in the
 build, right after a sign-in and from a saved session already past the chooser.
 
-A run can also begin already signed in, so the first sign-in screen never shows: the site goes
-straight to its app, or shows a signed-in page without the form. Build the sign-in to work then:
-when the first screen does not appear, it treats the session as signed in, goes to the site's
-regular app page and checks the signed-in marker there, rather than waiting for the missing screen
-or failing on it.
-
 Call `execute` with purpose `authenticate`, target `liveBrowser` and a `signInStep` for the screen in
 front of you. Pass the site's own sign-in link as you clicked it (above) as `loginUrl` on the first
 one, never the page it redirected to; runs open that link to replay your screens.
@@ -379,8 +373,7 @@ The host checks the marker in many places across the site, not only where this s
 after every reset, at the start of every operation, after a page load in the middle of a run, and
 on whatever page a failure lands on. Choose a site-wide element only a signed-in user sees, such as
 the global header's account menu or sign-out control, never something only the page after sign-in
-shows. Choose one the site's regular app page always shows, since a sign-in whose first screen
-never appeared checks it there.
+shows.
 
 - Prefer stable attributes and names (`aria-label`, a role, visible text, a test id) over
   generated class names such as `css-1q2w3e`.

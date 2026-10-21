@@ -164,7 +164,7 @@
 
 ### Other changes
 
-- The auth skill says a recorded sign-in must also work when a run begins already signed in and its first screen never shows: it treats the session as signed in, goes to the site's regular app page and checks the signed-in marker there, rather than waiting for the missing screen or failing on it, so the marker must be one that page always shows. It also says a code box's step field never carries `codeBox` or any box number, since the host reads each box's place from the page: each box sends only `selector` and `slot`.
+- The auth skill says a code box's step field never carries `codeBox` or any box number, since the host reads each box's place from the page: each box sends only `selector` and `slot`.
   - A recorded minter response keyed on the exact auth skill text needs recording again.
 - The forms skill tells a script to name a conditional pop-up's close control as `dismiss` of `waitForReady`, which closes it whenever it opens, rather than checking for it at one point. The testing skill adds a live case for a free-text input with a value the example used written another way, such as in other case or with other spacing, punctuation or accents. The core skill says to prefer a unique input, such as an ID: a tool that acts on one record takes the ID the site's other tools use for it, and finds the record another way, such as by name, only when the caller gives none.
   - A recorded minter response keyed on the exact forms, testing or core skill text needs recording again.
