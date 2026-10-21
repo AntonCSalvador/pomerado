@@ -309,14 +309,14 @@ export const placeAndConfirm = async (context: FillContext, checkedTotal: number
   }
   if ("blocked" in result) {
     // The review stayed, and its only flags are fields it showed on the click, left empty: that
-    // click saved nothing. Ask for them and fill them, and check the review again, since an
-    // answer such as a delivery speed may change the total. Until the step is entered again it
-    // reads sent, so a caller who never answers leaves the order possibly sent, as without the
-    // question. Only then record that the click saved nothing, and click once more.
-    if (!(await askAndFill(context, "Review", result.blocked)))
-      throw new errors.OperationFailure("not_confirmed", { dispatch: "sent" });
-    const recheckedTotal = await checkReview(context);
+    // click saved nothing, so record that before asking. A caller who never answers then leaves
+    // the order not sent. Ask for the fields and fill them, and check the review again, since an
+    // answer such as a delivery speed may change the total. Then enter the step again and click
+    // once more.
     notCommitted("place-order");
+    if (!(await askAndFill(context, "Review", result.blocked)))
+      throw new errors.OperationFailure("not_confirmed", { dispatch: "not_sent" });
+    const recheckedTotal = await checkReview(context);
     enteringCommit("place-order");
     result = await clickPlace(context, recheckedTotal);
   }
