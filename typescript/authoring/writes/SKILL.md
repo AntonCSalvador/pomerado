@@ -110,6 +110,10 @@ During the session:
   answer, check the step again, then call `notCommitted`, then `enteringCommit` again with the
   step's name, and click once. When a step shows several such fields at once, ask them in one
   round, declaring one site-field question per field. It isn't for passwords, codes or logins.
+  When `blockingRequiredFields(form, before, { unaskable: true })` returns `{ unaskable: true }`
+  after the step's first click, the click saved nothing but a field it flagged is one no
+  site-field question may ask, such as a card or bank field: call `notCommitted` for the step,
+  then throw `InvalidInput` that names the field by its label, and don't click again.
 - A pop-up, banner or interstitial on the path, such as an upsell, is conditional unless the
   page always opens it in answer to an action: handle it as the forms skill says, so the tool
   still works for a caller who never sees it.
