@@ -27,6 +27,7 @@ import {
 } from "../../src/mint/skills.js";
 import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
 import { Deadline } from "../../src/runtime/deadline.js";
+import { readBackMatches, sameText } from "../../src/runtime/text.js";
 import { offlineKernel } from "../support/offline-kernel.js";
 import { executeKernelOperation } from "../../src/runtime/kernel-operation-run.js";
 import { runLocalOperation } from "../../src/execution/local-operation.js";
@@ -768,7 +769,7 @@ it("has a write confirm from its first matching read-back, never from state befo
   );
   // The rules on commit marks and uncertain outcomes stay as they were.
   expect(writes).toContain(
-    "- Mark only the step whose click saves or submits. Opening or filling an unsaved form is not a commit step.",
+    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler sends the caller's change to the site.",
   );
   expect(writes).toContain(
     "- Never repeat a step blindly. If an `act` step fails after the page sent a state-changing request or opened a socket, after it entered a commit mark, or without returning a result at all (its page was lost), the write may already be committed;",
@@ -777,6 +778,42 @@ it("has a write confirm from its first matching read-back, never from state befo
   expect(
     (await readFile("typescript/authoring/examples/write-readback.ts", "utf8")).replace(/\s+/g, " "),
   ).toContain("// The 201 with its Location confirmed the write. Record it now, with no further call.");
+});
+
+/*
+ * A write marked opening a form and typing an address as commits, then waited only for the
+ * address suggestions. For an address outside the area the site serves, the site showed a notice
+ * instead, so the run timed out with two marks entered and reported a possible change when
+ * nothing had been sent. Marks go only on steps that send, and a wait names every answer.
+ */
+it("has a write mark only the steps that send and wait for every answer the site can give", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  // A lookup, suggestion, validation or analytics call from a control's handler, such as an
+  // address autocomplete, sends no change, so it is never a commit.
+  expect(writes).toContain(
+    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler sends the caller's change to the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests show they save the caller's change, such as an autosave; a lookup, suggestion, validation or analytics request saves nothing. Place the first commit mark at the first step that saves on the site.",
+  );
+  expect(writes).toContain(
+    "or a control whose handler sends the caller's change to the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests show they save the caller's change, such as an autosave; a lookup, suggestion, validation or analytics request saves nothing. Mark every such step, including autosaves,",
+  );
+  expect(writes).toContain(
+    "- Mark the commit at the step that submits the booking or order; a hold that expires on its own, such as a reserved table or a cart timer, is not the commit.",
+  );
+  // The wait is its own rule, and a refusal it reads ends as the caller's input before any mark.
+  expect(writes).toContain(
+    "the next step uses. - When a step waits for the site's answer, wait for every answer the site can give, such as results, a no-results message or an out-of-area notice, and throw `InvalidInput` naming the field the site refused, with the options the site offers as `available` when it lists them, before the mark of the commit it guards, rather than waiting for results alone.",
+  );
+  // The narrower click-only rule it replaces is gone, so the two never disagree.
+  expect(writes).not.toContain("Mark only the step whose click saves or submits.");
+  expect(writes).not.toContain("Opening or filling an unsaved form is not a commit step.");
+  // These rules are hard rules, never a preference.
+  expect(writes).not.toContain("Prefer placing the first commit mark");
+  expect(writes).not.toContain("Prefer marking the commit");
+  expect(writes).not.toContain("a control whose handler calls the site");
+  expect(writes).not.toContain("return the site's refusal with the caller's options");
 });
 
 /*
@@ -827,6 +864,53 @@ it("teaches every write to call verified() with no argument and declare a read-b
   expect(bookSeat.write).toEqual({ confirmation: "readback", commits: ["book-seat"] });
 });
 
+/*
+ * A form saved over several pages: the first save of one page kept the site's own value for a
+ * number the caller gave, the next page did not show it, and the final commit went out with the
+ * site's value. A second save of that page keeps the caller's value. The write reads back each
+ * saved value the site shows before its final commit, saves the page once more when one differs
+ * and saving it again updates the same record, and stops when it still differs. A value the tool
+ * picked from the site's list is compared as the label it picked: a caller's CA picked as
+ * California reads back as California, which readBackMatches never confirms for CA.
+ */
+it("has a write read back each saved caller value before its final commit, and save a page again once", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  expect(writes).toContain(
+    "- On a form saved over several pages, before the final commit, read back what the site saved for the caller's values, from a summary, a review page or each saved page, in the session and in the composed script. Compare each value the site shows with `readBackMatches(shown, wanted)` from `pomerado/runtime`, against the option the tool picked when it picked one: `wanted` is that option's label, and the caller's value otherwise. It accepts the same value in another format or word order, and every number must match exactly, the same numbers in the same order. When the site kept a different value, save that page again once with the same entries and read it back again, but only when saving it again updates the same record or page, never when the save adds an item, such as a cart line or a row. Prefer `saveAndReadBack` from `pomerado/runtime` for such a page's save: it does both and returns the values that still differ. When one still differs, or a page whose save adds an item kept a different value, stop before the final commit's mark and throw `InputNotApplied` with its `field`, `requested` and `applied`.",
+  );
+  expect(readBackMatches("California", "California")).toBe(true);
+  expect(readBackMatches("California", "CA")).toBe(false);
+  expect(readBackMatches("Yes", "true")).toBe(false);
+});
+
+/*
+ * The read-back after a commit decides whether the tool calls verified(). It compares with
+ * sameText, which refuses a different value that holds the wanted one, such as Not paid for Paid.
+ * readBackMatches, for a page saved before the final commit, accepts it.
+ */
+it("has a write compare its read-back after the commit with sameText, which refuses Not paid for Paid", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  expect(writes).toContain(
+    "so compare text after the commit with `sameText`, as before it (the core skill's Confirm step).",
+  );
+  expect(writes).not.toContain("compare text after the commit with `readBackMatches`");
+  for (const [shown, wanted] of [
+    ["Not paid", "Paid"],
+    ["Premium Economy", "Economy"],
+    ["West Virginia", "Virginia"],
+    ["Jane Mary Doe", "Jane Doe"],
+  ] as const) {
+    expect(sameText(shown, wanted), `${shown} | ${wanted}`).toBe(false);
+    expect(readBackMatches(shown, wanted), `${shown} | ${wanted}`).toBe(true);
+  }
+});
+
 // A click that saved nothing but flagged a field no question may ask ends as the caller's refusal,
 // with the step unsent, never a second click.
 it("has a write refuse a field no site-field question may ask once its click saved nothing", async () => {
@@ -872,7 +956,7 @@ it("renders the pinned standalone authoring", async () => {
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["d71e45c5b1f13bcf26c6a22bc455b1da93c1276b8e73f5d7db6ec302f62a6a04", "forms"],
-    ["14bc762731cf3b3bec15b3e0561f26847f99a279f8123abf5379db8eacf2dfd2", "writes"],
+    ["f3214392cca243dd3d796d96b20f766e68cc07c86d4cc9118e3fc793e7b1545d", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["a97a3bdb8a979d6f0230005ce8ae12b4789af3f5afccca8fb1ce4a450d8b668d", "caller-input"],
     ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],
