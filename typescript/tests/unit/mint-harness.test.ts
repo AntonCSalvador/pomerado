@@ -14,6 +14,7 @@ import {
 import type {
   AgentInputRequest,
   ExecutionEvidence,
+  MintDependencies,
   MintTurn,
   PublicationDecision,
   PublicationRequest,
@@ -801,26 +802,28 @@ it("marks the decision ledger partial after a takeover from a checkpoint without
   expect(ledgers).toEqual([{ partial: true, denials: [], testFailures: [] }]);
 });
 
+const hostCheckRefusal = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "autofill_recipe_not_verified",
+});
 /**
- * The reply to a takeover's host_refused report after its predecessor's publication was refused by
- * a host check, from the predecessor's checkpoint as `edit` leaves it.
+ * The reply to a takeover's host_refused report after its predecessor finished once per publish
+ * decision in `decisions`, in order, from the predecessor's checkpoint as `edit` leaves it.
  */
-const hostRefusedAfterTakeover = async (edit: (checkpoint: Record<string, unknown>) => void) => {
+const hostRefusedAfterTakeover = async (
+  edit: (checkpoint: Record<string, unknown>) => void,
+  decisions: readonly MintFailure[] = [hostCheckRefusal],
+) => {
   let capture: (() => MintHarnessSnapshot) | undefined;
+  let published = 0;
   const first = await fixture(
     (turn) =>
       Effect.gen(function* () {
         yield* turn.actions.execute(execution);
-        yield* turn.actions.finish(publication);
+        for (const _ of decisions) yield* turn.actions.finish(publication);
       }),
     {
-      publish: () =>
-        Effect.fail(
-          new MintFailure({
-            code: "PublicationUnavailable",
-            reason: "autofill_recipe_not_verified",
-          }),
-        ),
+      publish: () => Effect.fail(decisions[published++] ?? hostCheckRefusal),
       agentRecovery: {
         bindHarness: (bound) =>
           Effect.sync(() => {
@@ -870,25 +873,55 @@ it.each([
   expect(await hostRefusedAfterTakeover(edit)).toEqual([expect.objectContaining({ status })]);
 });
 
+// A host refusal a later finish_build got past to Guardian's review stays cleared after a takeover,
+// so the takeover refuses host_refused as the build that cleared it did.
+it("keeps a host refusal a later finish_build got past cleared across a takeover", async () => {
+  const kept: Record<string, unknown>[] = [];
+  const replies = await hostRefusedAfterTakeover(
+    (checkpoint) => {
+      kept.push({ ...checkpoint });
+    },
+    [
+      new MintFailure({ code: "PublicationUnavailable", reason: "variants_unsupported" }),
+      new MintFailure({
+        code: "ReviewDenied",
+        review: {
+          outcome: "deny",
+          reason: "source_correction",
+          reviewId: "review_correction",
+          rationale: "Read the total from the invoice table.",
+          findings: [],
+        },
+      }),
+    ],
+  );
+  expect(kept[0]).not.toHaveProperty("hostRefused");
+  expect(kept[0]).toHaveProperty("hostRefusalPassed", true);
+  expect(replies).toEqual([
+    expect.objectContaining({ status: "blocked_refused", reason: "host_refusal_passed" }),
+  ]);
+});
+
 /**
  * The reply to a takeover's site_declined report after its predecessor sent a sign-in that nothing
  * confirmed, from the predecessor's checkpoint as `edit` leaves it.
  */
 const declinedAfterUnconfirmedSignIn = async (
   edit: (checkpoint: Record<string, unknown>) => void,
+  signIn: MintDependencies["reviewAndExecute"] = () =>
+    Effect.succeed({
+      executionId: "sign_in_screen",
+      status: "completed" as const,
+      effect: "possible" as const,
+      resultRef: "screen_result",
+      observations: { step: { outcome: "filled", submit: "clicked" } },
+    }),
 ) => {
   let capture: (() => MintHarnessSnapshot) | undefined;
   const first = await fixture(
     (turn) => turn.actions.execute({ ...execution, purpose: "authenticate", target: "liveBrowser" }),
     {
-      reviewAndExecute: () =>
-        Effect.succeed({
-          executionId: "sign_in_screen",
-          status: "completed" as const,
-          effect: "possible" as const,
-          resultRef: "screen_result",
-          observations: { step: { outcome: "filled", submit: "clicked" } },
-        }),
+      reviewAndExecute: signIn,
       agentRecovery: {
         bindHarness: (bound) =>
           Effect.sync(() => {
@@ -939,6 +972,38 @@ it.each([
   "keeps an unconfirmed sign-in across a takeover from $checkpoint checkpoint",
   async ({ edit, status }) => {
     expect(await declinedAfterUnconfirmedSignIn(edit)).toEqual([
+      expect.objectContaining({ status }),
+    ]);
+  },
+);
+
+// Guardian's final refusal of a predecessor's sign-in still stands alone after a takeover; a
+// checkpoint from an older worker, which kept no such record, leaves the report as it was.
+it.each([
+  { checkpoint: "this worker's", edit: () => undefined, status: "sign_in_unavailable" },
+  {
+    checkpoint: "an older worker's",
+    edit: (checkpoint: Record<string, unknown>) => {
+      delete checkpoint["signInRefusalOnly"];
+    },
+    status: "blocked",
+  },
+])(
+  "keeps a refused sign-in across a takeover from $checkpoint checkpoint",
+  async ({ edit, status }) => {
+    const refused = () =>
+      Effect.fail(
+        new MintFailure({
+          code: "ReviewDenied",
+          review: {
+            outcome: "deny",
+            reviewId: "review_sign_in",
+            rationale: "This sign-in may not run.",
+            refusal: "final",
+          },
+        }),
+      );
+    expect(await declinedAfterUnconfirmedSignIn(edit, refused)).toEqual([
       expect.objectContaining({ status }),
     ]);
   },

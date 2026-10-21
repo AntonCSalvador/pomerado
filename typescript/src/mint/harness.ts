@@ -9,6 +9,8 @@ import {
 } from "../runtime/failure-detail.js";
 import {
   maximumHostRefusals,
+  maximumSignInDenials,
+  repeatedDenialNotice,
   signInAnswer,
   signInFailureFeedback,
   signInFeedbackOf,
@@ -95,6 +97,7 @@ import type {
   PublicationDecision,
   PublicationRecovery,
   SpentSignIn,
+  UnansweredQuestion,
   WeakenedOutput,
 } from "./contracts.js";
 import { pickedOption, type LoginDecline, type ValidAnswers } from "../runtime/input-request.js";
@@ -416,12 +419,17 @@ const askedOnceReasons: ReadonlySet<string> = new Set([
   "http_implementation_stale",
   "login_url_one_time",
 ]);
+/** An execution request for a sign-in step, read before it decodes. */
+const isAuthenticate = Schema.is(Schema.Struct({ purpose: Schema.Literal("authenticate") }));
 /** How the minter goes on after a refusal that is neither an outage nor Guardian's. */
 const refusalRecovery = (reason: string | undefined, write: boolean): PublicationRecovery =>
   reason !== undefined &&
   (writeCompletionReasons.has(reason) || (write && contractReasons.has(reason)))
     ? "write_completion"
-    : reason !== undefined && newObservationReasons.has(reason)
+    : reason !== undefined &&
+        newObservationReasons.has(reason) &&
+        // A write restores its inputs in the source and publishes its session's execution again.
+        !(write && reason === "input_contract_changed")
       ? "new_observation"
       : "correct_source";
 /** A refusal the harness makes before publication runs, as its decision. */
@@ -1071,15 +1079,20 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * takeover keeps it, and a move to another site clears it.
        */
       let signInUnconfirmed = recovered?.signInUnconfirmed === true;
-      /** Updates `signInUnconfirmed` once an authenticate ends, by what it did. */
+      /**
+       * Updates `signInUnconfirmed` once an authenticate ends, by what it did; a confirmed sign-in
+       * also clears `signInRefusalOnly`.
+       */
       const noteSignIn = (
         exit: Exit.Exit<ExecutionEvidence, MintFailure>,
         crossedDispatch: boolean,
       ) => {
         if (Exit.isSuccess(exit)) {
           const { authentication, effect } = exit.value;
-          if (authentication?.state === "authenticated") signInUnconfirmed = false;
-          else if (effect !== "not_sent") signInUnconfirmed = true;
+          if (authentication?.state === "authenticated") {
+            signInUnconfirmed = false;
+            signInRefusalOnly = false;
+          } else if (effect !== "not_sent") signInUnconfirmed = true;
           return;
         }
         // One that failed past its dispatch fence may have sent the login, unless it says it
@@ -1101,6 +1114,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       let hostRefusals: { readonly refusal: HostRefusal; readonly count: number } | undefined;
       /** `hostRefusals` before the running authenticate, which a refusal of its own extends. */
       let priorHostRefusals: typeof hostRefusals;
+      /**
+       * Guardian's correctable denials in a row of one unchanged sign-in step: the step as sent
+       * and how many. An authenticate that ends any other way clears it; a step that runs nothing,
+       * such as one the host refuses before review, leaves it as it was.
+       */
+      let signInDenials: { readonly step: string; readonly count: number } | undefined;
+      /** `signInDenials` before the running authenticate, which a denial of its own extends. */
+      let priorSignInDenials: typeof signInDenials;
+      /** The running execute's sign-in step as sent, serialized; undefined for any other. */
+      let sentSignInStep: string | undefined;
       /**
        * Sign-in is unavailable in this build: the answer that said so, which a later authenticate
        * gets again, and the outcome the build ends with. A retained receipt that may still
@@ -1148,11 +1171,25 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       let guardianRefused = recovered?.guardianRefused === true;
       /**
+       * Every refusal `guardianRefused` stands on is Guardian's of an authenticate step, and no
+       * sign-in on the current site confirmed after it: the build never got past signing in, so a
+       * blocked report that stands only on it ends as sign-in unavailable. Once cleared, it stays
+       * cleared for the rest of the attempt: a later refusal of a sign-in leaves `guardianRefused`
+       * standing on the earlier one too, so the report keeps its own ending.
+       */
+      let signInRefusalOnly = recovered?.signInRefusalOnly === true;
+      /**
        * A host check refused a step the build needs in this attempt: a publication its checks
        * refused, a sign-in the host refused, or a task update the host refused. A `host_refused`
-       * block stands on it.
+       * block stands on it. A later finish_build that gets past the host's checks to Guardian's
+       * review clears it, setting `hostRefusalPassed`.
        */
       let hostRefused = recovered?.hostRefused === true;
+      /**
+       * A host check refused a step earlier in this attempt, and a later finish_build got past the
+       * host's checks to Guardian's review, so no host refusal stands until another is recorded.
+       */
+      let hostRefusalPassed = recovered?.hostRefusalPassed === true;
       /**
        * This build's Guardian denials, the oldest first to go past the bound, for the blocked
        * explanation's review; a takeover restores them. A checkpoint from an older worker kept
@@ -1691,7 +1728,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           observations:
             "Private observations are available through the screened execution response.",
         };
-        executions.push(referenceOnly);
+        // An execution recorded again, as a resumed attempt's rejoined call is, replaces its entry.
+        const recorded = executions.findIndex((entry) => entry.executionId === evidence.executionId);
+        if (recorded === -1) executions.push(referenceOnly);
+        else executions[recorded] = referenceOnly;
         purposes.set(evidence.executionId, purpose);
         if (taskState.revision > 0) revisions.set(evidence.executionId, taskState.revision);
         if (purpose === "example") example = referenceOnly;
@@ -1723,6 +1763,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           // write repair's write, the build is signed in or holds a login, or it already handed
           // back its limit: then the build ends as no_response.
           if (evidence.noResponse !== undefined && !handedBack && !stopUnavailableHost()) {
+            const asked = evidence.scriptQuestion?.requestId;
+            yield* suspendUnanswered({
+              step: "execution",
+              executionId: evidence.executionId,
+              ...(asked === undefined ? {} : { requestId: asked }),
+              possibleCommit: evidence.noResponse.possibleCommit,
+            });
             noResponse ??= evidence.noResponse;
             terminal ??= {
               build: "incomplete",
@@ -2131,12 +2178,73 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             }),
           ),
         );
-      /** The build's owner left a question that decides what it may do unanswered: it ends. */
-      const unanswered = (error: MintFailure, step: string) =>
-        Effect.sync(() => {
-          noResponse ??= {
-            possibleCommit: error.noResponse?.possibleCommit === true || possibleCommit(),
-          };
+      /** Completed once the host suspended the build: the model run then stops with no outcome. */
+      const suspended = yield* Deferred.make<void>();
+      /** Set once the model run ended: only a running model can be stopped for a suspension. */
+      let modelRunEnded = false;
+      /**
+       * Offers the host to suspend the build on a question its owner left unanswered, where the
+       * build would otherwise end as no_response. Once the host suspended it, this never returns:
+       * the run stops, and the call that asked stays unreturned for a resumed attempt to rejoin.
+       */
+      const suspendUnanswered = (question: UnansweredQuestion) =>
+        Effect.gen(function* () {
+          const suspend = dependencies.suspendUnanswered;
+          if (suspend === undefined || terminal !== undefined || modelRunEnded) return;
+          const decision = yield* suspend(question).pipe(
+            Effect.catchAllDefect((error) =>
+              Effect.fail(
+                new MintFailure({
+                  code: "Unavailable",
+                  failureDetail: failureDetail("mint_host_dependency_failed", {
+                    operation: "suspendUnanswered",
+                    error,
+                  }),
+                }),
+              ),
+            ),
+            // The build ends as no_response, as it would without the hook.
+            Effect.catchAll((error) =>
+              diagnose({ phase: "suspend_unanswered", code: failureCode(error) }).pipe(
+                Effect.zipRight(
+                  reportFailure(error, {
+                    component: "mint",
+                    operation: "suspendUnanswered",
+                    phase: "suspend_unanswered",
+                    subCause: "mint_host_dependency_failed",
+                    correlation: dependencies.reportCorrelation ?? "process",
+                  }),
+                ),
+                Effect.as("not_suspended" as const),
+              ),
+            ),
+          );
+          if (decision !== "suspended") return;
+          // A model run that ended meanwhile can no longer be stopped: the build ends instead.
+          if (modelRunEnded) {
+            yield* diagnose({ phase: "suspend_unanswered", reason: "model_run_ended" });
+            return;
+          }
+          yield* Deferred.succeed(suspended, undefined);
+          return yield* Effect.never;
+        });
+      /** The id of the question the minter is asking, while it waits for the answer. */
+      let askingId: string | undefined;
+      /**
+       * The build's owner left a question that decides what it may do unanswered: it ends, unless
+       * the host suspends it to resume later.
+       */
+      const unanswered = (
+        error: MintFailure,
+        step: string,
+        question: Omit<UnansweredQuestion, "possibleCommit">,
+      ) =>
+        Effect.gen(function* () {
+          const possible = error.noResponse?.possibleCommit === true || possibleCommit();
+          // An owner's cancel is a choice to stop, never one to resume from.
+          if (error.ownerCancelled !== true)
+            yield* suspendUnanswered({ ...question, possibleCommit: possible });
+          noResponse ??= { possibleCommit: possible };
           terminal ??= {
             build: "incomplete",
             summary: `A question to the build's owner while ${step} was not answered in time, so the build stopped. No build was published. Recorded effects and receipts are preserved.`,
@@ -2146,11 +2254,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             instruction: "The build's owner did not answer in time. The host is ending this build.",
           });
         });
-      const reviewFeedback = (error: MintFailure) =>
+      const reviewFeedback = (error: MintFailure, signIn: boolean) =>
         Effect.gen(function* () {
           // A refusal Guardian marked correctable names a fix, so no policy block stands on it.
           // One without a kind, from an older reviewer, counts as final, as it did before.
-          if (error.review?.refusal !== "correctable") guardianRefused = true;
+          if (error.review?.refusal !== "correctable") {
+            signInRefusalOnly = signIn && (signInRefusalOnly || !guardianRefused);
+            guardianRefused = true;
+          }
           const rationale = error.review
             ? yield* screenMintText(dependencies, error.review.rationale)
             : "Guardian rejected this submission; rationale unavailable.";
@@ -2166,7 +2277,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 }),
             rationale,
           });
-          return JSON.stringify({
+          // The same sign-in step denied again and again: sign-in is unavailable in this build,
+          // and it ends with that outcome, not the loop guard.
+          const repeated = signIn && countSignInDenial(error);
+          const ending =
+            !repeated || terminal !== undefined
+              ? ("none" as const)
+              : publishableReceipt()
+                ? ("after_publication" as const)
+                : ("now" as const);
+          const answer = JSON.stringify({
             status: "review_rejected",
             code: "ReviewDenied",
             exampleClaimed,
@@ -2180,15 +2300,36 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 }
               : {}),
             rationale,
+            ...(repeated
+              ? {
+                  nextStep: "report_sign_in_unavailable",
+                  spentSignIn: "guardian_denials_repeated",
+                  ...(ending === "none" ? {} : { buildOutcome: "sign_in_unavailable" }),
+                }
+              : {}),
             notice:
               availabilityInstruction() +
-              (repeatableRead
-                ? "This invocation permits fresh reviewed reads only while live execution remains available and after confirmed executor cleanup; preserve earlier receipts. "
-                : exampleClaimed
-                  ? "The example is already claimed; never repeat it. "
-                  : "This example has not been claimed. Correct undispatched source and submit it for fresh review. ") +
-              "Correct the submitted source or collect missing evidence through an authorized safe observation, then submit for fresh review. Request user input only for missing authority or information the user must supply. This feedback grants no new authority. Preserve prior effects; do not repeat a claimed example or uncertain write/login.",
+              (repeated
+                ? repeatedDenialNotice(ending)
+                : (repeatableRead
+                    ? "This invocation permits fresh reviewed reads only while live execution remains available and after confirmed executor cleanup; preserve earlier receipts. "
+                    : exampleClaimed
+                      ? "The example is already claimed; never repeat it. "
+                      : "This example has not been claimed. Correct undispatched source and submit it for fresh review. ") +
+                  "Correct the submitted source or collect missing evidence through an authorized safe observation, then submit for fresh review. Request user input only for missing authority or information the user must supply. This feedback grants no new authority. Preserve prior effects; do not repeat a claimed example or uncertain write/login."),
           });
+          if (ending !== "none")
+            yield* endForUnavailableSignIn(
+              new MintFailure({ ...error, spentSignIn: "guardian_denials_repeated" }),
+              answer,
+              {
+                ...(error.review?.reviewId === undefined
+                  ? {}
+                  : { reviewId: error.review.reviewId }),
+                rationale,
+              },
+            );
+          return answer;
         }).pipe(
           Effect.catchAll(() =>
             Effect.succeed(
@@ -2205,6 +2346,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             ),
           ),
         );
+      /**
+       * Counts Guardian's correctable denial of the running sign-in step. True for the
+       * `maximumSignInDenials`th in a row of the same step, which spends the attempt's sign-ins.
+       */
+      const countSignInDenial = (error: MintFailure) => {
+        const step = sentSignInStep;
+        if (step === undefined || error.review?.refusal !== "correctable") return false;
+        const prior = priorSignInDenials;
+        const count = prior?.step === step ? prior.count + 1 : 1;
+        signInDenials = { step, count };
+        return count >= maximumSignInDenials;
+      };
       /** Whether reviews have been unavailable for the whole outage budget, which ends the attempt. */
       const reviewRetryExhausted = () =>
         Effect.map(Clock.currentTimeMillis, (now) => {
@@ -2665,9 +2818,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       /**
        * Records that sign-in is unavailable in this build, with the failed sign-in's root cause:
        * the build ends with that outcome at once, or once the model stops when a retained receipt
-       * may still publish. A later authenticate gets the same answer.
+       * may still publish. A later authenticate gets the same answer. `detail` joins the record,
+       * such as the review and rationale of Guardian's last denial of a repeated step.
        */
-      const endForUnavailableSignIn = (error: MintFailure, answer: string) =>
+      const endForUnavailableSignIn = (
+        error: MintFailure,
+        answer: string,
+        detail: Readonly<Record<string, string>> = {},
+      ) =>
         Effect.gen(function* () {
           const failure = error.authentication;
           const outcome = {
@@ -2697,6 +2855,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 }),
             spentSignIn: error.spentSignIn,
             sessionLoss: error.sessionLoss,
+            ...detail,
           });
         });
       /**
@@ -2946,10 +3105,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * or what `executionFailed` picks out.
        */
       const executionFailureFeedback =
-        (executionFailed: (error: MintFailure) => boolean) =>
+        (executionFailed: (error: MintFailure) => boolean, signIn = false) =>
         <A, R>(execution: Effect.Effect<A, MintFailure, R>) =>
           execution.pipe(
-            Effect.catchIf((error) => error.code === "ReviewDenied", reviewFeedback),
+            Effect.catchIf(
+              (error) => error.code === "ReviewDenied",
+              (error) => reviewFeedback(error, signIn),
+            ),
             Effect.catchIf(
               (error) => error.code === "ReviewUnavailable",
               reviewUnavailableRetry("execution", reviewUnavailableFeedback),
@@ -3058,7 +3220,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // refusal of an execution, or its publication refusal no correction gets past (an
         // escalation for missing evidence is not one), unless the host's own guidance names the
         // ending; the minter's reading of its own instructions is none. A host_refused block
-        // stands on a host check's refusal the host recorded in this attempt. The owner's no to a
+        // stands on a host check's refusal the host recorded in this attempt that no later
+        // finish_build got past to Guardian's review, or on a sign-in screen the host refused
+        // because the password's fills are spent, while they still are. The owner's no to a
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
@@ -3070,6 +3234,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               typeof answer === "object" && "confirmed" in answer && !answer.confirmed,
           );
         const unanswered = noAnswerHandBacks > 0;
+        const hostRefusing = hostRefused || dependencies.signInRefillRefused?.() === true;
         if (reason === "owner_declined" && !ownerRefused)
           return refused(
             "owner_not_declined",
@@ -3080,7 +3245,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "no_question_unanswered",
             "No question went unanswered in this build, so the build has not ended. Use question_unanswered only after a question you asked came back as no answer and the build cannot go on without it.",
           );
-        if (reason === "host_refused" && !hostRefused)
+        if (reason === "host_refused" && !hostRefusing && hostRefusalPassed)
+          return refused(
+            "host_refusal_passed",
+            "A host check refused a step earlier in this attempt, but a later finish_build got past it, so the build has not ended. Fix the findings the latest refusal names and call finish_build again. Use host_refused only when a host check still refuses a step and nothing left in this attempt can fix it.",
+          );
+        if (reason === "host_refused" && !hostRefusing)
           return refused(
             "host_not_refused",
             "No host check refused a step in this attempt, so the build has not ended. host_refused needs a host check that refused a step the build needs, such as finish_build, a sign-in form or a site change.",
@@ -3495,7 +3665,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const siteChanged = next.siteOrigin !== taskState.siteOrigin;
           taskState = next;
           // The first site's unconfirmed sign-in says nothing of the next site.
-          if (siteChanged) signInUnconfirmed = false;
+          if (siteChanged) {
+            signInUnconfirmed = false;
+            signInRefusalOnly = false;
+          }
           // The task now runs signed out: a failed sign-in no longer holds anything back, and no
           // sign-in runs until a later update asks for one, which the owner then confirmed.
           for (const change of accepted.changes)
@@ -3735,7 +3908,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         });
       const emptyCases: LiveTestCasesFile = { cases: [] };
       /** What a signed-in read designs, in place of a read signed out's suite. */
-      const signedInPlanInstruction = `This read signed in, so it runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, as the testing skill says: one combined case in ${liveTestCasesPath} that sets every optional input and filter the example left unset, with values the site shows (a picker's options, or values in the example's own rows, never a person's or record's name, number or email). Choose each value so at least one example row fails it while some rows still pass every filter, since a value every example row already satisfies passes even when the tool ignores it, and name in purpose the row each value excludes. Set next_page true when the tool pages. Add a second case only for inputs that cannot be set with the others. Then run it with live_tests action run and check that every row it returns satisfies each input it set, that the excluded rows are gone, and that page two holds new rows. Running it again after a fix, or on src/tool-http.mjs, is free.`;
+      const signedInPlanInstruction = `This read signed in, so it runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, as the testing skill says: one combined case in ${liveTestCasesPath} that sets every optional input and filter the example left unset, with values the site shows (a picker's options, or values in the example's own rows, never a person's or record's name, number or email). Choose each value so at least one example row fails it while some rows still pass every filter, since a value every example row already satisfies passes even when the tool ignores it, and name in purpose the row each value excludes. Set next_page true when the tool pages. Add a second case only for inputs that cannot be set with the others, and one made-up key for an input that takes a record's own key (testing skill). Then run it with live_tests action run and check that every row it returns satisfies each input it set, that the excluded rows are gone, and that page two holds new rows. Running it again after a fix, or on src/tool-http.mjs, is free.`;
       /** What the agent reads about its tests: its cases and their results. */
       const liveTestPlanView = (
         entrypoint: string,
@@ -4300,9 +4473,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               if (questionOnly) return yield* new MintFailure({ code: "ScopeDenied" });
               // Once sign-in is unavailable, another authenticate gets the same answer; once the
               // owner declined to sign in, it gets theirs.
-              const authenticating = Schema.is(
-                Schema.Struct({ purpose: Schema.Literal("authenticate") }),
-              )(input);
+              const authenticating = isAuthenticate(input);
               if (signInUnavailable !== undefined && authenticating)
                 return signInUnavailable.answer;
               if (loginDeclined !== undefined && authenticating)
@@ -4315,6 +4486,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 });
               yield* active();
               const submitted = yield* decode(ExecutionRequest, input);
+              sentSignInStep =
+                submitted.purpose === "authenticate" && submitted.signInStep !== undefined
+                  ? JSON.stringify(submitted.signInStep)
+                  : undefined;
               yield* Effect.try({
                 try: () => relativeSourcePath(submitted.entrypoint),
                 catch: (error) =>
@@ -4397,6 +4572,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 unresolvedSignIn = undefined;
                 priorHostRefusals = hostRefusals;
                 hostRefusals = undefined;
+                priorSignInDenials = signInDenials;
+                signInDenials = undefined;
               }
               const effectful =
                 submitted.purpose === "example" ||
@@ -4517,7 +4694,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               // The owner never answered a sign-in request: the build ends as no_response.
               Effect.catchIf(
                 (error) => error.noResponse !== undefined && !stopUnavailableHost(),
-                (error) => unanswered(error, "signing in to the website"),
+                (error) => unanswered(error, "signing in to the website", { step: "sign_in" }),
               ),
               // The owner declined the login the sign-in asked for: their answer, not a failed
               // sign-in, so the minter builds without signing in and nothing is left unresolved.
@@ -4566,6 +4743,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   error.spentSignIn !== undefined ||
                   error.sessionLoss !== undefined ||
                   error.reason === "login_in_use",
+                isAuthenticate(input),
               ),
             ),
           ),
@@ -4870,18 +5048,23 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               // make available is an infrastructure gap, and a refusal the host asks only once,
               // such as a one-time login URL or an untested HTTP version, is advice: finishing
               // again publishes.
-              if (
+              const hostChecksRefused =
                 publication._tag === "Left" &&
                 publication.left.code === "PublicationUnavailable" &&
                 !publicationOutage(publication.left) &&
                 publication.left.reason !== "example_output_unavailable" &&
-                !askedOnceReasons.has(publication.left.reason ?? "")
-              )
-                hostRefused = true;
+                !askedOnceReasons.has(publication.left.reason ?? "");
+              if (hostChecksRefused) hostRefused = true;
               if (publication._tag === "Right" || reviewDecided(publication.left)) {
                 yield* reviewCompleted;
                 // A completed review replaces the input feedback an earlier one returned.
                 inputFeedbackReview = undefined;
+                // This finish_build got past the host's checks to Guardian's review, so an earlier
+                // host refusal no longer stands: what Guardian decided is what the build answers.
+                if (hostRefused && !hostChecksRefused) {
+                  hostRefused = false;
+                  hostRefusalPassed = true;
+                }
               }
               const denial = publication._tag === "Left" ? publication.left.review : undefined;
               const deniedCategory = denial?.findings?.[0]?.category;
@@ -4890,8 +5073,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 publication.left.code === "ReviewDenied" &&
                 denial !== undefined &&
                 publicationRefusalUnfixable(denial)
-              )
+              ) {
                 guardianRefused = true;
+                signInRefusalOnly = false;
+              }
               if (publication._tag === "Left" && publication.left.code === "ReviewDenied") {
                 const paths = [
                   ...new Set([
@@ -5166,7 +5351,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     error.code,
                     error.reason,
                     { brokenInputs: error.brokenInputs ?? [] },
-                    inputContractChangedInstruction,
+                    inputContractChangedInstruction(buildEffect === "write"),
                   );
                 if (error.reason === "tool_name_taken")
                   return notPublished(
@@ -5320,7 +5505,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     (error.reason === "confirmation_undeclared"
                       ? "Not published: the composed script declares no write confirmation. Add write: {confirmation: 'message' | 'readback' | 'unverifiable'} to its defineOperation, matching what the session read, and call finish_build again with the same executionId."
                       : error.reason === "commit_marks_undeclared"
-                        ? "Not published: the composed script names none of its commit steps. List every step that can change the site (an autosave, a saved form step, the final submit) in order as write.commits, such as commits: ['save-address', 'place-order'], using short lowercase hyphenated names, and mark each with the context's enteringCommit(name) right before the execute call that can send it (an HTTP implementation calls journal.enteringCommit(name) before that request). Opening or filling an unsaved form is not a commit step. Then call finish_build again with the same executionId."
+                        ? "Not published: the composed script names none of its commit steps. List every step that can change the site (an autosave, a saved form step, the final submit) in order as write.commits, such as commits: ['save-address', 'place-order'], using short lowercase hyphenated names, and mark each with the context's enteringCommit(name) right before the execute call that can send it (an HTTP implementation calls journal.enteringCommit(name) before that request). Opening a form and typing into its fields are not commit steps unless the site's requests show they save the caller's change; a lookup, suggestion, validation or analytics request saves nothing. Then call finish_build again with the same executionId."
                         : error.reason === "commit_marks_unentered"
                           ? "Not published: the composed script declares a commit step that no act step of the session entered, so nothing shows its marks follow the real commit. Declare exactly the marks the session's act steps entered, marked by the same helper the composed script uses, and call finish_build again with the same executionId. If the session's steps entered none, it cannot publish: never run the write again for this; end the build and say its commit steps were not marked."
                           : error.reason === "confirmation_unrecorded"
@@ -5549,6 +5734,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       : "Reword the question using the rationale, or withdraw it and continue. Do not ask again for a value you were already given or that the site shows. A reworded question is reviewed again.",
                   });
               }
+              askingId = requestId;
               const answers = yield* dependencies.askInput(submitted, {
                 requestId,
                 ...(reviewId === undefined ? {} : { reviewId }),
@@ -5561,7 +5747,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 (error) =>
                   error.ownerCancelled !== true && handsBackNoAnswer()
                     ? noAnswer()
-                    : unanswered(error, "asking a question"),
+                    : unanswered(error, "asking a question", {
+                        step: "question",
+                        ...(askingId === undefined ? {} : { requestId: askingId }),
+                      }),
+              ),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  askingId = undefined;
+                }),
               ),
               // error-reporting-allow: typed-recovery an invalid request is the model's to correct, told as its result
               Effect.catchIf(
@@ -5661,17 +5855,20 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     );
                     if ("refusal" in ending) return ending.refusal;
                     // An ending the checks above accepted, while the build's latest sign-in
-                    // never confirmed: the site never got as far as judging the task, so it
+                    // never confirmed, or while the only refusal on record is Guardian's final
+                    // refusal of a sign-in step: the site never got as far as judging the task, so it
                     // cannot have declined it or lacked it, and a policy or host check that
                     // stopped it stopped a sign-in. With no failed sign-in pending, whose own
                     // refusal above asks the agent to resolve it, the build ends as sign-in
                     // unavailable, worded by what the host saw, and its caller is never told to
                     // change the request. The owner's own no, and a question they left
                     // unanswered, keep their endings, a policy report renamed to one included.
+                    // A host refusal a later finish_build got past is still a refusal on record.
                     if (
                       ending.reason !== "owner_declined" &&
                       ending.reason !== "question_unanswered" &&
-                      signInUnconfirmed &&
+                      (signInUnconfirmed ||
+                        (signInRefusalOnly && !hostRefused && !hostRefusalPassed)) &&
                       unresolvedSignIn === undefined &&
                       loginDeclined === undefined &&
                       !signInAbandoned
@@ -6264,7 +6461,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         },
         ...(blockedReviewUnavailable ? { blockedReviewUnavailable: true as const } : {}),
         ...(guardianRefused ? { guardianRefused: true as const } : {}),
+        ...(signInRefusalOnly ? { signInRefusalOnly: true as const } : {}),
         ...(hostRefused ? { hostRefused: true as const } : {}),
+        ...(hostRefusalPassed ? { hostRefusalPassed: true as const } : {}),
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),
         ...(loginHeld ? { loginHeld: true as const } : {}),
         ...(loginDeclined === undefined ? {} : { loginDeclined }),
@@ -6335,7 +6534,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       }),
                   ...(agentRecovery.initial === undefined
                     ? {}
-                    : { initial: agentRecovery.initial.agent }),
+                    : {
+                        initial: agentRecovery.initial.agent,
+                        ...(agentRecovery.initial.resumeMessage === undefined
+                          ? {}
+                          : { resumeMessage: agentRecovery.initial.resumeMessage }),
+                      }),
                   save: (agent) => agentRecovery.save(agent, captureHarness()),
                 },
               }),
@@ -6372,6 +6576,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           ...(dependencies.hostToolDescriptions === undefined
             ? {}
             : { hostToolDescriptions: dependencies.hostToolDescriptions }),
+          ...(dependencies.compactionSkillsNote === undefined
+            ? {}
+            : { compactionSkillsNote: dependencies.compactionSkillsNote }),
           actions: withHostNotices(
             dependencies.retainCapture === undefined
               ? (({ retainCapture: _capture, ...available }) => available)(reviewedActions)
@@ -6461,10 +6668,19 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         })
         .pipe(
           Effect.exit,
+          // A build the host suspended stops its model run here, before any further call starts.
+          Effect.raceFirst(Deferred.await(suspended).pipe(Effect.as(undefined))),
+          Effect.ensuring(
+            Effect.sync(() => {
+              modelRunEnded = true;
+            }),
+          ),
           Effect.ensuring(Scope.close(toolScope, Exit.void)),
           // A model that ended before registering its run state leaves the archive to read.
           Effect.ensuring(Deferred.done(historyRegistered, Exit.void)),
         );
+      // Suspended to resume later: no outcome is decided or recorded, and the run ends interrupted.
+      if (modelResult === undefined) return yield* Effect.interrupt;
       const modelFailure = Exit.isFailure(modelResult)
         ? Option.getOrUndefined(Cause.failureOption(modelResult.cause))
         : undefined;

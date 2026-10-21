@@ -233,6 +233,37 @@ export const isSecret = (slot: AutofillSlot): slot is AutofillSecret =>
   !isIdentifier(slot) && !isPrivateAnswer(slot);
 /** The secrets that prove the login: a sign-in verifies only once a submit sent one. */
 export const provesLogin = (slot: AutofillSlot) => slot === "password" || slot === "code";
+
+/** What a host keeps of the secrets its open sign-in filled, and whether its last one verified. */
+interface FilledSecrets {
+  readonly managedAuthenticationComplete: { readonly current: boolean };
+  readonly autofillSecretsFilled: { readonly current: readonly AutofillSecret[] };
+  readonly autofillSecretsRefilled: { readonly current: readonly AutofillSecret[] };
+}
+
+/**
+ * The field of `step` that names a secret this sign-in may not fill again, or -1. A fill is not a
+ * write, so a password or code filled once may be filled once more; any other secret never is. A
+ * sign-in after one that completed starts with nothing filled (`open` false).
+ */
+export const exhaustedSecret = (h: FilledSecrets, open: boolean, step: AutofillStep) => {
+  if (!open && h.managedAuthenticationComplete.current) return -1;
+  return step.fields.findIndex(
+    (field) =>
+      isSecret(field.slot) &&
+      h.autofillSecretsFilled.current.includes(field.slot) &&
+      (!provesLogin(field.slot) || h.autofillSecretsRefilled.current.includes(field.slot)),
+  );
+};
+/**
+ * Whether the sign-in under way filled the login's password as often as it may, and none verified
+ * since: every further screen that needs the password is refused (`exhaustedSecret`) until a
+ * sign-in verifies, or a corrected login starts its fills again.
+ */
+export const passwordFillsSpent = (h: FilledSecrets) =>
+  !h.managedAuthenticationComplete.current &&
+  h.autofillSecretsFilled.current.includes("password") &&
+  h.autofillSecretsRefilled.current.includes("password");
 /**
  * Whether a sign-in submitted the login's identifier and its password or code (`submittedSlots`:
  * a submit clicked after the fill, `submitFilled`), or passed a step the owner approves: the proof

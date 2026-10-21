@@ -323,6 +323,118 @@ it.each([
   }
 });
 
+/** The result of the call `callId` that the minter reads in `request`, parsed. */
+const resultOf = (request: ModelRequest | undefined, callId: string): unknown => {
+  const item = (Array.isArray(request?.input) ? request.input : []).find(
+    (entry) => entry.type === "function_call_result" && entry.callId === callId,
+  ) as { readonly output?: unknown } | undefined;
+  const output = item?.output;
+  return JSON.parse(
+    typeof output === "string"
+      ? output
+      : typeof output === "object" && output !== null && "text" in output
+        ? String(output.text)
+        : JSON.stringify(output),
+  );
+};
+/** A host check's refusal the minter fixes in its metadata: variants a Kernel script can't run. */
+const variantsUnsupported = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "variants_unsupported",
+});
+const hostRefusalPassed =
+  "A host check refused a step earlier in this attempt, but a later finish_build got past it, so the build has not ended. Fix the findings the latest refusal names and call finish_build again. Use host_refused only when a host check still refuses a step and nothing left in this attempt can fix it.";
+/** finish_build with its own coverage, so a submission after a denial is not the same again. */
+const finishAs = (n: number) =>
+  call(
+    "finish_build",
+    { ...finishBuild, coverage: `One actual example, round ${n}.` },
+    `finish_${n}`,
+  );
+
+// A host check's refusal the minter fixed no longer stands once a later finish_build gets past
+// the host's checks to Guardian's review. Guardian's correction is then what stops the build, and
+// the minter can still fix it, so host_refused is refused and the build goes on to publish.
+it("refuses host_refused once a later finish_build got past the host's refusal to Guardian", async () => {
+  const explanation = "A Pomerado check refused publication, so no tool was published.";
+  const refusals = [variantsUnsupported, guardianCorrection];
+  let published = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", pureExample),
+        finishAs(0),
+        finishAs(1),
+        call("report_blocked", { reason: "host_refused", explanation }, "report"),
+        finishAs(2),
+      ][index] ?? prose("Stopping."),
+    {
+      publish: () => {
+        const refusal = refusals[published++];
+        return refusal === undefined
+          ? Effect.succeed({ publicationRef: "published_revision", diagnostics: [] })
+          : Effect.fail(refusal);
+      },
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(outcome).toMatchObject({ build: "published" });
+  expect(published).toBe(3);
+  expect(resultOf(f.requests[2], "finish_0")).toMatchObject({ reason: "variants_unsupported" });
+  expect(resultOf(f.requests[3], "finish_1")).toMatchObject({ code: "ReviewDenied" });
+  expect(resultOf(f.requests[4], "report")).toEqual({
+    status: "blocked_refused",
+    reason: "host_refusal_passed",
+    userInputRequired: false,
+    instruction: hostRefusalPassed,
+  });
+});
+
+/** A host check's refusal that carries a review of its own, as a host may attach to one. */
+const reviewedHostRefusal = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "autofill_recipe_not_verified",
+  review: { outcome: "deny", rationale: "Fresh sign-in failure." },
+});
+
+// A host check's refusal that is the latest publication decision still stands, after Guardian's
+// correction and after an earlier refusal a later finish_build got past alike. One that carries a
+// review is still the host's refusal, not a finish_build that got past the host's checks.
+it.each([
+  { basis: "after Guardian's correction", publish: [guardianCorrection, variantsUnsupported] },
+  {
+    basis: "again after a finish_build got past the first",
+    publish: [variantsUnsupported, guardianCorrection, variantsUnsupported],
+  },
+  { basis: "with a review of its own", publish: [reviewedHostRefusal] },
+  {
+    basis: "with a review of its own after a finish_build got past the first",
+    publish: [variantsUnsupported, guardianCorrection, reviewedHostRefusal],
+  },
+])(
+  "ends as host_refused when a host check refused the latest publication $basis",
+  async ({ publish }) => {
+    const explanation = "A Pomerado check refused publication, so no tool was published.";
+    let published = 0;
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("execute", pureExample),
+          ...publish.map((_, n) => finishAs(n)),
+          call("report_blocked", { reason: "host_refused", explanation }),
+        ][index] ?? prose("Stopping."),
+      { publish: () => Effect.fail(publish[published++] ?? guardianCorrection) },
+    );
+    expect(await f.run()).toMatchObject({
+      build: "incomplete",
+      blocked: { reason: "host_refused", explanation },
+      stopReason: "host_refused",
+    });
+    expect(published).toBe(publish.length);
+  },
+);
+
 const moveSite = [
   call("request_input", {
     questions: [{ id: "move", type: "confirm", prompt: "May the build move to the sister site?" }],
@@ -894,6 +1006,201 @@ it.each([
     });
   },
 );
+
+// Guardian's final refusal of the sign-in itself, with nothing sent, is no reason the task is
+// impossible as asked: the build never got past signing in. A report that stands only on it ends as
+// sign-in unavailable, as an unconfirmed sign-in does, never as a policy block or a site's limit.
+const refusedSignIn = (refusal?: "final" | "correctable") =>
+  new MintFailure({
+    code: "ReviewDenied",
+    review: {
+      outcome: "deny",
+      reviewId: "review_sign_in_refused",
+      rationale: "This sign-in may not run.",
+      ...(refusal === undefined ? {} : { refusal }),
+    },
+  });
+it.each([
+  { reason: "policy", refusal: "final", kind: "final" },
+  { reason: "policy", refusal: undefined, kind: "unmarked" },
+  { reason: "site_lacks_capability", refusal: "final", kind: "final" },
+  { reason: "site_declined", refusal: "final", kind: "final" },
+] as const)(
+  "ends a $reason report as sign-in unavailable when its only refusal is Guardian's $kind refusal of the sign-in",
+  async ({ reason, refusal }) => {
+    const f = await signInThenDecline([refusedSignIn(refusal)], {}, {
+      reason,
+      explanation: "Guardian refused the sign-in, so this build cannot go on.",
+    });
+    const outcome = await f.run();
+    expect(outcome).not.toHaveProperty("blocked");
+    expect(outcome).toMatchObject({
+      build: "incomplete",
+      recoveryReason: "sign_in_unavailable",
+      stopReason: "sign_in_failed",
+    });
+  },
+);
+
+// A refusal Guardian marked correctable names a fix, so nothing stands on it; and a final refusal
+// of any other step or of a publication, a host check's refusal, a move to another site or a
+// confirmed sign-in after it keeps the report's own ending.
+const refusedRead = new MintFailure({
+  code: "ReviewDenied",
+  review: { outcome: "deny", reviewId: "review_read", rationale: "Not allowed.", refusal: "final" },
+});
+it("refuses a policy report on a correctable refusal of the sign-in", async () => {
+  const f = await signInThenDecline([refusedSignIn("correctable")], {}, {
+    reason: "policy",
+    explanation: "Guardian refused the sign-in.",
+  });
+  const outcome = await f.run();
+  expect(outcome).not.toMatchObject({ recoveryReason: "sign_in_unavailable" });
+  expect(lastResult(f.requests[2])).toContain("policy_not_refused");
+});
+it("keeps a policy block that also stands on a final refusal of another step", async () => {
+  const explanation = "Guardian refused the only way to reach the requested page.";
+  let executions = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate, "sign_in"),
+        call("execute", pureExample, "read"),
+        call("report_blocked", { reason: "policy", explanation }),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: () =>
+        Effect.fail(executions++ === 0 ? refusedSignIn("final") : refusedRead),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "policy", explanation },
+    stopReason: "policy",
+  });
+});
+/** Guardian refuses the sign-in in its preflight review; every other step passes it. */
+const refuseSignInOnly: { preflight: NonNullable<NonNullable<Parameters<typeof fixture>[1]>["preflight"]> } = {
+  preflight: (submitted) =>
+    submitted.purpose === "authenticate"
+      ? Effect.fail(refusedSignIn("final"))
+      : Effect.succeed({ supported: true as const }),
+};
+it("keeps a host_refused block after Guardian also refused the sign-in", async () => {
+  const explanation = "A Pomerado check refused the step this build needs.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate, "sign_in"),
+        ...moveSite,
+        call("report_blocked", { reason: "host_refused", explanation }),
+      ][index] ?? prose("Stopping."),
+    {
+      ...refuseSignInOnly,
+      askInput: () => Effect.succeed({ move: { type: "confirm", value: { confirmed: true } } }),
+      reviewTaskUpdate: () =>
+        Effect.succeed({ outcome: "allow" as const, rationale: "Same task.", reviewId: "r1" }),
+      applyTaskUpdate: () =>
+        Effect.succeed({
+          outcome: "refused" as const,
+          reason: "change_unsupported",
+          notice: "This build cannot move to that site.",
+        }),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "host_refused", explanation },
+    stopReason: "host_refused",
+  });
+});
+// A host refusal a later finish_build got past is still a refusal on record beside Guardian's
+// refusal of the sign-in, so a policy report keeps its own ending.
+it("keeps a policy block after Guardian refused the sign-in and a finish_build got past a host refusal", async () => {
+  const explanation = "Guardian refused the only way to reach the requested page.";
+  const refusals = [variantsUnsupported, guardianCorrection];
+  let published = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate, "sign_in"),
+        call("execute", pureExample, "read"),
+        finishAs(0),
+        finishAs(1),
+        call("report_blocked", { reason: "policy", explanation }),
+      ][index] ?? prose("Stopping."),
+    {
+      ...refuseSignInOnly,
+      publish: () => Effect.fail(refusals[published++] ?? guardianCorrection),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "policy", explanation },
+    stopReason: "policy",
+  });
+  expect(published).toBe(2);
+});
+it("keeps a policy block once the build moved to another site after Guardian refused the sign-in", async () => {
+  const explanation = "Guardian refused the only way to reach the requested page.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate, "sign_in"),
+        ...moveSite,
+        call("report_blocked", { reason: "policy", explanation }),
+      ][index] ?? prose("Stopping."),
+    {
+      ...refuseSignInOnly,
+      askInput: () => Effect.succeed({ move: { type: "confirm", value: { confirmed: true } } }),
+      reviewTaskUpdate: () =>
+        Effect.succeed({ outcome: "allow" as const, rationale: "Same task.", reviewId: "r1" }),
+      applyTaskUpdate: () => Effect.succeed({ outcome: "applied" as const }),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "policy", explanation },
+    stopReason: "policy",
+  });
+});
+it("keeps a policy block that also stands on a publication refusal no correction gets past", async () => {
+  const explanation = "Guardian refused to publish what this tool reads.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate, "sign_in"),
+        call("execute", pureExample, "read"),
+        call("finish_build", finishBuild, "finish"),
+        call("report_blocked", { reason: "policy", explanation }),
+      ][index] ?? prose("Stopping."),
+    {
+      ...refuseSignInOnly,
+      publish: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: {
+              outcome: "deny",
+              reason: "privacy",
+              reviewId: "review_privacy",
+              rationale: "The output holds another person's details.",
+              findings: [],
+            },
+          }),
+        ),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "policy", explanation },
+    stopReason: "policy",
+  });
+});
+it("keeps site_declined once a later sign-in confirmed after Guardian refused one", async () => {
+  const f = await signInThenDecline([refusedSignIn("final"), submittedScreen, signInCheck("authenticated")]);
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "site_declined" },
+    stopReason: "site_declined",
+  });
+});
 
 // A sign-in the host confirmed, or one that sent nothing, leaves site_declined as it was: a screen
 // that sent nothing, one whose host found nothing to submit, and one that stopped past its

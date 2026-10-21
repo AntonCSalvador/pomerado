@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { formControlsCode } from "../browser/form-controls.js";
-import type { AutofillPopup, DateOfBirthFormat } from "./autofill-contracts.js";
+import { maximumCodeBoxes, type AutofillPopup, type DateOfBirthFormat } from "./autofill-contracts.js";
 import { elementReadMs, locateCode, questionTextCode } from "./autofill-locate-code.js";
 import { clipCode, controlNamingCode } from "./control-naming-code.js";
 import { pageCode, primaryPageCode } from "../runtime/host-execute.js";
@@ -10,33 +10,73 @@ import { pageControlsCode } from "./page-controls.js";
 
 /**
  * Page code: where each code field sits among its screen's one-character boxes, as
- * `Described.codeBox` says, else null. A box is a visible, enabled, editable text input whose
- * `maxlength` is 1; the screen is the field's form, or its document or shadow root outside one. A
- * field that is no box, or a screen with fewer than two, has none. Attributes only, never a value.
+ * `Described.codeBox` says, else null. A box is a visible, enabled, editable text input that takes
+ * one character:
+ * - by its `maxlength` of 1, among the like boxes of its screen, the field's form, or its document
+ *   or shadow root outside one;
+ * - or, with no `maxlength` limit, by the page's own script, as many one-time-code widgets limit
+ *   their boxes, when the step names two or more code fields: among the visible, enabled, editable
+ *   text inputs that are children of its parent element, when those are two to
+ *   `maximumCodeBoxes`, all of its type and none with a `maxlength` limit. A field that is the only
+ *   such input in its parent counts one level up instead, among its parent and the parent's
+ *   siblings, when each of them holds one such input as its only element. Elements that show no
+ *   box, such as a hidden input, a style element or a message not shown, count at neither level.
+ *   When the step's boxes found so disagree on how many there are, or two take one place, as boxes
+ *   split between two containers do, none of them is a box.
+ * A field that is no box, or a screen with fewer than two, has none. Attributes only, never a value.
  */
 const codeBoxesCode = `const codeBoxes = [];
+const codeFields = codeSlots.filter(Boolean).length;
 for (const [index, field] of fields.entries()) {
   if (!codeSlots[index]) {
     codeBoxes.push(null);
     continue;
   }
-  const codeBox = await field.locator.evaluate((element) => {
+  const codeBox = await field.locator.evaluate((element, [codeFields, mostBoxes]) => {
     const textTypes = ["", "text", "tel", "number", "password", "search"];
-    const box = (control) => {
-      if (control.tagName !== "INPUT" || control.maxLength !== 1) return false;
+    const shown = (node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && node.checkVisibility({ visibilityProperty: true });
+    };
+    const shownChildren = (node) => Array.from(node.children).filter(shown);
+    const editable = (control) => {
+      if (control.tagName !== "INPUT") return false;
       if (!textTypes.includes((control.getAttribute("type") ?? "").toLowerCase())) return false;
       if (control.disabled || control.readOnly) return false;
-      const rect = control.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0 && control.checkVisibility({ visibilityProperty: true });
+      return shown(control);
     };
-    if (!box(element)) return null;
-    const screen = element.form ?? element.getRootNode();
-    const boxes = Array.from(screen.querySelectorAll("input")).filter(box);
-    const at = boxes.indexOf(element);
-    return boxes.length < 2 || at < 0 ? null : { box: at + 1, of: boxes.length };
-  }, undefined, { timeout: ${elementReadMs} }).catch(() => null);
+    const place = (boxes, limit) => {
+      const at = boxes.indexOf(element);
+      return boxes.length < 2 || at < 0 ? null : { box: at + 1, of: boxes.length, limit };
+    };
+    if (!editable(element)) return null;
+    if (element.maxLength === 1) {
+      const screen = element.form ?? element.getRootNode();
+      return place(Array.from(screen.querySelectorAll("input")).filter((control) => editable(control) && control.maxLength === 1), "maxlength");
+    }
+    if (element.maxLength >= 0 || codeFields < 2 || element.parentNode === null) return null;
+    let boxes = Array.from(element.parentNode.children).filter(editable);
+    const wrapper = element.parentElement;
+    if (boxes.length === 1 && wrapper?.parentNode) {
+      boxes = shownChildren(wrapper.parentNode).map((child) => {
+        const held = shownChildren(child);
+        return held.length === 1 ? held[0] : null;
+      });
+      if (!boxes.every((control) => control !== null && editable(control))) return null;
+    }
+    if (boxes.length > mostBoxes || boxes.some((control) => control.maxLength >= 0 || control.type !== element.type))
+      return null;
+    return place(boxes, "script");
+  }, [codeFields, ${maximumCodeBoxes}], { timeout: ${elementReadMs} }).catch(() => null);
   codeBoxes.push(codeBox);
-}`;
+}
+const scriptBoxes = codeBoxes.filter((codeBox) => codeBox?.limit === "script");
+const scriptAgree =
+  new Set(scriptBoxes.map(({ box }) => box)).size === scriptBoxes.length &&
+  new Set(scriptBoxes.map(({ of }) => of)).size <= 1;
+for (const [index, codeBox] of codeBoxes.entries())
+  codeBoxes[index] =
+    codeBox === null || (codeBox.limit === "script" && !scriptAgree) ? null : { box: codeBox.box, of: codeBox.of };`;
 
 /**
  * Page code: the step's controls and visible native and ARIA actions, for the host and Guardian.
@@ -530,23 +570,34 @@ const observed = ${JSON.stringify(observed)};
 const selectors = ${JSON.stringify(step.fields.map((field) => field.selector))};
 const questionSelectors = ${JSON.stringify(step.fields.map((field) => field.slot === "private_answer" ? field.questionSelector ?? null : null))};
 const codeSlots = ${JSON.stringify(step.fields.map((field) => field.slot === "code"))};
-const fields = [];
-for (let index = 0; index < selectors.length; index++) {
-  const found = await locate(selectors[index], questionSelectors[index]);
-  if ("error" in found)
-    return { ...found, target: index, url: primary.url()${fill?.call.kind === "submit" ? ", document: await documentStart()" : ""} };
-  fields.push(found);
-}
 const submitSelector = ${JSON.stringify(step.submit ?? null)};
 const submitKey = ${JSON.stringify(step.submitKey ?? null)};
+// Every control is found first, then read in one pass (readControls). A control that is not found
+// ends the call at once, after the no-wait read of the ones found before it (checkReads).
+const foundFields = [];
+for (let index = 0; index < selectors.length; index++) {
+  const foundField = await locate(selectors[index], questionSelectors[index]);
+  if ("error" in foundField) {
+    await checkReads(foundFields);
+    return { ...foundField, target: index, url: primary.url()${fill?.call.kind === "submit" ? ", document: await documentStart()" : ""} };
+  }
+  foundFields.push(foundField);
+}
+const foundSubmit =
+  (submitKey !== null && foundFields.length > 0) || submitSelector === null ? null : await locate(submitSelector);
+if (foundSubmit !== null && "error" in foundSubmit) {
+  await checkReads(foundFields);
+  return { ...foundSubmit, target: "submit", url: primary.url() };
+}
+const readFound = await readControls(foundSubmit === null ? foundFields : [...foundFields, foundSubmit]);
+const fields = readFound.slice(0, foundFields.length);
 ${keySubmitCode}
 const submit =
   submitKey !== null && fields.length > 0
     ? await keySubmit(fields[fields.length - 1])
-    : submitSelector === null
+    : foundSubmit === null
       ? null
-      : await locate(submitSelector);
-if (submit !== null && "error" in submit) return { ...submit, target: "submit", url: primary.url() };
+      : readFound[foundFields.length];
 // An inert submit takes no interaction at all, so nothing is typed for it. A disabled one may be
 // enabled once the fields hold input; the submit call never clicks it while it is disabled.
 if (submit !== null && submit.inert)

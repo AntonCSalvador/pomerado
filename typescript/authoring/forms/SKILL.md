@@ -107,18 +107,20 @@ They wait for suggestions to settle, scroll lists that render as they scroll, ma
 exactly, then loosely, never pick an "Add" or "Create" row, and confirm the field kept the choice,
 picking again when the page reverts it. A value the picker lacks, or several options that tie,
 comes back as `{ picked: false, reason, available, matches }`: decode it with `PickOutcome` and
-throw `pickRefusal(outcome, field)`, or ask the caller to choose among `matches`. Handle a site's
-quirk with the helper's options, such as `query`, `answered`, `committed`, `commit: "keyboard"` or
-`blur: "tab"`, never with a picker of your own. `references/picker.ts` picks a typeahead value
-and refuses a missing one, `references/dates-and-dropdowns.ts` fills a split date and
-`references/selection.ts` a native select. `references/custom-selection.ts` and
+throw `pickRefusal(outcome, field)`, or, on a write, ask the caller to choose among `matches`. On
+a read, pass `tie: "first"`, so the picker takes the first of the tied options in the site's order
+and returns the one it used. Handle a site's quirk with the helper's options, such as `query`,
+`answered`, `committed`, `commit: "keyboard"` or `blur: "tab"`, never with a picker of your own.
+`references/picker.ts` picks a typeahead value and refuses a missing one,
+`references/dates-and-dropdowns.ts` fills a split date and `references/selection.ts` a native
+select. `references/custom-selection.ts` and
 `references/dialog-picker.ts` write out a combobox and a dialog picker step by step, for a
 control the helper cannot drive; report that gap with what the page showed.
 
 Preserve add/replace and single/multiple intent. `pickValues`' `mode` keeps or replaces
 the chips already chosen. Query aliases
 are alternate spellings of one stable choice, not extra selections. An ambiguous choice
-needs a resolver or a `request_input` question, as `AGENTS.md`'s "Try hard, then
+on a write needs a resolver or a `request_input` question, as `AGENTS.md`'s "Try hard, then
 ask" says; take the site's default only when the choice is not a write and is easy
 to reverse, and list it in `finish_build` `assumptions`. Do not claim uncaptured
 options do not exist.
@@ -147,8 +149,11 @@ conditional one shows only for some accounts, states or visits, such as a cookie
 one-time promotion or a membership upsell shown only to non-members: check for it, resolve it
 when it shows, and continue without error when it does not, as one outcome beside the page's
 next state. Never wait for it or require it. One the page always opens in answer to an action,
-such as a confirmation dialog a button always opens, may be expected. A pop-up the session met
-once is conditional unless the page shows it always follows that action.
+such as a confirmation dialog a button always opens, may be expected, and the script accepts it
+when it only restates what this run entered or acts on. One that shows something new, such as a
+fee, a consequence beyond the request, another record or a warning about this input, goes to the
+caller as a declared question. A pop-up the session met once is conditional unless the page
+shows it always follows that action.
 
 Type each date-only input and output as the runtime's `CalendarDate`, imported beside
 `formControlsCode`, never a bare `YYYY-MM-DD` pattern, which accepts `2026-02-30`. It checks
@@ -157,12 +162,9 @@ impossible date before the run, in a browser or an HTTP tool alike. It sets no r
 narrow it to the example's date or a guessed window. A rule of the task or the site, such as
 a range that ends before it starts, a past date or a booking limit, is the tool's own check:
 fail as `InvalidInput` with a message naming the field and the rule, before any site action
-when the input alone breaks it, and when the site refuses the date. Start the message with
-"Caller input error:" when the refusal is obvious, and count a date as past only when it is
-before today in the site's time zone, both as the core skill says. A site with places in
-several time zones uses the place's zone when the tool knows it before any site action.
-When it doesn't know the zone, refuse only a date that is past in every time zone, such as one
-before yesterday in UTC.
+when the input alone breaks it, and when the site refuses the date. The message's start and
+the time zone that makes a date past follow the caller-input skill ("Validate it, and fail
+with the right error").
 
 Date ranges, calendar-only pickers, validation messages, uploads, staged forms and
 autosave need site-specific semantic checks. A date field that takes typing goes
@@ -235,6 +237,6 @@ does not authorize another submit.
 
 ## Standalone fixture checks
 
-Use the same supplied-input/observed-control rules and browser helper APIs. A read signed out may check pure parsers with `pureFiles` and supplied fixtures (testing skill); a signed-in read proves its form flow with its example and its combined case, and a write with its act session, and neither builds fixture checks. Never invent a live field value merely to test a control.
+Use the same supplied-input/observed-control rules and browser helper APIs. A read signed out may check pure parsers with `pureFiles` and supplied fixtures (testing skill); a signed-in read proves its form flow with its example and its signed-in cases, and a write with its act session, and neither builds fixture checks. Never invent a live field value merely to test a control.
 
 pomerado:section forms.fixture-checks:end -->
