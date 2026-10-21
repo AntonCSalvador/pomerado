@@ -27,6 +27,7 @@ import {
 } from "../../src/mint/skills.js";
 import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
 import { Deadline } from "../../src/runtime/deadline.js";
+import { readBackMatches, sameText } from "../../src/runtime/text.js";
 import { offlineKernel } from "../support/offline-kernel.js";
 import { executeKernelOperation } from "../../src/runtime/kernel-operation-run.js";
 import { runLocalOperation } from "../../src/execution/local-operation.js";
@@ -845,6 +846,53 @@ it("teaches every write to call verified() with no argument and declare a read-b
   expect(bookSeat.write).toEqual({ confirmation: "readback", commits: ["book-seat"] });
 });
 
+/*
+ * A form saved over several pages: the first save of one page kept the site's own value for a
+ * number the caller gave, the next page did not show it, and the final commit went out with the
+ * site's value. A second save of that page keeps the caller's value. The write reads back each
+ * saved value the site shows before its final commit, saves the page once more when one differs
+ * and saving it again updates the same record, and stops when it still differs. A value the tool
+ * picked from the site's list is compared as the label it picked: a caller's CA picked as
+ * California reads back as California, which readBackMatches never confirms for CA.
+ */
+it("has a write read back each saved caller value before its final commit, and save a page again once", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  expect(writes).toContain(
+    "- On a form saved over several pages, before the final commit, read back what the site saved for the caller's values, from a summary, a review page or each saved page, in the session and in the composed script. Compare each value the site shows with `readBackMatches(shown, wanted)` from `pomerado/runtime`, against the option the tool picked when it picked one: `wanted` is that option's label, and the caller's value otherwise. It accepts the same value in another format or word order, and every number must match exactly, the same numbers in the same order. When the site kept a different value, save that page again once with the same entries and read it back again, but only when saving it again updates the same record or page, never when the save adds an item, such as a cart line or a row. Prefer `saveAndReadBack` from `pomerado/runtime` for such a page's save: it does both and returns the values that still differ. When one still differs, or a page whose save adds an item kept a different value, stop before the final commit's mark and throw `InputNotApplied` with its `field`, `requested` and `applied`.",
+  );
+  expect(readBackMatches("California", "California")).toBe(true);
+  expect(readBackMatches("California", "CA")).toBe(false);
+  expect(readBackMatches("Yes", "true")).toBe(false);
+});
+
+/*
+ * The read-back after a commit decides whether the tool calls verified(). It compares with
+ * sameText, which refuses a different value that holds the wanted one, such as Not paid for Paid.
+ * readBackMatches, for a page saved before the final commit, accepts it.
+ */
+it("has a write compare its read-back after the commit with sameText, which refuses Not paid for Paid", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  expect(writes).toContain(
+    "so compare text after the commit with `sameText`, as before it (the core skill's Confirm step).",
+  );
+  expect(writes).not.toContain("compare text after the commit with `readBackMatches`");
+  for (const [shown, wanted] of [
+    ["Not paid", "Paid"],
+    ["Premium Economy", "Economy"],
+    ["West Virginia", "Virginia"],
+    ["Jane Mary Doe", "Jane Doe"],
+  ] as const) {
+    expect(sameText(shown, wanted), `${shown} | ${wanted}`).toBe(false);
+    expect(readBackMatches(shown, wanted), `${shown} | ${wanted}`).toBe(true);
+  }
+});
+
 // A click that saved nothing but flagged a field no question may ask ends as the caller's refusal,
 // with the step unsent, never a second click.
 it("has a write refuse a field no site-field question may ask once its click saved nothing", async () => {
@@ -890,7 +938,7 @@ it("renders the pinned standalone authoring", async () => {
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["d71e45c5b1f13bcf26c6a22bc455b1da93c1276b8e73f5d7db6ec302f62a6a04", "forms"],
-    ["21df2102b0168f0a579a11e5ec5f5a6251266f37b0ebb6847beb0bc63bcf7805", "writes"],
+    ["d582ef6b1432c3d297266f1aec4fe362ca4a0d20ea06fc98217f070bbc64c72c", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["b878173156d608df50612163e73637f1e9129b1eb568b72c597af27adca06df9", "caller-input"],
     ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],

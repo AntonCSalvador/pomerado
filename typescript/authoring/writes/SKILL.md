@@ -123,6 +123,19 @@ During the session:
   not match, and prefer running this check before the step's commit mark, so a mismatch
   stops the step before it sends anything. Never read back a field filled with a secret
   handle.
+- On a form saved over several pages, before the final commit, read back what the site saved
+  for the caller's values, from a summary, a review page or each saved page, in the session
+  and in the composed script. Compare each value the site shows with
+  `readBackMatches(shown, wanted)` from `pomerado/runtime`, against the option the tool picked
+  when it picked one: `wanted` is that option's label, and the caller's value otherwise. It
+  accepts the same value in another format or word order, and every number must match
+  exactly, the same numbers in the same order. When the site kept a different value, save that
+  page again once with the same entries and read it back again, but only when saving it again
+  updates the same record or page, never when the save adds an item, such as a cart line or a
+  row. Prefer `saveAndReadBack` from `pomerado/runtime` for such a page's save: it does both
+  and returns the values that still differ. When one still differs, or a page whose save adds
+  an item kept a different value, stop before the final commit's mark and throw
+  `InputNotApplied` with its `field`, `requested` and `applied`.
 - When the write changes state that already exists, such as a saved record or a cart
   (.agents/cart/SKILL.md), read that state before the committing step and again after it,
   in the session and in the composed script. Fail when a field the input sets did not change
