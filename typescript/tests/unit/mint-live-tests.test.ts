@@ -444,6 +444,51 @@ it("gives the example's review each judged batch, and whether its source is stil
   ]);
 });
 
+it("keeps a batch whose failure still stands on the source in the example review's window", async () => {
+  // `nothing` expects no results and gets some, so it fails every time it runs.
+  const { host } = liveTestHost({
+    nothing: { status: "completed", output: { results: [{ name: "Lamp" }], has_next_page: false, next_cursor: null } },
+  });
+  let batches: Effect.Effect<readonly ReviewedLiveTestBatch[]> | undefined;
+  const binding: LiveTestHost = {
+    ...host,
+    bindBatches: (read) => {
+      batches = read;
+    },
+  };
+  const reviewed: (readonly ReviewedLiveTestBatch[])[] = [];
+  const reviewAndExecute: MintDependencies["reviewAndExecute"] = (input, beforeDispatch) =>
+    Effect.gen(function* () {
+      reviewed.push(yield* batches ?? Effect.succeed([]));
+      return yield* completedExample(input, beforeDispatch);
+    });
+  const only = (ids: readonly string[]) => ({ ...runAll, cases: ids });
+  const f = await fixture(
+    (_request, index) =>
+      [
+        // The whole suite, with `nothing` failing; then only the passing cases, in later batches
+        // that would push the failing one out of a window of the latest four.
+        call("live_tests", runAll, "all"),
+        call("live_tests", only(["repeat-1", "sort-price", "page-2"]), "passing"),
+        call("live_tests", only(["repeat-1"]), "one"),
+        call("live_tests", only(["sort-price"]), "two"),
+        call("live_tests", only(["page-2"]), "three"),
+        call("execute", example, "example"),
+      ][index] ?? prose(),
+    { liveTests: binding, deadline: Deadline.after(30 * 60_000), reviewAndExecute },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+  await f.run();
+
+  // The example's review still sees `nothing` failing on the source it runs.
+  const failing = (reviewed[0] ?? []).flatMap((batch) =>
+    batch.sourceUnchanged ? batch.cases.filter((ran) => ran.verdict !== "pass").map((ran) => ran.id) : [],
+  );
+  expect(failing).toEqual(["nothing"]);
+});
+
 it("tells the agent when the host could not read the schemas its verdicts and next pages need", async () => {
   const { host, batches } = liveTestHost({});
   const unreadable: LiveTestHost = {

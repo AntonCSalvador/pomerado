@@ -361,7 +361,10 @@ const runnerResultNotice = (runner: RunnerResultDefect) =>
 
 /** How many of the latest publication refusals a question or blocked-explanation review reads. */
 const reviewedPublicationRefusals = 8;
-/** How many of the latest live test batches an execution review reads (`LiveTestHost.bindBatches`). */
+/**
+ * How many of the latest live test batches an execution review reads (`LiveTestHost.bindBatches`),
+ * beside older ones whose failures still stand.
+ */
 const reviewedLiveTestBatches = 4;
 /**
  * The bounds of a blocked explanation review's decision ledger: the latest denials, each one's
@@ -3747,6 +3750,36 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       const judgedBatches: Omit<ReviewedLiveTestBatch, "sourceUnchanged">[] = [];
       let batchesJudged = 0;
+      /**
+       * The failures a batch holds that still stand: cases that did not pass in it whose latest
+       * result, on the source it ran, still did not pass.
+       */
+      const standingFailures = (batch: (typeof judgedBatches)[number]) =>
+        batch.cases
+          .filter((ran) => {
+            const latest = recordsFor(batch.entrypoint).get(ran.id);
+            return (
+              ran.verdict !== "pass" &&
+              latest !== undefined &&
+              latest.verdict !== "pass" &&
+              latest.sourceDigest === batch.sourceDigest
+            );
+          })
+          .map((ran) => `${batch.entrypoint}\n${batch.sourceDigest}\n${ran.id}`);
+      /**
+       * Keeps the latest `reviewedLiveTestBatches` batches, and past them any batch holding a
+       * failure that still stands and no newer kept batch holds, so passing reruns of some cases
+       * never push a failure of another out of the review's view.
+       */
+      const dropOldBatches = () => {
+        for (let index = judgedBatches.length - reviewedLiveTestBatches - 1; index >= 0; index -= 1) {
+          const batch = judgedBatches[index];
+          if (batch === undefined) continue;
+          const newer = new Set(judgedBatches.slice(index + 1).flatMap(standingFailures));
+          if (standingFailures(batch).every((failure) => newer.has(failure)))
+            judgedBatches.splice(index, 1);
+        }
+      };
       dependencies.liveTests?.bindBatches?.(
         Effect.suspend(() =>
           Effect.forEach([...judgedBatches], (batch) =>
@@ -4251,7 +4284,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               ...(run.start === undefined ? {} : { start: run.start }),
             })),
           });
-          judgedBatches.splice(0, judgedBatches.length - reviewedLiveTestBatches);
+          dropOldBatches();
           yield* reportBestEffort(
             dependencies.diagnostics?.emit("mint.live_tests", {
               cases: selected.length,

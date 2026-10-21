@@ -456,8 +456,9 @@ export interface PendingExecution {
       readonly outcome: "done" | "not_done" | "unknown" | "unassessed";
     }[];
     /**
-     * Execution reviews only: this attempt's latest live test batches, oldest first, as the
-     * harness judged them (`LiveTestHost.bindBatches`). Empty before a batch ran in this attempt,
+     * Execution reviews only: this attempt's latest live test batches, and any older one holding
+     * a failure that still stands on its source, oldest first, as the harness judged them
+     * (`LiveTestHost.bindBatches`). Empty before a batch ran in this attempt,
      * a takeover's included; absent from a host that does not bind them.
      */
     readonly liveTests?: readonly ReviewedLiveTestBatch[];
