@@ -123,12 +123,18 @@ During the session:
   rewrote it as it was typed or on leaving the field, such as an address it standardized, or
   offered exactly one suggestion for it, take the site's version, as you would a picked
   option: later read-backs, such as a review page, summary or confirmation, compare against
-  it, and the output returns it for that field. Check it once with
+  it, and the output returns it for that field. The one suggestion counts only for a
+  free-text value the caller typed, such as an address or a name in a text box the site
+  completes, never for a picker that selects a record, such as a person, assignee, customer,
+  linked record, store or account, which keeps the reference rules in "Check the read-back"
+  and the caller-input skill's. Check it once with
   `sameText(shown, typed, { rewrite: true })`; when that fails, the site dropped or changed
   part of what the caller gave, so go on and add an optional output field `<input>_note`,
   such as `address_note`, naming what the caller sent and what the site kept. Never throw
-  `InputNotApplied` for such a rewrite. A value the site replaces only when a step saves
-  follows the read-back rules below.
+  `InputNotApplied` for such a rewrite. A value cut short by the field's length limit, digits
+  an input mask dropped, or a field that cleared is a failed fill, not a rewrite: fill it
+  again in the field's format, or refuse as today. A value the site replaces only when a step
+  saves follows the read-back before committing, above.
 - When the write changes state that already exists, such as a saved record or a cart
   (.agents/cart/SKILL.md), read that state before the committing step and again after it,
   in the session and in the composed script. Fail when a field the input sets did not change

@@ -752,17 +752,25 @@ it("has a write take the site's rewrite of a typed value and note when it change
   const text = (name: string) =>
     (contents(skills)[skills.findIndex((skill) => skill.name === name)] ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    "- Read each typed value back once its field settles, before the step's commit. When the site rewrote it as it was typed or on leaving the field, such as an address it standardized, or offered exactly one suggestion for it, take the site's version, as you would a picked option: later read-backs, such as a review page, summary or confirmation, compare against it, and the output returns it for that field. Check it once with `sameText(shown, typed, { rewrite: true })`; when that fails, the site dropped or changed part of what the caller gave, so go on and add an optional output field `<input>_note`, such as `address_note`, naming what the caller sent and what the site kept. Never throw `InputNotApplied` for such a rewrite. A value the site replaces only when a step saves follows the read-back rules below.",
+    "- Read each typed value back once its field settles, before the step's commit. When the site rewrote it as it was typed or on leaving the field, such as an address it standardized, or offered exactly one suggestion for it, take the site's version, as you would a picked option: later read-backs, such as a review page, summary or confirmation, compare against it, and the output returns it for that field. The one suggestion counts only for a free-text value the caller typed, such as an address or a name in a text box the site completes, never for a picker that selects a record, such as a person, assignee, customer, linked record, store or account, which keeps the reference rules in \"Check the read-back\" and the caller-input skill's. Check it once with `sameText(shown, typed, { rewrite: true })`; when that fails, the site dropped or changed part of what the caller gave, so go on and add an optional output field `<input>_note`, such as `address_note`, naming what the caller sent and what the site kept. Never throw `InputNotApplied` for such a rewrite. A value cut short by the field's length limit, digits an input mask dropped, or a field that cleared is a failed fill, not a rewrite: fill it again in the field's format, or refuse as today. A value the site replaces only when a step saves follows the read-back before committing, above.",
   );
   expect(text("core")).toContain(
-    "With none, throw its `pickRefusal`, an `InvalidInput` with `field` and `available`, the entries the site showed, except on a write whose site offered exactly one suggestion for the typed text: that is the site correcting it, so take it as the writes skill says for a value the site rewrites.",
+    "With none, throw its `pickRefusal`, an `InvalidInput` with `field` and `available`, the entries the site showed, except on a write whose site offered exactly one suggestion for a free-text value the caller typed, never a picker that selects a record: take it as the writes skill says for a value the site rewrites.",
   );
   expect(text("core")).toContain(
-    "`wanted` being the option the tool picked from the site's list when it picked one, the site's version of a value a write typed and the site rewrote (writes skill), and the caller's value otherwise. It ignores case, accents, spacing, apostrophes, periods, commas and hyphens between letters, and spaces, hyphens, slashes and parentheses between digits, so 29 59 matches 29-59, and accepts a word the page shortened, such as St for Saint.",
+    "`wanted` being the option the tool picked from the site's list when it picked one, the site's version of a value a write typed and the site rewrote (writes skill), and the caller's value otherwise. It ignores case, accents, spacing, apostrophes, periods, commas and hyphens between letters, reads a space, hyphen, slash or parentheses between digits as one separator while the groups still count, so 29 59 matches 29-59 but never 2959 or 2 959, and accepts a word the page shortened, such as St for Saint.",
+  );
+  expect(text("forms")).toContain(
+    "On a write, a single suggestion for a free-text value the caller typed is the site's correction instead, never for a picker that selects a record: take it as the writes skill says.",
   );
   expect(text("caller-input")).toContain(
     "or a value a write typed that the site rewrote before any save, kept and reported as the writes skill says.",
   );
+  // The publication review and the minter's publication skill excuse the note in the same words.
+  const note =
+    "A write's `<input>_note` reporting a value the site rewrote as it was typed, on leaving the field, or through its one suggestion is not unapplied input; the tool read the site's version back and returns it.";
+  expect(publicationOutputPolicy).toContain(note);
+  expect(text("publication")).toContain(note);
 });
 
 /*
@@ -864,16 +872,16 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["c63969b8535da5ec194b5efd0909364cb639e3ec0b302565adb2ea712e99e4bd", "core"],
+    ["7d4c38dd4d2426ab4878ec5e5dbf183cfd0c3e7a736ac40f89e32c7735f1e686", "core"],
     ["9fe0598c1dc41354e5dbddd42a372c6b628eecd206cf5ea9a3cf0fcbf10a6410", "search"],
     ["7e50c86ea30964f0e3610e090c7bd7d78aac6f59a7f644644c1ad99577d59f5f", "auth"],
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
-    ["5d6d582812ab26cab6dfbba0f189fa538264f52108e15a48cd52b8fca350d786", "forms"],
-    ["8b30b05587052caa74cc03f430c84963987e897671f11d1e3e13650abfcaec9e", "writes"],
+    ["54dd741dd620106cac5e1d37b633094f170475cf5062365da83b840fc02bfaa4", "forms"],
+    ["e7f3a15bbed6e8336c577362b41f8dedbd13b5a4db3f239570e716c8e6764225", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["8db95dfe2791eac7a4ffd98b03c54d77f872e2f4ae0290205ca746f045713e3c", "caller-input"],
-    ["4334eb48b34d5464550242d55a6c6b75963bcce22c3e5f0090ea1addbe550f47", "publication"],
+    ["79df8b81e354bd37c55086dbc000fe88fea86268286f68b9a0708574ae126c89", "publication"],
     ["ca25d414d25ba51222fbd7014de75173308bc46d6fc237cc527f47837b1992fc", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);

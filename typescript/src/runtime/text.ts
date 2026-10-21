@@ -52,10 +52,11 @@ export const foldChoiceText = (text: unknown): string => {
  * longer one in `shown`, so a wanted Pen never matches a shown Pencil. Both texts need the same
  * number of words in the same order, and a word holding a digit or another symbol, such as a slash
  * or a bracket, must be the same word, so 12 never matches 123, C++ never matches C and Blue/Green
- * never matches Blue Green. Spaces, hyphens, dashes, slashes and parentheses between digits are
- * formatting, though, so 29 59, 29-59, 29/59 and 2959 match, and so do (317) 555-1234 and
- * 317-555-1234, while a period or comma between digits counts, so 10.0 never matches 100. Compare
- * numbers, dates and amounts as values instead.
+ * never matches Blue Green. A space, hyphen, dash, slash or parentheses between digits is one
+ * separator, whichever it is, so 29 59, 29-59 and 29/59 match, and so do (317) 555-1234 and
+ * 317-555-1234, but the groups it separates count: 1/12 never matches 11/2, 1 234 never matches
+ * 12 34 and 2959 never matches 29 59. A period or comma between digits counts too, so 10.0 never
+ * matches 100. Compare numbers, dates and amounts as values instead.
  *
  * With `{ rewrite: true }`, `shown` is the site's own version of a value the tool typed, `wanted`,
  * such as an address the site standardized as it was entered, and the answer is whether it kept
@@ -64,11 +65,11 @@ export const foldChoiceText = (text: unknown): string => {
  * add its own, as 100 N Main St adds N to 100 Main St. A word may be written short or in full
  * either way, with the same first letter, its letters in order and the short form at most three
  * fifths as long, so Parkway matches PKWY, Suite matches STE and St matches Street, while Main
- * never matches Martin. A number may be split or joined at the separators above, and
- * extended only after one, so 46204 matches 46204-1234 but 12 never matches 123. Other punctuation
- * is ignored. A dropped or changed word or number fails, so 1420 Oak Road, Springfield never
- * matches 1420 Oak Rd, Riverton. An email, domain or file name, or a `wanted` with no letter or
- * digit, compares as it does without the option.
+ * never matches Martin. A number keeps its groups, as above, and may only gain groups after its
+ * last, so 46204 matches 46204-1234, while 12 never matches 123 and 3175551234 never matches
+ * (317) 555-1234. Other punctuation is ignored. A dropped or changed word or number fails, so
+ * 1420 Oak Road, Springfield never matches 1420 Oak Rd, Riverton. An email, domain or file name,
+ * or a `wanted` with no letter or digit, compares as it does without the option.
  *
  * It is pure and self-contained, so page code can embed it.
  */
@@ -90,12 +91,13 @@ export const sameText = (
       .trim();
     return folded === "" ? raw.trim() : folded;
   };
-  // Spaces, hyphens, dashes, slashes and parentheses between digits are formatting, as is the
-  // opening parenthesis of a group such as (317) before more digits.
-  const joinDigits = (text: string) =>
+  // A space, hyphen, dash, slash or parentheses between digits is one separator, written as a
+  // hyphen, and the opening parenthesis of a group such as (317) before more digits goes. The
+  // groups stay, so 1/12 never reads as 11/2.
+  const groupDigits = (text: string) =>
     text
       .replace(/\((?=\p{N}+\)[\s/\-\u2010-\u2014]*\p{N})/gu, "")
-      .replace(/(?<=\p{N})[\s/()\-\u2010-\u2014]+(?=\p{N})/gu, "");
+      .replace(/(?<=\p{N})[\s/()\-\u2010-\u2014]+(?=\p{N})/gu, "-");
   // One word writes another short: same first letter, its letters in order in the other word,
   // and at most half as long when `halfLength` holds, three fifths otherwise.
   const shortens = (short: string, full: string, halfLength: boolean) => {
@@ -129,37 +131,32 @@ export const sameText = (
     return found;
   };
   // The site's version keeps each of the caller's words and numbers, in order, and may add its
-  // own. A number the caller gave starts one of the site's and may end before a separator in it.
+  // own. A number the caller gave starts one of the site's with the same groups, one by one, and
+  // the site's may go on with more.
   const kept = (site: readonly Part[], given: readonly Part[]) => {
-    const items: Part[] = [];
+    const items: Part[][] = [];
     for (const part of given) {
       const last = items[items.length - 1];
-      if (part.joined && last !== undefined) last.text += part.text;
-      else items.push({ ...part });
+      if (part.joined && last !== undefined) last.push(part);
+      else items.push([part]);
     }
+    const fits = (item: readonly Part[], start: number) =>
+      item.every((part, offset) => {
+        const there = site[start + offset];
+        if (there === undefined || there.number !== part.number) return false;
+        if (part.number) return there.joined === (offset > 0) && there.text === part.text;
+        return (
+          there.text === part.text ||
+          shortens(there.text, part.text, false) ||
+          shortens(part.text, there.text, false)
+        );
+      });
     let at = 0;
     for (const item of items) {
-      let next = -1;
-      for (let index = at; next < 0 && index < site.length; index++) {
-        const part = site[index];
-        if (part === undefined || part.number !== item.number) continue;
-        if (!item.number) {
-          const alike =
-            part.text === item.text ||
-            shortens(part.text, item.text, false) ||
-            shortens(item.text, part.text, false);
-          if (alike) next = index + 1;
-          continue;
-        }
-        if (part.joined) continue;
-        let digits = part.text;
-        let last = index;
-        while (digits.length < item.text.length && site[last + 1]?.joined === true)
-          digits += site[++last]?.text ?? "";
-        if (digits === item.text) next = last + 1;
-      }
-      if (next < 0) return false;
-      at = next;
+      let start = at;
+      while (start < site.length && !fits(item, start)) start++;
+      if (start >= site.length) return false;
+      at = start + item.length;
     }
     return true;
   };
@@ -167,8 +164,8 @@ export const sameText = (
     const given = parts(wanted);
     if (given.length > 0) return kept(parts(shown), given);
   }
-  const a = joinDigits(fold(shown)).split(" ");
-  const b = joinDigits(fold(wanted)).split(" ");
+  const a = groupDigits(fold(shown)).split(" ");
+  const b = groupDigits(fold(wanted)).split(" ");
   return (
     a.length === b.length &&
     a.every(

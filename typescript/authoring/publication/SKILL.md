@@ -136,6 +136,9 @@ first:
     skill); with
     no results a sort has nothing to apply, so return the empty result ("Unapplied supplied
     input");
+  - A write's `<input>_note` reporting a value the site rewrote as it was typed, on leaving the
+    field, or through its one suggestion is not unapplied input; the tool read the site's version
+    back and returns it.
   - a free-text place, name or venue that matches several of the site's options lists them for
     the caller instead of picking one (core skill, the input schema);
   - a check that refuses a past date compares with today in the site's time zone, or the

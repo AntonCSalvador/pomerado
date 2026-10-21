@@ -194,21 +194,34 @@ it("needs a word holding a digit or another symbol to be the same word", () => {
   );
 });
 
-it("reads spaces, hyphens, dashes, slashes and parentheses between digits as formatting", () => {
+/** Digits grouped differently: none of these names the same value, in either mode. */
+const regrouped: Pairs = [
+  ["11/2/2025", "1/12/2025"],
+  ["12/3", "1/23"],
+  ["2025-1-12", "2025-11-2"],
+  ["123 45th St", "12 345th St"],
+  ["1 234", "12 34"],
+  ["3/4", "34"],
+  ["10-12", "1012"],
+  ["2959", "29 59"],
+];
+
+it("reads a space, hyphen, dash, slash or parentheses between digits as one separator", () => {
   expectEach(
     [
       ["29 59", "29-59"],
-      ["29/59", "2959"],
+      ["29/59", "29 59"],
       ["29 – 59", "29 59"],
       ["46204-1234", "46204 1234"],
       ["(317) 555-1234", "317-555-1234"],
-      ["Unit 29-59 Elm St", "unit 2959 elm st"],
+      ["Unit 29-59 Elm St", "unit 29 59 elm st"],
     ],
     true,
   );
-  // Periods and commas between digits still count, and so does every digit.
+  // The groups still count, and so do periods and commas between digits and every digit.
   expectEach(
     [
+      ...regrouped,
       ["10.0", "100"],
       ["1,200", "1 200"],
       ["12", "123"],
@@ -235,14 +248,14 @@ it("says a site's rewrite kept the typed value when it only reformatted, shorten
   const pairs: Pairs = [
     // Each pair is the site's version, then what the tool typed.
     ["29-59", "29 59"],
-    ["2959", "29/59"],
+    ["29-59", "29/59"],
     ["12 ELM PKWY", "12 Elm Parkway"],
     ["STE 4", "Suite 4"],
     ["22 BIRCH CT", "22 Birch Court"],
     ["12 Elm Street", "12 Elm St"],
     ["46204-1234", "46204"],
     ["100 N Main St", "100 Main St"],
-    ["(317) 555-1234", "3175551234"],
+    ["(317) 555-1234", "317 555 1234"],
     // A short form at most three fifths as long as the word it stands for.
     ["100 Elm Trl", "100 Elm Trail"],
     ["100 Elm Rte", "100 Elm Route"],
@@ -272,6 +285,9 @@ it("says a site's rewrite changed the typed value when it dropped or changed wha
     ["100 Main St", "100 N Main St"],
     ["12 Elm", "12 Elm Pkwy"],
     ["Elm Pkwy 12", "12 Elm Pkwy"],
+    // A number the site grouped differently, beyond a group it added at the end.
+    ["(317) 555-1234", "3175551234"],
+    ["4620-41234", "46204-1234"],
     // A shorter word more than three fifths as long names another word, not a short form.
     ["100 Martin St", "100 Main St"],
     ["Marty Smith", "Mary Smith"],
@@ -281,6 +297,10 @@ it("says a site's rewrite changed the typed value when it dropped or changed wha
     ["12 Elm", "-"],
   ];
   for (const [site, typed] of pairs) expect(kept(site, typed), `${site} | ${typed}`).toBe(false);
+  for (const [one, other] of regrouped) {
+    expect(kept(one, other), `${one} | ${other}`).toBe(false);
+    expect(kept(other, one), `${other} | ${one}`).toBe(false);
+  }
 });
 
 it("folds only Latin accents, so a mark that spells another word in another script counts", () => {
