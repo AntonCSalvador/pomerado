@@ -17,9 +17,12 @@ import { pageControlsCode } from "./page-controls.js";
  * - or, with no `maxlength` limit, by the page's own script, as many one-time-code widgets limit
  *   their boxes, when the step names two or more code fields: among the visible, enabled, editable
  *   text inputs that are children of its parent element, when those are two to
- *   `maximumCodeBoxes`, all of its type and none with a `maxlength` limit. When the step's boxes
- *   found so disagree on how many there are, or two take one place, as boxes split between two
- *   containers do, none of them is a box.
+ *   `maximumCodeBoxes`, all of its type and none with a `maxlength` limit. A field that is the only
+ *   such input in its parent counts one level up instead, among its parent and the parent's
+ *   siblings, when each of them holds one such input as its only element. Elements that show no
+ *   box, such as a hidden input, a style element or a message not shown, count at neither level.
+ *   When the step's boxes found so disagree on how many there are, or two take one place, as boxes
+ *   split between two containers do, none of them is a box.
  * A field that is no box, or a screen with fewer than two, has none. Attributes only, never a value.
  */
 const codeBoxesCode = `const codeBoxes = [];
@@ -31,12 +34,16 @@ for (const [index, field] of fields.entries()) {
   }
   const codeBox = await field.locator.evaluate((element, [codeFields, mostBoxes]) => {
     const textTypes = ["", "text", "tel", "number", "password", "search"];
+    const shown = (node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && node.checkVisibility({ visibilityProperty: true });
+    };
+    const shownChildren = (node) => Array.from(node.children).filter(shown);
     const editable = (control) => {
       if (control.tagName !== "INPUT") return false;
       if (!textTypes.includes((control.getAttribute("type") ?? "").toLowerCase())) return false;
       if (control.disabled || control.readOnly) return false;
-      const rect = control.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0 && control.checkVisibility({ visibilityProperty: true });
+      return shown(control);
     };
     const place = (boxes, limit) => {
       const at = boxes.indexOf(element);
@@ -48,7 +55,15 @@ for (const [index, field] of fields.entries()) {
       return place(Array.from(screen.querySelectorAll("input")).filter((control) => editable(control) && control.maxLength === 1), "maxlength");
     }
     if (element.maxLength >= 0 || codeFields < 2 || element.parentNode === null) return null;
-    const boxes = Array.from(element.parentNode.children).filter(editable);
+    let boxes = Array.from(element.parentNode.children).filter(editable);
+    const wrapper = element.parentElement;
+    if (boxes.length === 1 && wrapper?.parentNode) {
+      boxes = shownChildren(wrapper.parentNode).map((child) => {
+        const held = shownChildren(child);
+        return held.length === 1 ? held[0] : null;
+      });
+      if (!boxes.every((control) => control !== null && editable(control))) return null;
+    }
     if (boxes.length > mostBoxes || boxes.some((control) => control.maxLength >= 0 || control.type !== element.type))
       return null;
     return place(boxes, "script");
