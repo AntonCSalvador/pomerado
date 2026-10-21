@@ -63,11 +63,10 @@ export const foldChoiceText = (text: unknown): string => {
  * everything the caller gave. It only tells a rewrite that reformatted the value from one that
  * changed it, and never decides whether a write goes on. Every word and number of `wanted` must
  * appear in `shown`, in order. A word may be written short or in full either way, with the same
- * first letter, its letters in order and a short form of two letters or more: the site's at most
- * three fifths as long as the caller's word, the caller's at most half as long as the site's, and
- * one that is the full word's start three letters at most. So Parkway matches PKWY, Suite matches
- * STE and St matches Street, while Main never matches Martin, Mainland or M, and Larkspur never
- * matches Lark. A number keeps its groups, as above, though the site may pad a group of a grouped
+ * first letter, its letters in order and a short form of two letters or more, at most three fifths
+ * as long as the full word, and three letters at most when it is the full word's start. So
+ * Parkway matches PKWY, Suite matches STE and St matches Street, either way, while Main never
+ * matches Martin, Mainland or M, and Larkspur never matches Lark. A number keeps its groups, as above, though the site may pad a group of a grouped
  * number with zeros, as 01/12 for 1/12, or add thousands commas to a bare one, as 1,420 for 1420,
  * and three or more groups split by periods, as in 555.123.4567, are groups as a hyphen splits
  * them. A bare number of seven digits or more, a phone or account number, may come back grouped,
@@ -175,14 +174,14 @@ export const sameText = (
     const countryAt = (index: number) => country(site[index]) && site[index + 1]?.joined === true;
     // Whether a number starts at the site's part `index`, on its own or after a country code.
     const opens = (index: number) => site[index]?.joined === false || countryAt(index - 1);
-    // The site writes a word short, at most three fifths as long as the caller's, or in full, the
-    // caller's at most half as long. A short form is two letters or more, and one that is the
-    // full word's start has three letters at most, so Lark never stands for Larkspur.
+    // The site writes a word short or in full, the short form at most three fifths as long. A
+    // short form is two letters or more, and one that is the full word's start has three letters
+    // at most, so Lark never stands for Larkspur, nor Main for Mainland.
     const sameWord = (there: string, typed: string) => {
       if (there === typed) return true;
       const [short, full] = there.length < typed.length ? [there, typed] : [typed, there];
       if (short.length < 2 || (short.length > 3 && full.startsWith(short))) return false;
-      return shortens(short, full, short === typed);
+      return shortens(short, full, false);
     };
     // The site writes a bare number with thousands commas, as 1,420 for 1420, or pads a group of
     // a grouped number with zeros, as 01/12 for 1/12.

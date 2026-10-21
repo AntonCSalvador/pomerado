@@ -285,6 +285,21 @@ it("says a site's rewrite kept the typed value when it only reformatted, shorten
   for (const [site, typed] of pairs) expect(kept(site, typed), `${site} | ${typed}`).toBe(true);
 });
 
+it("says a site's rewrite only reformatted a word the caller gave that it wrote short or in full", () => {
+  // Each pair is a site's version and what the tool typed, and holds in either order.
+  const pairs: Pairs = [
+    ["STE 5", "Suite 5"],
+    ["12 ELM PKWY", "12 Elm Parkway"],
+    ["12 ELM ST", "12 Elm Street"],
+    ["1420 OAK RD", "1420 Oak Road"],
+    ["100 ELM AVE", "100 Elm Avenue"],
+  ];
+  for (const [one, other] of pairs) {
+    expect(kept(one, other), `${one} | ${other}`).toBe(true);
+    expect(kept(other, one), `${other} | ${one}`).toBe(true);
+  }
+});
+
 it("says a site's rewrite only reformatted a phone number, a date or a count it wrote another way", () => {
   const pairs: Pairs = [
     // Each pair is the site's version, then what the tool typed.
@@ -320,10 +335,8 @@ it("says a site's rewrite changed the typed value when it cut a word, guessed on
     // An initial stands for too many words to be the caller's.
     ["100 M St", "100 Main St"],
     ["100 M L K Jr Blvd", "100 Martin Luther King Jr Blvd"],
-    // A word the site wrote longer is the caller's only when the caller's is at most half as long
-    // and, when it is the longer word's start, three letters at most.
+    // A word the site wrote longer whose start is the caller's word of four letters or more.
     ["100 Mainland St", "100 Main St"],
-    ["Suite 4", "Ste 4"],
     // A word holding a digit is the same word, or added by the site.
     ["Apt 4B", "Apt 4"],
     ["Apt 4 B", "Apt 4"],
@@ -331,6 +344,7 @@ it("says a site's rewrite changed the typed value when it cut a word, guessed on
     ["1420-2 Larkspur Rd", "1420 Larkspur Rd"],
     ["Unit 1420-2", "Unit 1420"],
     // A unit or a place the site added.
+    ["100 Main St Ste 5", "100 Main St"],
     ["1420 Larkspur Rd Apt 2", "1420 Larkspur Rd"],
     ["1420 Larkspur Rd, Unit B, Springfield", "1420 Larkspur Rd, Springfield"],
     ["1420 Larkspur Rd, Springfield", "1420 Larkspur Rd"],
