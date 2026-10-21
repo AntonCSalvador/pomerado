@@ -1238,6 +1238,18 @@ const pickValues = async (control, values, options = {}) => {
           return pickerChipIs(now.map(chipNames), [label]) !== null;
         };
         if (found.status === "refused") {
+          // A site that stops suggesting a chosen option no longer lists a chip an earlier call
+          // picked by stem or as whole words, so the chips are ranked as the options were.
+          if (!options.create && found.refusal.reason === "option_missing") {
+            const chips = await pickerChips(s);
+            const chosen = pickerRank(s, chips.map(chipNames), wanted);
+            if (chosen.status === "picked") {
+              await pickerClose(s, found.field);
+              results.push({ label: chips[chosen.index].label, value: chips[chosen.index].value, added: false });
+              done = true;
+              continue;
+            }
+          }
           if (!(options.create && found.refusal.reason === "option_missing")) {
             await pickerClose(s, found.field);
             return { ...found.refusal, values: results };
@@ -1263,7 +1275,9 @@ const pickValues = async (control, values, options = {}) => {
     if (mode === "replace") {
       for (let round = 0; round < 50 && Date.now() < s.until; round++) {
         const chips = await pickerChips(s);
-        const extra = chips.find((chip) => !list.some((wanted) => pickerChipIs([chipNames(chip)], wanted)));
+        // A chip this call chose stays, even one it picked by stem or as whole words.
+        const chosen = [...list, ...results.map((result) => [result.label])];
+        const extra = chips.find((chip) => !chosen.some((wanted) => pickerChipIs([chipNames(chip)], wanted)));
         if (!extra) break;
         if (!extra.removable) throw pickerFailure("not_committed");
         const since = pickerMark(s);
