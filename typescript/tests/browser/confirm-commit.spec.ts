@@ -49,9 +49,10 @@ const page = (each: Pick<Case, "extra" | "after" | "click">) => `
     };
   </script>`;
 
-// The commit call: both paste strings, the click's wait, then the check.
-const commitCall = `${waitCode}${confirmCommitCode}
+// The commit call: waitCode, the commit paste just before the click's wait, then the check.
+const commitCall = `${waitCode}
   const form = page.getByRole("form", { name: "Edit record" });
+  ${confirmCommitCode}
   const answer = await waitForOutcomeResult({
     invalid: { invalid: form },
     saved: { response: { method: "POST", url: "/api/records" } },
@@ -239,11 +240,138 @@ const cases: readonly Case[] = [
     expected: unclear,
   },
   { name: "a body status of declined is unclear", reply: { status: 200, body: json({ status: "Declined" }) }, expected: unclear },
+  // A page that draws its messages again keeps the ones it showed before the click.
+  {
+    name: "an error message drawn again with the same text after the save leaves the commit done",
+    reply: saved,
+    extra: `<div id="main"><div class="alert alert-danger">Your last payment failed</div></div>`,
+    after: `document.querySelector("#main").innerHTML =
+        '<div class="alert alert-danger">Your last payment failed</div><div class="alert alert-success" role="alert">Record saved</div>';`,
+    expected: done,
+  },
+  {
+    name: "a field still flagged as it was before the click is unclear",
+    reply: saved,
+    extra: `<script>
+      document.querySelector("#email").setAttribute("aria-invalid", "true");
+      document.querySelector("#email-help").textContent = "Enter a valid email";
+    </script>`,
+    expected: unclear,
+  },
+  // A write may itself reject or deny something, so those words prove nothing on their own.
+  { name: "a body status of rejected is unclear", reply: { status: 200, body: json({ status: "rejected" }) }, expected: unclear },
+  {
+    name: "a toast saying a request was rejected is unclear",
+    reply: saved,
+    after: `say('<div role="alert" class="toast">Request rejected</div>');`,
+    expected: unclear,
+  },
+  {
+    name: "errors deep in a body still report the failure",
+    reply: { status: 200, body: json({ data: { records: { save: { userErrors: [{ message: "Name is taken" }] } } } }) },
+    expected: notDone,
+  },
   { name: "an error field that says no error leaves the commit done", reply: { status: 200, body: json({ error: "No error" }) }, expected: done },
   {
     name: "an errors field holding only empty lists leaves the commit done",
     reply: { status: 200, body: json({ errors: { email: [] } }) },
     expected: done,
+  },
+];
+
+/** Serves `pages` by path and query, or path alone, and answers each POST by its path. */
+const localSite = async (
+  pages: Record<string, string>,
+  post: (path: string) => { status: number; headers?: Record<string, string> },
+) => {
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (request.method === "POST") {
+      request.resume();
+      request.on("end", () => {
+        const answer = post(url.pathname);
+        response.writeHead(answer.status, answer.headers);
+        response.end();
+      });
+      return;
+    }
+    const html = pages[url.pathname + url.search] ?? pages[url.pathname];
+    response.writeHead(html === undefined ? 404 : 200, { "content-type": "text/html" });
+    response.end(html ?? "");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    close: () => {
+      server.closeAllConnections();
+      server.close();
+    },
+  };
+};
+
+const postForm = (action: string, extra = "") => `
+  ${extra}
+  <form method="post" action="${action}" aria-label="Edit record">
+    <label for="name">Name</label><input id="name" name="name" value="Example">
+    <button id="save">Save</button>
+  </form>`;
+
+const redirectCall = `${waitCode}${confirmCommitCode}
+  const answer = await waitForOutcomeResult({ saved: { response: { method: "POST" } } }, {
+    action: () => page.locator("#save").click({ noWaitAfter: true }), noProgressMs: 600, timeout: 4000,
+  });
+  return await confirmCommit(answer, page);`;
+
+const banner = `<div class="alert alert-danger">Your last payment failed</div>`;
+const dangerZone = `<section><h2>Close account</h2><p class="text-danger">This cannot be undone</p></section>`;
+
+const redirects: readonly {
+  name: string;
+  start: string;
+  pages: Record<string, string>;
+  post: (path: string) => { status: number; headers?: Record<string, string> };
+  expected: Record<string, unknown>;
+}[] = [
+  {
+    name: "a form post answered with a redirect to the saved record is done",
+    start: "/form",
+    pages: { "/form": postForm("/records"), "/records/r-7": "<h1>Record r-7</h1>" },
+    post: () => ({ status: 302, headers: { location: "/records/r-7" } }),
+    expected: done,
+  },
+  {
+    name: "a redirect to a page carrying the same account banner and a success alert is done",
+    start: "/form",
+    pages: {
+      "/form": postForm("/records", banner),
+      "/records/r-7": `${banner}<div class="alert alert-success" role="alert">Record saved</div><h1>Record r-7</h1>`,
+    },
+    post: () => ({ status: 302, headers: { location: "/records/r-7" } }),
+    expected: done,
+  },
+  {
+    name: "a redirect to a settings page whose danger zone was on the page before is done",
+    start: "/settings/email",
+    pages: { "/settings/email": postForm("/settings/email", dangerZone), "/settings": `<h1>Settings</h1>${dangerZone}` },
+    post: () => ({ status: 302, headers: { location: "/settings" } }),
+    expected: done,
+  },
+  {
+    name: "a redirect back to the form with an error in its query and a plain message is unclear",
+    start: "/form",
+    pages: {
+      "/form": postForm("/form"),
+      "/form?error=reference_required": `<p class="flash">Reference number is required</p>${postForm("/form")}`,
+    },
+    post: () => ({ status: 302, headers: { location: "/form?error=reference_required" } }),
+    expected: unclear,
+  },
+  {
+    name: "a redirect back to the form it posted from is unclear",
+    start: "/form",
+    pages: { "/form": postForm("/form") },
+    post: () => ({ status: 302, headers: { location: "/form" } }),
+    expected: unclear,
   },
 ];
 
@@ -257,35 +385,17 @@ test.describe("confirmCommit", () => {
       if (each.expected["status_label"] === undefined) expect(confirmed).not.toHaveProperty("status_label");
     });
 
-  test("a form post answered with a redirect to the saved record is done", async ({ page: browserPage }) => {
-    await browserPage.context().route(`${origin}/**`, async (route) => {
-      const request = route.request();
-      const path = new URL(request.url()).pathname;
-      if (request.method() === "POST")
-        return route.fulfill({ status: 302, headers: { location: "/records/r-7" }, body: "" });
-      return route.fulfill({
-        status: 200,
-        contentType: "text/html",
-        body:
-          path === "/records/r-7"
-            ? "<h1>Record r-7</h1>"
-            : `<form method="post" action="/records" aria-label="Edit record">
-                 <label for="email">Email</label><input id="email" name="email" value="a@example.test">
-                 <button id="save">Save</button>
-               </form>`,
-      });
+  // Form posts answered with a redirect, on a local server so the browser follows them.
+  for (const each of redirects)
+    test(each.name, async ({ page: browserPage }) => {
+      const site = await localSite(each.pages, each.post);
+      try {
+        await browserPage.goto(`${site.origin}${each.start}`);
+        expect(await run(browserPage, redirectCall)).toMatchObject(each.expected);
+      } finally {
+        site.close();
+      }
     });
-    await browserPage.goto(`${origin}/`);
-    const result = await run(
-      browserPage,
-      `${waitCode}${confirmCommitCode}
-        const answer = await waitForOutcomeResult({
-          saved: { response: { method: "POST", url: "/records" } },
-        }, { action: () => page.locator("#save").click({ noWaitAfter: true }), noProgressMs: 600, timeout: 4000 });
-        return await confirmCommit(answer, page);`,
-    );
-    expect(result).toMatchObject(done);
-  });
 
   test("a body that can't be read in time is unclear", async ({ page: browserPage }) => {
     // The site sends the response's headers at once and its body only later.
