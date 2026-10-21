@@ -105,8 +105,8 @@ export const CalendarDate = Schema.String.pipe(
  *   `one-time-code`) or by a label, name or id such as card number, card #, credit card, security
  *   code, card verification, CVV, CVN, CID, a card's expiry (next to "card", or as MM/YY or valid
  *   thru), SSN, verification, authentication or SMS code, a gate, door, access, alarm, lockbox or
- *   entry code (not one whose label, name or id is also an offer's code or a note, such as a
- *   promo, coupon, discount or presale code, or instructions or notes that mention one), OTP, a
+ *   entry code (not one whose label is also an offer's code or a note, such as a promo, coupon,
+ *   discount, presale or early access code, or instructions or notes that mention one), OTP, a
  *   6-digit code, a PIN (not a PIN code, which can be a postcode), password, passport, driver's
  *   licence, national ID or national insurance number, a TIN or EIN, IBAN, bank account, routing
  *   number or sort code, and a few of their German, Spanish and French names. With `before`,
@@ -134,8 +134,8 @@ export const CalendarDate = Schema.String.pipe(
  *   bank field, and every other one a question can ask, it returns `{ unaskable: true, labels }`
  *   instead of `null`, with the labels of those secret ones: the click saved nothing, and no
  *   question can fill them. A flagged field already showing, one with no label, or another
- *   unsupported one, such as a date or a box to tick, still gives `null`, so a repair can teach
- *   the tool to fill it.
+ *   unsupported one, such as a date, or a box to tick or a button to choose even when it names a
+ *   card, still gives `null`, so a repair can teach the tool to fill it.
  *   Call it only once the click's wait found no confirmation and the form flagged a field, as a
  *   `{ invalid }` outcome of `waitForOutcomeResult` does.
  * - `fillRequiredField(scope, label, answer, { timeout }?)`: fills the one supported field
@@ -408,10 +408,10 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
     const secretWords = /\b(?:card ?(?:number|no)|cc ?(?:number|num)|credit card|card verification|security ?code|cvv2?|cvc2?|csc|cvn|cid|ssn|social security|verification ?code|authentication code|sms ?code|otp|\d[- ]?digit code|pass ?word|passcode|passport|driv(?:er|ing).?s? ?licen[cs]e|national ?(?:insurance|id|identity|identification)|iban|bank ?account|routing ?(?:transit )?(?:number|no)|sort ?code|card ?(?:expiry|expiration|exp)|cc ?exp(?:iry|iration)?|(?:expiry|expiration) (?:date )?(?:of|on) (?:your |the )?card|valid ?(?:thru|through)|mm ?\/ ?yy|kartennummer|n[uú]mero de tarjeta|num[eé]ro de carte|passwort|kennwort|contrase[nñ]a|mot de passe|reisepass|pasaporte|passeport|f[uü]hrerschein|(?:permiso|licencia|carn[eé]) de conducir|permis de conduire|personalausweis|ausweisnummer|documento de identidad|carte d.identit|sozialversicherung(?:snummer)?|seguridad social|s[eé]curit[eé] sociale|kontonummer|bankleitzahl|cuenta bancaria|compte bancaire)\b|\bcard ?#|\bpin\b(?! ?code)/i;
     // Short codes that are ordinary words in some languages count only in capitals.
     const secretCodes = /\b(?:EIN|TIN|DNI|NIE)\b/;
-    // An access code, such as a gate or door code, unless the field is an offer's code or a note
-    // that mentions one, such as delivery instructions.
+    // An access code, such as a gate or door code, unless its label shows an offer's code or a
+    // note that mentions one, such as delivery instructions.
     const accessCodes = /\b(?:gate|door|access|alarm|lockbox|entry) ?code\b/i;
-    const notAccessCodes = /\b(?:promo|coupon|discount|pre ?sale|instruction|note)/i;
+    const notAccessCodes = /\b(?:promo|coupon|discount|pre ?sale|early ?access|instruction|note)/i;
     const spaced = (text) => words(String(text ?? "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\-.[\]]+/g, " "));
     const flagMarks = '[aria-invalid="true"], .is-invalid' +
       (globalThis.CSS?.supports?.("selector(:user-invalid)") ? ", :user-invalid" : "");
@@ -497,10 +497,12 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
         options: listed.options,
         duplicate: listed.duplicate === true,
         input: element instanceof HTMLInputElement ? element.type : undefined,
+        // A box to tick or a button to choose that names a card or a bank is never one itself.
         secret:
-          tokens.some((token) => secretTokens.test(token)) ||
-          texts.some((text) => secretWords.test(text) || secretCodes.test(text)) ||
-          (texts.some((text) => accessCodes.test(text)) && !texts.some((text) => notAccessCodes.test(text))),
+          !(element instanceof HTMLInputElement && (element.type === "checkbox" || element.type === "radio")) &&
+          (tokens.some((token) => secretTokens.test(token)) ||
+            texts.some((text) => secretWords.test(text) || secretCodes.test(text)) ||
+            (texts.some((text) => accessCodes.test(text)) && !notAccessCodes.test(spaced(label)))),
         readOnly: element.readOnly === true,
         flagged,
         keys: keysOf(element),
