@@ -502,7 +502,7 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
           !(element instanceof HTMLInputElement && (element.type === "checkbox" || element.type === "radio")) &&
           (tokens.some((token) => secretTokens.test(token)) ||
             texts.some((text) => secretWords.test(text) || secretCodes.test(text)) ||
-            (texts.some((text) => accessCodes.test(text)) && !notAccessCodes.test(spaced(label)))),
+            (texts.some((text) => accessCodes.test(text)) && !notAccessCodes.test(texts[0]))),
         readOnly: element.readOnly === true,
         flagged,
         keys: keysOf(element),
