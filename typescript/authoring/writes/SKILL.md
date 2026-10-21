@@ -119,15 +119,34 @@ During the session:
   still works for a caller who never sees it.
 - Before committing, read back from the page what you are about to submit and check each
   value as the core skill's Confirm step says, against the option the tool picked when it
-  picked one, in the session and on every branch of the composed script. Fail if one does
-  not match, and prefer running this check before the step's commit mark, so a mismatch
-  stops the step before it sends anything. Never read back a field filled with a secret
-  handle.
+  picked one, or the site's version of a typed value it rewrote (below), in the session and
+  on every branch of the composed script. Fail if one does not match, and prefer running
+  this check before the step's commit mark, so a mismatch stops the step before it sends
+  anything. Never read back a field filled with a secret handle.
+- Read each typed value back once its field settles, before the step's commit. When the site
+  rewrote it as it was typed or on leaving the field, such as an address it standardized, or
+  offered exactly one suggestion for it, take the site's version, as you would a picked
+  option: later read-backs, such as a review page, summary or confirmation, compare against
+  it, and the output returns it for that field. The one suggestion counts only for a
+  free-text value the caller typed, such as an address or a name in a text box the site
+  completes, never for a picker that selects a record, such as a person, assignee, customer,
+  linked record, store or account, which keeps the reference rules in "Check the read-back"
+  and the caller-input skill's. Add an optional output field `<input>_note`, such as
+  `address_note`, that reports the rewrite with what the caller sent and what the site kept.
+  Check it once with `sameText(shown, typed, { rewrite: true })`, which only decides what the
+  note says: when it holds, the site only reformatted the value, and the note says so; when it
+  fails, the site dropped or changed part of what the caller gave, and the note says it
+  changed. The write goes on either way: never throw `InputNotApplied` for such a rewrite. A
+  value cut short by the field's length limit, digits an input mask dropped, or a field that
+  cleared is a failed fill, not a rewrite: fill it again in the field's format, or refuse as
+  today. A value the site replaces only when a step saves follows the read-back before
+  committing, above.
 - On a form saved over several pages, before the final commit, read back what the site saved
   for the caller's values, from a summary, a review page or each saved page, in the session
   and in the composed script. Compare each value the site shows with
   `readBackMatches(shown, wanted)` from `pomerado/runtime`, against the option the tool picked
-  when it picked one: `wanted` is that option's label, and the caller's value otherwise. It
+  when it picked one, or the site's version of a typed value it rewrote (above): `wanted` is
+  that option's label or that version, and the caller's value otherwise. It
   accepts the same value in another format or word order, and every number must match
   exactly, the same numbers in the same order. When the site kept a different value, save that
   page again once with the same entries and read it back again, but only when saving it again

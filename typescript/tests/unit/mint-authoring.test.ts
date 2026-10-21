@@ -739,7 +739,7 @@ it("has the minter read back a write, accept recent-search saves and look before
   const text = (name: string) =>
     (contents(skills)[skills.findIndex((skill) => skill.name === name)] ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    "- Before committing, read back from the page what you are about to submit and check each value as the core skill's Confirm step says, against the option the tool picked when it picked one, in the session and on every branch of the composed script. Fail if one does not match, and prefer running this check before the step's commit mark, so a mismatch stops the step before it sends anything. Never read back a field filled with a secret handle.",
+    "- Before committing, read back from the page what you are about to submit and check each value as the core skill's Confirm step says, against the option the tool picked when it picked one, or the site's version of a typed value it rewrote (below), in the session and on every branch of the composed script. Fail if one does not match, and prefer running this check before the step's commit mark, so a mismatch stops the step before it sends anything. Never read back a field filled with a secret handle.",
   );
   expect(text("core")).toContain(
     "Telemetry, analytics and bot-sensor POSTs are normal and need no change. So is an anonymous recent-search, prefill or search-state save the site fires when you submit a search.",
@@ -747,6 +747,38 @@ it("has the minter read back a write, accept recent-search saves and look before
   expect(guide.instructions.replace(/\s+/g, " ")).toContain(
     "Do not infer invalid input from a timeout, missing observation, lost authentication, or failure of our automation. Not finding a value where you first looked is not that evidence. Before you call a value unavailable, check where the site would show it for the requested scope, such as the requested date's calendar or the results for the requested search. Settled evidence for the requested option, such as the site not listing it, is enough, and so is the site showing it sold out or unavailable for a write. A read that finds the requested option greyed out or sold out returns it as unavailable data with the page's alternatives instead",
   );
+});
+
+/*
+ * A site rewrote an address as it was typed, writing Parkway as PKWY, and the read-back refused a
+ * correct save. A write takes the site's version of a typed value, as it would a picked option,
+ * and notes in its output whether the rewrite only reformatted or changed what the caller gave,
+ * never refusing it.
+ */
+it("has a write take the site's rewrite of a typed value and note whether it changed the caller's", async () => {
+  const skills = await Effect.runPromise(loadAuthoringSkills("typescript/authoring"));
+  const text = (name: string) =>
+    (contents(skills)[skills.findIndex((skill) => skill.name === name)] ?? "").replace(/\s+/g, " ");
+  expect(text("writes")).toContain(
+    "- Read each typed value back once its field settles, before the step's commit. When the site rewrote it as it was typed or on leaving the field, such as an address it standardized, or offered exactly one suggestion for it, take the site's version, as you would a picked option: later read-backs, such as a review page, summary or confirmation, compare against it, and the output returns it for that field. The one suggestion counts only for a free-text value the caller typed, such as an address or a name in a text box the site completes, never for a picker that selects a record, such as a person, assignee, customer, linked record, store or account, which keeps the reference rules in \"Check the read-back\" and the caller-input skill's. Add an optional output field `<input>_note`, such as `address_note`, that reports the rewrite with what the caller sent and what the site kept. Check it once with `sameText(shown, typed, { rewrite: true })`, which only decides what the note says: when it holds, the site only reformatted the value, and the note says so; when it fails, the site dropped or changed part of what the caller gave, and the note says it changed. The write goes on either way: never throw `InputNotApplied` for such a rewrite. A value cut short by the field's length limit, digits an input mask dropped, or a field that cleared is a failed fill, not a rewrite: fill it again in the field's format, or refuse as today. A value the site replaces only when a step saves follows the read-back before committing, above.",
+  );
+  expect(text("core")).toContain(
+    "With none, throw its `pickRefusal`, an `InvalidInput` with `field` and `available`, the entries the site showed, except on a write whose site offered exactly one suggestion for a free-text value the caller typed, never a picker that selects a record: take it as the writes skill says for a value the site rewrites.",
+  );
+  expect(text("core")).toContain(
+    "`wanted` being the option the tool picked from the site's list when it picked one, the site's version of a value a write typed and the site rewrote (writes skill), and the caller's value otherwise. It ignores case, accents, spacing, apostrophes, periods, commas and hyphens between letters, reads a space, hyphen, slash or parentheses between digits as one separator while the groups still count, so 29 59 matches 29-59 but never 2959 or 2 959, and accepts a word the page shortened, such as St for Saint.",
+  );
+  expect(text("forms")).toContain(
+    "On a write, a single suggestion for a free-text value the caller typed is the site's correction instead, never for a picker that selects a record: take it as the writes skill says.",
+  );
+  expect(text("caller-input")).toContain(
+    "or a value a write typed that the site rewrote before any save, kept and reported as the writes skill says.",
+  );
+  // The publication review and the minter's publication skill excuse the note in the same words.
+  const note =
+    "A write's `<input>_note` reporting a value the site rewrote as it was typed, on leaving the field, or through its one suggestion is not unapplied input; the tool read the site's version back and returns it.";
+  expect(publicationOutputPolicy).toContain(note);
+  expect(text("publication")).toContain(note);
 });
 
 /*
@@ -906,7 +938,7 @@ it("has a write read back each saved caller value before its final commit, and s
     " ",
   );
   expect(writes).toContain(
-    "- On a form saved over several pages, before the final commit, read back what the site saved for the caller's values, from a summary, a review page or each saved page, in the session and in the composed script. Compare each value the site shows with `readBackMatches(shown, wanted)` from `pomerado/runtime`, against the option the tool picked when it picked one: `wanted` is that option's label, and the caller's value otherwise. It accepts the same value in another format or word order, and every number must match exactly, the same numbers in the same order. When the site kept a different value, save that page again once with the same entries and read it back again, but only when saving it again updates the same record or page, never when the save adds an item, such as a cart line or a row. Prefer `saveAndReadBack` from `pomerado/runtime` for such a page's save: it does both and returns the values that still differ. When one still differs, or a page whose save adds an item kept a different value, stop before the final commit's mark and throw `InputNotApplied` with its `field`, `requested` and `applied`.",
+    "- On a form saved over several pages, before the final commit, read back what the site saved for the caller's values, from a summary, a review page or each saved page, in the session and in the composed script. Compare each value the site shows with `readBackMatches(shown, wanted)` from `pomerado/runtime`, against the option the tool picked when it picked one, or the site's version of a typed value it rewrote (above): `wanted` is that option's label or that version, and the caller's value otherwise. It accepts the same value in another format or word order, and every number must match exactly, the same numbers in the same order. When the site kept a different value, save that page again once with the same entries and read it back again, but only when saving it again updates the same record or page, never when the save adds an item, such as a cart line or a row. Prefer `saveAndReadBack` from `pomerado/runtime` for such a page's save: it does both and returns the values that still differ. When one still differs, or a page whose save adds an item kept a different value, stop before the final commit's mark and throw `InputNotApplied` with its `field`, `requested` and `applied`.",
   );
   expect(readBackMatches("California", "California")).toBe(true);
   expect(readBackMatches("California", "CA")).toBe(false);
@@ -977,16 +1009,16 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["8f37adf51ce894d811085c5deb89afb7d06ba8f46336707c76e8e159496c93bf", "core"],
+    ["d505d23c2ef6b234262cdf0d1ec48af4d8916ee60c77a52280df33ab733f4452", "core"],
     ["a896a59d7b924a2940a90437b8d4488cd515c4f4afc70da9fe14953b1583dd93", "search"],
     ["e1b24b29d645071fa265f37d0fae3bb5be2b38798a32ecdbd7d5a6826a1c9248", "auth"],
     ["d720cd4d66afaf411cf14dbce6a026f72e2830e203c284e87248dfaff920f44c", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
-    ["26446a39d72a9c69c3755a7101619477a7eb0a753a0ae816094cba9b85f225cd", "forms"],
-    ["fbcc17242c23f824c4f60de9cbf1da1eb614f93a1c859fa05821372d9e76848c", "writes"],
+    ["d2256259f30d4da5f46f50e6d012834a29f0f08526b02a5696fada8e9b47bbda", "forms"],
+    ["da1153c3b0467828276f76b5d3baa0a800f8de5c6c7251ef90bd4aeaf78ab6b3", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["a97a3bdb8a979d6f0230005ce8ae12b4789af3f5afccca8fb1ce4a450d8b668d", "caller-input"],
-    ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],
+    ["ef6f1840e268b678cf0a9367f3314cc408854a015359199b1f37b736abbadf71", "caller-input"],
+    ["3855dfaddc3e2ef61282b67344e61f667723f120dd0cd33d70d394504aa274ab", "publication"],
     ["ca25d414d25ba51222fbd7014de75173308bc46d6fc237cc527f47837b1992fc", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
