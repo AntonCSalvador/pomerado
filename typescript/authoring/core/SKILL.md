@@ -201,10 +201,13 @@ exception: it is optional unless the task can't run without it (below).
   (case, accents, spacing, punctuation, and whole words, so a name with a neighborhood or an
   airport code in brackets still matches) with a whole-name or code match outranking a partial
   one, and counts the matches at the best rank. With none, throw its `pickRefusal`, an
-  `InvalidInput` with `field` and `available`, the entries the site showed. With one, use it.
-  With several, a read takes the first in the site's own order and returns the one it used, as
-  the site labels it. A write asks the caller which one with a declared choice question whose
-  options are those matches as the site labels them (.agents/caller-input/SKILL.md).
+  `InvalidInput` with `field` and `available`, the entries the site showed, except on a write
+  whose site offered exactly one suggestion for a free-text value the caller typed, never a
+  picker that selects a record: take it as the writes skill says for a value the site
+  rewrites. With one, use it. With several, a read takes the first in the site's own order and
+  returns the one it used, as the site labels it. A write asks the caller which one with a
+  declared choice question whose options are those matches as the site labels them
+  (.agents/caller-input/SKILL.md).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
   match that accepts the usual forms of the same name, such as a name with or without its
   accents (Abaca for Abacá), a city alone or with its state and country, or a company with
@@ -543,9 +546,11 @@ that depends on them:
    before the page updates belongs to the previous choice. A choice already in the requested
    state needs no step and no wait. Compare text read back with `sameText(shown, wanted)` from
    `pomerado/runtime`, `wanted` being the option the tool picked from the site's list when it
-   picked one, and the caller's value otherwise. It ignores case, accents, spacing,
-   apostrophes, and periods, commas and hyphens between letters, and accepts a word the page
-   shortened, such as St for Saint. Prefer it over
+   picked one, the site's version of a value a write typed and the site rewrote (writes skill),
+   and the caller's value otherwise. It ignores case, accents, spacing, apostrophes, periods,
+   commas and hyphens between letters, reads a space, hyphen, slash or parentheses between
+   digits as one separator while the groups still count, so 29 59 matches 29-59 but never 2959
+   or 2 959, and accepts a word the page shortened, such as St for Saint. Prefer it over
    exact equality, since a page may echo a query or name in its own case or short form, and
    prefer comparing numbers, dates and amounts as values. When the page kept another value
    after the tool's bounded retries, throw

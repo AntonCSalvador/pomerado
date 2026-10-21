@@ -52,10 +52,44 @@ export const foldChoiceText = (text: unknown): string => {
  * longer one in `shown`, so a wanted Pen never matches a shown Pencil. Both texts need the same
  * number of words in the same order, and a word holding a digit or another symbol, such as a slash
  * or a bracket, must be the same word, so 12 never matches 123, C++ never matches C and Blue/Green
- * never matches Blue Green. Compare numbers, dates and amounts as values instead. It is pure and
- * self-contained, so page code can embed it.
+ * never matches Blue Green. A space, hyphen, dash, slash or parentheses between digits is one
+ * separator, whichever it is, so 29 59, 29-59 and 29/59 match, and so do (317) 555-1234 and
+ * 317-555-1234, but the groups it separates count: 1/12 never matches 11/2, 1 234 never matches
+ * 12 34 and 2959 never matches 29 59. A period or comma between digits counts too, so 10.0 never
+ * matches 100. Compare numbers, dates and amounts as values instead.
+ *
+ * With `{ rewrite: true }`, `shown` is the site's own version of a value the tool typed, `wanted`,
+ * such as an address the site standardized as it was entered, and the answer is whether it kept
+ * everything the caller gave. It only tells a rewrite that reformatted the value from one that
+ * changed it, and never decides whether a write goes on. Every word and number of `wanted` must
+ * appear in `shown`, in order. A word may be written short or in full either way, with the same
+ * first letter, its letters in order and a short form of two letters or more, at most three fifths
+ * as long as the full word, and of two letters when it is the full word's start. So Parkway
+ * matches PKWY, Suite matches STE and St matches Street, either way, while Main never matches
+ * Martin, Mainland or M, Larkspur never matches Lark, Oakwood never matches Oak and Avenue never
+ * matches Ave. A number keeps its groups, as above, though the site may pad a group of a grouped
+ * number with zeros, as 01/12 for 1/12, or add thousands commas to a bare one, as 1,420 for 1420,
+ * and three or more groups split by periods, as in 555.123.4567, are groups as a hyphen splits
+ * them. A bare number of seven digits or more, a phone or account number, may come back grouped,
+ * so 5551234567 matches (555) 123-4567, but a shorter one never does and a grouped one never
+ * comes back regrouped or bare, so 1420 never matches 14-20 and 29-59 never matches 2959. What
+ * the site adds is a change, a word holding a digit, a unit or a place alike, so Apt 4 never
+ * matches Apt 4B, and 1420 Larkspur Rd never matches 1420-2 Larkspur Rd or 1420 Larkspur Rd
+ * Apt 2, with three exceptions: a word of one or two Latin letters between two of the caller's,
+ * as 100 N Main St adds N to 100 Main St; a country code before a number, as +1 before
+ * (555) 123-4567; and one more group after a postal code of five digits or more that ends the
+ * caller's value, so 46204 matches 46204-1234. Other punctuation is ignored. A dropped or changed
+ * word or number fails, so 1420 Oak Road, Springfield never matches 1420 Oak Rd, Riverton, except
+ * a country code the caller typed where the site shows none. An email, domain or file name, or a
+ * `wanted` with no letter or digit, compares as it does without the option.
+ *
+ * It is pure and self-contained, so page code can embed it.
  */
-export const sameText = (shown: string, wanted: string): boolean => {
+export const sameText = (
+  shown: string,
+  wanted: string,
+  options: { readonly rewrite?: boolean } = {},
+): boolean => {
   const fold = (text: string) => {
     const raw = String(text ?? "").replace(/[\u00AD\u200B\u2060\uFEFF]/gu, "");
     const folded = raw
@@ -69,11 +103,20 @@ export const sameText = (shown: string, wanted: string): boolean => {
       .trim();
     return folded === "" ? raw.trim() : folded;
   };
-  // The page's word writes the wanted one short: same first letter, its letters in order in the
-  // wanted word, and at most half as long. Never the other way round.
-  const shortens = (short: string, full: string) => {
+  // A space, hyphen, dash, slash or parentheses between digits is one separator, written as a
+  // hyphen, and the opening parenthesis of a group such as (317) before more digits goes. The
+  // groups stay, so 1/12 never reads as 11/2.
+  const groupDigits = (text: string) =>
+    text
+      .replace(/\((?=\p{N}+\)[\s/\-\u2010-\u2014]*\p{N})/gu, "")
+      .replace(/(?<=\p{N})[\s/()\-\u2010-\u2014]+(?=\p{N})/gu, "-");
+  // One word writes another short: same first letter, its letters in order in the other word,
+  // and at most half as long when `halfLength` holds, three fifths otherwise.
+  const shortens = (short: string, full: string, halfLength: boolean) => {
     const latin = /^\p{Script=Latin}+$/u.test(short + full);
-    if (!latin || short[0] !== full[0] || short.length * 2 > full.length) return false;
+    if (!latin || short[0] !== full[0]) return false;
+    if (halfLength ? short.length * 2 > full.length : short.length * 5 > full.length * 3)
+      return false;
     let next = 0;
     for (const letter of full) if (letter === short[next]) next++;
     return next === short.length;
@@ -82,11 +125,136 @@ export const sameText = (shown: string, wanted: string): boolean => {
   // period before two letters marks one; an abbreviation's own periods, as in D.C., do not.
   const both = String(shown ?? "") + " " + String(wanted ?? "");
   const literal = /@|[\p{L}\p{N}]\.\p{L}{2}/u.test(both);
-  const a = fold(shown).split(" ");
-  const b = fold(wanted).split(" ");
+  // Words and numbers, a number keeping a period or comma between its digits and a word holding
+  // a digit, such as 4b, staying one word, `mixed`. A number that follows another across
+  // separators alone continues it, `joined`, and so does each group of three or more split by
+  // periods alone, as in 555.123.4567. `plus` marks a number written after a plus sign.
+  type Part = { text: string; number: boolean; mixed: boolean; joined: boolean; plus: boolean };
+  const parts = (text: string) => {
+    const folded = fold(text);
+    const found: Part[] = [];
+    let end = 0;
+    for (const match of folded.matchAll(
+      /(?:\p{N}+(?:[.,]\p{N}+)*|[\p{L}\p{M}\u200C\u200D]+)+/gu,
+    )) {
+      const gap = folded.slice(end, match.index);
+      end = (match.index ?? 0) + match[0].length;
+      const number = /^\p{N}+(?:[.,]\p{N}+)*$/u.test(match[0]);
+      const mixed = !number && /\p{N}/u.test(match[0]);
+      const previous = found[found.length - 1];
+      const joined = number && previous?.number === true && /^[\s/()\-\u2010-\u2014]*$/u.test(gap);
+      const groups = /^\p{N}+(?:\.\p{N}+){2,}$/u.test(match[0]) ? match[0].split(".") : [match[0]];
+      groups.forEach((group, index) =>
+        found.push({
+          text: group,
+          number,
+          mixed,
+          joined: joined || index > 0,
+          plus: number && index === 0 && gap.endsWith("+"),
+        }),
+      );
+    }
+    return found;
+  };
+  // The site's version keeps each of the caller's words and numbers, in order. A number the
+  // caller gave starts one of the site's with the same groups, one by one; a bare one of seven
+  // digits or more, a phone or account number, may also be the site's whole number, grouped, as
+  // 5551234567 is (555) 123-4567. What the site adds is a change, except a word of one or two
+  // Latin letters between two of the caller's, a country code before a number, and one more
+  // group after a postal code of five digits or more that ends the caller's value.
+  const kept = (site: readonly Part[], given: readonly Part[]) => {
+    const items: Part[][] = [];
+    for (const part of given) {
+      const last = items[items.length - 1];
+      if (part.joined && last !== undefined) last.push(part);
+      else items.push([part]);
+    }
+    // A country code: one to three digits after a plus sign, before the groups of a number.
+    const country = (part: Part | undefined) =>
+      part !== undefined && part.plus && !part.joined && /^\p{N}{1,3}$/u.test(part.text);
+    const countryAt = (index: number) => country(site[index]) && site[index + 1]?.joined === true;
+    // Whether a number starts at the site's part `index`, on its own or after a country code.
+    const opens = (index: number) => site[index]?.joined === false || countryAt(index - 1);
+    // The site writes a word short or in full, the short form at most three fifths as long. A
+    // short form is two letters or more, and one that is the full word's start has two letters,
+    // as St for Street, so Oak never stands for Oakwood, nor Main for Mainland.
+    const sameWord = (there: string, typed: string) => {
+      if (there === typed) return true;
+      const [short, full] = there.length < typed.length ? [there, typed] : [typed, there];
+      if (short.length < 2 || (short.length > 2 && full.startsWith(short))) return false;
+      return shortens(short, full, false);
+    };
+    // The site writes a bare number with thousands commas, as 1,420 for 1420, or pads a group of
+    // a grouped number with zeros, as 01/12 for 1/12.
+    const sameNumber = (there: string, typed: string, grouped: boolean) => {
+      if (there === typed) return true;
+      if (!/^\p{N}+$/u.test(typed)) return false;
+      if (grouped) {
+        const padding = there.slice(0, there.length - typed.length);
+        return there.length > typed.length && /^0+$/u.test(padding) && there.endsWith(typed);
+      }
+      return /^\p{N}{1,3}(?:,\p{N}{3})+$/u.test(there) && there.replace(/,/gu, "") === typed;
+    };
+    // How many of the site's parts from `start` the caller's item takes, or 0 when it does not
+    // fit there.
+    const fits = (item: readonly Part[], start: number): number => {
+      const first = item[0];
+      if (first === undefined || (first.number && !opens(start))) return 0;
+      if (first.number && item.length === 1 && /^\p{N}{7,}$/u.test(first.text)) {
+        let end = start + 1;
+        while (site[end]?.joined === true) end++;
+        const whole = site.slice(start, end).map((there) => there.text);
+        if (end - start > 1 && whole.join("") === first.text) return end - start;
+      }
+      // A country code the caller typed may be left out, as 555-123-4567 for +1 555 123 4567,
+      // when the site shows none.
+      if (country(first) && item.length > 1 && !country(site[start]) && !countryAt(start - 1))
+        return fits(item.slice(1), start);
+      const all = item.every((part, offset) => {
+        const there = site[start + offset];
+        if (there === undefined || there.number !== part.number || there.mixed !== part.mixed)
+          return false;
+        if (part.number) {
+          const grouped = item.length > 1;
+          return (offset === 0 || there.joined) && sameNumber(there.text, part.text, grouped);
+        }
+        return part.mixed ? there.text === part.text : sameWord(there.text, part.text);
+      });
+      return all ? item.length : 0;
+    };
+    let at = 0;
+    for (const [index, item] of items.entries()) {
+      let start = at;
+      let taken = 0;
+      while (start < site.length && (taken = fits(item, start)) === 0) start++;
+      if (taken === 0) return false;
+      for (let added = at; added < start; added++) {
+        const part = site[added];
+        const inserted =
+          index > 0 && part !== undefined && /^\p{Script=Latin}{1,2}$/u.test(part.text);
+        if (!inserted && !(added === start - 1 && countryAt(added))) return false;
+      }
+      at = start + taken;
+    }
+    const last = items[items.length - 1];
+    const postal = last?.length === 1 && /^\p{N}{5,}$/u.test(last[0]?.text ?? "");
+    const extra = site.slice(at);
+    return (
+      extra.length === 0 ||
+      (extra.length === 1 && postal && extra[0]?.joined === true && /^\p{N}+$/u.test(extra[0].text))
+    );
+  };
+  if (options?.rewrite === true && !literal) {
+    const given = parts(wanted);
+    if (given.length > 0) return kept(parts(shown), given);
+  }
+  const a = groupDigits(fold(shown)).split(" ");
+  const b = groupDigits(fold(wanted)).split(" ");
   return (
     a.length === b.length &&
-    a.every((word, index) => word === b[index] || (!literal && shortens(word, b[index] ?? "")))
+    a.every(
+      (word, index) => word === b[index] || (!literal && shortens(word, b[index] ?? "", true)),
+    )
   );
 };
 
