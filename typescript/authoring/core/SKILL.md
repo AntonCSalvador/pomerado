@@ -239,6 +239,9 @@ exception: it is optional unless the task can't run without it (below).
   offers: a collapsed group is not an absent one. Leave out controls unrelated to the purpose,
   such as a language switch or a newsletter opt-in on a search. The search skill's "Find the
   filters" says how a search records them.
+- Declare input fields in the order a person fills in the site's form: what or where first,
+  then when (a start date before an end date), then who and how many, then optional
+  refinements, with sorting and paging (`limit`, `cursor`) last.
 - Turn safety defaults off. They are never an input or a question ("Safety defaults", below).
 - Inputs that tailor the answer. Many sites tailor what they show to facts about the visitor,
   not just what they searched for: where they are (ZIP, address, store, delivery or pickup),
