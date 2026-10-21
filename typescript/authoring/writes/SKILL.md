@@ -172,7 +172,8 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
 - When a step waits for the site's answer, wait for every answer the site can give, such
   as results, a no-results message or an out-of-area notice, and throw `InvalidInput`
   naming the field the site refused, with the options the site offers as `available` when
-  it lists them, before any commit mark, rather than waiting for results alone.
+  it lists them, before the mark of the commit it guards, rather than waiting for results
+  alone.
 - Report a confirm popup to `decideDialog` with a literal `step` name, and keep that
   literal in the helper the composed script imports. Runs accept a popup without
   asking only at the step the session accepted it at, so the host refuses to publish

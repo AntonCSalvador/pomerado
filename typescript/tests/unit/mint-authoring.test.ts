@@ -804,7 +804,7 @@ it("has a write mark only the steps that send and wait for every answer the site
   );
   // The wait is its own rule, and a refusal it reads ends as the caller's input before any mark.
   expect(writes).toContain(
-    "the next step uses. - When a step waits for the site's answer, wait for every answer the site can give, such as results, a no-results message or an out-of-area notice, and throw `InvalidInput` naming the field the site refused, with the options the site offers as `available` when it lists them, before any commit mark, rather than waiting for results alone.",
+    "the next step uses. - When a step waits for the site's answer, wait for every answer the site can give, such as results, a no-results message or an out-of-area notice, and throw `InvalidInput` naming the field the site refused, with the options the site offers as `available` when it lists them, before the mark of the commit it guards, rather than waiting for results alone.",
   );
   // The narrower click-only rule it replaces is gone, so the two never disagree.
   expect(writes).not.toContain("Mark only the step whose click saves or submits.");
@@ -956,7 +956,7 @@ it("renders the pinned standalone authoring", async () => {
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["d71e45c5b1f13bcf26c6a22bc455b1da93c1276b8e73f5d7db6ec302f62a6a04", "forms"],
-    ["aeecdb5351a5d1fd60daabdc71099a235640d56ed53e3d2b3af3319fd5e39169", "writes"],
+    ["f3214392cca243dd3d796d96b20f766e68cc07c86d4cc9118e3fc793e7b1545d", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["b878173156d608df50612163e73637f1e9129b1eb568b72c597af27adca06df9", "caller-input"],
     ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],
