@@ -94,27 +94,30 @@ export const sameText = (shown: string, wanted: string): boolean => {
  * How much of `query`'s words each of `texts` holds, by BM25 (Okapi BM25 with k1 1.2 and b 0.75,
  * and Lucene's word weight), with `texts` as the set that weighs each word: a word few of them
  * hold counts for more. Each score is the text's BM25 score for the query over the query's own
- * score as a text, so 1 is a text holding every word of the query and no other, it falls as the
- * query's words go missing or the text adds others, and 0 is a text sharing no word with it.
- * Apart from the numbers rule below, ranking texts by it ranks them by plain BM25.
+ * score as a text, so a text holding every word of the query once and no other scores 1, it falls
+ * as the query's words go missing or the text adds others, and 0 is a text sharing no word with
+ * it. A text that repeats the query's words can score above 1, as "Smith Smith Smith" does for
+ * Smith. Apart from the numbers rule below, ranking texts by it ranks them by plain BM25.
  *
  * Words are read as `foldChoiceText` reads names: case, accents, apostrophes and periods, commas
  * and hyphens between letters are ignored. A whole text that names one date, such as
  * "Nov 5, 2026", "5 November 2026", "2026-11-05" or "25/11/2026", is one word, that date, unless
  * its day and month could be either way round, as in "03/04/2026". A whole text of 7 to 15 digits
- * with only spaces, periods, hyphens, brackets and a leading +, other than a number with two
- * decimals such as 1500000.00, is one word, its digits, without the leading 1 of 11 digits, so a
- * phone or account number matches however it is spaced. Thousands commas, a trailing .00 and
- * currency symbols are dropped, so $1,250.00 matches 1250 and ¥1,500,000 matches 1500000. An
+ * with only spaces, periods, hyphens, brackets and a leading +, other than a decimal number such
+ * as 1500000.00 or 1234567.8, is one word, all its digits, so a phone or account number matches
+ * however it is spaced, and 14155551234 never matches 4155551234. Thousands commas, a trailing .00
+ * and currency symbols are dropped, so $1,250.00 matches 1250 and ¥1,500,000 matches 1500000. An
  * email, domain or file name, a word whose digits are joined by a slash, period or hyphen, such as
  * 1.5 or ACCT-0042, and a number with a sign before or after it, such as -5 or 5+, each stay one
- * word, so 12 never matches 123 or 1.2, and 5 never matches -5. A run of single letters is one
- * word, so U.S.A. matches USA.
+ * word, so 12 never matches 123 or 1.2, 1234567.8 never matches 12345678, and 5 never matches -5.
+ * A run of single letters is one word, so U.S.A. matches USA.
  *
- * Numbers must match exactly: a text that lacks any word of the query holding a digit, read as
- * above, scores 0 whatever else it shares, so 125 Main St never matches 123 Main St and 500000
- * never matches 300000. A text may hold numbers the query lacks, and in another order. Any other
- * word counts only by its BM25 weight, so a negation such as "not" or "non" is one more word.
+ * Numbers must match exactly: a text whose words holding a digit, read as above, are not the
+ * query's, the same ones in the same order, scores 0 whatever else it shares. So 125 Main St never
+ * matches 123 Main St, 500000 never matches 300000, "Adults 2 Children 1" never matches
+ * "Adults 1 Children 2", and "5 15" never matches 5. The words around them may move, so
+ * "Main St 123" matches "123 Main St". Any other word counts only by its BM25 weight, so a
+ * negation such as "not" or "non" is one more word.
  *
  * It is pure and self-contained, so page code can embed it.
  */
@@ -187,11 +190,11 @@ export const rankByWords = (query: string, texts: readonly string[]): number[] =
       .trim();
     const date = dateOf(raw);
     if (date !== "") return ["date:" + date];
-    // A phone or account number is its digits, the word a bare number or an amount also gives.
-    if (/^[+\d\s().-]+$/u.test(raw) && !/^\d+\.\d\d$/u.test(raw)) {
+    // A phone or account number is all its digits, the word a bare number or an amount also gives.
+    // A decimal number keeps its point.
+    if (/^[+\d\s().-]+$/u.test(raw) && !/^\d+\.\d+$/u.test(raw)) {
       const digits = raw.replace(/\D/gu, "");
-      if (digits.length >= 7 && digits.length <= 15)
-        return [digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits];
+      if (digits.length >= 7 && digits.length <= 15) return [digits];
     }
     const spaced = raw
       .replace(/(?<![\p{L}\p{N}])(\d{1,3}(?:,\d{3})+)(?!\p{N})/gu, (number) => number.replace(/,/gu, ""))
@@ -249,24 +252,31 @@ export const rankByWords = (query: string, texts: readonly string[]): number[] =
     }
     return sum;
   };
-  // Every number of the query, as read above, must be in the text.
-  const numbers = asked.filter((word) => /\p{N}/u.test(word));
+  // The text's numbers, as read above, must be the query's: the same ones in the same order.
+  const numbersOf = (words: readonly string[]) => words.filter((word) => /\p{N}/u.test(word));
+  const numbers = numbersOf(asked);
+  const sameNumbers = (doc: readonly string[]) => {
+    const held = numbersOf(doc);
+    return held.length === numbers.length && held.every((word, index) => word === numbers[index]);
+  };
   const own = score(asked);
-  return docs.map((doc) => (own === 0 || numbers.some((word) => !doc.includes(word)) ? 0 : score(doc) / own));
+  return docs.map((doc) => (own === 0 || !sameNumbers(doc) ? 0 : score(doc) / own));
 };
 
 /**
- * Whether text read back from the page, `shown`, confirms `wanted`, the option the tool picked or
- * the caller's value: `sameText(shown, wanted)` holds, or `shown` holds enough of `wanted`'s words,
- * a `rankByWords` score for `wanted` of 0.7 or more with `shown` as the only text. Case, accents,
+ * Whether text read back from the page, `shown`, confirms `wanted`: `sameText(shown, wanted)`
+ * holds, or `shown` holds enough of `wanted`'s words, a `rankByWords` score for `wanted` of 0.7 or
+ * more with `shown` as the only text. `wanted` is the label of the option the tool picked when it
+ * picked one, and the caller's value otherwise, since California never confirms a caller's CA
+ * that the tool picked as California. Case, accents,
  * spacing and punctuation between letters are ignored either way. The second step accepts the
  * wanted words in another order and among other words: a one-word value is confirmed by text
  * that adds up to two words to it, and text that drops one of the wanted words is not, unless the
  * value has eleven words or more. So a wanted name inside a longer one, such as Lakeside in North
- * Lakeside, is confirmed. `shown` must hold every number `wanted` holds: dates, phone numbers and
- * amounts as `rankByWords` reads them, so 2,150 confirms 2150, and other numbers the same, so
- * 125 Main St never confirms 123 Main St. It calls `sameText` and `rankByWords`, so page code that
- * embeds it embeds those two first.
+ * Lakeside, is confirmed. `shown` must hold the numbers `wanted` holds and no others, in the same
+ * order: dates, phone numbers and amounts as `rankByWords` reads them, so 1,875 confirms 1875, and
+ * other numbers the same, so 125 Main St never confirms 123 Main St and "5 15" never confirms 5.
+ * It calls `sameText` and `rankByWords`, so page code that embeds it embeds those two first.
  */
 export const readBackMatches = (shown: string, wanted: string): boolean =>
   sameText(shown, wanted) || (rankByWords(wanted, [shown])[0] ?? 0) >= 0.7;

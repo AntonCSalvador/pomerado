@@ -8,10 +8,14 @@ export interface SavedValueDifference<Field extends string = string> {
 }
 
 /**
- * Saves one page of a form saved over several pages and reads back each value of `wanted`, the
- * caller's values, from what the site stored. `save` fills the page with the caller's values and
- * saves it, behind its commit mark; `read` reads what the site saved for each field, from a
- * summary, a review page or the saved page, with null or no entry for a field it no longer shows.
+ * Saves one page of a form saved over several pages and reads back each value of `wanted` from
+ * what the site stored. `wanted` holds each field the site shows for the caller's values: the
+ * label of the option the tool picked when it picked one, such as California for a caller's CA,
+ * and the caller's value otherwise. `save` fills the page with the same entries and saves it,
+ * behind its commit mark. Use it only for a save that updates the same record or page, never one
+ * that adds an item, such as a cart line or a row, since its second save would add another.
+ * `read` reads what the site saved for each field, from a summary, a review page or the saved
+ * page, with null or no entry for a field it no longer shows, which counts as differing.
  * Each field is compared with `readBackMatches`. When one differs, it saves once more and reads
  * back again, and never saves a third time. It returns the fields that still differ, in `wanted`'s
  * order, empty when the site kept every value, so the tool stops before its final commit and
