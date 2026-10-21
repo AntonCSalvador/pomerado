@@ -95,6 +95,7 @@ export type {
   ReadyResult,
 } from "./action-waits.js";
 export type {
+  CommitConfirmation,
   OutcomeObservation,
   WaitProgress,
   WaitProgressSign,

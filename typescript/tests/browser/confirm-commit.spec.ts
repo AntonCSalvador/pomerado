@@ -106,8 +106,11 @@ const cases: readonly Case[] = [
   {
     name: "a 200 followed by the page marking a field invalid is not done",
     reply: { status: 200, body: json({ success: true }) },
-    after: `document.querySelector("#email").setAttribute("aria-invalid", "true");
-      document.querySelector("#email-help").textContent = "Enter a valid email";`,
+    // Drawn a moment after the response wins the wait, as a page that renders its answer late.
+    after: `setTimeout(() => {
+        document.querySelector("#email").setAttribute("aria-invalid", "true");
+        document.querySelector("#email-help").textContent = "Enter a valid email";
+      }, 200);`,
     expected: { state: "not_done", status: "failed" },
   },
   {
@@ -116,6 +119,23 @@ const cases: readonly Case[] = [
     after: `const body = await reply.json();
       say('<div role="alert" class="alert alert-danger">' + body.message + '</div>');`,
     expected: { state: "not_done", status: "failed" },
+  },
+  {
+    name: "a 200 followed by a message styled as an error is not done",
+    reply: { status: 200, body: json({ id: "r-7" }) },
+    after: `say('<span class="field-validation-error">Start date is required</span>');`,
+    expected: { state: "not_done", status: "failed" },
+  },
+  {
+    name: "a body that wraps its JSON in a string still reports its failure",
+    reply: { status: 200, body: json({ d: json({ Success: false, Message: "Rate unavailable" }) }) },
+    expected: { state: "not_done", status: "failed" },
+  },
+  {
+    name: "an announcement only a screen reader hears leaves the commit done",
+    reply: { status: 200, body: json({ Success: "True" }) },
+    after: `say('<p role="alert" aria-live="assertive" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Record r-7</p>');`,
+    expected: { state: "done", status: "completed" },
   },
   {
     name: "a 201 whose Location names the new record is done at once",

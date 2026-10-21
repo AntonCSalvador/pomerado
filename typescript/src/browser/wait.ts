@@ -40,6 +40,19 @@ export interface WaitRecord {
 }
 
 /**
+ * `confirmCommit`'s answer: whether the write's final commit went through (`done`), did not
+ * (`not_done`) or can't be told from the response and the page (`unclear`); its status in the
+ * core notation, `queued` with the site's own word in `statusLabel` when the site took the work
+ * to finish later; and a sentence saying what decided it.
+ */
+export interface CommitConfirmation {
+  readonly state: "done" | "not_done" | "unclear";
+  readonly status: "completed" | "queued" | "failed" | "unconfirmed";
+  readonly statusLabel?: string;
+  readonly reason: string;
+}
+
+/**
  * The page-progress tracker every wait shares. A wait keeps going while the page shows progress
  * and fails once it has shown none for `noProgressMs`. Progress is any of:
  *
@@ -636,6 +649,199 @@ const waitForOutcome = async (outcomes, options = {}) => (await waitForOutcomeRe
 `;
 
 /**
+ * `confirmCommit`: whether a write's final commit went through, from the `{ response }` answer of
+ * the commit click's `waitForOutcomeResult` and the page after it. Uses `page`, the progress
+ * code's `waitLimits`, `waitBounded` and `waitSleep`, and the outcome kinds' `outcomeWaitClean`
+ * and `outcomeWaitInvalidInPage`.
+ */
+const commitCode = String.raw`
+// Words that say a write failed, in a status, a success field, a message or a page alert. "No
+// errors" says none.
+const confirmCommitErrorWords = /\b(?:errors?|fail(?:s|ed|ure)?|invalid|denied|rejected|declined|forbidden|unauthori[sz]ed)\b/i;
+const confirmCommitNoErrors = /\b(?:no|without|zero|0)\s+errors?\b/i;
+// What a page alert says when it is the site refusing a value, beside the error words.
+const confirmCommitRefusalWords = /\b(?:required|must|cannot|can't|could not|couldn't|unable|not valid|please (?:enter|select|choose|provide|fill|complete|correct))\b/i;
+const confirmCommitSuccessWords = /\b(?:success(?:ful|fully)?|saved|created|updated|submitted|completed|confirmed|thank you)\b/i;
+// A status that says the site took the work and finishes it later.
+const confirmCommitQueuedWords = /\b(?:queued|enqueued|pending|processing|in progress)\b/i;
+const confirmCommitWords = (value) => String(value).replace(/[_-]+/g, " ");
+const confirmCommitSaysError = (value) =>
+  typeof value === "string" && confirmCommitErrorWords.test(confirmCommitWords(value)) &&
+  !confirmCommitNoErrors.test(confirmCommitWords(value));
+const confirmCommitClip = (value) => outcomeWaitClean(typeof value === "string" ? value : JSON.stringify(value), 160);
+const confirmCommitList = (texts) => texts.slice(0, 3).map((text) => '"' + confirmCommitClip(text) + '"').join(", ");
+// A success field's value: true, false, or anything else, which leaves it unclear.
+const confirmCommitTruth = (value) => {
+  const text = typeof value === "string" ? value.trim().toLowerCase() : value;
+  if (text === true || text === 1 || ["true", "1", "yes", "ok", "success"].includes(text)) return true;
+  if (text === false || text === 0 || ["false", "0", "no"].includes(text) || confirmCommitSaysError(value)) return false;
+  return undefined;
+};
+// Whether an error field holds an error: not empty, zero, false, or a word for none.
+const confirmCommitFilled = (value) =>
+  value === true || (typeof value === "number" && value !== 0) ||
+  (typeof value === "string" && !/^(?:|0+|none|null|false|ok|success|n\/a)$/i.test(value.trim())) ||
+  (Array.isArray(value) ? value.length > 0 : value !== null && typeof value === "object" && Object.keys(value).length > 0);
+// What a readable JSON body says about the write: the first sign it failed, the first it leaves
+// unclear, and the site's word for queued work. Success, ok and error fields count up to two
+// levels down, as in { data: { save: { errors } } }; status and message words up to one. A string
+// that holds JSON, as some frameworks wrap a body in { d: "..." }, is read as one more level.
+const confirmCommitBody = (body) => {
+  const found = {};
+  const visit = (value, depth) => {
+    if (depth > 2 || value === null || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      for (const each of value.slice(0, 50)) visit(each, depth + 1);
+      return;
+    }
+    for (const [key, field] of Object.entries(value)) {
+      const name = key.toLowerCase().replace(/[_-]/g, "");
+      const said = key + " is " + confirmCommitClip(field);
+      if (/^(?:is)?succe(?:ss|ssful|eded)$/.test(name)) {
+        const truth = confirmCommitTruth(field);
+        if (truth === false) found.failed ??= said;
+        else if (truth === undefined) found.unclear ??= said + ", not true";
+      } else if (name === "ok" && field === false) found.failed ??= said;
+      else if (/errors?$|^error(?:message|msg|text|code)s?$/.test(name) && confirmCommitFilled(field)) found.failed ??= said;
+      else if (depth <= 1 && (name === "status" || name === "statuscode") && typeof field === "number" && field >= 400)
+        found.failed ??= said;
+      else if (depth <= 1 && /^(?:status|state|result|outcome|message|msg)$/.test(name) && typeof field === "string") {
+        if (confirmCommitSaysError(field)) found.failed ??= said;
+        else if ((name === "status" || name === "state") && confirmCommitQueuedWords.test(confirmCommitWords(field)))
+          found.queued ??= outcomeWaitClean(field, 100);
+      }
+      if (typeof field === "string" && depth <= 1 && /^\s*[[{]/.test(field)) {
+        try {
+          visit(JSON.parse(field), depth + 1);
+        } catch {}
+      } else visit(field, depth + 1);
+    }
+  };
+  visit(body, 0);
+  return found;
+};
+// The body as JSON, or undefined when it is empty, not JSON or can't be read, as a redirect's.
+const confirmCommitRead = async (response) => {
+  const text = await waitBounded(Promise.resolve().then(() => response.text()).catch(() => undefined), 1000);
+  if (typeof text !== "string" || text.trim() === "") return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+};
+// Elements that may hold the site's message: alerts, assertive live regions, and anything styled
+// as an error.
+const confirmCommitMessages =
+  '[role="alert"], [role="alertdialog"], [aria-live="assertive"], [class*="error" i], [class*="danger" i], [class*="invalid" i]';
+// Runs in the page: each visible, short message with what its styling (its own, or up to two
+// elements around it) says, and whether it is an alert.
+const confirmCommitMessagesInPage = (elements) => {
+  const shows = (element) =>
+    typeof element.checkVisibility === "function"
+      ? element.checkVisibility({ visibilityProperty: true, opacityProperty: true })
+      : element.getClientRects().length > 0;
+  const styling = (element) => {
+    const parts = [];
+    for (let node = element, depth = 0; node instanceof Element && depth < 3; node = node.parentElement, depth += 1)
+      for (const name of ["class", "data-type", "data-status", "data-variant", "data-severity"]) parts.push(node.getAttribute(name) ?? "");
+    return parts.join(" ");
+  };
+  return elements.flatMap((element) => {
+    if (element.matches("input, select, textarea, button, option") || !shows(element)) return [];
+    // Text only a screen reader hears, in a box a pixel wide, is not what the page shows.
+    const box = element.getBoundingClientRect();
+    if (box.width <= 1 || box.height <= 1) return [];
+    const text = String(element.innerText ?? "").replace(/\s+/g, " ").trim();
+    if (text === "" || text.length > 500) return [];
+    const style = styling(element);
+    return [{
+      text,
+      errorStyle: /error|danger|invalid|fail/i.test(style),
+      successStyle: /success/i.test(style),
+      alert: element.matches('[role="alert"], [role="alertdialog"], [aria-live="assertive"]'),
+    }];
+  });
+};
+// One look at the page: the invalid fields and error messages it shows, and alerts that say
+// neither error nor success. The body's own message never excuses one.
+const confirmCommitLook = async (page) => {
+  const fields = await page.locator("body").evaluateAll(outcomeWaitInvalidInPage);
+  const messages = await page.locator(confirmCommitMessages).evaluateAll(confirmCommitMessagesInPage);
+  const error = (message) =>
+    message.errorStyle || (!message.successStyle &&
+      ((confirmCommitErrorWords.test(message.text) && !confirmCommitNoErrors.test(message.text)) || confirmCommitRefusalWords.test(message.text)));
+  return {
+    errors: [
+      ...fields.map((field) => field.field + (field.message === "" ? " is marked invalid" : ": " + field.message)),
+      ...new Set(messages.filter(error).map((message) => message.text)),
+    ],
+    neutral: [...new Set(messages.filter((message) => message.alert && !error(message) && !message.successStyle &&
+      !confirmCommitSuccessWords.test(message.text)).map((message) => message.text))],
+  };
+};
+// Looks at the page for the settle window, so an error the page draws just after the response
+// counts, and returns at the first look that shows one. Undefined when no look could read it.
+const confirmCommitPage = async (page) => {
+  const begun = Date.now();
+  const capMs = 2000;
+  let seen;
+  while (true) {
+    const look = await waitBounded(confirmCommitLook(page).catch(() => undefined), Math.max(0, begun + capMs - Date.now()));
+    if (look !== undefined) {
+      seen = look;
+      if (look.errors.length > 0) return look;
+    }
+    const elapsed = Date.now() - begun;
+    if ((seen !== undefined && elapsed >= waitLimits.settle) || elapsed >= capMs) return seen;
+    await waitSleep(100);
+  }
+};
+const confirmCommit = async (outcome, page) => {
+  const done = (reason, queued, statusLabel) => ({
+    state: "done",
+    status: queued ? "queued" : "completed",
+    ...(statusLabel === undefined ? {} : { statusLabel }),
+    reason,
+  });
+  const notDone = (reason) => ({ state: "not_done", status: "failed", reason });
+  const unclear = (reason) => ({ state: "unclear", status: "unconfirmed", reason });
+  // A native dialog that opened during the wait and says the write failed is the page's answer.
+  // While one stays open the page can't be read, and the look below finds it unclear.
+  const dialog = outcome?.dialog;
+  if (dialog !== undefined && dialog !== null && confirmCommitSaysError(dialog.message()))
+    return notDone("a native " + dialog.type() + ' dialog said "' + confirmCommitClip(dialog.message()) + '"');
+  const response = outcome?.response;
+  if (response === undefined || response === null) {
+    const look = await confirmCommitPage(page);
+    const answered = outcome?.outcome === undefined ? "" : '; "' + outcome.outcome + '" answered the wait';
+    if (look !== undefined && look.errors.length > 0)
+      return notDone("no commit response" + answered + "; the page shows " + confirmCommitList(look.errors));
+    return unclear("no commit response to confirm" + answered);
+  }
+  const status = response.status();
+  const where = response.request().method() + " " + new URL(response.url()).pathname + " answered " + status;
+  if (status < 200 || status >= 400) return notDone(where);
+  const location = String(response.headers()["location"] ?? "").trim();
+  if (status === 201 && location !== "") return done(where + " with Location " + confirmCommitClip(location), false);
+  const body = await confirmCommitRead(response);
+  const found = body === undefined ? {} : confirmCommitBody(body);
+  if (found.failed !== undefined) return notDone(where + "; its body's " + found.failed);
+  const look = await confirmCommitPage(page);
+  if (look !== undefined && look.errors.length > 0) return notDone(where + "; the page shows " + confirmCommitList(look.errors));
+  if (found.unclear !== undefined) return unclear(where + "; its body's " + found.unclear);
+  if (look === undefined) return unclear(where + "; the page could not be read after it");
+  if (look.neutral.length > 0)
+    return unclear(where + "; the page shows an alert that says neither error nor success: " + confirmCommitList(look.neutral));
+  return done(
+    where + (body === undefined ? "" : "; its body shows no error") + "; the page shows no error",
+    status === 202 || found.queued !== undefined,
+    found.queued,
+  );
+};
+`;
+
+/**
  * `waitForRows`, `waitForValues` and `waitForChange`: wait for the values a tool returns to be
  * filled in and to read the same on two looks.
  */
@@ -1095,6 +1301,25 @@ const waitForChange = async (fields, options = {}) => {
  * `response`, `dialog` or popup `page` is on the result too, kept off its JSON. Every listener
  * the losing outcomes used is removed before it returns or throws.
  *
+ * `confirmCommit(outcome, page)` judges a write's final commit from the `{ response }` answer of
+ * the commit click's `waitForOutcomeResult` and the page, and returns `CommitConfirmation`, plain
+ * data a call can return. A response that is not 2xx or 3xx is `not_done`; a 201 with a Location
+ * is `done` at once. In a body that reads as JSON, a success field (`success`, `succeeded`,
+ * `isSuccess`, any case) that is false, `"false"`, 0 or `"no"` or holds an error word, `ok: false`,
+ * a non-empty `error`, `errors` or `userErrors`, a status of 400 or more, or an error word in a
+ * status or message is `not_done`, and a success field holding anything but true, `"true"`, 1,
+ * `"yes"`, `"ok"` or `"success"` is `unclear`; a string holding JSON, as in `{ d: "..." }`, is read
+ * too. The page then
+ * gets the settle window (`settle`, 0.5 s) to show a field marked invalid or an error message, such
+ * as an alert or anything styled as an error, which is `not_done`, whatever the body's message
+ * said; an alert that says neither error nor success is `unclear`. Otherwise the commit is
+ * `done`: `queued` for a 202, or a body whose status says queued, pending or processing, with that
+ * word as `statusLabel`, else `completed`. An outcome with no response is `not_done` when the page
+ * shows an error, else `unclear`. A native dialog that opened during the wait and says the write
+ * failed is `not_done`; while one stays open the page can't be read, which is `unclear`. A message
+ * only a screen reader hears, in a box a pixel wide, never counts. It never clicks, and it reads
+ * the body for at most 1 s and the page for at most about 2 s.
+ *
  * `waitForRows(rows, fields, { count, key, ...options })` waits until the first `count` identified
  * rows have every field filled and read the same on two looks `stableMs` apart (default `settle`,
  * 0.5 s), and returns `{ rows: [{ key, ...fields }], more }`. `rows` is a locator for every row;
@@ -1146,7 +1371,7 @@ const waitForChange = async (fields, options = {}) => {
  * `change_unknown` when waitForChange's fields are missing; `values_timeout` at the cap. Each is a
  * `ValueWaitFailure`.
  */
-export const waitCode = `${progressCode}${outcomeKindsCode}${outcomeCode}${valueCode}${readyWaitCode}`;
+export const waitCode = `${progressCode}${outcomeKindsCode}${outcomeCode}${commitCode}${valueCode}${readyWaitCode}`;
 
 /**
  * `waitForOutcome` alone, for code written against the first release of it: it declares only the

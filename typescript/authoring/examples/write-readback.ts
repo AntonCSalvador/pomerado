@@ -101,6 +101,7 @@ export default defineOperation(
         });
         // A field the form marked invalid stopped the save, or answered it: never resubmit.
         if (answer.outcome === "invalid") return { failure: "not_saved" };
+        if ((await confirmCommit(answer, page)).state !== "done") return { failure: "not_saved" };
         const response = answer.response;
         const posted = new URL(response.url());
         const location = new URL(response.headers()["location"] ?? "", posted);
