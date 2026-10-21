@@ -807,6 +807,24 @@ it("has a write confirm from its own commit request, and read back only when tha
   );
 });
 
+/*
+ * A write's own status and body checks for its commit response missed a case each time, such as
+ * a 3xx it rejected or a success field holding an error word, and each fix opened another. The
+ * writes skill and its reference confirm the final commit through the runtime's one check.
+ */
+it("points a write's commit confirmation at confirmCommit", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  expect(writes).toContain(
+    "- Prefer confirming the final commit with `confirmCommit` from `pomerado/browser`, passing the `{ response }` answer of that click's `waitForOutcomeResult` and the page. It applies the commit-response and page-error rules above in one place, so prefer it over writing your own status and body checks, and call `verified()` only when it reports done.",
+  );
+  expect(await readFile("typescript/authoring/examples/write-readback.ts", "utf8")).toContain(
+    "await confirmCommit(answer, page)",
+  );
+});
+
 // A write that passed the page's headings to `verified` lost its receipt. With no argument there
 // is nothing to get wrong, so no skill or reference teaches the argument form any more.
 it("teaches every write to call verified() with no argument and declare a read-back", async () => {
