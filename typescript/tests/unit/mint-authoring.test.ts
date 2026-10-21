@@ -921,6 +921,23 @@ it("has a write refuse a field no site-field question may ask once its click sav
   );
 });
 
+// A write still refuses an option the page does not offer, unless the caller's own task asks for
+// whatever the site ends up with: then it follows the site's preselected substitute and returns it.
+it("has a write follow the site's substitute only when the caller's task asks for what it ends up with", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const writes = (texts.get("writes") ?? "").replace(/\s+/g, " ");
+  // The refusal rule stays as it was, and the exception comes right after it.
+  expect(writes).toContain(
+    "- When one of those checks rules the task out, such as a total over the caller's limit, an item out of stock or a variant the page does not offer, the script refuses before the mark with `InvalidInput` (the caller-input skill, \"Throw the error that matches what happened\"), or returns a refusal its output schema declares before its first mark (below).",
+  );
+  expect(writes).toContain(
+    "A report of the form's fields, its validation messages or the options to pick from is a refusal (`InvalidInput` with `available`) or a failure (`OperationFailure`), not the write's output.",
+  );
+  expect(writes).toContain(
+    "(`site_declined` when the site refused this example). A build whose session never reached the end publishes nothing. - When the caller's own task asks for whatever the site ends up with, such as the product a quote ended up on, follow the site's preselected substitute and return the value the site used instead of throwing `InvalidInput`. Only the caller's task text counts this way; an output field or description you wrote does not. - When a write's form adds required fields",
+  );
+});
+
 // An access code is asked privately, as the site-field question's secret classification treats it.
 it("asks for an access code with a private secret question", async () => {
   const texts = await renderedTexts("typescript/authoring");
