@@ -950,6 +950,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const answeredQuestions = new Map<string, AnsweredQuestion>(
         (recovered?.answeredQuestions ?? []).map(({ id, answer }) => [id, answer]),
       );
+      /**
+       * Whether the owner's latest request_input kept an answer Guardian reads, with no other call
+       * through the turn's actions since: what `owner_ended` stands on. A secret or sign-in answer
+       * is never kept.
+       */
+      let ownerAnsweredLast = false;
       // A write build's one live session: its first act step takes the example claim and the
       // step that records the site's confirmation closes it. A takeover restores this session;
       // an unrelated attempt with an existing claim keeps it closed.
@@ -1557,6 +1563,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 if (entry === undefined) return;
                 answeredQuestions.delete(question.id);
                 answeredQuestions.set(question.id, entry);
+                ownerAnsweredLast = true;
               }),
             ),
           ),
@@ -3244,7 +3251,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
-        // one of those takes its name, so neither ever ends as policy.
+        // one of those takes its name, so neither ever ends as policy. `owner_ended` needs the
+        // owner's latest answer with nothing run since, so a build that went on from an answer
+        // never ends as the owner's choice.
         const ownerRefused =
           loginDeclined !== undefined ||
           [...answeredQuestions.values()].some(
@@ -3262,6 +3271,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           return refused(
             "no_question_unanswered",
             "No question went unanswered in this build, so the build has not ended. Use question_unanswered only after a question you asked came back as no answer and the build cannot go on without it.",
+          );
+        if (reason === "owner_ended" && !ownerAnsweredLast)
+          return refused(
+            "owner_not_ended",
+            "The owner gave no answer since this build's last step that could end it, so the build has not ended. Use owner_ended only right after the owner chose in an answer to end the build.",
           );
         if (reason === "host_refused" && !hostRefusing && hostRefusalPassed)
           return refused(
@@ -3282,7 +3296,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           if (unanswered) return { reason: "question_unanswered" };
           return refused(
             "policy_not_refused",
-            "Nothing in this attempt refused this: Guardian made no final refusal of an execution, and refused no publication for privacy or authority or for a finding no correction gets past. Use host_refused when a host check refused a step the build needs and nothing left in this attempt can fix it. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
+            "Nothing in this attempt refused this: Guardian made no final refusal of an execution, and refused no publication for privacy or authority or for a finding no correction gets past. Use host_refused when a host check refused a step the build needs and nothing left in this attempt can fix it. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, their choice to end the build is owner_ended, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
           );
         }
         return { reason };
@@ -6000,12 +6014,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     // stopped it stopped a sign-in. With no failed sign-in pending, whose own
                     // refusal above asks the agent to resolve it, the build ends as sign-in
                     // unavailable, worded by what the host saw, and its caller is never told to
-                    // change the request. The owner's own no, and a question they left
-                    // unanswered, keep their endings, a policy report renamed to one included.
-                    // A host refusal a later finish_build got past is still a refusal on record.
+                    // change the request. The owner's own no, a question they left unanswered and
+                    // their choice to end the build keep their endings, a policy report renamed to
+                    // one included. A host refusal a later finish_build got past is still a
+                    // refusal on record.
                     if (
                       ending.reason !== "owner_declined" &&
                       ending.reason !== "question_unanswered" &&
+                      ending.reason !== "owner_ended" &&
                       (signInUnconfirmed ||
                         (signInRefusalOnly && !hostRefused && !hostRefusalPassed)) &&
                       unresolvedSignIn === undefined &&
@@ -6535,12 +6551,55 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         return notices.length === 0 ? undefined : notices;
       };
       const published = () => terminal?.build === "published";
+      // Any call through the turn's actions but a question or a blocked report is work after the
+      // owner's latest answer, so `owner_ended` no longer stands on it. Cleared before and after, so
+      // a call queued behind the question still counts. Sandbox commands and file edits are not
+      // actions and leave it as it is.
+      const working =
+        <A extends readonly unknown[]>(
+          action: (...args: A) => Effect.Effect<string, MintFailure>,
+        ) =>
+        (...args: A) =>
+          Effect.suspend(() => {
+            ownerAnsweredLast = false;
+            return action(...args);
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                ownerAnsweredLast = false;
+              }),
+            ),
+          );
       const reviewedActions: MintActions = {
         ...actions,
+        ...(actions.retainCapture === undefined
+          ? {}
+          : { retainCapture: working(actions.retainCapture) }),
+        readSource: working(actions.readSource),
+        execute: working(actions.execute),
+        requestInput: (input) =>
+          Effect.suspend(() => {
+            ownerAnsweredLast = false;
+            return actions.requestInput(input);
+          }),
+        ...(actions.updateTask === undefined ? {} : { updateTask: working(actions.updateTask) }),
+        ...(actions.captchaState === undefined
+          ? {}
+          : { captchaState: working(actions.captchaState) }),
+        ...(actions.liveTests === undefined ? {} : { liveTests: working(actions.liveTests) }),
+        ...(actions.requestBrowserRecovery === undefined
+          ? {}
+          : { requestBrowserRecovery: working(actions.requestBrowserRecovery) }),
+        ...(actions.checkSignedInMarker === undefined
+          ? {}
+          : { checkSignedInMarker: working(actions.checkSignedInMarker) }),
+        ...(actions.abandonSignIn === undefined
+          ? {}
+          : { abandonSignIn: working(actions.abandonSignIn) }),
         // A published build with a write unresolved gives the reviewer its last turn;
         // publication itself never waits for it.
         finish: (input) =>
-          actions.finish(input).pipe(
+          working(actions.finish)(input).pipe(
             Effect.tap((result) =>
               Effect.sync(() => {
                 publications.push(result);
