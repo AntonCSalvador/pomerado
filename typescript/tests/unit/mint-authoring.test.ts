@@ -769,7 +769,7 @@ it("has a write confirm from its first matching read-back, never from state befo
   );
   // The rules on commit marks and uncertain outcomes stay as they were.
   expect(writes).toContain(
-    "- Mark only the step whose click saves or submits. Opening or filling an unsaved form is not a commit step.",
+    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler sends the caller's change to the site.",
   );
   expect(writes).toContain(
     "- Never repeat a step blindly. If an `act` step fails after the page sent a state-changing request or opened a socket, after it entered a commit mark, or without returning a result at all (its page was lost), the write may already be committed;",
@@ -778,6 +778,42 @@ it("has a write confirm from its first matching read-back, never from state befo
   expect(
     (await readFile("typescript/authoring/examples/write-readback.ts", "utf8")).replace(/\s+/g, " "),
   ).toContain("// The 201 with its Location confirmed the write. Record it now, with no further call.");
+});
+
+/*
+ * A write marked opening a form and typing an address as commits, then waited only for the
+ * address suggestions. For an address outside the area the site serves, the site showed a notice
+ * instead, so the run timed out with two marks entered and reported a possible change when
+ * nothing had been sent. Marks go only on steps that send, and a wait names every answer.
+ */
+it("has a write mark only the steps that send and wait for every answer the site can give", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  // A lookup, suggestion, validation or analytics call from a control's handler, such as an
+  // address autocomplete, sends no change, so it is never a commit.
+  expect(writes).toContain(
+    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler sends the caller's change to the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests show they save the caller's change, such as an autosave; a lookup, suggestion, validation or analytics request saves nothing. Place the first commit mark at the first step that saves on the site.",
+  );
+  expect(writes).toContain(
+    "or a control whose handler sends the caller's change to the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests show they save the caller's change, such as an autosave; a lookup, suggestion, validation or analytics request saves nothing. Mark every such step, including autosaves,",
+  );
+  expect(writes).toContain(
+    "- Mark the commit at the step that submits the booking or order; a hold that expires on its own, such as a reserved table or a cart timer, is not the commit.",
+  );
+  // The wait is its own rule, and a refusal it reads ends as the caller's input before any mark.
+  expect(writes).toContain(
+    "the next step uses. - When a step waits for the site's answer, wait for every answer the site can give, such as results, a no-results message or an out-of-area notice, and throw `InvalidInput` naming the field the site refused, with the options the site offers as `available` when it lists them, before the mark of the commit it guards, rather than waiting for results alone.",
+  );
+  // The narrower click-only rule it replaces is gone, so the two never disagree.
+  expect(writes).not.toContain("Mark only the step whose click saves or submits.");
+  expect(writes).not.toContain("Opening or filling an unsaved form is not a commit step.");
+  // These rules are hard rules, never a preference.
+  expect(writes).not.toContain("Prefer placing the first commit mark");
+  expect(writes).not.toContain("Prefer marking the commit");
+  expect(writes).not.toContain("a control whose handler calls the site");
+  expect(writes).not.toContain("return the site's refusal with the caller's options");
 });
 
 /*
@@ -920,7 +956,7 @@ it("renders the pinned standalone authoring", async () => {
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["d71e45c5b1f13bcf26c6a22bc455b1da93c1276b8e73f5d7db6ec302f62a6a04", "forms"],
-    ["9961f2bc809c085f9422e6cc705f9a3521e5ebecc9bfc3fe09ec44b98ccb7d25", "writes"],
+    ["f3214392cca243dd3d796d96b20f766e68cc07c86d4cc9118e3fc793e7b1545d", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["b878173156d608df50612163e73637f1e9129b1eb568b72c597af27adca06df9", "caller-input"],
     ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],
