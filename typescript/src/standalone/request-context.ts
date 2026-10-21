@@ -248,6 +248,8 @@ export interface ReviewStep {
   readonly startsOnFreshPage?: boolean;
   /** Host text Guardian reads after the build's observations. */
   readonly note?: string;
+  /** The agent's own description of the step, its execute call's intent; redacted for review. */
+  readonly agentNote?: string;
   /** Files Guardian may read besides the step's own, by their full paths. */
   readonly evidence?: ReadonlyMap<string, string>;
 }
@@ -336,6 +338,7 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
           requestedIntent,
           ...(taskUpdates.length === 0 ? {} : { taskUpdates: [...taskUpdates] }),
           screenedInput: secrets.redact(JSON.stringify(step.input)),
+          ...(step.agentNote === undefined ? {} : { agentNote: secrets.redact(step.agentNote) }),
           screenedObservations: [
             JSON.stringify(observations),
             ...(step.note ? [step.note] : []),
