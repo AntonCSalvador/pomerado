@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { Effect, Either, Scope } from "effect";
 import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
+import type { EffectJournal } from "../../src/runtime/context.js";
 import { Deadline } from "../../src/runtime/deadline.js";
 import { siteDomain } from "../../src/runtime/same-site.js";
 import type {
@@ -72,6 +73,8 @@ export const runExample = async <Input, EncodedInput, Output, EncodedOutput>(
     readonly list?: ListHost;
     /** The caller's answers to the operation's declared questions; absent, nobody answers. */
     readonly answer?: (request: InputRequest) => InputAnswers;
+    /** The run's journal, for a test that reads its marks while a question waits. */
+    readonly journal?: EffectJournal;
   } = {},
 ) => {
   const calls: string[] = [];
@@ -87,7 +90,7 @@ export const runExample = async <Input, EncodedInput, Output, EncodedOutput>(
       },
     },
   };
-  const journal = await Effect.runPromise(makeEffectJournal);
+  const journal = options.journal ?? (await Effect.runPromise(makeEffectJournal));
   const result = await Effect.runPromise(
     Effect.either(
       Effect.scoped(

@@ -831,6 +831,19 @@ it("has a write refuse a field no site-field question may ask once its click sav
   );
 });
 
+// The click's proof puts its step back before the site-field question, so a run that ends on the
+// question reports nothing sent.
+it("has a write put its step back before asking a field its click proved missing", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("writes")).toContain(
+    "When such a field shows only after the step's click, ask it once `blockingRequiredFields` returns it, which proves the click saved nothing: call `notCommitted` for the step, fill the answer, check the step again, then call `enteringCommit` again with the step's name, and click once.",
+  );
+  expect(text("caller-input")).toContain(
+    "A second click on a marked step is not a resubmission when `blockingRequiredFields` returned the fields you asked for and you called `notCommitted` for that step before asking: fill the answers, check the step again, then call `enteringCommit` again for that step, and click once, as the writes skill says.",
+  );
+});
+
 // An access code is asked privately, as the site-field question's secret classification treats it.
 it("asks for an access code with a private secret question", async () => {
   const texts = await renderedTexts("typescript/authoring");
