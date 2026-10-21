@@ -105,7 +105,9 @@ its spellings (`["CA", "California"]`). `pickValues` adds or replaces chips and 
 multi-select, and `pickerOptions` returns the options a picker lists, for a caller question.
 They wait for suggestions to settle, scroll lists that render as they scroll, match the value
 exactly, then loosely, never pick an "Add" or "Create" row, and confirm the field kept the choice,
-picking again when the page reverts it. A value the picker lacks, or several options that tie,
+picking again when the page reverts it. A read passes `stem: true`, so a caller's word also matches
+an option that shares its stem, such as Dentist and Dentistry. A write leaves it off and asks the
+caller or lists the options instead. A value the picker lacks, or several options that tie,
 comes back as `{ picked: false, reason, available, matches }`: decode it with `PickOutcome` and
 throw `pickRefusal(outcome, field)`, or ask the caller to choose among `matches`. Handle a site's
 quirk with the helper's options, such as `query`, `answered`, `committed`, `commit: "keyboard"` or

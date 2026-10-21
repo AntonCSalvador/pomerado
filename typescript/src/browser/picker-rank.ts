@@ -26,8 +26,9 @@ export type PickerRanking =
 /**
  * The one option `wanted` names, a list of spellings of one choice, by rank: a name or the value
  * as written (trimmed), then ignoring case and spacing, then also ignoring accents and
- * punctuation (`fold`), then a name holding a spelling as whole words, then a name whose words
- * pair one for one, in order, with a spelling's (`stem`). Two words pair when they are equal, or
+ * punctuation (`fold`), then a name holding a spelling as whole words, then, only with
+ * `options.stem`, a name whose words pair one for one, in order, with a spelling's (`stem`), as a
+ * read asks for and a write never does. Two words pair when they are equal, or
  * when both are Latin letters only and share a start of five or more letters that covers at least
  * 70% of the longer word, such as Dentist and Dentistry, Pediatrician and Pediatrics, or Dentists
  * and Dentist, but not Physician and Physics, Adam and Adams, or UK and Ukraine. The value never
@@ -43,6 +44,7 @@ export const rankChoices = (
   choices: readonly PickerChoice[],
   wanted: readonly string[],
   fold: (text: string) => string,
+  options: { readonly stem?: boolean } = {},
 ): PickerRanking => {
   const squash = (text: string) => String(text ?? "").replace(/\s+/gu, " ").trim();
   const lower = (text: string) => squash(text).toLowerCase();
@@ -84,6 +86,7 @@ export const rankChoices = (
     [
       "stem",
       (choice) => {
+        if (options.stem !== true) return false;
         const wants = spellings.map(words).filter((list) => list.length > 0);
         return choice.names.some((name) => {
           const have = words(name);

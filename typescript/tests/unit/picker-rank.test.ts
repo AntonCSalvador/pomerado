@@ -10,6 +10,8 @@ const choice = (names: string | readonly string[], value = "", disabled = false)
 };
 const rank = (choices: readonly PickerChoice[], ...wanted: string[]) =>
   rankChoices(choices, wanted, foldChoiceText);
+const stemRank = (choices: readonly PickerChoice[], ...wanted: string[]) =>
+  rankChoices(choices, wanted, foldChoiceText, { stem: true });
 
 describe("rankChoices", () => {
   test("a name as written beats one that matches only once case and spacing are ignored", () => {
@@ -82,36 +84,44 @@ describe("rankChoices word stems", () => {
     choice("General Dentistry (Dental Assistant)"),
   ];
 
+  test("without the stem option, as on a write, nothing matches by stem", () => {
+    expect(rank([choice("Count")], "County")).toEqual({ status: "missing" });
+    expect(rank(dentistry, "Dentist")).toEqual({ status: "missing" });
+    expect(rankChoices(dentistry, ["Dentist"], foldChoiceText, { stem: false })).toEqual({ status: "missing" });
+    // A read that asks for stems accepts this looser pairing too.
+    expect(stemRank([choice("Count")], "County")).toEqual({ status: "picked", index: 0, rank: "stem" });
+  });
+
   test("a word picks the one option whose word shares a long enough start with it", () => {
-    expect(rank(dentistry, "Dentist")).toEqual({ status: "picked", index: 0, rank: "stem" });
-    expect(rank([choice("Cardiology"), choice("Neurology")], "Cardiologist")).toEqual({ status: "picked", index: 0, rank: "stem" });
-    expect(rank([choice("Pediatric Dentistry"), choice("Pediatrics")], "Pediatrician")).toEqual({
+    expect(stemRank(dentistry, "Dentist")).toEqual({ status: "picked", index: 0, rank: "stem" });
+    expect(stemRank([choice("Cardiology"), choice("Neurology")], "Cardiologist")).toEqual({ status: "picked", index: 0, rank: "stem" });
+    expect(stemRank([choice("Pediatric Dentistry"), choice("Pediatrics")], "Pediatrician")).toEqual({
       status: "picked",
       index: 1,
       rank: "stem",
     });
-    expect(rank([choice("Orthodontics")], "Orthodontist")).toEqual({ status: "picked", index: 0, rank: "stem" });
-    expect(rank([choice("Dermatology")], "Dermatologist")).toEqual({ status: "picked", index: 0, rank: "stem" });
-    expect(rank([choice("Dentist")], "Dentists")).toEqual({ status: "picked", index: 0, rank: "stem" });
+    expect(stemRank([choice("Orthodontics")], "Orthodontist")).toEqual({ status: "picked", index: 0, rank: "stem" });
+    expect(stemRank([choice("Dermatology")], "Dermatologist")).toEqual({ status: "picked", index: 0, rank: "stem" });
+    expect(stemRank([choice("Dentist")], "Dentists")).toEqual({ status: "picked", index: 0, rank: "stem" });
   });
 
   test("every word of the name must pair, in order", () => {
-    expect(rank([choice("Obstetrics & Gynecology")], "Obstetrician Gynecologist")).toEqual({
+    expect(stemRank([choice("Obstetrics & Gynecology")], "Obstetrician Gynecologist")).toEqual({
       status: "picked",
       index: 0,
       rank: "stem",
     });
-    expect(rank([choice("Obstetrics & Gynecology")], "Obstetrician")).toEqual({ status: "missing" });
-    expect(rank([choice("Sports Dentistry")], "Dentist")).toEqual({ status: "missing" });
+    expect(stemRank([choice("Obstetrics & Gynecology")], "Obstetrician")).toEqual({ status: "missing" });
+    expect(stemRank([choice("Sports Dentistry")], "Dentist")).toEqual({ status: "missing" });
   });
 
   test("two options that pair equally tie", () => {
-    expect(rank([choice("Dentistry"), choice("Dentists"), choice("Cosmetic Dentistry")], "Dentist")).toEqual({
+    expect(stemRank([choice("Dentistry"), choice("Dentists"), choice("Cosmetic Dentistry")], "Dentist")).toEqual({
       status: "ambiguous",
       indexes: [0, 1],
       rank: "stem",
     });
-    expect(rank([choice("Cardiology"), choice("Cardiologists")], "Cardiologist")).toEqual({
+    expect(stemRank([choice("Cardiology"), choice("Cardiologists")], "Cardiologist")).toEqual({
       status: "ambiguous",
       indexes: [0, 1],
       rank: "stem",
@@ -119,9 +129,9 @@ describe("rankChoices word stems", () => {
   });
 
   test("a match as written, by whole name or by whole word, outranks a stem", () => {
-    expect(rank([choice("Dentistry"), choice("Dentist")], "Dentist")).toEqual({ status: "picked", index: 1, rank: "exact" });
-    expect(rank([choice("Dentistry"), choice("dentist")], "Dentist")).toEqual({ status: "picked", index: 1, rank: "normalized" });
-    expect(rank([choice("Obstetrics"), choice("Obstetrician & Gynecologist")], "Obstetrician")).toEqual({
+    expect(stemRank([choice("Dentistry"), choice("Dentist")], "Dentist")).toEqual({ status: "picked", index: 1, rank: "exact" });
+    expect(stemRank([choice("Dentistry"), choice("dentist")], "Dentist")).toEqual({ status: "picked", index: 1, rank: "normalized" });
+    expect(stemRank([choice("Obstetrics"), choice("Obstetrician & Gynecologist")], "Obstetrician")).toEqual({
       status: "picked",
       index: 1,
       rank: "words",
@@ -129,21 +139,21 @@ describe("rankChoices word stems", () => {
   });
 
   test("a shared start under five letters or under 70% of the longer word never pairs", () => {
-    expect(rank([choice("Physics")], "Physician")).toEqual({ status: "missing" });
-    expect(rank([choice("Christy")], "Christian")).toEqual({ status: "missing" });
-    expect(rank([choice("Adams")], "Adam")).toEqual({ status: "missing" });
-    expect(rank([choice("Ukraine"), choice("United Kingdom")], "UK")).toEqual({ status: "missing" });
-    expect(rank([choice("Dental Hygienist")], "Dentist")).toEqual({ status: "missing" });
-    expect(rank([choice("Dental")], "Dentist")).toEqual({ status: "missing" });
+    expect(stemRank([choice("Physics")], "Physician")).toEqual({ status: "missing" });
+    expect(stemRank([choice("Christy")], "Christian")).toEqual({ status: "missing" });
+    expect(stemRank([choice("Adams")], "Adam")).toEqual({ status: "missing" });
+    expect(stemRank([choice("Ukraine"), choice("United Kingdom")], "UK")).toEqual({ status: "missing" });
+    expect(stemRank([choice("Dental Hygienist")], "Dentist")).toEqual({ status: "missing" });
+    expect(stemRank([choice("Dental")], "Dentist")).toEqual({ status: "missing" });
   });
 
   test("a word with a digit, or with letters outside Latin, only pairs with itself", () => {
-    expect(rank([choice("Suite 12345")], "Suite 1234")).toEqual({ status: "missing" });
-    expect(rank([choice("Москвичка")], "Москвич")).toEqual({ status: "missing" });
+    expect(stemRank([choice("Suite 12345")], "Suite 1234")).toEqual({ status: "missing" });
+    expect(stemRank([choice("Москвичка")], "Москвич")).toEqual({ status: "missing" });
   });
 
   test("a stem never matches an option's value", () => {
-    expect(rank([choice("General", "dentistry")], "Dentist")).toEqual({ status: "missing" });
+    expect(stemRank([choice("General", "dentistry")], "Dentist")).toEqual({ status: "missing" });
   });
 
   test("a pick by stem decodes and reports its rank", () => {
@@ -152,7 +162,7 @@ describe("rankChoices word stems", () => {
   });
 
   test("a disabled stem match is reported, not replaced", () => {
-    expect(rank([choice("Dentistry", "", true)], "Dentist")).toEqual({ status: "disabled", index: 0, rank: "stem" });
+    expect(stemRank([choice("Dentistry", "", true)], "Dentist")).toEqual({ status: "disabled", index: 0, rank: "stem" });
   });
 });
 

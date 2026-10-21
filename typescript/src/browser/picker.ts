@@ -498,7 +498,8 @@ const pickerPageCode = String.raw`(element, args) => {
  * Select or OK button, or double-clicks the row, when a click alone leaves the dialog open).
  *
  * Matching (see `rankChoices`): a name or value as written, then ignoring case and spacing, then
- * accents and punctuation, then a name holding the value as whole words, then a name whose words
+ * accents and punctuation, then a name holding the value as whole words, then, only with
+ * `options.stem` set to true (as a read sets it; `pickValues` takes it too), a name whose words
  * each share a long start with the value's, such as Dentistry for Dentist (rank `stem`). An
  * option's names are its text, first line, accessible name, `title` and, for a table row, each
  * cell, and its value is `data-value`, `value`, `data-id`, `data-key` or `data-code` (put others
@@ -554,6 +555,7 @@ export const pickerCode = String.raw`
 const pickerFailure = (reason) => Object.assign(new Error(reason), { name: "PickerFailure" });
 const pickerFold = ${String(foldChoiceText)};
 const pickerRankChoices = ${String(rankChoices)};
+const pickerRank = (s, list, wanted) => pickerRankChoices(list, wanted, pickerFold, { stem: s.options.stem === true });
 const pickerPage = ${pickerPageCode};
 const pickerLimits = Object.freeze(${JSON.stringify({
   timeout: 10_000,
@@ -775,7 +777,7 @@ const pickerCollect = async (s, scan, wanted) => {
     else if (latest.scroll.end || latest.scroll.top === at || ++stuck >= 3) complete = !latest.loading;
   }
   const list = [...seen.values()].filter((option) => !option.creation);
-  const ranking = wanted ? pickerRankChoices(pickerChoices(list), wanted, pickerFold) : { status: "missing" };
+  const ranking = wanted ? pickerRank(s, pickerChoices(list), wanted) : { status: "missing" };
   return { list, ranking, scan: latest, complete: complete || seen.size >= 2000 };
 };
 // The enabled options as shown, never a native select's empty-valued prompt such as "Choose...".
@@ -1075,7 +1077,7 @@ const pickerNativeOptions = (control, s) =>
   }, undefined, s.act());
 const pickerNative = async (s, wanted) => {
   const list = await pickerNativeOptions(s.control, s);
-  const outcome = pickerOutcome({ ranking: pickerRankChoices(list, wanted, pickerFold), list }, wanted);
+  const outcome = pickerOutcome({ ranking: pickerRank(s, list, wanted), list }, wanted);
   if (outcome.status === "refused") return outcome.refusal;
   const option = outcome.option;
   const force = !(await pickerEval(s, "select-shown"));
@@ -1092,7 +1094,7 @@ const pickerNative = async (s, wanted) => {
 };
 const pickerDatalist = async (s, wanted) => {
   const list = await pickerNativeOptions(s.control, s);
-  const outcome = pickerOutcome({ ranking: pickerRankChoices(list, wanted, pickerFold), list }, wanted);
+  const outcome = pickerOutcome({ ranking: pickerRank(s, list, wanted), list }, wanted);
   if (outcome.status === "refused") return outcome.refusal;
   const option = outcome.option;
   for (let attempt = 0; attempt <= s.refills; attempt++) {
@@ -1167,7 +1169,7 @@ const pickValues = async (control, values, options = {}) => {
       const all = await pickerNativeOptions(s.control, s);
       const picked = [];
       for (const wanted of list) {
-        const outcome = pickerOutcome({ ranking: pickerRankChoices(all, wanted, pickerFold), list: all }, wanted);
+        const outcome = pickerOutcome({ ranking: pickerRank(s, all, wanted), list: all }, wanted);
         if (outcome.status === "refused") return { ...outcome.refusal, values: [] };
         picked.push(outcome.option);
       }
