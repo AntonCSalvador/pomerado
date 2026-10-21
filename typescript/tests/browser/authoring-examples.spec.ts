@@ -45,6 +45,7 @@ import {
   type ListCursorScope,
 } from "../../src/runtime/list-cursor.js";
 
+import { makeEffectJournal } from "../../src/runtime/context.js";
 import { commitEvidenceOf, commitRetryRefusal, unenteredWrite } from "../../src/runtime/run-outcome.js";
 import { runExample, failure, localFiles } from "./authoring-fixture.js";
 
@@ -1869,6 +1870,34 @@ test("write-session example asks for a field the review flags only after Place o
   expect(phones).toEqual(["555-0100"]);
 });
 
+test("write-session example records its click unsent before it asks the field the click proved missing", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const journal = await Effect.runPromise(makeEffectJournal);
+  const whileAsked: unknown[] = [];
+  const placed = await runExample(page, placeOrder, { item: "armchair", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    journal,
+    answer: () => {
+      whileAsked.push(Effect.runSync(journal.commits));
+      return { extra_field: "555-0100" };
+    },
+  });
+  // The click proved it saved nothing, so the step reads unsent while the question waits.
+  expect(whileAsked).toEqual([[{ name: "place-order", state: "not_sent" }]]);
+  // Entered again once the answer is filled, the second click alone places the order.
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    effect: "verified",
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["armchair"]);
+});
+
 test("write-session example's act steps ask for a field the review flags only after Place order, then place the order once", async ({
   page,
 }) => {
@@ -1919,7 +1948,7 @@ test("write-session example asks nothing after a click whose page may have saved
   expect(orders).toEqual(["sofa"]);
 });
 
-test("write-session example keeps the order possibly sent when nobody answers the field a click proved missing", async ({
+test("write-session example reports the order not sent when nobody answers the field a click proved missing", async ({
   page,
 }) => {
   const origin = "https://shop.example.invalid";
@@ -1930,11 +1959,10 @@ test("write-session example keeps the order possibly sent when nobody answers th
     siteOrigin: origin,
   });
   expect(failure(unanswered.result)).toMatchObject({ _tag: "ScriptInputFailure", code: "Unavailable" });
-  // The step goes back only once the answer is in, so a run that ends on the question reports
-  // the click possibly sent, as it would without the question, and refuses a retry.
-  expect(unanswered.commits).toEqual([{ name: "place-order", state: "sent" }]);
-  expect(commitRetryRefusal(commitEvidenceOf(unanswered.commits))).toBe("commit_entered");
-  expect(unenteredWrite(unanswered.effect, unanswered.commits)).toBe(false);
+  // The step went back before the question, so a run that ends on it reports nothing sent.
+  expect(unanswered.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
+  expect(commitRetryRefusal(commitEvidenceOf(unanswered.commits))).toBeUndefined();
+  expect(unenteredWrite(unanswered.effect, unanswered.commits)).toBe(true);
   expect(orders).toEqual([]);
 });
 
@@ -2119,11 +2147,12 @@ for (const [variant, site] of Object.entries(savingReviews))
     expect(failure(saved.result)).toMatchObject({ _tag: "OperationFailure", message: "not_confirmed" });
   });
 
-test("write-session example keeps a saved order possibly sent when nobody answers a field the save showed", async ({
+test("write-session example asks nothing after a save that hides a field and shows a new required one, and keeps it possibly sent", async ({
   page,
 }) => {
-  // The save resets the form to pickup, which shows a required store the page never showed before
-  // the click: no check can tell that from a refused click, but nobody answered, so it stays sent.
+  // The save resets the form to pickup, which hides the delivery address and shows a required
+  // store the page never showed before the click. A field the click hid proves nothing, so
+  // nothing is asked and the step stays sent.
   const origin = "https://shop.example.invalid";
   const orders: string[] = [];
   await reviewSite(page, origin, orders, {
@@ -2136,13 +2165,23 @@ test("write-session example keeps a saved order possibly sent when nobody answer
       confirm(800);`,
   });
   await page.goto("about:blank");
-  const unanswered = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+  const asked: InputRequest[] = [];
+  const saved = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
     siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o1" };
+    },
   });
-  expect(failure(unanswered.result)).toMatchObject({ _tag: "ScriptInputFailure", code: "Unavailable" });
+  expect(asked).toEqual([]);
   expect(orders).toHaveLength(1);
-  expect(unanswered.commits).toEqual([{ name: "place-order", state: "sent" }]);
-  expect(commitRetryRefusal(commitEvidenceOf(unanswered.commits))).toBe("commit_entered");
+  expect(failure(saved.result)).toMatchObject({
+    _tag: "OperationFailure",
+    message: "not_confirmed",
+    dispatch: "sent",
+  });
+  expect(saved.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  expect(commitRetryRefusal(commitEvidenceOf(saved.commits))).toBe("commit_entered");
 });
 
 test("write-session example checks the review again before its second click when the answer changes the total", async ({
@@ -2383,9 +2422,13 @@ test("write-session example never clicks again when an answer shows a field no q
   expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
     ["Delivery method"],
   ]);
-  // The step was never entered again, so it still reads possibly sent, as for an unanswered question.
-  expect(failure(stopped.result)).toMatchObject({ _tag: "OperationFailure", message: "not_confirmed" });
-  expect(stopped.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  // The step went back before the question and was never entered again, so it reads unsent.
+  expect(failure(stopped.result)).toMatchObject({
+    _tag: "OperationFailure",
+    message: "not_confirmed",
+    dispatch: "not_sent",
+  });
+  expect(stopped.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
   expect(orders).toEqual([]);
 });
 
@@ -2467,6 +2510,53 @@ test("write-session example keeps the step sent when its second click shows a fi
     ["Delivery phone"],
   ]);
   expect(failure(stopped.result)).toMatchObject({ _tag: "OperationFailure", message: "not_confirmed" });
+  expect(stopped.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  expect(orders).toEqual([]);
+});
+
+test("write-session example keeps the step sent when its second click shows another field to ask", async ({
+  page,
+}) => {
+  // The first click asks for a phone. The second, with the phone filled, shows delivery notes and
+  // saves nothing, but the step already went back once, so it stays possibly sent, asked no more.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<label hidden>Delivery phone<input type="tel" name="phone"></label>
+      <label hidden>Delivery notes<input name="notes"></label>
+      <script>
+        let clicks = 0;
+        document.forms[0].addEventListener("submit", (event) => {
+          clicks += 1;
+          if (clicks !== 2) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          const notes = document.querySelector("[name=notes]");
+          notes.parentElement.hidden = false;
+          notes.required = true;
+          notes.setAttribute("aria-invalid", "true");
+        });
+      </script>`,
+    refuseFirst: `const phone = form.querySelector("[name=phone]"); phone.parentElement.hidden = false; phone.setAttribute("aria-invalid", "true");`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const stopped = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "555-0100" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Delivery phone"],
+  ]);
+  expect(failure(stopped.result)).toMatchObject({
+    _tag: "OperationFailure",
+    message: "not_confirmed",
+    dispatch: "sent",
+  });
   expect(stopped.commits).toEqual([{ name: "place-order", state: "sent" }]);
   expect(orders).toEqual([]);
 });

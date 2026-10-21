@@ -15,7 +15,7 @@ import {
 import { offlineKernel } from "../support/offline-kernel.js";
 import { executeKernelOperation } from "../../src/runtime/kernel-operation-run.js";
 import { defineOperation } from "../../src/runtime/operation.js";
-import { ScriptInput, makeScriptInput } from "../../src/runtime/script-input.js";
+import { ScriptInput, ScriptInputFailure, makeScriptInput } from "../../src/runtime/script-input.js";
 import { commitEvidenceOf, unenteredWrite } from "../../src/runtime/run-outcome.js";
 import type { ScriptQuestionHandler } from "../../src/runtime/script-input.js";
 import type { InputRequest } from "../../src/runtime/input-request.js";
@@ -1195,6 +1195,109 @@ describe("a commit step whose click saved nothing", () => {
     expect(marks).toEqual([{ name: "place-order", state: "not_sent" }]);
     expect(commitEvidenceOf(marks)).toBe("not_entered");
     expect(unenteredWrite(outcome.websiteEffect, marks)).toBe(true);
+  });
+
+  // The page's proof comes with the click, so the step goes back right then, before the site-field
+  // question: a run that ends on the question reports nothing sent. A script published when the
+  // step went back only after the answer runs as it did.
+  describe("around the site-field question for a field the click showed", () => {
+    const questions = { extra_field: { type: "site_field" } } as const;
+    const placing = (order: "before_asking" | "after_the_answer") =>
+      defineOperation(
+        {
+          input: Schema.Struct({}),
+          output: Schema.String,
+          questions,
+          write: { confirmation: "readback", commits: ["place-order"] },
+        },
+        async ({ kernel, sessionId, enteringCommit, notCommitted, ask, verified }) => {
+          const click = { code: "return click();", timeout_sec: 10 };
+          enteringCommit("place-order");
+          await kernel.browsers.playwright.execute(sessionId, click);
+          if (order === "before_asking") notCommitted("place-order");
+          const answer = await ask({ extra_field: { label: "Delivery phone" } });
+          await kernel.browsers.playwright.execute(sessionId, {
+            code: `return fill(${JSON.stringify(answer.extra_field)});`,
+            timeout_sec: 10,
+          });
+          if (order === "after_the_answer") notCommitted("place-order");
+          enteringCommit("place-order");
+          const second = await kernel.browsers.playwright.execute(sessionId, click);
+          // A second click the page stops too may have saved: the step can't go back again.
+          if (second.result === "flagged") notCommitted("place-order");
+          verified();
+          return "placed";
+        },
+      );
+    const placeOnce = async (
+      order: "before_asking" | "after_the_answer",
+      options: { readonly secondClick?: "flagged"; readonly unanswered?: true } = {},
+    ) => {
+      const journal = await Effect.runPromise(makeEffectJournal);
+      const whileAsked: unknown[] = [];
+      let clicks = 0;
+      const kernel = fakeKernel((code) => {
+        if (code === "return click();") clicks += 1;
+        return {
+          success: true,
+          result: clicks === 2 && options.secondClick === "flagged" ? "flagged" : null,
+        };
+      });
+      const answer: ScriptQuestionHandler = () =>
+        Effect.suspend(() => {
+          whileAsked.push(Effect.runSync(journal.commits));
+          return options.unanswered === true
+            ? Effect.fail(new ScriptInputFailure({ code: "NoResponse" }))
+            : Effect.succeed({ extra_field: "555-0100" });
+        });
+      const outcome = await run(
+        executeKernelOperation(placing(order), {}, { kernel: kernel.client, sessionId: "s" }).pipe(
+          Effect.provideService(ScriptInput, makeScriptInput(questions, answer)),
+        ),
+        Deadline.after(60_000),
+        Effect.succeed(journal),
+      );
+      return { ...outcome, whileAsked, clicks, commits: await Effect.runPromise(journal.commits) };
+    };
+
+    it("reads the step unsent while the question waits, then confirms the one click after the answer", async () => {
+      const placed = await placeOnce("before_asking");
+      expect(placed.whileAsked).toEqual([[{ name: "place-order", state: "not_sent" }]]);
+      expect(placed.exit).toEqual(Exit.succeed("placed"));
+      expect(placed.clicks).toBe(2);
+      expect(placed.commits).toEqual([{ name: "place-order", state: "confirmed" }]);
+    });
+
+    it("ends a run whose question goes unanswered with nothing sent", async () => {
+      const unanswered = await placeOnce("before_asking", { unanswered: true });
+      expect(failureOf(unanswered.exit)).toEqual(
+        Option.some(expect.objectContaining({ _tag: "ScriptInputFailure", code: "NoResponse" })),
+      );
+      expect(unanswered.clicks).toBe(1);
+      expect(unanswered.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
+      expect(commitEvidenceOf(unanswered.commits)).toBe("not_entered");
+      expect(unenteredWrite(unanswered.websiteEffect, unanswered.commits)).toBe(true);
+    });
+
+    it("still runs a script that puts the step back only after the answer, as published before", async () => {
+      const placed = await placeOnce("after_the_answer");
+      expect(placed.whileAsked).toEqual([[{ name: "place-order", state: "sent" }]]);
+      expect(placed.exit).toEqual(Exit.succeed("placed"));
+      expect(placed.commits).toEqual([{ name: "place-order", state: "confirmed" }]);
+      // Unanswered, that order leaves the step sent, as it always did.
+      const unanswered = await placeOnce("after_the_answer", { unanswered: true });
+      expect(unanswered.commits).toEqual([{ name: "place-order", state: "sent" }]);
+      expect(unenteredWrite(unanswered.websiteEffect, unanswered.commits)).toBe(false);
+    });
+
+    for (const order of ["before_asking", "after_the_answer"] as const)
+      it(`keeps the step sent when the second click is stopped too (${order})`, async () => {
+        const stopped = await placeOnce(order, { secondClick: "flagged" });
+        expect(failureOf(stopped.exit)).toEqual(
+          Option.some(expect.objectContaining({ _tag: "CommitAlreadySent", name: "place-order" })),
+        );
+        expect(stopped.commits).toEqual([{ name: "place-order", state: "sent" }]);
+      });
   });
 
   it("stops the script when its host's journal cannot mark a step unsent", async () => {

@@ -183,9 +183,11 @@ export interface KernelOperationContext<
    * Marks the named commit step unsent again, once the page proved that its click saved nothing:
    * `blockingRequiredFields` returned the fields that stopped it, so the same step still shows,
    * every field it flagged is a required one that appeared with the click and is left empty, and
-   * no confirmation showed. Ask for those fields and fill them first, check the step again, then
-   * call it right before `enteringCommit` and the click once more. Until then the step reads
-   * sent, so a run that ends on the question, unanswered or declined, reports it possibly sent.
+   * no confirmation showed. Call it right then, before asking for those fields, so a run that
+   * ends on the question, unanswered or declined, reports the step unsent. Then fill them, check
+   * the step again, and call `enteringCommit` right before the click once more. A script that
+   * calls it only after the answers, right before `enteringCommit`, still works, with the step
+   * reading sent until then.
    * When `blockingRequiredFields(scope, before, { unaskable: true })` returned
    * `{ unaskable: true, labels }` instead after the step's first click, the click saved nothing
    * but no question may ask those fields, such as a card number: call it, then throw

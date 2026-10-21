@@ -127,7 +127,10 @@ export const CalendarDate = Schema.String.pipe(
  *   field was already showing, by its label, name or id, which a save may have cleared or the page
  *   may have flagged before. A flagged field whose label begins with a label shown before, as when
  *   the page writes its error inside the label, or reads as an error message, such as "Required"
- *   or "This field is required.", counts as one already showing.
+ *   or "This field is required.", counts as one already showing. It also returns `null` when the
+ *   click hid or removed a field shown before it, by its label, name or id, as a save that resets
+ *   the form to another option may. A label the page only extended, as with its error, is still
+ *   showing.
  *   With `unaskable: true`, when every flagged field is such a new, empty, required field with a
  *   label, but one or more are a card, password, code or identity number field as
  *   `unfilledRequiredFields` names them, which no site-field question may ask, such as a card or
@@ -553,11 +556,16 @@ const blockingRequiredFields = async (scope, before, options = {}) => {
   // cleared or flagged by a save. So may one whose label begins with a label shown before, as
   // when the page writes its error inside the label, or whose label reads as an error message.
   const seen = new Set(before.map(String));
-  const extended = (label) =>
-    [...seen].some((key) => label.length > key.length && label.startsWith(key) && !/[\p{L}\p{N}]/u.test(label.charAt(key.length)));
+  const extendsKey = (label, key) =>
+    label.length > key.length && label.startsWith(key) && !/[\p{L}\p{N}]/u.test(label.charAt(key.length));
+  const extended = (label) => [...seen].some((key) => extendsKey(label, key));
   const stale = (field) =>
     field.keys.some((key) => seen.has(key)) || extended(field.label) || formControlMessageWords.test(field.label);
   if (fields.length === 0 || flaggedFilled > 0 || fields.some(stale)) return null;
+  // A click that hid or removed a field the form showed before may be a save that reset the
+  // form, so it proves nothing. A label the page only extended, as with its error, is kept.
+  const after = await formControlRequiredFields(scope, timeout, "labels");
+  if ([...seen].some((key) => !after.some((shown) => shown === key || extendsKey(shown, key)))) return null;
   const unasked = fields.filter((field) => field.unsupported);
   if (unasked.length === 0) return { fields: fields.map(({ control, keys, secret, ...field }) => field) };
   // The click still saved nothing, but no site-field question may ask a secret, such as a card

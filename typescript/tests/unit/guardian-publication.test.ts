@@ -830,11 +830,25 @@ describe("the publication policy", () => {
   it("accepts a write confirmed from its own commit request, and refuses a loose check", () => {
     const policy = guardianPublicationPolicy;
     expect(policy).toContain(
-      "perform and return the confirmation or read-back it declares, and never resubmit or commit twice. A second click on a marked step is not a resubmission when the marked call returned `blockingRequiredFields`' fields and the script, once they were answered, called `notCommitted` for that step once, just before entering it again; a `notCommitted` without that, or a second one for the same step, is a confirmation finding. A `notCommitted` for a step right after the marked call of the step's first click got `unaskable` from `blockingRequiredFields`, followed by `InvalidInput` and no further click, is no finding. A script that confirms from its commit request is confirming, not missing a read-back: in the same call as the final commit click it waits for the site's response on the route the session's commit used, requires a 2xx or 3xx status and no error in a body it can read, checks the page for an error or validation message (a 201 whose Location names the new record needs no page check), and only then calls verified(). It is a confirmation finding when the script accepts any request or any status, takes a 200 from an endpoint that can report errors in its body without checking that body, or skips the page's error check.",
+      "perform and return the confirmation or read-back it declares, and never resubmit or commit twice. A second click on a marked step is not a resubmission when the marked call returned `blockingRequiredFields`' fields and the script called `notCommitted` for that step once, after `blockingRequiredFields` returned them and before entering it again, and entered it again once they were answered; a `notCommitted` without that, or a second one for the same step, is a confirmation finding. A `notCommitted` for a step right after the marked call of the step's first click got `unaskable` from `blockingRequiredFields`, followed by `InvalidInput` and no further click, is no finding. A script that confirms from its commit request is confirming, not missing a read-back: in the same call as the final commit click it waits for the site's response on the route the session's commit used, requires a 2xx or 3xx status and no error in a body it can read, checks the page for an error or validation message (a 201 whose Location names the new record needs no page check), and only then calls verified(). It is a confirmation finding when the script accepts any request or any status, takes a 200 from an endpoint that can report errors in its body without checking that body, or skips the page's error check.",
     );
     expect(policy).toContain(
       "'unverifiable' is valid only if the session evidence shows the site offered no commit response the script can check, no confirmation and no read-back.",
     );
+  });
+
+  // The click's proof lets the step go back once before it is entered again: before the
+  // site-field question, as the skills teach, or after the answers, as tools published before do.
+  it("accepts a step put back after the fields that stopped its click, before or after asking them", () => {
+    expect(guardianPublicationPolicy).toContain(
+      "and a check run again after a marked call returned `blockingRequiredFields`' fields and they were answered, before that step's next enteringCommit.",
+    );
+    expect(guardianPublicationPolicy).not.toContain("just before entering it again");
+    const execution = guardianExecutionPolicy(nativeExecutionEnvironment);
+    expect(execution).toContain(
+      "A second click on a marked step is not submitting the task a second time when the marked call returned blockingRequiredFields' fields and the step called notCommitted for that step once, after blockingRequiredFields returned them and before entering it again, and entered it again once they were answered.",
+    );
+    expect(execution).not.toContain("just before entering it again");
   });
 
   // A write that follows the site's own substitute for an unoffered option is right only when the
