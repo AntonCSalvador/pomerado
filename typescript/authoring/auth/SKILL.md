@@ -113,6 +113,12 @@ on the same page does not prove an account choice happened. Record an authorized
 following Continue as separate steps. Prefer exercising a chooser step from both starts in the
 build, right after a sign-in and from a saved session already past the chooser.
 
+A run can also begin already signed in, so the first sign-in screen never shows: the site goes
+straight to its app, or shows a signed-in page without the form. Build the sign-in to work then:
+when the first screen does not appear, it treats the session as signed in, goes to the site's
+regular app page and checks the signed-in marker there, rather than waiting for the missing screen
+or failing on it.
+
 Call `execute` with purpose `authenticate`, target `liveBrowser` and a `signInStep` for the screen in
 front of you. Pass the site's own sign-in link as you clicked it (above) as `loginUrl` on the first
 one, never the page it redirected to; runs open that link to replay your screens.
@@ -323,9 +329,8 @@ account chrome alone does not establish access to the caller's workflow. The sig
 send is a separate check, of presence only (`auth.sign-in-check`): for it, a site-wide account menu
 or sign-out control is the right choice once `check_signed_in_marker` shows the signed-out page
 lacks it. <!-- pomerado:section auth.signed-in-page:start
-Call `authenticate` with `signInStep: { signedIn: { selector } }`. When the landing page
-shows no such marker, add `openPath`, the observed path of an account page that does, and the host
-opens it and checks there; never guess a protected route.
+Call `authenticate` with `signInStep: { signedIn: { selector } }`. The host checks it on the page
+the browser is already on, so choose a marker that page shows.
 pomerado:section auth.signed-in-page:end --> The host checks that the submitted
 sign-in's recorded controls/form no longer show a password entry awaiting sign-in; unrelated
 password controls on the account page do not fail this check. It also checks that this sign-in
@@ -371,7 +376,8 @@ The host checks the marker in many places across the site, not only where this s
 after every reset, at the start of every operation, after a page load in the middle of a run, and
 on whatever page a failure lands on. Choose a site-wide element only a signed-in user sees, such as
 the global header's account menu or sign-out control, never something only the page after sign-in
-shows.
+shows. Choose one the site's regular app page always shows, since a sign-in whose first screen
+never appeared checks it there.
 
 - Prefer stable attributes and names (`aria-label`, a role, visible text, a test id) over
   generated class names such as `css-1q2w3e`.
@@ -385,19 +391,18 @@ shows.
 - Test it with `check_signed_in_marker` and choose another until every check passes:
   <!-- pomerado:section auth.marker-checks:start
 `signedOutSnapshot` absent (the host saved the page it saw before the sign-in sent anything, and
-  your explores from before signing in count too), `signedInNow`, `freshLoad` (the host opens
-  `openPath`, else `urlPath`, else the site's front page in a new tab) and `secondPage`. Your own
-  tab stays as it was.
+  your explores from before signing in count too), `signedInNow`, `freshLoad` and `secondPage`.
+  Your own tab stays as it was.
 pomerado:section auth.marker-checks:end --> When it reports the signed-out page unchecked, as for a browser that
   started from a saved profile, compare the marker yourself against what a signed-out visitor
   sees.
 - The host repeats these checks when you send `signedIn`. It refuses a marker a signed-out page
   shows (`marker_matches_signed_out_page`) or a sign-in page's path alone
   (`marker_is_login_path`); the sign-in stays open and nothing is sent again, so send `signedIn`
-  with another marker. The marker must show on the signed-in page now. A fresh load never refuses
-  it: the result reports `freshLoad`, and when it is false a notice says why. When the new tab
-  showed the sign-in form, the site keeps its session only in page memory or session storage, and
-  the host signs in automatically at each operation start; the marker must still be site-wide.
+  with another marker. The marker must show on the signed-in page now. `freshLoad` never refuses
+  it: the result reports it, and when it is false a notice says why. A site that keeps its session
+  only in page memory or session storage is signed in automatically at each operation start; the
+  marker must still be site-wide.
 
 The published tool records the check with its screens.
 
