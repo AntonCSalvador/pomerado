@@ -44,6 +44,17 @@ test("pickValue types into an ARIA combobox and clicks the matching option", asy
   expect(await submitted(page)).toEqual({ person: "3" });
 });
 
+// A practitioner's word picks the one suggestion named by its field's word, ahead of the
+// suggestions that hold that field's word among others.
+test("pickValue picks the suggestion whose whole name shares the value's stem", async ({ page }) => {
+  const specialties = '[["1","Cosmetic Dentistry"],["2","Dentistry"],["3","Pediatric Dentistry"],["4","General Dentistry (Dental Assistant)"]]';
+  await serve(page, combobox.replace("Assignee", "Specialty").replace(/const people = \[.*\];/, `const people = ${specialties};`));
+  expect(
+    await call(page, `return await pickValue(page.getByRole("combobox", { name: "Specialty" }), "Dentist", fast);`),
+  ).toEqual({ result: { picked: true, kind: "typeahead", label: "Dentistry", value: "2", rank: "stem", refills: 0 } });
+  expect(await submitted(page)).toEqual({ person: "2" });
+});
+
 test("pickValue picks a native select's option by label, value or another spelling", async ({ page }) => {
   await serve(page, `<form><label>State <select name="state">
 <option value="">Choose a state</option><option value="CA">California</option><option value="NV">Nevada</option>

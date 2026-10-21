@@ -498,7 +498,8 @@ const pickerPageCode = String.raw`(element, args) => {
  * Select or OK button, or double-clicks the row, when a click alone leaves the dialog open).
  *
  * Matching (see `rankChoices`): a name or value as written, then ignoring case and spacing, then
- * accents and punctuation, then a name holding the value as whole words. An option's names are
+ * accents and punctuation, then a name holding the value as whole words, then a name whose words
+ * pair with the value's by stem, such as Dentistry for Dentist (rank `stem`). An option's names are
  * its text, first line, accessible name, `title` and, for a table row, each cell, and its value is
  * `data-value`, `value`, `data-id`, `data-key` or `data-code` (put others first with
  * `options.valueAttributes`). Two options at the best rank are ambiguous; an "Add ..." or
@@ -1150,10 +1151,11 @@ const pickValue = async (control, wanted, options = {}) => {
 };
 const pickerChips = (s) => pickerEval(s, "chips", { chips: s.options.chips ?? null });
 // A chip is the value only by its whole name (as written, or ignoring case, spacing, accents and
-// punctuation), never because its name holds the value as a word: "Blue Grey" is not "Blue".
+// punctuation), never because its name holds the value as a word or shares its stem: "Blue Grey"
+// is not "Blue".
 const pickerChipIs = (chips, wanted) => {
   const ranking = pickerRankChoices(chips, wanted, pickerFold);
-  return ranking.status === "picked" && ranking.rank !== "words" ? ranking : null;
+  return ranking.status === "picked" && ["exact", "normalized", "folded"].includes(ranking.rank) ? ranking : null;
 };
 const pickValues = async (control, values, options = {}) => {
   const list = (Array.isArray(values) ? values : [values]).map(pickerWanted);
@@ -1201,8 +1203,9 @@ const pickValues = async (control, values, options = {}) => {
       for (let attempt = 0; attempt <= s.refills && !done; attempt++) {
         const { method } = pickerTry(options, attempt, attempt);
         let found = await pickerFind(s, wanted);
-        // A free-entry value is created rather than replaced by a suggestion that only holds it.
-        if (options.create && found.status === "picked" && found.rank === "words")
+        // A free-entry value is created rather than replaced by a suggestion that only holds it
+        // or shares its stem.
+        if (options.create && found.status === "picked" && ["words", "stem"].includes(found.rank))
           found = { status: "refused", field: found.field, refusal: { picked: false, reason: "option_missing", wanted: wanted[0], available: [], matches: [] } };
         const since = pickerMark(s);
         const showsChip = (label) => async () => {
