@@ -768,7 +768,7 @@ it("has a write confirm from its first matching read-back, never from state befo
   );
   // The rules on commit marks and uncertain outcomes stay as they were.
   expect(writes).toContain(
-    "- Mark only the step whose click saves or submits. Opening or filling an unsaved form is not a commit step.",
+    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler calls the site.",
   );
   expect(writes).toContain(
     "- Never repeat a step blindly. If an `act` step fails after the page sent a state-changing request or opened a socket, after it entered a commit mark, or without returning a result at all (its page was lost), the write may already be committed;",
@@ -777,6 +777,28 @@ it("has a write confirm from its first matching read-back, never from state befo
   expect(
     (await readFile("typescript/authoring/examples/write-readback.ts", "utf8")).replace(/\s+/g, " "),
   ).toContain("// The 201 with its Location confirmed the write. Record it now, with no further call.");
+});
+
+/*
+ * A write marked opening a form and typing an address as commits, then waited only for the
+ * address suggestions. For an address outside the area the site serves, the site showed a notice
+ * instead, so the run timed out with two marks entered and reported a possible change when
+ * nothing had been sent. Marks go only on steps that send, and a wait names every answer.
+ */
+it("has a write mark only the steps that send and wait for every answer the site can give", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  expect(writes).toContain(
+    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler calls the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests or handlers show they save something. Prefer placing the first commit mark at the first step that saves on the site.",
+  );
+  expect(writes).toContain(
+    "with `waitForOutcome` naming the element the next step uses. When a step waits for the site's answer, wait for every answer the site can give, such as results, a no-results message or an out-of-area notice, and return the site's refusal with the caller's options rather than waiting for results alone.",
+  );
+  // The narrower click-only rule it replaces is gone, so the two never disagree.
+  expect(writes).not.toContain("Mark only the step whose click saves or submits.");
+  expect(writes).not.toContain("Opening or filling an unsaved form is not a commit step.");
 });
 
 /*
