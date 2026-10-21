@@ -16,43 +16,46 @@ const annotationKeywords = new Set([
   "title",
   "writeOnly",
 ]);
-/** Keywords whose meaning depends on other keywords in the same schema. */
-const dependentKeywords = new Set([
-  "additionalItems",
-  "additionalProperties",
-  "contains",
-  "else",
-  "if",
-  "items",
-  "maxContains",
-  "minContains",
-  "patternProperties",
-  "prefixItems",
-  "properties",
-  "then",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-]);
+/**
+ * Keywords whose meaning depends on one another in the same schema, by the part of a value they
+ * judge: `additionalProperties` admits what `properties` leaves out, for example.
+ */
+const dependentKeywords: readonly (readonly string[])[] = [
+  ["additionalProperties", "patternProperties", "properties", "unevaluatedProperties"],
+  [
+    "additionalItems",
+    "contains",
+    "items",
+    "maxContains",
+    "minContains",
+    "prefixItems",
+    "unevaluatedItems",
+  ],
+  ["else", "if", "then"],
+];
 const allOfIn = (schema: Json): readonly unknown[] =>
   Array.isArray(schema["allOf"]) ? schema["allOf"] : [];
 /**
  * One schema that accepts what both `target` and `siblings` accept, as `allOf` does: the
  * referenced or sole `allOf` schema and the keywords beside it, each already inlined. They merge
- * into one, `siblings` winning on annotations. Where both set a validation keyword differently,
- * the merge keeps `target`'s value in `allOf` rather than drop it: just that keyword, when it
- * holds on its own, or else all of `target`.
+ * into one, `siblings` winning on annotations. A merge must not drop a constraint of `target`:
+ * where both set a keyword differently, `target`'s value stays in `allOf`, and where `siblings`
+ * changes a keyword that others of `target`'s depend on, all of `target` stays in `allOf`.
  */
 const conjoined = (target: Json, siblings: Json): Json => {
-  const conflicts = Object.keys(siblings).filter(
-    (key) =>
-      Object.hasOwn(target, key) &&
-      !annotationKeywords.has(key) &&
-      JSON.stringify(target[key]) !== JSON.stringify(siblings[key]),
-  );
-  if (conflicts.length === 0) return { ...target, ...siblings };
-  if (conflicts.some((key) => dependentKeywords.has(key)))
+  const differs = (key: string) =>
+    Object.hasOwn(siblings, key) && JSON.stringify(target[key]) !== JSON.stringify(siblings[key]);
+  if (
+    dependentKeywords.some(
+      (group) => group.some((key) => Object.hasOwn(target, key)) && group.some(differs),
+    )
+  )
     return { ...siblings, allOf: [...allOfIn(siblings), target] };
+  const conflicts = Object.keys(target).filter(
+    (key) => !annotationKeywords.has(key) && differs(key),
+  );
   const merged = { ...target, ...siblings };
+  if (conflicts.length === 0) return merged;
   const held = Object.fromEntries(conflicts.map((key) => [key, target[key]]));
   return { ...merged, allOf: [...allOfIn(merged), held] };
 };
@@ -159,36 +162,6 @@ const subschemasIn = (
   if (key === "dependencies" && isRecord(value))
     return mapEntries(value, (entry) => (Array.isArray(entry) ? data(entry) : schema(entry)));
   return data(value);
-};
-
-/** Keywords about the schema document, which stay where they are beside a root reference. */
-const documentKeywords = new Set(["$schema", "$id", "$defs", "definitions"]);
-
-/**
- * A published schema with each reference that has keywords beside it, such as a bound a
- * refinement adds to a named schema, written as `allOf` that reference with those keywords beside
- * it. Draft-07 ignores every keyword beside `$ref`, so a validator that follows it to the letter
- * would drop those bounds; beside `allOf` they apply. The inliners here read both forms the same.
- */
-export const withLoneReferences = (schema: Readonly<Json>): Json => {
-  const child = (value: unknown) => (isRecord(value) ? withLoneReferences(value) : value);
-  const node = Object.fromEntries(
-    Object.entries(schema).map(([key, value]) => [
-      key,
-      definitionContainers.has(key) && isRecord(value)
-        ? mapEntries(value, child)
-        : subschemasIn(key, value, child),
-    ]),
-  );
-  const reference = node["$ref"];
-  const beside = Object.keys(node).filter((key) => key !== "$ref" && !documentKeywords.has(key));
-  if (typeof reference !== "string" || beside.length === 0) return node;
-  return {
-    allOf: [{ $ref: reference }, ...allOfIn(node)],
-    ...Object.fromEntries(
-      Object.entries(node).filter(([key]) => key !== "$ref" && key !== "allOf"),
-    ),
-  };
 };
 
 /** The definition a canonical reference (`#/$defs/<name>`) names. */

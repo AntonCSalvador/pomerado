@@ -15,7 +15,6 @@ import type { WebsiteAuthenticationFailed } from "./authentication.js";
 import type { ScriptQuestionDeclarations } from "./script-input.js";
 import type { KernelOperation, KernelOperationContext } from "./kernel-operation.js";
 import { withListHost, type ListHost } from "./list-host.js";
-import { withLoneReferences } from "../registry/schema-references.js";
 
 /**
  * How a write operation proves its effect: it reads the confirmation the site shows, or reads back
@@ -157,6 +156,12 @@ const withEmptyObjectsIn = (
       );
 
 /**
+ * The JSON Schema an operation publishes for its input or output. Effect writes an empty struct
+ * as TypeScript's `{}` type (any object or array), which admits arrays and is no tool input
+ * schema. A no-input operation takes the empty object, written the way Effect writes every other
+ * struct; annotations such as a description are kept.
+ */
+/**
  * An optional input field that defaults to `value`: a caller may leave it out, and the run then
  * gets `value`. Its published schema shows `value` as its `default`, which `Schema.optionalWith`'s
  * own default does not. Use it for a choice the build's request or the owner's answer settled as
@@ -168,17 +173,8 @@ export const defaultedInput = <A, I, R>(schema: Schema.Schema<A, I, R>, value: N
     exact: true,
   });
 
-/**
- * The JSON Schema an operation publishes for its input or output. Effect writes an empty struct
- * as TypeScript's `{}` type (any object or array), which admits arrays and is no tool input
- * schema. A no-input operation takes the empty object, written the way Effect writes every other
- * struct; annotations such as a description are kept. Effect writes a refinement of a named
- * schema, such as a length bound on a non-empty string, as a reference with the bound beside it,
- * which the declared Draft-07 ignores; `withLoneReferences` moves the reference into `allOf`, so
- * the bound applies.
- */
 export const contractJsonSchema = <A, I, R>(schema: Schema.Schema<A, I, R>) =>
-  withLoneReferences(withEmptyObjectsIn({ ...JSONSchema.make(schema) }));
+  withEmptyObjectsIn({ ...JSONSchema.make(schema) });
 
 export const executeOperation = <Input, EncodedInput, Output, EncodedOutput, Error, Services>(
   operation: Operation<Input, EncodedInput, Output, EncodedOutput, Error, Services>,

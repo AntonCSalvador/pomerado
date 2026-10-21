@@ -2,7 +2,11 @@ import { Effect, Option, Schema } from "effect";
 import { publicDefinitionPath } from "../guardian/publication.js";
 import type { PendingExecution, ReviewTurn } from "../guardian/review.js";
 import type { PublicationScope } from "../guardian/review-contracts.js";
-import { inlineLocalRefs, UnresolvedSchemaReference } from "../registry/schema-references.js";
+import {
+  canonicalSchema,
+  inlineLocalRefs,
+  UnresolvedSchemaReference,
+} from "../registry/schema-references.js";
 import type { ScriptQuestionDeclarations } from "../runtime/script-input.js";
 import type { TaskChange } from "../guardian/task-update.js";
 import { MintFailure } from "./contracts.js";
@@ -485,8 +489,23 @@ export const sessionEvidenceFiles = (
   );
 
 /**
+ * A published schema as callers receive it: its canonical form, with the definitions a recursive
+ * schema keeps at its root, so it reads on its own. The published text declares Draft-07, which
+ * ignores a bound Effect writes beside a reference; the canonical form inlines that reference, so
+ * the bound reads as the tool applies it. A schema with no canonical form reads as published.
+ */
+const callerSchema = (schema: unknown): unknown => {
+  const canonical = isRecord(schema) ? canonicalSchema({ ...schema }) : undefined;
+  if (canonical === undefined) return schema;
+  return Object.keys(canonical.definitions).length === 0
+    ? canonical.schema
+    : { ...canonical.schema, $defs: canonical.definitions };
+};
+
+/**
  * The public definition as Guardian reads it, at `publication/definition.json`: the build's name
- * and description, then its input and output schemas and declared questions.
+ * and description, then its input and output schemas, in the form callers receive them
+ * (`callerSchema`), and declared questions.
  */
 export const publicDefinition = (
   metadata: { readonly name: string; readonly description: string },
@@ -500,8 +519,8 @@ export const publicDefinition = (
     {
       name: metadata.name,
       description: metadata.description,
-      inputSchema: schemas.input,
-      outputSchema: schemas.output,
+      inputSchema: callerSchema(schemas.input),
+      outputSchema: callerSchema(schemas.output),
       ...(schemas.questions === undefined ? {} : { questions: schemas.questions }),
     },
     null,

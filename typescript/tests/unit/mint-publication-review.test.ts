@@ -1,4 +1,5 @@
-import { Effect, Schema } from "effect";
+import { Ajv } from "@modelcontextprotocol/server/validators/ajv";
+import { Effect, JSONSchema, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { publicationDelta, publicationRound } from "../../src/guardian/publication-delta.js";
 import {
@@ -28,6 +29,7 @@ import {
   type PublicationCandidate,
   type PublicationReview,
 } from "../../src/mint/publication-review.js";
+import { contractJsonSchema } from "../../src/runtime/operation.js";
 
 const limit = 96 * 1024;
 const Envelope = Schema.parseJson(
@@ -443,6 +445,64 @@ describe("the public definition", () => {
       ),
     );
     expect(publicDefinition(metadata, schemas)).not.toContain('"questions"');
+  });
+
+  /** Whether `value` is valid against `schema` read as Draft-07, as Ajv's classic engine reads it. */
+  const validDraft7 = (schema: unknown, value: unknown) =>
+    new Ajv({ strict: false, validateSchema: false, logger: false }).compile(
+      schema as Record<string, unknown>,
+    )(value);
+  /** A schema as a spec-strict Draft-07 validator reads it: every keyword beside `$ref` ignored. */
+  const draft7Reading = (schema: unknown): unknown => {
+    if (Array.isArray(schema)) return schema.map(draft7Reading);
+    if (typeof schema !== "object" || schema === null) return schema;
+    const node = Object.fromEntries(
+      Object.entries(schema).map(([key, value]) => [key, draft7Reading(value)]),
+    );
+    // The root keeps its definitions, which references resolve against.
+    return typeof node["$ref"] === "string" && node["$defs"] === undefined
+      ? { $ref: node["$ref"] }
+      : node;
+  };
+  const definitionOf = (input: Schema.Schema.Any) => {
+    const read = Schema.decodeUnknownSync(
+      Schema.parseJson(Schema.Struct({ inputSchema: Schema.Unknown })),
+    );
+    return read(
+      publicDefinition(metadata, {
+        input: contractJsonSchema(input),
+        output: contractJsonSchema(Schema.Unknown),
+      }),
+    ).inputSchema;
+  };
+
+  it("shows a bound on a named schema as callers receive it, and publishes the contract as Effect writes it", () => {
+    const input = Schema.Struct({ m: Schema.NonEmptyString.pipe(Schema.maxLength(5)) });
+    const shown = definitionOf(input);
+    for (const schema of [shown, draft7Reading(shown)]) {
+      expect(validDraft7(schema, { m: "abcde" })).toBe(true);
+      expect(validDraft7(schema, { m: "abcdefgh" })).toBe(false);
+      expect(validDraft7(schema, { m: "" })).toBe(false);
+    }
+    expect(contractJsonSchema(input)).toEqual({ ...JSONSchema.make(input) });
+  });
+
+  it("shows a recursive schema with the definitions its references name", () => {
+    interface Folder {
+      readonly name: string;
+      readonly folders: readonly Folder[];
+    }
+    const Folder = Schema.Struct({
+      name: Schema.NonEmptyString.pipe(Schema.maxLength(5)),
+      folders: Schema.Array(Schema.suspend((): Schema.Schema<Folder> => Folder)),
+    }).annotations({ identifier: "Folder" });
+    const shown = definitionOf(Schema.Struct({ root: Folder }));
+    expect(validDraft7(shown, { root: { name: "a", folders: [{ name: "b", folders: [] }] } })).toBe(
+      true,
+    );
+    expect(validDraft7(shown, { root: { name: "a", folders: [{ name: "abcdefgh", folders: [] }] } })).toBe(
+      false,
+    );
   });
 });
 

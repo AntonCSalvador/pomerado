@@ -3,7 +3,6 @@ import { JSONSchema, Schema } from "effect";
 import { expect, it } from "vitest";
 import { canonicalSchema, inlineLocalRefs } from "../../src/registry/schema-references.js";
 import type { CanonicalSchema } from "../../src/registry/schema-references.js";
-import { contractJsonSchema } from "../../src/runtime/operation.js";
 
 // Every surface reads a tool's schema in one canonical form; a run checks the published one. Each
 // case's values must validate the same against both.
@@ -168,69 +167,6 @@ it("has no canonical form for a reference that names nothing in the schema", () 
   ).toBeUndefined();
 });
 
-/** Whether `value` is valid against `schema` read as Draft-07, as Ajv's classic engine reads it. */
-const validDraft7 = (schema: unknown, value: unknown) =>
-  new Ajv({ strict: false, validateSchema: false, logger: false }).compile(
-    schema as Record<string, unknown>,
-  )(value);
-/** A schema as a spec-strict Draft-07 validator reads it: every keyword beside `$ref` ignored. */
-const draft7Reading = (schema: unknown): unknown => {
-  if (Array.isArray(schema)) return schema.map(draft7Reading);
-  if (typeof schema !== "object" || schema === null) return schema;
-  const node = Object.fromEntries(
-    Object.entries(schema).map(([key, value]) => [key, draft7Reading(value)]),
-  );
-  // The root keeps its definitions, which references resolve against.
-  return typeof node["$ref"] === "string" && node["$defs"] === undefined
-    ? { $ref: node["$ref"] }
-    : node;
-};
-
-it("publishes constraints on a referenced schema so a Draft-07 validator keeps them", () => {
-  const published = contractJsonSchema(
-    Schema.Struct({ m: Schema.NonEmptyString.pipe(Schema.maxLength(5)) }),
-  );
-  expect(published["$schema"]).toBe("http://json-schema.org/draft-07/schema#");
-  for (const schema of [published, draft7Reading(published)]) {
-    expect(validDraft7(schema, { m: "abcde" })).toBe(true);
-    expect(validDraft7(schema, { m: "abcdefgh" })).toBe(false);
-    expect(validDraft7(schema, { m: "" })).toBe(false);
-  }
-});
-
-it("reads a refined referenced schema the same, whether its constraints sit beside the reference or in allOf with it", () => {
-  const Code = Schema.String.pipe(
-    Schema.pattern(/^[A-Z]+$/),
-    Schema.annotations({ identifier: "Code" }),
-  );
-  const Tool = Schema.Struct({
-    name: Schema.NonEmptyString.pipe(Schema.maxLength(40)),
-    count: Schema.Int.pipe(Schema.between(1, 10)),
-    tags: Schema.Array(Schema.NonEmptyString.pipe(Schema.maxLength(8))).pipe(Schema.maxItems(3)),
-    pair: Schema.Tuple(Schema.NonEmptyString.pipe(Schema.maxLength(3)), Code),
-    code: Code.pipe(Schema.minLength(2)),
-  });
-  const published = contractJsonSchema(Tool);
-  const beside = { ...JSONSchema.make(Tool) };
-  const values: readonly (readonly [unknown, boolean])[] = [
-    [{ name: "a", count: 3, tags: ["x"], pair: ["ab", "CD"], code: "AB" }, true],
-    [{ name: "a".repeat(41), count: 3, tags: [], pair: ["ab", "CD"], code: "AB" }, false],
-    [{ name: "a", count: 11, tags: [], pair: ["ab", "CD"], code: "AB" }, false],
-    [{ name: "a", count: 3, tags: ["x", "y", "z", "w"], pair: ["ab", "CD"], code: "AB" }, false],
-    [{ name: "a", count: 3, tags: ["abcdefghi"], pair: ["ab", "CD"], code: "AB" }, false],
-    [{ name: "a", count: 3, tags: [], pair: ["abcd", "CD"], code: "AB" }, false],
-    [{ name: "a", count: 3, tags: [], pair: ["ab", "CD"], code: "A" }, false],
-    [{ name: "a", count: 3, tags: [], pair: ["ab", "cd"], code: "ab" }, false],
-  ];
-  for (const [value, expected] of values) {
-    expect(validDraft7(draft7Reading(published), value), JSON.stringify(value)).toBe(expected);
-    expect(validDraft7(published, value), JSON.stringify(value)).toBe(expected);
-  }
-  // Every surface reads the canonical form, which is the same either way.
-  expect(canonicalSchema(published)).toEqual(canonicalSchema(beside));
-  expect(inlineLocalRefs(published)).toEqual(inlineLocalRefs(beside));
-});
-
 it("keeps both of two constraints on one keyword, the referenced schema's and its own", () => {
   const published = {
     type: "object",
@@ -261,4 +197,95 @@ it("keeps both of two constraints on one keyword, the referenced schema's and it
   const inlined = inlineLocalRefs(published);
   for (const value of values)
     expect(valid(inlined, value), JSON.stringify(value)).toBe(valid(published, value));
+});
+
+it("keeps both of two refinements on one keyword of a named schema", () => {
+  const Named = Schema.String.pipe(Schema.pattern(/^x/), Schema.annotations({ identifier: "Named" }));
+  // Effect writes the earlier refinement's pattern in `allOf` beside the later one's.
+  const published = { ...JSONSchema.make(Named.pipe(Schema.pattern(/a/), Schema.pattern(/b/))) };
+  const values = ["xab", "xa", "xb", "ab", "x"];
+  agrees(published, values);
+  for (const value of values)
+    expect(valid(inlineLocalRefs(published), value), value).toBe(valid(published, value));
+});
+
+it("never merges keywords that depend on each other into a schema that accepts otherwise", () => {
+  const published = {
+    type: "object",
+    $defs: {
+      Closed: { type: "object", additionalProperties: false },
+      Named: { type: "object", properties: { name: { type: "string" } } },
+      Pair: { type: "array", prefixItems: [{ type: "string" }], items: false },
+      Listed: { type: "array", items: { type: "string" } },
+      Tagged: { type: "array", contains: { const: "a" } },
+      Coded: { if: { type: "string" }, then: { minLength: 2 } },
+    },
+    properties: {
+      // The reference closes the object; the keyword beside it names a property.
+      closed: { $ref: "#/$defs/Closed", properties: { name: { type: "string" } } },
+      // The reverse: the reference names a property, the keyword beside it closes the object.
+      named: { $ref: "#/$defs/Named", additionalProperties: false },
+      pair: { $ref: "#/$defs/Pair", prefixItems: [{ type: "string" }, { type: "string" }] },
+      listed: { $ref: "#/$defs/Listed", prefixItems: [{ type: "number" }] },
+      // Alone, without `contains` or `if` beside them, these keywords assert nothing.
+      tagged: { $ref: "#/$defs/Tagged", maxContains: 1 },
+      coded: { $ref: "#/$defs/Coded", else: { minimum: 2 } },
+    },
+  };
+  const values = [
+    {},
+    { closed: {} },
+    { closed: { name: "x" } },
+    { named: {} },
+    { named: { name: "x" } },
+    { named: { age: 1 } },
+    { pair: ["a"] },
+    { pair: ["a", "b"] },
+    { listed: ["a"] },
+    { listed: [1] },
+    { tagged: ["a"] },
+    { tagged: ["a", "a"] },
+    { coded: "x" },
+    { coded: "xy" },
+    { coded: 1 },
+  ];
+  agrees(published, values);
+  for (const value of values)
+    expect(valid(inlineLocalRefs(published), value), JSON.stringify(value)).toBe(
+      valid(published, value),
+    );
+});
+
+it("never merges a Draft-07 tuple with items beside it into a schema that accepts more", () => {
+  const draft7 = (schema: unknown, value: unknown) =>
+    new Ajv({ strict: false, validateSchema: false, logger: false }).compile(
+      schema as Record<string, unknown>,
+    )(value);
+  const published = {
+    $schema: "http://json-schema.org/draft-07/schema#",
+    type: "object",
+    $defs: {
+      Pair: { type: "array", items: [{ type: "string" }], additionalItems: false },
+      Listed: { type: "array", items: { type: "string" } },
+    },
+    properties: {
+      pair: { $ref: "#/$defs/Pair", items: [{ type: "string" }, { type: "string" }] },
+      listed: { $ref: "#/$defs/Listed", items: [{ type: "number" }] },
+    },
+  };
+  const canonical = canonicalSchema(published);
+  if (canonical === undefined) throw new Error("expected a canonical schema");
+  for (const value of [
+    { pair: ["a"] },
+    { pair: ["a", "b"] },
+    { listed: ["a"] },
+    { listed: [1] },
+  ]) {
+    expect(draft7(standalone(canonical), value), JSON.stringify(value)).toBe(
+      draft7(published, value),
+    );
+    expect(draft7(inlineLocalRefs(published), value), JSON.stringify(value)).toBe(
+      draft7(published, value),
+    );
+  }
 });
