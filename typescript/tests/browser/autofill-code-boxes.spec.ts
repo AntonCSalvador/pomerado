@@ -110,3 +110,114 @@ test("six boxes a script limits, split three and three between two containers, a
   expect(places).toEqual([undefined, undefined, undefined, undefined, undefined, undefined]);
   expect(codeBoxesRefusal(step, inspection)).toBeUndefined();
 });
+
+/**
+ * `count` `tel` boxes with no `maxlength`, each wrapped by `wrap`, the wrappers side by side in one
+ * container after `first`, and the widget's script that keeps one digit in each box and moves to
+ * the next.
+ */
+const wrappedBoxes = (count: number, wrap = (box: string) => `<span>${box}</span>`, first = "") =>
+  `<div id="boxes" style="display:flex;gap:4px">${first}${Array.from({ length: count }, (_, at) =>
+    wrap(
+      `<input id="box-${at + 1}" type="tel" inputmode="numeric" autocomplete="one-time-code" aria-label="Code digit" style="width:32px;height:40px">`,
+    ),
+  ).join("")}</div>
+<script>
+const boxes = [...document.querySelectorAll('#boxes input[type="tel"]')];
+boxes.forEach((box, at) => box.addEventListener("input", () => {
+  box.value = box.value.replace(/[^0-9]/g, "").slice(-1);
+  if (box.value !== "" && boxes[at + 1]) boxes[at + 1].focus();
+}));
+</script>`;
+
+test("six boxes a script limits, each the only element of its own wrapper, are each read with their place among six", async ({
+  page,
+}) => {
+  const places = [1, 2, 3, 4, 5, 6];
+  const { step, inspection, places: read } = await inspect(page, wrappedBoxes(6), boxFields(places));
+  expect(read).toEqual(places.map((box) => ({ box, of: 6 })));
+  expect(codeBoxesRefusal(step, inspection)).toBeUndefined();
+});
+
+test("a step that names five of six boxes in their own wrappers is sent back with how many the screen shows", async ({
+  page,
+}) => {
+  const { step, inspection } = await inspect(page, wrappedBoxes(6), boxFields([1, 2, 3, 4, 5]));
+  expect(codeBoxesRefusal(step, inspection)).toMatchObject({
+    outcome: "refused",
+    reason: "code_boxes_incomplete",
+    codeBoxes: { boxes: 6, named: [1, 2, 3, 4, 5] },
+  });
+});
+
+test("six boxes a script limits, each wrapped two levels deep, are no boxes", async ({ page }) => {
+  const { places } = await inspect(
+    page,
+    wrappedBoxes(6, (box) => `<span><span>${box}</span></span>`),
+    boxFields([1, 2, 3, 4, 5, 6]),
+  );
+  expect(places).toEqual([undefined, undefined, undefined, undefined, undefined, undefined]);
+});
+
+test("a box beside five boxes in their own wrappers is no box, nor are they, so a step that names all six is not sent back", async ({
+  page,
+}) => {
+  const { step, inspection, places } = await inspect(
+    page,
+    wrappedBoxes(6, (box) => (box.includes('id="box-1"') ? box : `<span>${box}</span>`)),
+    boxFields([1, 2, 3, 4, 5, 6]),
+  );
+  expect(places).toEqual([undefined, undefined, undefined, undefined, undefined, undefined]);
+  expect(codeBoxesRefusal(step, inspection)).toBeUndefined();
+});
+
+test("six address fields, each in its own wrapper with its label, are no boxes even when a step names them as code fields", async ({
+  page,
+}) => {
+  const labels = ["Street", "City", "Region", "Postal code", "Country", "Phone"];
+  const { places } = await inspect(
+    page,
+    `<div>${labels
+      .map((label, at) => `<div><label for="box-${at + 1}">${label}</label><input id="box-${at + 1}" type="text"></div>`)
+      .join("")}</div>`,
+    boxFields([1, 2, 3, 4, 5, 6]),
+  );
+  expect(places).toEqual([undefined, undefined, undefined, undefined, undefined, undefined]);
+});
+
+test("one code field whose maxlength is 6, alone in its own wrapper, is no box", async ({ page }) => {
+  const { step, inspection, places } = await inspect(
+    page,
+    '<div><span><input id="code" maxlength="6" inputmode="numeric" autocomplete="one-time-code" aria-label="Code"></span></div>',
+    [{ selector: "#code", slot: "code" }],
+  );
+  expect(places).toEqual([undefined]);
+  expect(codeBoxesRefusal(step, inspection)).toBeUndefined();
+});
+
+/** Wraps each box in a `span`, and box 3's wrapper in `third` instead. */
+const wrapThird = (third: (box: string) => string) => (box: string) =>
+  box.includes('id="box-3"') ? third(box) : `<span>${box}</span>`;
+
+for (const [what, wrap, first] of [
+  ["a hidden input in the container", undefined, '<input type="hidden" name="code">'],
+  ["an error message not shown in the container", undefined, '<div role="alert" style="display:none">That code is wrong</div>'],
+  ["a style element in the container", undefined, "<style>#boxes span{display:inline-block}</style>"],
+  ["an element not shown inside one wrapper", wrapThird((box) => `<span>${box}<span hidden>Required</span></span>`), ""],
+] as const)
+  test(`six boxes in their own wrappers, beside ${what}, are each read with their place among six`, async ({
+    page,
+  }) => {
+    const places = [1, 2, 3, 4, 5, 6];
+    const { places: read } = await inspect(page, wrappedBoxes(6, wrap, first), boxFields(places));
+    expect(read).toEqual(places.map((box) => ({ box, of: 6 })));
+  });
+
+for (const [what, wrap] of [
+  ["a separator shown between two wrappers", wrapThird((box) => `<span>${box}</span><span>-</span>`)],
+  ["a label shown inside one wrapper", wrapThird((box) => `<span><label for="box-3">Digit 3</label>${box}</span>`)],
+] as const)
+  test(`six boxes in their own wrappers, with ${what}, are no boxes`, async ({ page }) => {
+    const { places } = await inspect(page, wrappedBoxes(6, wrap), boxFields([1, 2, 3, 4, 5, 6]));
+    expect(places).toEqual([undefined, undefined, undefined, undefined, undefined, undefined]);
+  });
