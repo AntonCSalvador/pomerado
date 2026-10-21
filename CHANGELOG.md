@@ -164,6 +164,8 @@
 
 ### Other changes
 
+- The forms skill tells a script to name a conditional pop-up's close control as `dismiss` of `waitForReady`, which closes it whenever it opens, rather than checking for it at one point. The testing skill adds a live case for a free-text input with a value the example used written another way, such as in other case or with other spacing, punctuation or accents. The core skill says to prefer a unique input, such as an ID: a tool that acts on one record takes the ID the site's other tools use for it, and finds the record another way, such as by name, only when the caller gives none.
+  - A recorded minter response keyed on the exact forms, testing or core skill text needs recording again.
 - The core skill tells a search step to wait for either the site's results or its own no-match state, and to return the site's no-match answer with its message, so a value the site does not recognise no longer runs into a timeout waiting on results that never appear.
   - A recorded minter response keyed on the exact core skill text needs recording again.
 - The caller-input skill says to apply each caller input the way the site applies it, and only that: no added constraints between inputs, no filtering of them and no value the caller didn't give, so a store and a delivery ZIP the site sets separately are both applied as given. The search skill says that a location given without a store uses what the site would show for that location, such as the nearest store, rather than what the site guessed from the browser's own location, and returns what was applied.
