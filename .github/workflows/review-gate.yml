@@ -4,8 +4,8 @@
 # it alone. tools/review-gate.ts holds the rules, .github/review-gate.json the policy, and
 # typescript/tests/unit/review-gate.test.ts tests them. docs/RELEASING.md describes the setup.
 #
-# A pull request can't change this gate. pull_request_target, issue_comment, workflow_run and
-# workflow_dispatch all run this file, the script and the policy as they are on the default branch.
+# A pull request can't change this gate. pull_request_target, issue_comment and workflow_dispatch
+# all run this file, the script and the policy as they are on the default branch.
 # The job checks out that trusted commit only, never a pull request's code, and reads each fact from
 # GitHub's API.
 #
@@ -14,20 +14,17 @@
 # doesn't count. The App's key lives in the review-gate environment, which only this job uses and
 # which deploys only from main.
 #
-# CodeRabbit reports its review by writing and editing its walkthrough comment, which starts
-# issue_comment here; the job runs only for that bot's comments on pull requests. Reviews don't
-# trigger pull_request_target, so approval-review.yml marks each submitted or dismissed review and
-# its completion starts this workflow again. A maintainer can dispatch this workflow on main to
-# evaluate one pull request, or every open one, again, for example after resolving a finding.
+# CodeRabbit submits its review and marks findings addressed before it updates the coverage marker
+# in its walkthrough comment, and that update starts issue_comment here. The job runs only for that
+# bot's comments on pull requests. Resolving a thread starts no workflow, so a maintainer dispatches
+# this workflow on main to evaluate one pull request, or every open one, again.
 name: Review gate
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+    # edited covers a pull request retargeted to the default branch.
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, edited]
   issue_comment:
     types: [created, edited]
-  workflow_run:
-    workflows: [Approval review]
-    types: [completed]
   workflow_dispatch:
     inputs:
       pull_request:
@@ -37,11 +34,13 @@ on:
 permissions: {}
 # Runs for one pull request wait for each other, and each reads the review as it stands when it
 # starts, so the last check posted reflects the latest review. CodeRabbit edits its walkthrough
-# several times per review, and GitHub keeps only the newest pending run per group.
+# several times per review, and GitHub keeps only the newest pending run per group. Anyone else's
+# comment gets a group of its own, so its skipped run can't displace CodeRabbit's pending one.
 concurrency:
   group: >-
-    review-gate-${{ github.event.pull_request.number || github.event.issue.number
-    || github.event.workflow_run.head_sha || github.run_id }}
+    review-gate-${{ (github.event_name == 'issue_comment' && github.event.comment.user.login !=
+    'coderabbitai[bot]') && format('skip-{0}', github.run_id) || github.event.pull_request.number
+    || github.event.issue.number || inputs.pull_request || github.run_id }}
   cancel-in-progress: false
 jobs:
   review:

@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parseCodeOwners } from "../../../tools/approval-gate.js";
 import {
   checkName,
+  isAddressed,
   parsePolicy,
   pathMatcher,
   pullsToEvaluate,
@@ -46,6 +47,8 @@ interface Pull {
   readonly changedFiles?: number;
   readonly comments?: readonly Comment[];
   readonly threads?: readonly ReviewThread[];
+  /** CodeRabbit's or anyone's reviews, by their summary. */
+  readonly reviews?: readonly Comment[];
 }
 
 interface Comment {
@@ -69,12 +72,15 @@ interface Fixture {
   readonly checkRuns?: Readonly<Record<string, readonly CheckRun[]>>;
   /** Review threads per GraphQL page, when a test pages through them. */
   readonly threadPages?: readonly (readonly ReviewThread[])[];
+  /** What the compare API lists for the default branch against each commit. */
+  readonly compare?: Readonly<Record<string, readonly { filename: string; status: string; sha: string }[]>>;
 }
 
 /** CodeRabbit's walkthrough comment, shaped as it writes it. */
 const walkthrough = (
   options: {
     readonly covered?: string;
+    readonly source?: string;
     readonly kind?: string;
     readonly risk?: string | undefined;
     readonly checks?: readonly (readonly [string, string])[];
@@ -84,6 +90,8 @@ const walkthrough = (
   const covered = options.covered ?? head;
   const risk = "risk" in options ? options.risk : "⚪ Minimal";
   return [
+    "<!-- coderabbit-ai-generated:v1 -->",
+    "",
     "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->",
     "<!-- walkthrough_start -->",
     "## Walkthrough",
@@ -95,7 +103,7 @@ const walkthrough = (
     "<!-- final_review_risk_label",
     ...(risk === undefined ? [] : [`**Merge Risk:** **${risk}** · up to \`${covered.slice(0, 5)}\``]),
     "-->",
-    `<!-- final_review_risk_coverage:${JSON.stringify({ sourceCommitId: earlier, coveredCommitId: covered, kind: options.kind ?? "reviewed" })} -->`,
+    `<!-- final_review_risk_coverage:${JSON.stringify({ sourceCommitId: options.source ?? covered, coveredCommitId: covered, kind: options.kind ?? "reviewed" })} -->`,
     "",
     "The change presents no identified merge-blocking risk.",
     "<!-- final_review_risk_end -->",
@@ -122,6 +130,8 @@ const finding = (
     readonly severity?: string;
     readonly resolvedBy?: string;
     readonly addressed?: boolean;
+    /** Contributor code CodeRabbit quotes in its proposed fix. */
+    readonly quoted?: string;
     readonly author?: { readonly __typename: string; readonly login: string };
     readonly path?: string;
     readonly line?: number | null;
@@ -143,6 +153,9 @@ const finding = (
             `**🎯 Functional Correctness** | ${label} | **⚡ Quick win**`,
             "",
             "The loop stops one item early.",
+            ...(options.quoted === undefined ? [] : ["", "```diff", `- ${options.quoted}`, "+ for (const item of items) {", "```"]),
+            "",
+            "<!-- This is an auto-generated comment by CodeRabbit -->",
             ...(options.addressed === true ? ["", "✅ Addressed in commit 1234567"] : []),
           ].join("\n"),
           url: `https://github.example/${repo}/pull/7/files/r1`,
@@ -168,7 +181,8 @@ const pullJson = (pull: Pull) => ({
 const fakeApi = (fixture: Fixture) => {
   const posted: { path: string; body: unknown }[] = [];
   const patched: { path: string; body: unknown }[] = [];
-  const pullPath = /^\/repos\/example-org\/example-repo\/pulls\/(\d+)(\/files)?$/;
+  const pullPath = /^\/repos\/example-org\/example-repo\/pulls\/(\d+)(\/files|\/reviews)?$/;
+  const compare = /^\/repos\/example-org\/example-repo\/compare\/main\.\.\.([0-9a-f]{40})$/;
   const comments = /^\/repos\/example-org\/example-repo\/issues\/(\d+)\/comments$/;
   const permission = /^\/repos\/example-org\/example-repo\/collaborators\/([^/]+)\/permission$/;
   const checks = /^\/repos\/example-org\/example-repo\/commits\/([0-9a-f]{40})\/check-runs$/;
@@ -185,6 +199,13 @@ const fakeApi = (fixture: Fixture) => {
     if (pullMatch !== null) {
       const pull = find(pullMatch[1]);
       if (pull === undefined) return undefined;
+      if (pullMatch[2] === "/reviews") {
+        return (pull.reviews ?? []).map((review, index) => ({
+          user: { login: review.login, type: review.type ?? "User" },
+          body: review.body,
+          html_url: `https://github.example/${repo}/pull/7/reviews/${index}`,
+        }));
+      }
       return pullMatch[2] === undefined ? pullJson(pull) : (pull.files ?? [{ filename: "typescript/src/runtime/list.ts" }]);
     }
     const commentMatch = comments.exec(pathname);
@@ -194,6 +215,11 @@ const fakeApi = (fixture: Fixture) => {
         body: comment.body,
         updated_at: comment.updated ?? "2026-10-01T10:00:00Z",
       }));
+    }
+    const compared = compare.exec(pathname)?.[1];
+    if (compared !== undefined) {
+      const files = fixture.compare?.[compared];
+      return files === undefined ? undefined : { files };
     }
     const user = permission.exec(pathname)?.[1];
     if (user !== undefined) {
@@ -252,7 +278,7 @@ const gitHub = (fixture: Fixture): GitHub & { readonly posted: Recorded; readonl
   };
 };
 
-/** Runs the gate for a pull request event on pull request 7 by an outside contributor. */
+/** Runs the gate for a pull request event on an outside contributor's pull request, numbered 7. */
 const gate = async (pull: Omit<Pull, "number" | "author"> & { readonly author?: string }, fixture: Omit<Fixture, "pulls"> = {}) => {
   const api = gitHub({ ...fixture, pulls: [{ number: 7, author: "outside-dev", ...pull }] });
   const results = await runGate(api, context, "pull_request_target", { pull_request: { number: 7 } }, appId, detailsUrl);
@@ -369,20 +395,41 @@ describe("review gate", () => {
     }
   });
 
-  it("counts a review CodeRabbit carried across a merge of the base branch, and asks a maintainer about other kinds", async () => {
-    const carried = await gate({ comments: [reviewer(walkthrough({ kind: "target_branch_merge_carry_forward" }))] });
+  it("counts a review CodeRabbit carried across a merge of the base branch when the pull request's changes didn't move", async () => {
+    const comments = [reviewer(walkthrough({ kind: "target_branch_merge_carry_forward", source: earlier }))];
+    const change = { filename: "typescript/src/runtime/list.ts", status: "modified", sha: "c".repeat(40) };
+    const carried = await gate({ comments }, { compare: { [earlier]: [change], [head]: [change] } });
     expect(checkBody(carried.posted).conclusion).toBe("success");
+    // The merge changed a file the pull request touches, or brought a file of its own.
+    for (const atHead of [
+      [{ ...change, sha: "d".repeat(40) }],
+      [change, { filename: "typescript/src/runtime/extra.ts", status: "added", sha: "e".repeat(40) }],
+      [{ ...change, status: "renamed" }],
+    ]) {
+      const check = checkBody((await gate({ comments }, { compare: { [earlier]: [change], [head]: atHead } })).posted);
+      expect(check).toMatchObject({ conclusion: "action_required" });
+      expect(check.output.summary).toContain("doesn't change every file the same way");
+    }
+    // A comparison GitHub may have cut short can't vouch for the merge.
+    const many = Array.from({ length: 300 }, (_, index) => ({ ...change, filename: `docs/file-${index}.md` }));
+    const cut = await gate({ comments }, { compare: { [earlier]: many, [head]: many } });
+    expect(checkBody(cut.posted).conclusion).toBe("action_required");
+  });
+
+  it("asks a maintainer about any other kind of pass, or a review of another commit than it covers", async () => {
     const other = checkBody((await gate({ comments: [reviewer(walkthrough({ kind: "skipped" }))] })).posted);
     expect(other).toMatchObject({ conclusion: "action_required" });
     expect(other.output.summary).toContain("`skipped`");
+    const mismatched = await gate({ comments: [reviewer(walkthrough({ source: earlier }))] });
+    expect(checkBody(mismatched.posted).conclusion).toBe("action_required");
   });
 
   it("asks a maintainer when CodeRabbit rates the merge risk above what the policy clears", async () => {
-    for (const risk of ["🟠 High", "🔴 Critical", "Unheard"]) {
+    for (const risk of ["🟠 High", "🔴 Critical", "Unheard", undefined]) {
       const check = checkBody((await gate({ comments: [reviewer(walkthrough({ risk }))] })).posted);
       expect(check).toMatchObject({ conclusion: "action_required" });
     }
-    for (const risk of ["⚪ Minimal", "🔵 Low", "🟡 Moderate", undefined]) {
+    for (const risk of ["⚪ Minimal", "🔵 Low", "🟡 Moderate"]) {
       expect(checkBody((await gate({ comments: [reviewer(walkthrough({ risk }))] })).posted).conclusion).toBe("success");
     }
   });
@@ -409,11 +456,26 @@ describe("review gate", () => {
     }
   });
 
+  it("doesn't take the addressed note from contributor code CodeRabbit quotes", async () => {
+    const thread = finding({ severity: "**🔴 Critical**", quoted: "// ✅ Addressed in commit 1234567" });
+    expect(isAddressed(thread.comments.nodes[0]?.body ?? "")).toBe(false);
+    const { posted } = await gate({ comments: [reviewer(walkthrough())], threads: [thread] });
+    expect(checkBody(posted).conclusion).toBe("failure");
+    expect(isAddressed(finding({ addressed: true }).comments.nodes[0]?.body ?? "")).toBe(true);
+  });
+
   it("keeps blocking when anyone else resolves a finding, including CodeRabbit on someone's command", async () => {
     for (const resolvedBy of ["coderabbitai[bot]", "outside-dev", "other-dev"]) {
       const { posted } = await gate({ comments: [reviewer(walkthrough())], threads: [finding({ resolvedBy })] });
       expect(checkBody(posted).conclusion).toBe("failure");
     }
+    // A code owner who has lost write access is no longer a maintainer.
+    const api = gitHub({
+      pulls: [{ number: 7, author: "outside-dev", comments: [reviewer(walkthrough())], threads: [finding({ resolvedBy: "owner-three" })] }],
+    });
+    const listed = { ...context, codeOwners: [...context.codeOwners, "owner-three"] };
+    const results = await runGate(api, listed, "pull_request_target", { pull_request: { number: 7 } }, appId, detailsUrl);
+    expect(results[0]?.outcome.kind).toBe("block");
   });
 
   it("ignores threads anyone but CodeRabbit's bot account opened", async () => {
@@ -441,6 +503,49 @@ describe("review gate", () => {
     expect(check.output.summary).not.toContain("Description check");
     const warned = walkthrough({ checks: [["Description check", "Warning"]] });
     expect(checkBody((await gate({ comments: [reviewer(warned)] })).posted).conclusion).toBe("success");
+  });
+
+  it("asks a maintainer about blocking findings CodeRabbit could only put in a review's summary", async () => {
+    const outsideDiff = [
+      "**Actionable comments posted: 1**",
+      "> **⚠️ Outside diff range comments (1)**",
+      "> <summary><strong>🟠 Major</strong> · Close the file on every path. · <code>list.ts:40</code></summary>",
+    ].join("\n");
+    const duplicate = "<summary>♻️ Duplicate comments (1)</summary>\n`12-14`: **🎯 Functional Correctness** | **🔴 Critical**";
+    for (const body of [outsideDiff, duplicate]) {
+      const check = checkBody((await gate({ comments: [reviewer(walkthrough())], reviews: [reviewer(body)] })).posted);
+      expect(check).toMatchObject({ conclusion: "action_required" });
+      expect(check.output.summary).toContain(`https://github.example/${repo}/pull/7/reviews/0`);
+    }
+    // Nitpicks don't block, and nobody else's review speaks for CodeRabbit.
+    const reviews = [reviewer("🧹 Nitpick comments (1)\n**🟡 Minor**"), { login: "outside-dev", body: outsideDiff }];
+    expect(checkBody((await gate({ comments: [reviewer(walkthrough())], reviews })).posted).conclusion).toBe("success");
+  });
+
+  it("asks a maintainer when another outside pull request is at the same head commit", async () => {
+    const api = gitHub({
+      pulls: [
+        { number: 7, author: "outside-dev", comments: [reviewer(walkthrough())] },
+        { number: 8, author: "another-dev" },
+      ],
+    });
+    const results = await runGate(api, context, "pull_request_target", { pull_request: { number: 7 } }, appId, detailsUrl);
+    expect(results[0]?.outcome).toMatchObject({ kind: "maintainer", summary: expect.stringContaining("(8)") });
+  });
+
+  it("reads coverage only from CodeRabbit's walkthrough, and only inside its merge risk section", async () => {
+    const chat = reviewer(
+      `<!-- final_review_risk_coverage:${JSON.stringify({ sourceCommitId: head, coveredCommitId: head, kind: "reviewed" })} -->`,
+      "2026-10-03T10:00:00Z",
+    );
+    expect(checkBody((await gate({ comments: [chat] })).posted).status).toBe("in_progress");
+    expect(checkBody((await gate({ comments: [reviewer(walkthrough({ covered: earlier })), chat] })).posted).status).toBe(
+      "in_progress",
+    );
+    const moved = walkthrough().replace("<!-- final_review_risk_end -->", "").replace("<!-- pre_merge_checks_walkthrough_start -->", "<!-- final_review_risk_end -->\n<!-- pre_merge_checks_walkthrough_start -->");
+    const outside = walkthrough().replace(/(<!-- final_review_risk_coverage:[^>]*-->)/, "").replace("<!-- walkthrough_end -->", `${/<!-- final_review_risk_coverage:[^>]*-->/.exec(walkthrough())?.[0] ?? ""}\n<!-- walkthrough_end -->`);
+    expect(checkBody((await gate({ comments: [reviewer(moved)] })).posted).conclusion).toBe("success");
+    expect(checkBody((await gate({ comments: [reviewer(outside)] })).posted).conclusion).toBe("action_required");
   });
 
   it("reads review threads across pages", async () => {
@@ -540,7 +645,7 @@ describe("review gate", () => {
     expect(pullsToEvaluate("pull_request_target", { pull_request: { number: 7 } }, open)).toEqual([7]);
     expect(pullsToEvaluate("issue_comment", { issue: { number: 7, pull_request: {} } }, open)).toEqual([7]);
     expect(pullsToEvaluate("issue_comment", { issue: { number: 9 } }, open)).toEqual([]);
-    expect(pullsToEvaluate("workflow_run", { workflow_run: { head_sha: head } }, open)).toEqual([7, 8]);
+    expect(() => pullsToEvaluate("workflow_run", { workflow_run: { head_sha: head } }, open)).toThrow("doesn't handle");
     expect(pullsToEvaluate("workflow_dispatch", { inputs: { pull_request: "" } }, open)).toEqual([6, 7, 8]);
     expect(pullsToEvaluate("workflow_dispatch", {}, open)).toEqual([6, 7, 8]);
     expect(pullsToEvaluate("workflow_dispatch", { inputs: { pull_request: " 8 " } }, open)).toEqual([8]);
@@ -554,6 +659,7 @@ describe("review gate parsing", () => {
     const body = walkthrough({ risk: "🟡 Moderate", checks: [["Repository rules", "Error"], ["Title check", "Passed"]] });
     expect(readCoverage([{ ...reviewer(body), user: { login: "coderabbitai[bot]", type: "Bot" }, updated_at: "2026-10-01T10:00:00Z" }], policy.reviewer)).toEqual({
       commit: head,
+      source: head,
       kind: "reviewed",
       mergeRisk: "Moderate",
       erroredChecks: ["Repository rules"],
@@ -565,6 +671,7 @@ describe("review gate parsing", () => {
     expect(severityOf("**🎯 Functional Correctness** | **🟠 Major** | **⚡ Quick win**")).toBe("Major");
     expect(severityOf("_⚠️ Potential issue_ | _🔴 Critical_")).toBe("Critical");
     expect(severityOf("**📐 Maintainability** | **🟡 Minor**")).toBe("Minor");
+    expect(severityOf("<summary><strong>🟠 Major</strong> · Bound the query.</summary>")).toBe("Major");
     expect(severityOf("A Major problem, without a label.")).toBeUndefined();
   });
 
@@ -608,7 +715,10 @@ describe("review gate configuration", () => {
   });
 
   it("starts the workflow's job only for comments by the reviewer the policy names", () => {
-    expect(read(".github/workflows/review-gate.yml")).toContain(`github.event.comment.user.login == '${policy.reviewer}'`);
+    const workflow = read(".github/workflows/review-gate.yml");
+    expect(workflow).toContain(`github.event.comment.user.login == '${policy.reviewer}'`);
+    // Its concurrency group keeps everyone else's comments out of the reviewer's group.
+    expect(workflow.replace(/\s+/g, " ")).toContain(`github.event.comment.user.login != '${policy.reviewer}'`);
   });
 });
 
@@ -688,7 +798,8 @@ describe("review gate workflow step", () => {
       { path: `/repos/${repo}/check-runs`, body: expect.objectContaining({ conclusion: "success", head_sha: head }) },
     ]);
     expect(new Set(authorizations)).toEqual(new Set(["Bearer test-token"]));
-    expect(output).toContain(`Pull request 7 at ${head}: clear: CLEAR from coderabbit, round 1. Posted.`);
+    const number = 7;
+    expect(output).toContain(`Pull request ${number} at ${head}: clear: CLEAR from coderabbit, round 1. Posted.`);
   });
 
   it("posts nothing for a pull request that no longer exists, and fails on an event it doesn't handle", async () => {

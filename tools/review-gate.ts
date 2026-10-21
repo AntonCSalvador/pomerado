@@ -8,21 +8,22 @@
  * gate. For any other author's pull request into the default branch, the gate decides one of:
  *
  * - Maintainer review (`action_required`): the pull request changes a path .github/review-gate.json
- *   lists, changes more lines than it allows, CodeRabbit rates the merge risk above what it allows,
- *   or the gate can't read CodeRabbit's verdict. A maintainer then reviews it and posts
- *   `review/clear` with `review:clear`, which the gate never overwrites.
+ *   lists or more lines than it allows, shares its head commit with another outside pull request,
+ *   CodeRabbit rates the merge risk above what the policy clears or raised a blocking finding that
+ *   has no thread, or the gate can't read CodeRabbit's verdict with confidence. A maintainer then
+ *   reviews it and posts `review/clear` through the reviewer App, which the gate never overwrites.
  * - Waiting (`in_progress`): the pull request is a draft, or CodeRabbit hasn't reviewed its head
  *   commit yet.
- * - BLOCK (`failure`): CodeRabbit's review of the head commit left a finding at a blocking severity
- *   open, or a pre-merge check errored.
+ * - BLOCK (`failure`): CodeRabbit's review left a finding at a blocking severity open, or a
+ *   pre-merge check errored.
  * - CLEAR (`success`): CodeRabbit reviewed the head commit and left nothing blocking.
  *
- * CodeRabbit records the commit its review covers in a marker in its walkthrough comment, including
- * when it carries a review across a merge of the base branch. The gate counts only comments and
- * review threads that CodeRabbit's bot account wrote, and never its approval, its commit status or
- * a thread resolution CodeRabbit makes on someone's command, since others can trigger those. A
- * finding stops blocking once CodeRabbit marks it addressed in a later commit, or once a code owner
- * resolves its thread.
+ * CodeRabbit records the commit its review covers in a marker in its walkthrough comment. When it
+ * carries a review across a merge of the base branch instead, the gate checks itself that the pull
+ * request changes every file exactly as at the reviewed commit. The gate counts only what
+ * CodeRabbit's bot account wrote, and never its approval, its commit status or a thread resolution
+ * it makes on someone's command, since others can trigger those. A finding stops blocking once
+ * CodeRabbit marks it addressed in a later commit, or once a maintainer resolves its thread.
  *
  * The `Approval` check still needs a code owner's approval of the head commit, so a CLEAR alone never
  * merges an outside contributor's pull request.
@@ -41,6 +42,10 @@ export const checkName = "review/clear";
 const writeRoles = new Set(["admin", "maintain", "write"]);
 /** Findings and paths a check run's summary lists before it counts the rest. */
 const listLimit = 20;
+/** The most files GitHub's compare API lists. A longer list may be cut short. */
+const compareFileLimit = 300;
+/** The first line of CodeRabbit's walkthrough comment, after its generated-content marker. */
+const walkthroughMarker = "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->";
 
 export interface GitHub {
   /** One REST resource, or undefined when GitHub answers 404. */
@@ -58,8 +63,6 @@ export interface Policy {
   readonly reviewer: string;
   /** The lane the gate's check runs name, which tells them apart from a maintainer's. */
   readonly lane: string;
-  /** Coverage kinds in CodeRabbit's marker that count as a review of the commit they cover. */
-  readonly coverageKinds: readonly string[];
   /** Finding severities that block until addressed. */
   readonly blockingSeverities: readonly string[];
   /** Merge risk labels the gate may CLEAR. Any other label needs a maintainer. */
@@ -94,12 +97,21 @@ interface PullRequest {
 interface ChangedFile {
   readonly filename: string;
   readonly previous_filename?: string;
+  readonly status?: string;
+  readonly sha?: string | null;
 }
 
-interface IssueComment {
+interface Authored {
   readonly user: { readonly login: string; readonly type: string } | null;
   readonly body?: string | null;
+}
+
+interface IssueComment extends Authored {
   readonly updated_at: string;
+}
+
+interface Review extends Authored {
+  readonly html_url?: string;
 }
 
 interface CheckRun {
@@ -134,14 +146,14 @@ const isStringList = (value: unknown): value is string[] =>
 export const parsePolicy = (text: string): Policy => {
   const value: unknown = JSON.parse(text);
   if (!isObject(value)) throw new Error("The review gate policy must be a JSON object.");
-  const { reviewer, lane, coverageKinds, blockingSeverities, clearMergeRisks, maintainerReview } = value;
+  const { reviewer, lane, blockingSeverities, clearMergeRisks, maintainerReview } = value;
   if (typeof reviewer !== "string" || !/^[\w-]+\[bot\]$/.test(reviewer)) {
     throw new Error("The review gate policy's reviewer must be a bot account such as name[bot].");
   }
   if (typeof lane !== "string" || lane === "" || /[;=]/.test(lane)) {
     throw new Error("The review gate policy's lane must be a name without ; or =.");
   }
-  for (const [name, list] of Object.entries({ coverageKinds, blockingSeverities, clearMergeRisks })) {
+  for (const [name, list] of Object.entries({ blockingSeverities, clearMergeRisks })) {
     if (!isStringList(list) || list.length === 0) {
       throw new Error(`The review gate policy's ${name} must be a list of names.`);
     }
@@ -155,7 +167,6 @@ export const parsePolicy = (text: string): Policy => {
   return {
     reviewer,
     lane,
-    coverageKinds: coverageKinds as string[],
     blockingSeverities: blockingSeverities as string[],
     clearMergeRisks: clearMergeRisks as string[],
     maintainerReview: { maxChangedLines, paths },
@@ -189,6 +200,9 @@ export const pathMatcher = (globs: readonly string[]): ((path: string) => boolea
 /** The reviewer's login as GraphQL names a bot, without the `[bot]` REST adds. */
 const graphLogin = (login: string) => login.toLowerCase().replace(/\[bot\]$/, "");
 
+/** Whether CodeRabbit's bot account, as REST reports it, wrote a comment or review. */
+const byReviewer = (item: Authored, reviewer: string) => item.user?.login === reviewer && item.user.type === "Bot";
+
 /** The text between CodeRabbit's `<!-- name_start -->` and `<!-- name_end -->` markers. */
 const sections = (body: string, name: string): string[] =>
   [...body.matchAll(new RegExp(`<!-- ${name}_start -->([\\s\\S]*?)<!-- ${name}_end -->`, "g"))].map(
@@ -198,52 +212,86 @@ const sections = (body: string, name: string): string[] =>
 export interface Coverage {
   /** The commit the latest review covers. */
   readonly commit: string;
+  /** The commit CodeRabbit last reviewed, which differs from `commit` when it carried a review. */
+  readonly source: string;
   readonly kind: string;
-  /** The merge risk label, such as Minimal, when the walkthrough has one. */
-  readonly mergeRisk: string | undefined;
+  /** The merge risk label, such as Minimal. */
+  readonly mergeRisk: string;
   /** Pre-merge checks the walkthrough reports as errors. */
   readonly erroredChecks: readonly string[];
 }
 
 /**
- * What CodeRabbit's walkthrough says it covered, from the newest comment its bot account wrote that
- * carries a coverage marker. It is undefined when there is none yet, and a string saying what is
- * wrong when the comment can't be read with confidence.
+ * What CodeRabbit's walkthrough comment says its review covers. It is undefined when CodeRabbit
+ * hasn't written one with a coverage marker yet, and a string saying what is wrong when the
+ * walkthrough can't be read with confidence. Only CodeRabbit's walkthrough comment counts, and only
+ * a marker inside its merge risk section, so a marker CodeRabbit echoes elsewhere decides nothing.
  */
 export const readCoverage = (comments: readonly IssueComment[], reviewer: string): Coverage | string | undefined => {
-  const marker = /<!-- final_review_risk_coverage:(\{[^}]*\}) -->/g;
-  const written = comments
-    .filter((comment) => comment.user?.login === reviewer && comment.user.type === "Bot")
-    .filter((comment) => (comment.body ?? "").includes("final_review_risk_coverage:"))
+  const walkthroughs = comments
+    .filter((comment) => byReviewer(comment, reviewer))
+    .filter((comment) =>
+      (comment.body ?? "")
+        .replace(/^\s*<!-- coderabbit-ai-generated:v1 -->\s*/, "")
+        .startsWith(walkthroughMarker),
+    )
     .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
-  const body = written[0]?.body;
-  if (body === undefined || body === null) return undefined;
+  const body = walkthroughs[0]?.body ?? "";
+  if (!body.includes("final_review_risk_coverage:")) return undefined;
+  const marker = /<!-- final_review_risk_coverage:(\{[^}]*\}) -->/g;
   const markers = [...body.matchAll(marker)];
-  if (markers.length !== 1) return `its walkthrough has ${markers.length} coverage markers, not one`;
+  const risks = sections(body, "final_review_risk");
+  if (markers.length !== 1 || risks.length !== 1 || !/<!-- final_review_risk_coverage:\{[^}]*\} -->/.test(risks[0] ?? "")) {
+    return "its walkthrough doesn't have exactly one coverage marker, inside its merge risk section";
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(markers[0]?.[1] ?? "");
   } catch {
     return "its coverage marker isn't JSON";
   }
-  if (!isObject(parsed) || typeof parsed["coveredCommitId"] !== "string" || typeof parsed["kind"] !== "string") {
-    return "its coverage marker names no covered commit";
+  if (
+    !isObject(parsed) ||
+    typeof parsed["coveredCommitId"] !== "string" ||
+    typeof parsed["sourceCommitId"] !== "string" ||
+    typeof parsed["kind"] !== "string"
+  ) {
+    return "its coverage marker doesn't name the covered and reviewed commits";
   }
-  const risk = sections(body, "final_review_risk")
-    .map((section) => /\*\*Merge Risk:\*\*\s*\*\*(?:[^\s*]+\s+)?([A-Za-z]+)\*\*/.exec(section)?.[1])
-    .find((label) => label !== undefined);
+  const mergeRisk = /\*\*Merge Risk:\*\*\s*\*\*(?:[^\s*]+\s+)?([A-Za-z]+)\*\*/.exec(risks[0] ?? "")?.[1];
+  if (mergeRisk === undefined) return "its merge risk label doesn't have the form the gate reads";
   const erroredChecks = sections(body, "pre_merge_checks_walkthrough").flatMap((section) =>
     section
       .split("\n")
       .map((line) => /^\|\s*(.+?)\s*\|\s*!\[Error\]\(/.exec(line)?.[1])
       .filter((name): name is string => name !== undefined),
   );
-  return { commit: parsed["coveredCommitId"], kind: parsed["kind"], mergeRisk: risk, erroredChecks };
+  return {
+    commit: parsed["coveredCommitId"],
+    source: parsed["sourceCommitId"],
+    kind: parsed["kind"],
+    mergeRisk,
+    erroredChecks,
+  };
 };
 
+const severityPattern = "(?:🔴|🟠|🟡|🔵|⚪)\\uFE0F?\\s*(?:<strong>|[*_]{0,2})\\s*(Critical|Major|Minor|Trivial|Info)(?![A-Za-z])";
+
 /** A review comment's severity label, such as Major, or undefined when it has none. */
-export const severityOf = (body: string): string | undefined =>
-  /(?:🔴|🟠|🟡|🔵|⚪)️?\s*[*_]{0,2}\s*(Critical|Major|Minor|Trivial|Info)(?![A-Za-z])/u.exec(body)?.[1];
+export const severityOf = (body: string): string | undefined => new RegExp(severityPattern, "u").exec(body)?.[1];
+
+/** Every severity label in a text, such as a review's summary. */
+const severitiesIn = (body: string): string[] =>
+  [...body.matchAll(new RegExp(severityPattern, "gu"))].map((match) => match[1] ?? "");
+
+/**
+ * Whether CodeRabbit marked a finding addressed. It appends the note after its own closing marker
+ * at the end of the comment, so the same words in quoted code elsewhere in the comment don't count.
+ */
+export const isAddressed = (body: string): boolean =>
+  /<!-- This is an auto-generated comment by CodeRabbit -->\s*✅ Addressed in commits? [0-9a-f]{7,40}(?: to [0-9a-f]{7,40})?\s*$/u.test(
+    body,
+  );
 
 export interface Finding {
   readonly severity: string | undefined;
@@ -254,21 +302,21 @@ export interface Finding {
 /**
  * The reviewer's open findings: those at a blocking severity, and those whose severity the gate
  * can't read. A finding is closed once the reviewer marks it addressed in a later commit, or once a
- * code owner resolves its thread.
+ * maintainer resolves its thread.
  */
-export const openFindings = (
+export const openFindings = async (
   threads: readonly ReviewThread[],
   policy: Policy,
-  codeOwners: ReadonlySet<string>,
-): { readonly blocking: readonly Finding[]; readonly unreadable: readonly Finding[] } => {
+  isMaintainer: (login: string) => Promise<boolean>,
+): Promise<{ readonly blocking: readonly Finding[]; readonly unreadable: readonly Finding[] }> => {
   const blocking: Finding[] = [];
   const unreadable: Finding[] = [];
   const blockingSeverities = new Set(policy.blockingSeverities);
   for (const thread of threads) {
     const first = thread.comments.nodes[0];
     if (first?.author?.__typename !== "Bot" || graphLogin(first.author.login) !== graphLogin(policy.reviewer)) continue;
-    if (/✅ Addressed in commits?\b/u.test(first.body)) continue;
-    if (thread.isResolved && codeOwners.has((thread.resolvedBy?.login ?? "").toLowerCase())) continue;
+    if (isAddressed(first.body)) continue;
+    if (thread.isResolved && thread.resolvedBy !== null && (await isMaintainer(thread.resolvedBy.login))) continue;
     const severity = severityOf(first.body);
     const line = thread.line ?? thread.originalLine;
     const finding = { severity, location: line === null ? thread.path : `${thread.path}:${line}`, url: first.url };
@@ -276,6 +324,48 @@ export const openFindings = (
     else if (blockingSeverities.has(severity)) blocking.push(finding);
   }
   return { blocking, unreadable };
+};
+
+/**
+ * The reviews whose summary carries a blocking finding. CodeRabbit puts findings it can't post
+ * inline there, such as those outside the diff and those it repeats from earlier reviews. They have
+ * no thread to resolve, so a maintainer reviews them.
+ */
+export const summaryFindings = (reviews: readonly Review[], policy: Policy): Review[] => {
+  const blocking = new Set(policy.blockingSeverities);
+  return reviews.filter(
+    (review) => byReviewer(review, policy.reviewer) && severitiesIn(review.body ?? "").some((severity) => blocking.has(severity)),
+  );
+};
+
+/** What the pull request changes in each file from its merge base with `base`, or undefined if GitHub can't list it all. */
+const changesAt = async (github: GitHub, repo: string, base: string, commit: string) => {
+  const comparison = (await github.get(`/repos/${repo}/compare/${encodeURIComponent(base)}...${commit}`)) as
+    | { readonly files?: readonly ChangedFile[] }
+    | undefined;
+  const files = comparison?.files;
+  if (files === undefined || files.length >= compareFileLimit) return undefined;
+  return new Map(files.map((file) => [file.filename, `${file.status ?? ""}:${file.previous_filename ?? ""}:${file.sha ?? ""}`]));
+};
+
+/**
+ * Whether the pull request changes every file at `covered` exactly as at `reviewed`, against its
+ * merge base with the default branch each time. A merge of the default branch that brings nothing
+ * of its own passes; a change of any file the pull request touches, or a new one, doesn't.
+ */
+export const sameChanges = async (
+  github: GitHub,
+  repo: string,
+  base: string,
+  reviewed: string,
+  covered: string,
+): Promise<boolean> => {
+  const [before, after] = await Promise.all([
+    changesAt(github, repo, base, reviewed),
+    changesAt(github, repo, base, covered),
+  ]);
+  if (before === undefined || after === undefined || before.size !== after.size) return false;
+  return [...before].every(([path, change]) => after.get(path) === change);
 };
 
 const short = (sha: string) => sha.slice(0, 7);
@@ -287,6 +377,13 @@ const listed = (items: readonly string[]) => {
 
 const rateLimitHint =
   "If CodeRabbit skipped the review or reached its rate limit, a maintainer can comment `@coderabbitai review` on the pull request.";
+const maintainerPosts = "A maintainer posts `review/clear` once they have reviewed it.";
+
+const maintainer = (summary: string): Outcome => ({
+  kind: "maintainer",
+  title: "A maintainer reviews this pull request",
+  summary: `${summary} ${maintainerPosts}`,
+});
 
 export interface Context {
   readonly repo: string;
@@ -385,11 +482,18 @@ export const evaluate = async (
   if (await isMaintainer(pull.user.login)) {
     return { kind: "skip", reason: "a maintainer opened it, so the independent review clears it" };
   }
-  // A check run belongs to a commit. A maintainer's pull request at the same commit owns its verdict.
-  for (const other of openPulls) {
-    if (other.number !== pull.number && other.head.sha === head && (await isMaintainer(other.user.login))) {
+  // A check run belongs to a commit, not a pull request. A maintainer's pull request at the same
+  // commit owns its verdict, and two outside pull requests at one commit could each claim it.
+  const sharing = openPulls.filter((other) => other.number !== pull.number && other.head.sha === head);
+  for (const other of sharing) {
+    if (await isMaintainer(other.user.login)) {
       return { kind: "skip", reason: `maintainer's pull request ${other.number} is at the same commit` };
     }
+  }
+  if (sharing.length > 0) {
+    return maintainer(
+      `Other open pull requests (${sharing.map((other) => other.number).join(", ")}) are at the same head commit, and a check belongs to the commit.`,
+    );
   }
   if (pull.draft === true) {
     return {
@@ -409,37 +513,23 @@ export const evaluate = async (
     ),
   ];
   if (sensitive.length > 0) {
-    return {
-      kind: "maintainer",
-      title: "A maintainer reviews this pull request",
-      summary: `It changes files that a maintainer reviews in person, as \`.github/review-gate.json\` lists:\n\n${listed(sensitive.map((path) => `- \`${path}\``))}\n\nCodeRabbit's review still helps. A maintainer posts \`review/clear\` once they have reviewed it.`,
-    };
+    return maintainer(
+      `It changes files that a maintainer reviews in person, as \`.github/review-gate.json\` lists:\n\n${listed(sensitive.map((path) => `- \`${path}\``))}\n\nCodeRabbit's review still helps.`,
+    );
   }
   if (files.length < pull.changed_files) {
-    return {
-      kind: "maintainer",
-      title: "A maintainer reviews this pull request",
-      summary: `It changes ${pull.changed_files} files, more than GitHub lists for the gate to check. A maintainer posts \`review/clear\` once they have reviewed it.`,
-    };
+    return maintainer(`It changes ${pull.changed_files} files, more than GitHub lists for the gate to check.`);
   }
   const changedLines = pull.additions + pull.deletions;
   if (changedLines > policy.maintainerReview.maxChangedLines) {
-    return {
-      kind: "maintainer",
-      title: "A maintainer reviews this pull request",
-      summary: `It changes ${changedLines} lines, more than the ${policy.maintainerReview.maxChangedLines} that the automated review covers. A maintainer posts \`review/clear\` once they have reviewed it.`,
-    };
+    return maintainer(
+      `It changes ${changedLines} lines, more than the ${policy.maintainerReview.maxChangedLines} that the automated review covers.`,
+    );
   }
 
   const comments = (await github.list(`/repos/${repo}/issues/${pull.number}/comments`)) as IssueComment[];
   const coverage = readCoverage(comments, policy.reviewer);
-  if (typeof coverage === "string") {
-    return {
-      kind: "maintainer",
-      title: "A maintainer reviews this pull request",
-      summary: `The gate couldn't read CodeRabbit's verdict: ${coverage}. A maintainer posts \`review/clear\` once they have reviewed it.`,
-    };
-  }
+  if (typeof coverage === "string") return maintainer(`The gate couldn't read CodeRabbit's verdict: ${coverage}.`);
   if (coverage === undefined) {
     return {
       kind: "wait",
@@ -454,32 +544,31 @@ export const evaluate = async (
       summary: `CodeRabbit last reviewed \`${coverage.commit}\`, not the head commit \`${head}\`. The gate checks again when it reviews the head. ${rateLimitHint}`,
     };
   }
-  if (!policy.coverageKinds.includes(coverage.kind)) {
-    return {
-      kind: "maintainer",
-      title: "A maintainer reviews this pull request",
-      summary: `CodeRabbit's last pass over \`${head}\` was \`${coverage.kind}\`, which the gate doesn't count as a review. A maintainer posts \`review/clear\` once they have reviewed it.`,
-    };
+  if (coverage.kind === "target_branch_merge_carry_forward") {
+    if (!(await sameChanges(github, repo, context.defaultBranch, coverage.source, head))) {
+      return maintainer(
+        `CodeRabbit carried its review of \`${coverage.source}\` to \`${head}\`, but the pull request doesn't change every file the same way at both.`,
+      );
+    }
+  } else if (coverage.kind !== "reviewed" || coverage.source !== head) {
+    return maintainer(`CodeRabbit's last pass over \`${head}\` was \`${coverage.kind}\`, which the gate doesn't count as a review.`);
   }
-  if (coverage.mergeRisk !== undefined && !policy.clearMergeRisks.includes(coverage.mergeRisk)) {
-    return {
-      kind: "maintainer",
-      title: "A maintainer reviews this pull request",
-      summary: `CodeRabbit rates the merge risk of \`${head}\` ${coverage.mergeRisk}, above what the gate clears on its own. A maintainer posts \`review/clear\` once they have reviewed it.`,
-    };
+  if (!policy.clearMergeRisks.includes(coverage.mergeRisk)) {
+    return maintainer(`CodeRabbit rates the merge risk of \`${head}\` ${coverage.mergeRisk}, above what the gate clears on its own.`);
   }
 
-  const { blocking, unreadable } = openFindings(
-    await reviewThreads(github, repo, pull.number),
-    policy,
-    new Set(context.codeOwners),
-  );
+  const reviews = (await github.list(`/repos/${repo}/pulls/${pull.number}/reviews`)) as Review[];
+  const summarized = summaryFindings(reviews, policy);
+  if (summarized.length > 0) {
+    return maintainer(
+      `CodeRabbit raised ${policy.blockingSeverities.join(" or ")} findings in the summary of these reviews, outside the diff or repeated from earlier, which have no thread to resolve:\n\n${listed(summarized.map((review) => `- ${review.html_url ?? "a review"}`))}\n`,
+    );
+  }
+  const { blocking, unreadable } = await openFindings(await reviewThreads(github, repo, pull.number), policy, isMaintainer);
   if (unreadable.length > 0) {
-    return {
-      kind: "maintainer",
-      title: "A maintainer reviews this pull request",
-      summary: `The gate couldn't read the severity of these CodeRabbit findings:\n\n${listed(unreadable.map((finding) => `- [${finding.location}](${finding.url})`))}\n\nA maintainer posts \`review/clear\` once they have reviewed it.`,
-    };
+    return maintainer(
+      `The gate couldn't read the severity of these CodeRabbit findings:\n\n${listed(unreadable.map((finding) => `- [${finding.location}](${finding.url})`))}\n`,
+    );
   }
   if (blocking.length > 0 || coverage.erroredChecks.length > 0) {
     const lines = [
@@ -579,11 +668,6 @@ export const pullsToEvaluate = (eventName: string, event: unknown, openPulls: re
   if (eventName === "issue_comment") {
     const issue = (event as { readonly issue: { readonly number: number; readonly pull_request?: unknown } }).issue;
     return issue.pull_request === undefined ? [] : [issue.number];
-  }
-  // A review was submitted or dismissed. The marker workflow's run names the head commit it ran for.
-  if (eventName === "workflow_run") {
-    const sha = (event as { readonly workflow_run: { readonly head_sha: string } }).workflow_run.head_sha;
-    return openPulls.filter((pull) => pull.head.sha === sha).map((pull) => pull.number);
   }
   // A maintainer's dispatch evaluates one pull request, or every open one.
   if (eventName === "workflow_dispatch") {
