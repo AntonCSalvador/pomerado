@@ -27,6 +27,7 @@ import {
 } from "../../src/mint/skills.js";
 import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
 import { Deadline } from "../../src/runtime/deadline.js";
+import { readBackMatches, sameText } from "../../src/runtime/text.js";
 import { offlineKernel } from "../support/offline-kernel.js";
 import { executeKernelOperation } from "../../src/runtime/kernel-operation-run.js";
 import { runLocalOperation } from "../../src/execution/local-operation.js";
@@ -760,7 +761,7 @@ it("has a write confirm from its first matching read-back, never from state befo
     " ",
   );
   expect(writes).toContain(
-    "- When a read-back is needed, the first one that matches confirms the write; stop there. It matches when it shows the written record after the write, found by something the write produced or entered (its number, its own reference or the values entered), and every field the caller asked for that the view shows agrees (the read before the commit already checked what you entered). Sites reformat what they save, such as line breaks, spaces and dates in the viewer's format, so compare text after the commit with `readBackMatches`, as for a page saved before it. Compare a chosen option's value only where the view shows that value; otherwise compare the label it shows. When the write changed state that already existed, the same read is also the after read of the before-and-after comparison, which runs after `verified()` (\"Check the read-back\"). Write each read-back step to check the requested fields in its own code and call `verified()` when they hold, so the first one that matches is the confirming step. Read one confirmation, list or detail view: find the record there by that identity, never by its position, such as the first or newest row, and prefer finding each value in it by a stable id, its column header or a `data-` attribute over its cell's position. Read only that record, and the view's other rows only where the before-and-after check or another skill, such as the cart skill, compares them. Read another page, in that same step before `verified()`, only for a field the view did not show and the tool's output promises.",
+    "- When a read-back is needed, the first one that matches confirms the write; stop there. It matches when it shows the written record after the write, found by something the write produced or entered (its number, its own reference or the values entered), and every field the caller asked for that the view shows agrees (the read before the commit already checked what you entered). Sites reformat what they save, such as line breaks, spaces and dates in the viewer's format, so compare text after the commit with `sameText`, as before it (the core skill's Confirm step). Compare a chosen option's value only where the view shows that value; otherwise compare the label it shows. When the write changed state that already existed, the same read is also the after read of the before-and-after comparison, which runs after `verified()` (\"Check the read-back\"). Write each read-back step to check the requested fields in its own code and call `verified()` when they hold, so the first one that matches is the confirming step. Read one confirmation, list or detail view: find the record there by that identity, never by its position, such as the first or newest row, and prefer finding each value in it by a stable id, its column header or a `data-` attribute over its cell's position. Read only that record, and the view's other rows only where the before-and-after check or another skill, such as the cart skill, compares them. Read another page, in that same step before `verified()`, only for a field the view did not show and the tool's output promises.",
   );
   // Entered values find a record but never prove it new.
   expect(writes).toContain(
@@ -831,8 +832,10 @@ it("teaches every write to call verified() with no argument and declare a read-b
  * A form saved over several pages: the first save of one page kept the site's own value for a
  * number the caller gave, the next page did not show it, and the final commit went out with the
  * site's value. A second save of that page keeps the caller's value. The write reads back each
- * saved value before its final commit, saves the page once more when one differs, and stops when
- * it still differs.
+ * saved value the site shows before its final commit, saves the page once more when one differs
+ * and saving it again updates the same record, and stops when it still differs. A value the tool
+ * picked from the site's list is compared as the label it picked: a caller's CA picked as
+ * California reads back as California, which readBackMatches never confirms for CA.
  */
 it("has a write read back each saved caller value before its final commit, and save a page again once", async () => {
   const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
@@ -840,8 +843,36 @@ it("has a write read back each saved caller value before its final commit, and s
     " ",
   );
   expect(writes).toContain(
-    "- On a form saved over several pages, before the final commit, read back each value the caller supplied from what the site saved, such as a summary, a review page or each saved page, in the session and in the composed script. Compare each with `readBackMatches(shown, wanted)` from `pomerado/runtime`: it accepts the same value in another format or word order, and every number must match exactly. When the site kept a different value, save that page again once with the caller's values and read it back again. Prefer `saveAndReadBack` from `pomerado/runtime` for such a page's save: it does both and returns the values that still differ. When one still differs, stop before the final commit's mark and throw `InputNotApplied` with its `field`, `requested` and `applied`.",
+    "- On a form saved over several pages, before the final commit, read back what the site saved for the caller's values, from a summary, a review page or each saved page, in the session and in the composed script. Compare each value the site shows with `readBackMatches(shown, wanted)` from `pomerado/runtime`, against the option the tool picked when it picked one: `wanted` is that option's label, and the caller's value otherwise. It accepts the same value in another format or word order, and every number must match exactly, the same numbers in the same order. When the site kept a different value, save that page again once with the same entries and read it back again, but only when saving it again updates the same record or page, never when the save adds an item, such as a cart line or a row. Prefer `saveAndReadBack` from `pomerado/runtime` for such a page's save: it does both and returns the values that still differ. When one still differs, or a page whose save adds an item kept a different value, stop before the final commit's mark and throw `InputNotApplied` with its `field`, `requested` and `applied`.",
   );
+  expect(readBackMatches("California", "California")).toBe(true);
+  expect(readBackMatches("California", "CA")).toBe(false);
+  expect(readBackMatches("Yes", "true")).toBe(false);
+});
+
+/*
+ * The read-back after a commit decides whether the tool calls verified(). It compares with
+ * sameText, which refuses a different value that holds the wanted one, such as Not paid for Paid.
+ * readBackMatches, for a page saved before the final commit, accepts it.
+ */
+it("has a write compare its read-back after the commit with sameText, which refuses Not paid for Paid", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  expect(writes).toContain(
+    "so compare text after the commit with `sameText`, as before it (the core skill's Confirm step).",
+  );
+  expect(writes).not.toContain("compare text after the commit with `readBackMatches`");
+  for (const [shown, wanted] of [
+    ["Not paid", "Paid"],
+    ["Premium Economy", "Economy"],
+    ["West Virginia", "Virginia"],
+    ["Jane Mary Doe", "Jane Doe"],
+  ] as const) {
+    expect(sameText(shown, wanted), `${shown} | ${wanted}`).toBe(false);
+    expect(readBackMatches(shown, wanted), `${shown} | ${wanted}`).toBe(true);
+  }
 });
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");

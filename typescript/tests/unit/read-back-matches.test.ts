@@ -8,10 +8,15 @@ it("scores 1 for text holding every word of the query, and 0 for text sharing no
   expect(rankByWords("Exemple Bay", [""])).toEqual([0]);
 });
 
+it("scores above 1 a text that repeats the query's words", () => {
+  expect(rankByWords("Smith", ["Smith Smith Smith"])[0]).toBeGreaterThan(1);
+});
+
 it("ranks the text that shares the most words above one that shares fewer or adds more", () => {
-  const [marina, exemple] = rankByWords("Exemple Bay", ["Exemple Bay Marina", "Exemple"]);
-  expect(marina).toBeCloseTo(0.8302, 4);
-  expect(exemple).toBeCloseTo(0.2618, 4);
+  const [whole, marina, exemple] = rankByWords("Exemple Bay", ["Exemple Bay", "Exemple Bay Marina", "Exemple"]);
+  expect(whole ?? 0).toBeGreaterThan(marina ?? 0);
+  expect(marina ?? 0).toBeGreaterThan(exemple ?? 0);
+  expect(exemple ?? 0).toBeGreaterThan(0);
   // A word few texts hold counts for more than one every text holds.
   const [north, road] = rankByWords("Lakeside Park", ["North Lakeside", "Lakeside Park Road"]);
   expect(road ?? 0).toBeGreaterThan(north ?? 0);
@@ -28,7 +33,7 @@ it("reads one date, one phone number or one amount however the page writes it", 
     0, 1, 1, 1,
   ]);
   expect(rankByWords("2026-11-25", ["11/25/2026", "25/11/2026", "25.11.2026"])).toEqual([1, 1, 1]);
-  expect(rankByWords("(555) 010-0199", ["555.010.0199", "+1 555 010 0199", "555 010 0198"])).toEqual([1, 1, 0]);
+  expect(rankByWords("(555) 010-0199", ["555.010.0199", "555 010 0199", "555 010 0198"])).toEqual([1, 1, 0]);
   expect(rankByWords("$1,250.00", ["1250", "1,250", "125"])).toEqual([1, 1, 0]);
   // A day and month order the text leaves open is no date, so it matches only as written.
   expect(rankByWords("03/04/2026", ["2026-03-04", "2026-04-03", "03/04/2026"])).toEqual([0, 0, 1]);
@@ -44,6 +49,17 @@ it("reads an amount of seven digits or more as its number, written bare or forma
   expect(readBackMatches("5550100199", "(555) 010-0199")).toBe(true);
   expect(readBackMatches("+1 555 010 0199", "15550100199")).toBe(true);
   expect(readBackMatches("555 010 0198", "5550100199")).toBe(false);
+});
+
+it("keeps a number's decimal point and every one of its digits", () => {
+  expect(readBackMatches("1234567.8", "12345678")).toBe(false);
+  expect(readBackMatches("12345678", "1234567.8")).toBe(false);
+  expect(readBackMatches("1,234,567.8", "12345678")).toBe(false);
+  expect(readBackMatches("1234567.8", "1234567.8")).toBe(true);
+  expect(readBackMatches("4155551234", "14155551234")).toBe(false);
+  expect(readBackMatches("14155551234", "4155551234")).toBe(false);
+  expect(readBackMatches("+1 (555) 010-0199", "(555) 010-0199")).toBe(false);
+  expect(readBackMatches("1 555 010 0199", "15550100199")).toBe(true);
 });
 
 it("ignores characters that never show, and reads a combining accent as the letter's", () => {
@@ -62,13 +78,24 @@ it("keeps a number, an email, a domain or a file name as one word", () => {
   expect(rankByWords("report-2024.pdf", ["report 2024 pdf"])).toEqual([0]);
 });
 
-it("scores 0 a text that lacks any number of the query, whatever else it shares", () => {
+it("scores 0 a text whose numbers are not the query's, whatever else it shares", () => {
   expect(rankByWords("Order 1250", ["Order 1251", "Order 1250 shipped"])).toEqual([0, expect.any(Number)]);
   // Four of five words shared would pass on words alone; the changed house number fails it.
   expect(rankByWords("Jane Exemple 42 Elm Street Hillcrest", ["Jane Exemple 44 Elm Street Hillcrest"])).toEqual([0]);
   expect(rankByWords("2026-11-05", ["Nov 5, 2027"])).toEqual([0]);
-  // A text may hold numbers the query lacks.
-  expect(rankByWords("Elm Street", ["42 Elm Street"])[0]).toBeGreaterThan(0.7);
+  // A text may not hold a number the query lacks.
+  expect(rankByWords("Elm Street", ["42 Elm Street"])).toEqual([0]);
+});
+
+it("refuses a saved value with the caller's numbers in another order, or with one more or fewer", () => {
+  expect(rankByWords("Adults 1 Children 2", ["Adults 2 Children 1", "Adults 1 Children 2"])).toEqual([0, 1]);
+  expect(readBackMatches("Adults 2 Children 1", "Adults 1 Children 2")).toBe(false);
+  expect(readBackMatches("3 Oak St Apt 12", "12 Oak St Apt 3")).toBe(false);
+  expect(readBackMatches("5 15", "5")).toBe(false);
+  expect(readBackMatches("5", "5 15")).toBe(false);
+  expect(readBackMatches("5 5", "5")).toBe(false);
+  // The words around the numbers may still move.
+  expect(readBackMatches("Oak St 12, Apt 3", "12 Oak St Apt 3")).toBe(true);
 });
 
 it("embeds as self-contained source, so page code can use it", () => {
@@ -95,11 +122,11 @@ it("confirms a saved value that differs only in format or word order", () => {
   expect(readBackMatches("Bay Exemple", "Exemple Bay")).toBe(true);
   expect(readBackMatches("Exemple, Jane", "Jane Exemple")).toBe(true);
   expect(readBackMatches("Main St 123", "123 Main St")).toBe(true);
-  expect(readBackMatches("2,150", "2150")).toBe(true);
-  expect(readBackMatches("2,150 sq ft", "2150")).toBe(true);
+  expect(readBackMatches("1,875", "1875")).toBe(true);
+  expect(readBackMatches("1,875 sq ft", "1875")).toBe(true);
   expect(readBackMatches("$300,000.00", "300000")).toBe(true);
   expect(readBackMatches("Thu, Nov 5, 2026", "2026-11-05")).toBe(true);
-  expect(readBackMatches("+1 (555) 010-0199", "555.010.0199")).toBe(true);
+  expect(readBackMatches("(555) 010-0199", "555.010.0199")).toBe(true);
   expect(readBackMatches("Exemple Bay Marina", "Exemple Bay")).toBe(true);
   // A wanted name inside a longer one is a known limit: it confirms.
   expect(readBackMatches("North Lakeside", "Lakeside")).toBe(true);
@@ -109,15 +136,15 @@ it("refuses a saved value with any number other than the caller's", () => {
   expect(readBackMatches("125 Main St", "123 Main St")).toBe(false);
   expect(readBackMatches("500000", "300000")).toBe(false);
   expect(readBackMatches("$500,000", "300000")).toBe(false);
-  expect(readBackMatches("1,240", "2150")).toBe(false);
-  expect(readBackMatches("1240 sq ft", "2,150")).toBe(false);
+  expect(readBackMatches("1,460", "1875")).toBe(false);
+  expect(readBackMatches("1460 sq ft", "1,875")).toBe(false);
   expect(readBackMatches("Jane Exemple, 44 Elm Street, Hillcrest", "Jane Exemple, 42 Elm Street, Hillcrest")).toBe(
     false,
   );
   // A long value sharing every other word would pass on words alone.
   const house = (feet: string) => `Two storey brick house with slate roof, detached garage and ${feet} square feet`;
-  expect(readBackMatches(house("1240"), house("2150"))).toBe(false);
-  expect(readBackMatches(house("2,150"), house("2150"))).toBe(true);
+  expect(readBackMatches(house("1460"), house("1875"))).toBe(false);
+  expect(readBackMatches(house("1,875"), house("1875"))).toBe(true);
 });
 
 it("ignores case on both of its steps", () => {
@@ -129,18 +156,15 @@ it("ignores case on both of its steps", () => {
   expect(readBackMatches("BAY EXEMPLE", "exemple bay")).toBe(true);
 });
 
-it("confirms from a BM25 score of 0.7 up, and refuses below it", () => {
-  // One wanted word on a page that adds two words scores 0.727, and with three added 0.693.
-  expect(rankByWords("Acme", ["Acme Insurance Group"])[0]).toBeCloseTo(0.7273, 4);
+it("confirms the wanted words among a few words more, and refuses them among more", () => {
+  // One wanted word confirms with two words added, and not with three.
   expect(readBackMatches("Acme Insurance Group", "Acme")).toBe(true);
-  expect(rankByWords("Acme", ["Acme Insurance Group Ltd"])[0]).toBeCloseTo(0.6932, 4);
   expect(readBackMatches("Acme Insurance Group Ltd", "Acme")).toBe(false);
-  // Four wanted words among eleven more score 0.7, and among twelve 0.693.
-  const words = (count: number) => Array.from({ length: count }, (_, index) => `extra${index}`).join(" ");
+  // Four wanted words confirm among eleven more, and not among twelve.
+  const words = (count: number) =>
+    Array.from({ length: count }, (_, index) => `extra${String.fromCharCode(97 + index)}`).join(" ");
   const wanted = "alpha beta gamma delta";
-  expect(rankByWords(wanted, [`${wanted} ${words(11)}`])[0]).toBeCloseTo(0.7, 10);
   expect(readBackMatches(`${wanted} ${words(11)}`, wanted)).toBe(true);
-  expect(rankByWords(wanted, [`${wanted} ${words(12)}`])[0]).toBeCloseTo(0.6932, 4);
   expect(readBackMatches(`${wanted} ${words(12)}`, wanted)).toBe(false);
 });
 
