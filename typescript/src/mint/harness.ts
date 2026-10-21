@@ -117,6 +117,8 @@ import {
   decodeCasesFile,
   judgeCase,
   liveTestCasesPath,
+  failingCasesRefusal,
+  failingLiveTestCases,
   liveTestsEvidence,
   liveTestsEvidencePath,
   liveTestsEvidenceProblem,
@@ -409,6 +411,8 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   "input_contract_changed",
   // Too few cases pass on the published source: fix, then run them again.
   "live_tests_below_threshold",
+  // A counted case fails on the published source: fix the code and run the cases again, or retire it.
+  "live_test_cases_failing",
 ]);
 /**
  * Publication refusals the host asks about only once in an attempt: finishing again, or passing
@@ -4949,7 +4953,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     );
               // The host's own record of a read's live tests on this source goes to the review
               // as evidence, and its line to coverage. It refuses publication by itself only
-              // when the published version's cases pass below the bar on its source: the review
+              // when the published version's cases pass below the bar on its source, or, on a
+              // host that holds the review for it, when any of them fails there: the review
               // would hold it back on those failures anyway, so it is not started. Once the
               // attempt ran out of time for live tests, or no further batch fits, as after a
               // host's batch cap, no case can run again, so the review decides on the record as
@@ -4983,6 +4988,28 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   reason,
                   userInputRequired: false,
                   instruction: `Publication review not started: only ${shortfall.passed} of ${shortfall.counted} live test cases${shortfall.entrypoint === undefined ? "" : ` on ${shortfall.entrypoint}`} pass on this source (${shortfall.percent}%), and review starts at ${reviewPassPercent}%. Fix the code where a case fails, or the case where it is wrong, run every case again, then call finish_build.`,
+                  executionContext: yield* executionContext(),
+                });
+              }
+              // A host that holds the review while a counted case fails on this source has the
+              // minter fix the code or retire the case first: the review would hold publication
+              // back on that case anyway. It lifts with the bar, once no case can run again.
+              const failing =
+                liveTests === undefined ||
+                !testsCanRunAgain ||
+                dependencies.liveTests?.holdReviewOnFailingCases !== true
+                  ? undefined
+                  : failingLiveTestCases(liveTests.record, liveTestVersion(proposed.entrypoint));
+              if (failing !== undefined) {
+                const reason = "live_test_cases_failing";
+                pendingDecision = hostRefusalDecision(reason, evidence.executionId, write);
+                yield* diagnose({ phase: "publication", code: "PublicationUnavailable", reason });
+                return JSON.stringify({
+                  status: "not_published",
+                  code: "PublicationUnavailable",
+                  reason,
+                  userInputRequired: false,
+                  instruction: failingCasesRefusal(failing),
                   executionContext: yield* executionContext(),
                 });
               }
