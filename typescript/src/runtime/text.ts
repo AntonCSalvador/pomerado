@@ -64,9 +64,10 @@ export const foldChoiceText = (text: unknown): string => {
  * changed it, and never decides whether a write goes on. Every word and number of `wanted` must
  * appear in `shown`, in order. A word may be written short or in full either way, with the same
  * first letter, its letters in order and a short form of two letters or more, at most three fifths
- * as long as the full word, and three letters at most when it is the full word's start. So
- * Parkway matches PKWY, Suite matches STE and St matches Street, either way, while Main never
- * matches Martin, Mainland or M, and Larkspur never matches Lark. A number keeps its groups, as above, though the site may pad a group of a grouped
+ * as long as the full word, and of two letters when it is the full word's start. So Parkway
+ * matches PKWY, Suite matches STE and St matches Street, either way, while Main never matches
+ * Martin, Mainland or M, Larkspur never matches Lark, Oakwood never matches Oak and Avenue never
+ * matches Ave. A number keeps its groups, as above, though the site may pad a group of a grouped
  * number with zeros, as 01/12 for 1/12, or add thousands commas to a bare one, as 1,420 for 1420,
  * and three or more groups split by periods, as in 555.123.4567, are groups as a hyphen splits
  * them. A bare number of seven digits or more, a phone or account number, may come back grouped,
@@ -175,12 +176,12 @@ export const sameText = (
     // Whether a number starts at the site's part `index`, on its own or after a country code.
     const opens = (index: number) => site[index]?.joined === false || countryAt(index - 1);
     // The site writes a word short or in full, the short form at most three fifths as long. A
-    // short form is two letters or more, and one that is the full word's start has three letters
-    // at most, so Lark never stands for Larkspur, nor Main for Mainland.
+    // short form is two letters or more, and one that is the full word's start has two letters,
+    // as St for Street, so Oak never stands for Oakwood, nor Main for Mainland.
     const sameWord = (there: string, typed: string) => {
       if (there === typed) return true;
       const [short, full] = there.length < typed.length ? [there, typed] : [typed, there];
-      if (short.length < 2 || (short.length > 3 && full.startsWith(short))) return false;
+      if (short.length < 2 || (short.length > 2 && full.startsWith(short))) return false;
       return shortens(short, full, false);
     };
     // The site writes a bare number with thousands commas, as 1,420 for 1420, or pads a group of
@@ -213,8 +214,10 @@ export const sameText = (
         const there = site[start + offset];
         if (there === undefined || there.number !== part.number || there.mixed !== part.mixed)
           return false;
-        if (part.number)
-          return (offset === 0 || there.joined) && sameNumber(there.text, part.text, item.length > 1);
+        if (part.number) {
+          const grouped = item.length > 1;
+          return (offset === 0 || there.joined) && sameNumber(there.text, part.text, grouped);
+        }
         return part.mixed ? there.text === part.text : sameWord(there.text, part.text);
       });
       return all ? item.length : 0;
@@ -227,7 +230,8 @@ export const sameText = (
       if (taken === 0) return false;
       for (let added = at; added < start; added++) {
         const part = site[added];
-        const inserted = index > 0 && part !== undefined && /^\p{Script=Latin}{1,2}$/u.test(part.text);
+        const inserted =
+          index > 0 && part !== undefined && /^\p{Script=Latin}{1,2}$/u.test(part.text);
         if (!inserted && !(added === start - 1 && countryAt(added))) return false;
       }
       at = start + taken;

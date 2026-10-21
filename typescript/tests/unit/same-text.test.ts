@@ -269,9 +269,7 @@ it("says a site's rewrite kept the typed value when it only reformatted, shorten
     ["100 Elm Rte", "100 Elm Route"],
     ["100 Elm Plz", "100 Elm Plaza"],
     ["100 Elm Rdg", "100 Elm Ridge"],
-    ["100 Elm Ave", "100 Elm Avenue"],
     ["100 Elm Blvd", "100 Elm Boulevard"],
-    ["100 Elm Ter", "100 Elm Terrace"],
     ["Apt 4", "Apartment 4"],
     [
       "12 Elm Pkwy, Ste 4, Springfield, IL 62704-0001",
@@ -292,11 +290,30 @@ it("says a site's rewrite only reformatted a word the caller gave that it wrote 
     ["12 ELM PKWY", "12 Elm Parkway"],
     ["12 ELM ST", "12 Elm Street"],
     ["1420 OAK RD", "1420 Oak Road"],
-    ["100 ELM AVE", "100 Elm Avenue"],
   ];
   for (const [one, other] of pairs) {
     expect(kept(one, other), `${one} | ${other}`).toBe(true);
     expect(kept(other, one), `${other} | ${one}`).toBe(true);
+  }
+});
+
+it("says a site's rewrite changed a word it cut to, or wrote out from, its first three letters or more", () => {
+  // Each pair is a site's version and what the tool typed, and is a change in either order.
+  const pairs: Pairs = [
+    ["100 Oak St", "100 Oakwood St"],
+    ["100 Elm St", "100 Elmhurst St"],
+    ["100 Ash St", "100 Ashford St"],
+    ["100 Fox St", "100 Foxglove St"],
+    ["Rob Smith", "Robert Smith"],
+    ["Dan Smith", "Daniel Smith"],
+    ["Kim Smith", "Kimberly Smith"],
+    ["Pat Smith", "Patricia Smith"],
+    ["100 Elm Ave", "100 Elm Avenue"],
+    ["100 Elm Ter", "100 Elm Terrace"],
+  ];
+  for (const [one, other] of pairs) {
+    expect(kept(one, other), `${one} | ${other}`).toBe(false);
+    expect(kept(other, one), `${other} | ${one}`).toBe(false);
   }
 });
 
