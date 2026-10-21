@@ -2146,12 +2146,12 @@ for (const [variant, site] of Object.entries(savingReviews))
     expect(failure(saved.result)).toMatchObject({ _tag: "OperationFailure", message: "not_confirmed" });
   });
 
-test("write-session example reads a save that shows a new required field as a refused click, unsent while nobody answers", async ({
+test("write-session example asks nothing after a save that hides a field and shows a new required one, and keeps it possibly sent", async ({
   page,
 }) => {
-  // The save resets the form to pickup, which shows a required store the page never showed before
-  // the click: no check can tell that from a refused click, so the step goes back before the
-  // question, as for a refused click. This is the limit of the page's proof.
+  // The save resets the form to pickup, which hides the delivery address and shows a required
+  // store the page never showed before the click. A field the click hid proves nothing, so
+  // nothing is asked and the step stays sent.
   const origin = "https://shop.example.invalid";
   const orders: string[] = [];
   await reviewSite(page, origin, orders, {
@@ -2164,12 +2164,23 @@ test("write-session example reads a save that shows a new required field as a re
       confirm(800);`,
   });
   await page.goto("about:blank");
-  const unanswered = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+  const asked: InputRequest[] = [];
+  const saved = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
     siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o1" };
+    },
   });
-  expect(failure(unanswered.result)).toMatchObject({ _tag: "ScriptInputFailure", code: "Unavailable" });
+  expect(asked).toEqual([]);
   expect(orders).toHaveLength(1);
-  expect(unanswered.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
+  expect(failure(saved.result)).toMatchObject({
+    _tag: "OperationFailure",
+    message: "not_confirmed",
+    dispatch: "sent",
+  });
+  expect(saved.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  expect(commitRetryRefusal(commitEvidenceOf(saved.commits))).toBe("commit_entered");
 });
 
 test("write-session example checks the review again before its second click when the answer changes the total", async ({

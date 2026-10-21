@@ -568,6 +568,36 @@ test("blockingRequiredFields proves a click saved nothing only when every flag i
   await page.setContent(blockedReview(`<label>Card number<input name="card" autocomplete="cc-number"></label>`));
   await reveal("[name=card]");
   expect(await blocking(["Item"])).toEqual({ result: null });
+  // A click that hid or removed a field the form showed before may be a save that reset the
+  // form, such as to pickup, so a new required field it flagged proves nothing.
+  await page.setContent(
+    blockedReview(`<label>Pickup store<input name="store"></label>`, `<label>Delivery address<input name="address" value="1 Main St"></label>`),
+  );
+  const resetting = ((await before()) as { result: string[] }).result;
+  expect(resetting).toEqual(["Item", "item", "Delivery address", "address"]);
+  await page.evaluate(() => {
+    const address = document.querySelector("[name=address]");
+    if (address?.parentElement instanceof HTMLElement) address.parentElement.hidden = true;
+  });
+  await reveal("[name=store]");
+  expect(await blocking(resetting)).toEqual({ result: null });
+  await page.setContent(
+    blockedReview(`<label>Pickup store<input name="store"></label>`, `<label>Delivery address<input name="address" value="1 Main St"></label>`),
+  );
+  await page.evaluate(() => document.querySelector("[name=address]")?.parentElement?.remove());
+  await reveal("[name=store]");
+  expect(await blocking(resetting)).toEqual({ result: null });
+  // A field still showing whose label the page only extended, as with an error mark, is kept.
+  await page.setContent(
+    blockedReview(`<label>Delivery phone<input name="phone"></label>`, `<label>Contact<input id="contact" value="Sam"></label>`),
+  );
+  const kept = ((await before()) as { result: string[] }).result;
+  expect(kept).toEqual(["Item", "item", "Contact", "contact"]);
+  await page.evaluate(() => {
+    document.querySelector("#contact")?.insertAdjacentText("afterend", " *");
+  });
+  await reveal("[name=phone]");
+  expect(await blocking(kept)).toEqual({ result: { fields: [{ label: "Delivery phone", shape: "text" }] } });
   // Without the labels read before the click, it refuses to judge.
   expect(await call(page, `return await blockingRequiredFields(${form});`)).toEqual({ error: "labels_missing" });
   // The form gone, or shown twice, is no longer the same step.
