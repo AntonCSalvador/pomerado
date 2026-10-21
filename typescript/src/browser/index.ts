@@ -64,7 +64,7 @@ export { visibleTextCode } from "./visible-text.js";
 export { normalizeText, rankByWords, readBackMatches, sameText } from "../runtime/text.js";
 export { saveAndReadBack } from "../runtime/save-read-back.js";
 export type { SavedValueDifference } from "../runtime/save-read-back.js";
-export { waitCode } from "./wait.js";
+export { confirmCommitCode, waitCode } from "./wait.js";
 export {
   CursorRefusal,
   finishList,
@@ -97,6 +97,7 @@ export type {
   ReadyResult,
 } from "./action-waits.js";
 export type {
+  CommitConfirmation,
   OutcomeObservation,
   WaitProgress,
   WaitProgressSign,

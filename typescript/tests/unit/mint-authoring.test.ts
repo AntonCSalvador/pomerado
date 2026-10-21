@@ -916,6 +916,28 @@ it("has a write confirm from its own commit request, and read back only when tha
   );
 });
 
+/*
+ * A write's own status and body checks for its commit response missed a case each time, such as
+ * a 3xx it rejected or a success field holding an error word, and each fix opened another. The
+ * writes skill and its reference confirm the final commit through the runtime's one check.
+ */
+it("points a write's commit confirmation at confirmCommit", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  expect(writes).toContain(
+    "- Prefer confirming the final commit with `confirmCommit(answer, page)`: import `confirmCommitCode` from `pomerado/runtime`, paste it after `waitCode` in the commit call, once the form is filled and just before the click's wait, and pass it the `{ response }` answer of that click's `waitForOutcomeResult` and the page. It applies the commit-response and page-error rules above in one place, so prefer it over writing your own status and body checks, and call `verified()` only when it reports done.",
+  );
+  const reference = await readFile("typescript/authoring/examples/write-readback.ts", "utf8");
+  expect(reference).toContain("${confirmCommitCode}");
+  expect(reference).toContain("await confirmCommit(answer, page)");
+  // Pasted after the fills, so what the fills draw is noted, and before the click's wait.
+  const paste = reference.indexOf("${confirmCommitCode}");
+  expect(paste).toBeGreaterThan(reference.lastIndexOf(".fill("));
+  expect(paste).toBeLessThan(reference.indexOf("await waitForOutcomeResult("));
+});
+
 // A write that passed the page's headings to `verified` lost its receipt. With no argument there
 // is nothing to get wrong, so no skill or reference teaches the argument form any more.
 it("teaches every write to call verified() with no argument and declare a read-back", async () => {
@@ -1081,7 +1103,7 @@ it("renders the pinned standalone authoring", async () => {
     ["d720cd4d66afaf411cf14dbce6a026f72e2830e203c284e87248dfaff920f44c", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["da972d9b65ff424210686366db36843a6aa966dce4dbb203fcfcfcaad9f84853", "forms"],
-    ["90621a27aaa7c7e6dc12f008cac38b94e363737593a791a92d237eae35ab4b8d", "writes"],
+    ["4dec1571c30dec8467834a57399769a0c6d63c5fefa617e0d9fbb47c3902d300", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["4423c6fd332f1c3d3b17e3e5ea988aa564e3bb9d0d94838d85558cdecd987fb9", "caller-input"],
     ["3855dfaddc3e2ef61282b67344e61f667723f120dd0cd33d70d394504aa274ab", "publication"],

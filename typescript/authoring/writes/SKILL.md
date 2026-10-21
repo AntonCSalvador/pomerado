@@ -253,6 +253,12 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   it stands. Make no execute
   call after `verified()`: a later call reopens the effect. After the confirming step,
   further `act` steps are refused.
+- Prefer confirming the final commit with `confirmCommit(answer, page)`: import
+  `confirmCommitCode` from `pomerado/runtime`, paste it after `waitCode` in the commit call,
+  once the form is filled and just before the click's wait, and pass it the `{ response }`
+  answer of that click's `waitForOutcomeResult` and the page. It applies the commit-response and
+  page-error rules above in one place, so prefer it over writing your own status and body
+  checks, and call `verified()` only when it reports done.
 - Read the site's own proof instead only when the commit request can't confirm the write:
   no such request went out; it failed, got no answer or returned an error status; its body
   shows an error, or can't be read on an endpoint that reports errors with a 200, such as

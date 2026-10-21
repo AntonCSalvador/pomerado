@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { defineOperation, timeoutDefaults, waitCode } from "../../src/browser/index.js";
+import { confirmCommitCode, defineOperation, timeoutDefaults, waitCode } from "../../src/browser/index.js";
 
 const SavedTask = Schema.Struct({
   id: Schema.NonEmptyTrimmedString.annotations({ description: "ID the site gave the saved task" }),
@@ -77,6 +77,9 @@ export default defineOperation(
           return { failure: "form_changed" };
         await form.getByLabel("Title", { exact: true }).fill(title, { timeout: actionTimeout(${timeoutDefaults.action}) });
         await form.getByLabel("Assignee", { exact: true }).fill(assignee, { timeout: actionTimeout(${timeoutDefaults.action}) });
+        // Notes the page's messages and flagged fields once the form is filled, just before the
+        // click, so confirmCommit below counts only what the save adds.
+        ${confirmCommitCode}
         const available = timeLeft();
         if (available <= 2000) return { failure: "not_submitted" };
         // Race the save response against the form's own refusal, in the same call as the click
@@ -101,6 +104,7 @@ export default defineOperation(
         });
         // A field the form marked invalid stopped the save, or answered it: never resubmit.
         if (answer.outcome === "invalid") return { failure: "not_saved" };
+        if ((await confirmCommit(answer, page)).state !== "done") return { failure: "not_saved" };
         const response = answer.response;
         const posted = new URL(response.url());
         const location = new URL(response.headers()["location"] ?? "", posted);
