@@ -7,6 +7,7 @@ import {
   refusalsOnHostGapsFail,
   ReviewFailure,
   type PendingExecution,
+  type ReviewedLiveTestBatch,
   type ReviewTurn,
 } from "../guardian/review.js";
 import { makeOpenAIReviewer, nativeExecutionEnvironment } from "../guardian/openai.js";
@@ -306,8 +307,11 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
     );
     /** The build's tracked writes, once the harness's outcome reviewer binds them. */
     let writes: (() => readonly WriteOutcome[]) | undefined;
+    /** The build's judged live test batches, once the harness binds them. */
+    let liveTests: Effect.Effect<readonly ReviewedLiveTestBatch[]> | undefined;
     const host: MintReviewHost = {
       writes: () => writes?.() ?? [],
+      liveTests: () => liveTests ?? Effect.succeed([]),
       repeatableRead: () => repeatableReadFor(buildEffect, claimed),
       browser: () => (navigated ? "active" : "not_opened"),
       // The page's place is redacted again on each read, as its capture is.
@@ -729,6 +733,10 @@ export const requestContext = (session: StandaloneSession, request: PomeradoRequ
       /** Gives execution reviews the outcome reviewer's tracked writes. */
       bindWrites: (read: () => readonly WriteOutcome[]) => {
         writes = read;
+      },
+      /** Gives execution reviews the harness's judged live test batches. */
+      bindLiveTests: (read: Effect.Effect<readonly ReviewedLiveTestBatch[]>) => {
+        liveTests = read;
       },
     };
   });

@@ -60,6 +60,7 @@ import {
   withOwnWords,
 } from "./contracts.js";
 import { answersForReview, type AnsweredQuestion } from "../guardian/question.js";
+import type { ReviewedLiveTestBatch } from "../guardian/review.js";
 import {
   cutToLimit,
   publicationRefusalUnfixable,
@@ -360,6 +361,8 @@ const runnerResultNotice = (runner: RunnerResultDefect) =>
 
 /** How many of the latest publication refusals a question or blocked-explanation review reads. */
 const reviewedPublicationRefusals = 8;
+/** How many of the latest live test batches an execution review reads (`LiveTestHost.bindBatches`). */
+const reviewedLiveTestBatches = 4;
 /**
  * The bounds of a blocked explanation review's decision ledger: the latest denials, each one's
  * rationale and finding explanations capped, and the latest failing live test cases.
@@ -3739,6 +3742,27 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         (record) => record.retired === true,
       );
       /**
+       * This attempt's latest judged live test batches, each with the digest of the source it ran,
+       * for the host's execution reviews. In memory: a takeover starts without them.
+       */
+      const judgedBatches: Omit<ReviewedLiveTestBatch, "sourceUnchanged">[] = [];
+      let batchesJudged = 0;
+      dependencies.liveTests?.bindBatches?.(
+        Effect.suspend(() =>
+          Effect.forEach([...judgedBatches], (batch) =>
+            stepDigest(batch.entrypoint).pipe(
+              Effect.map(
+                (digest): ReviewedLiveTestBatch => ({
+                  ...batch,
+                  entrypoint: `operation/${batch.entrypoint}`,
+                  sourceUnchanged: digest !== undefined && digest === batch.sourceDigest,
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+      /**
        * The blocked explanation review's decision ledger: this attempt's denials, each case's
        * latest verdict counted, and the latest cases that did not pass, a replaced failure
        * included. Undefined when there is nothing to record.
@@ -4216,6 +4240,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               ...(signedInBatch ? { signedIn: true as const } : {}),
             });
           }
+          batchesJudged += 1;
+          judgedBatches.push({
+            batchId: result.reviewId ?? `live-tests-${batchesJudged}`,
+            entrypoint: request.entrypoint,
+            sourceDigest,
+            cases: judgedRuns.map(({ run, judged }) => ({
+              id: run.id,
+              verdict: judged.verdict,
+              ...(run.start === undefined ? {} : { start: run.start }),
+            })),
+          });
+          judgedBatches.splice(0, judgedBatches.length - reviewedLiveTestBatches);
           yield* reportBestEffort(
             dependencies.diagnostics?.emit("mint.live_tests", {
               cases: selected.length,

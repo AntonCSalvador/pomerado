@@ -13,6 +13,7 @@ import {
   MintHarnessSnapshot,
   type PublicationDecision,
 } from "../../src/mint/contracts.js";
+import type { ReviewedLiveTestBatch } from "../../src/guardian/review.js";
 import type { LiveTestOutcome } from "../../src/mint/live-tests.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
 import type { MintAgentSnapshot, MintRecoveryFactory } from "../../src/mint/recovery-contracts.js";
@@ -384,6 +385,62 @@ it("marks results stale in the publication record when the source changed after 
     "stale",
     "stale",
     "stale",
+  ]);
+});
+
+it("gives the example's review each judged batch, and whether its source is still the one it ran", async () => {
+  const { host } = liveTestHost({
+    nothing: { status: "completed", output: { results: [{ name: "Lamp" }], has_next_page: false, next_cursor: null } },
+  });
+  let batches: Effect.Effect<readonly ReviewedLiveTestBatch[]> | undefined;
+  const binding: LiveTestHost = {
+    ...host,
+    bindBatches: (read) => {
+      batches = read;
+    },
+  };
+  // What the host's review of each example would put in its trusted context.
+  const reviewed: (readonly ReviewedLiveTestBatch[])[] = [];
+  const reviewAndExecute: MintDependencies["reviewAndExecute"] = (input, beforeDispatch) =>
+    Effect.gen(function* () {
+      reviewed.push(yield* batches ?? Effect.succeed([]));
+      return yield* completedExample(input, beforeDispatch);
+    });
+  let root = "";
+  const f = await fixture(
+    async (_request, index) => {
+      // After the first example passes, the agent edits the source and runs the example again.
+      if (index === 2) await writeWorkspace(root, { "src/tool.ts": `${toolSource}// edited\n` });
+      return (
+        [
+          call("live_tests", runAll, "run"),
+          call("execute", example, "example"),
+          call("execute", example, "edited"),
+        ][index] ?? prose()
+      );
+    },
+    { liveTests: binding, deadline: Deadline.after(30 * 60_000), repeatableRead: true, reviewAndExecute },
+    read,
+  );
+  root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(cases) });
+  await f.run();
+
+  const batch = {
+    batchId: "review_batch",
+    entrypoint: "operation/src/tool.ts",
+    sourceDigest: expect.any(String),
+    cases: [
+      { id: "repeat-1", verdict: "pass", start: "warm" },
+      { id: "sort-price", verdict: "pass", start: "cold" },
+      { id: "nothing", verdict: "fail", start: "cold" },
+      { id: "page-2", verdict: "pass", start: "warm" },
+    ],
+  };
+  // The example right after the batch runs the source the batch ran; the one after the edit does not.
+  expect(reviewed).toEqual([
+    [{ ...batch, sourceUnchanged: true }],
+    [{ ...batch, sourceUnchanged: false }],
   ]);
 });
 
