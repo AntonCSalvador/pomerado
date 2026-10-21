@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { defineOperation, timeoutDefaults, waitCode } from "../../src/browser/index.js";
+import { confirmCommitCode, defineOperation, timeoutDefaults, waitCode } from "../../src/browser/index.js";
 
 const SavedTask = Schema.Struct({
   id: Schema.NonEmptyTrimmedString.annotations({ description: "ID the site gave the saved task" }),
@@ -55,6 +55,7 @@ export default defineOperation(
       timeout_sec: timeoutSec,
       code: `
         ${waitCode}
+        ${confirmCommitCode}
         // On the site: any https host on the host's site domain, else the site origin alone.
         const siteDomain = ${JSON.stringify(siteDomain ?? null)};
         const onSite = (url) => siteDomain === null ? url.origin === ${JSON.stringify(siteOrigin)}

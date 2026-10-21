@@ -62,7 +62,7 @@ export { pickerRanks, rankChoices } from "./picker-rank.js";
 export type { PickerChoice, PickerRank, PickerRanking } from "./picker-rank.js";
 export { visibleTextCode } from "./visible-text.js";
 export { normalizeText, sameText } from "../runtime/text.js";
-export { waitCode } from "./wait.js";
+export { confirmCommitCode, waitCode } from "./wait.js";
 export {
   CursorRefusal,
   finishList,
