@@ -289,19 +289,42 @@ test("unfilledRequiredFields never offers an access code, such as a gate or door
   page,
 }) => {
   const accessLabels = ["Gate code", "Door code", "Access code", "Alarm code", "Lockbox code", "Entry code", "Building ACCESS CODE"];
-  // Other codes, and the same words before something else, stay ordinary text.
-  const ordinaryLabels = ["Zip code", "Promo code", "Country code", "Postal code", "Area code", "Discount code", "Gate number", "Entry date"];
+  // Other codes, the same words before something else, and an offer's code or a note that only
+  // mentions an access code stay ordinary text.
+  const ordinaryLabels = [
+    "Zip code",
+    "Promo code",
+    "Country code",
+    "Postal code",
+    "Area code",
+    "Discount code",
+    "Gate number",
+    "Entry date",
+    "Delivery instructions (gate code, buzzer)",
+    "Notes, such as a door code",
+    "Promo/Access code",
+    "Presale access code",
+    "Coupon or access code",
+  ];
   await page.setContent(`<form>
   ${accessLabels.map((label, index) => `<label>${label}<input name="access${index}" required></label>`).join("")}
   <label>Gate<input name="gate_code" required></label>
   <label>Front door<input name="doorCode" required></label>
+  <label>Card number (see note)<input name="card" required></label>
   ${ordinaryLabels.map((label, index) => `<label>${label}<input name="plain${index}" required></label>`).join("")}
+  <label>Delivery instructions<input name="gate_code_2" required></label>
 </form>`);
   expect(await call(page, `return await unfilledRequiredFields(page.locator("form"));`)).toEqual({
     result: [
-      // By its label, or by a name such as gate_code or doorCode.
-      ...[...accessLabels, "Gate", "Front door"].map((label) => ({ label, shape: "other", unsupported: true })),
-      ...ordinaryLabels.map((label) => ({ label, shape: "text" })),
+      // By its label, or by a name such as gate_code or doorCode. A note beside another secret,
+      // such as a card number, doesn't change it.
+      ...[...accessLabels, "Gate", "Front door", "Card number (see note)"].map((label) => ({
+        label,
+        shape: "other",
+        unsupported: true,
+      })),
+      // A label that is a note keeps a field named for an access code ordinary too.
+      ...[...ordinaryLabels, "Delivery instructions"].map((label) => ({ label, shape: "text" })),
     ],
   });
 });
@@ -597,11 +620,15 @@ test("blockingRequiredFields with unaskable says when a click that saved nothing
     asked: { result: { unaskable: true, labels: ["Card number"] } },
     plain: { result: null },
   });
-  // Any other field a question can't ask counts too, such as a box to tick.
-  expect(await judge(`<label><input type="checkbox" name="terms" data-flag> I accept the terms</label>`)).toEqual({
-    asked: { result: { unaskable: true, labels: ["I accept the terms"] } },
-    plain: { result: null },
-  });
+  // Any other field a question can't ask, such as a box to tick, a date or a choice of buttons,
+  // is left to a repair that can teach the tool to fill it, alone or beside a card.
+  const unasked = [
+    `<label><input type="checkbox" name="terms" data-flag> I accept the terms</label>`,
+    `<label>Delivery date<input type="date" name="date" data-flag></label>`,
+    `<label><input type="radio" name="speed" value="fast" data-flag> Fast</label><label><input type="radio" name="speed" value="slow" data-flag> Slow</label>`,
+    `${card}<label>Delivery date<input type="date" name="date" data-flag></label>`,
+  ];
+  for (const hidden of unasked) expect(await judge(hidden)).toEqual({ asked: { result: null }, plain: { result: null } });
   // A new field a question can ask is still returned to ask, with or without the option.
   const phone = { result: { fields: [{ label: "Delivery phone", shape: "text" }] } };
   expect(await judge(`<label>Delivery phone<input name="phone" data-flag></label>`)).toEqual({
