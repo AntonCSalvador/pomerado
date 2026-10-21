@@ -512,14 +512,17 @@ that depends on them:
    selectable, exactly as shown. Leave disabled, sold-out and other unselectable options out of
    `available`, and say in the message that they were left out. Never pick a near match, the
    page's default or the first option; the same proper noun in another usual form is not a near
-   match (input schema above). A broader choice that covers the value, such as "Show all", is
-   allowed on a search (search skill).
+   match (input schema above). A write follows the site's preselected substitute instead when
+   the caller's own task asks for whatever the site ends up with (writes skill). A broader
+   choice that covers the value, such as "Show all", is allowed on a search (search skill).
    - An option the page lists but greys out, disables or marks unavailable, such as a booked
      date, a sold-out size or a full time slot: a read returns it as data, the requested value
      with `available: false`, the page's own reason when it shows one, and the alternatives the
      page offers beside it, such as the in-stock sizes, the open times or the valid stays, and
      the run succeeds. A write throws `InvalidInput` with `field` and `available`, the
-     selectable options. Neither picks another value for the caller.
+     selectable options. Neither picks another value for the caller; a write follows the site's
+     preselected substitute only when the caller's own task asks for whatever the site ends up
+     with (writes skill).
    - For an input whose options depend on another, such as a check-out after a check-in or a
      time after a date, apply the input it depends on first and read `available` from that
      state, then drop the options the input alone rules out. Never list options read before

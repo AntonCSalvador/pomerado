@@ -13,9 +13,10 @@ the caller asked for. Never return results computed without a value the caller s
 an input that tailors the answer, which a read returns labeled with the value the site applied.
 
 Apply each caller input the way the site applies it, and only that. Don't add your own
-constraints between inputs, filter them, or swap in a value the caller didn't give. For example,
-a store and a delivery ZIP that the site sets separately are both applied as given, even when
-they're far apart.
+constraints between inputs, filter them, or swap in a value the caller didn't give; a write
+follows the site's preselected substitute only when the caller's own task asks for whatever the
+site ends up with (writes skill). For example, a store and a delivery ZIP that the site sets
+separately are both applied as given, even when they're far apart.
 
 1. Express in the input schema everything it can hold, so the host refuses a bad value before
    the script runs: each field's type, an enum of the site's full set of options when the
@@ -51,7 +52,8 @@ they're far apart.
      above, or is not among the options the page lists, such as a store missing from its
      picker. Pass `field`, and `available`, every option the page offers
      as selectable, exactly as shown, whenever the page lists them. The caller corrects the
-     input and runs again.
+     input and runs again. A write follows the site's preselected substitute instead when the
+     caller's own task asks for whatever the site ends up with (writes skill).
    - `InputNotApplied`: the value is valid and the site offers it, but the page did not apply
      it after the tool's bounded retries. It ignored, reset or replaced the value, such as a
      filter, sort or date (on a write, a location or store too), and the read-back shows its own
@@ -138,7 +140,8 @@ Work the request already covers proceeds without a question, such as finding the
 or choosing among alternatives the request already allows. A supplied value the site does not
 offer, whether the page does not list it or greys it out, is not such a question either, and
 never one to ask about: it follows .agents/core/SKILL.md ("Configure, then read"), which never
-substitutes another value. Asking the
+substitutes another value; a write follows the site's preselected substitute only when the
+caller's own task asks for whatever the site ends up with (writes skill). Asking the
 owner to revise it or stop is the minter's own `request_input` question while it builds, as
 `AGENTS.md` says.
 
