@@ -663,6 +663,35 @@ describe("OpenAI reviewer policy and trusted authority", () => {
       for (const sentence of sentences) expect(policy).toContain(sentence);
   });
 
+  // A public site's own button can log each query it runs, with a generated name, for anyone
+  // viewing its data. Guardian allowed a read's browser steps that fire it, then denied its HTTP
+  // version as a write once the request body showed the record. The write rule now settles it.
+  it("tells Guardian a public site's own record of a view is not the caller's write", async () => {
+    const requests = readThenDecide({
+      outcome: "allow",
+      rationale: "Controlled source was read.",
+      action: "read",
+    });
+    await Effect.runPromise(
+      makeGuardian(reviewer(markedUpstreamPolicy)).review(pending, readEntrypoint),
+    );
+    const anchor =
+      "So is the same save sent the same way, a PUT or POST included, by a read's HTTP version before its query.";
+    const sentence =
+      "A record a public site creates for itself whenever anyone views or queries its data, such as a query log, saved-search id or view counter, holding none of the caller's data and needing no sign-in, is not a write by the caller; judge the step as the read it serves.";
+    for (const policy of [
+      requests[0]?.systemInstructions ?? "",
+      guardianExecutionPolicy(otherHost),
+      guardianExecutionPolicy(nativeExecutionEnvironment),
+    ]) {
+      // It sits in the paragraph that classifies writes, right after the search-state save rule.
+      const writeRule =
+        policy.split("\n").find((line) => line.startsWith("Classify actual website effects")) ??
+        "";
+      expect(writeRule).toContain(`${anchor} ${sentence} `);
+    }
+  });
+
   // Guardian escalated example runs because it could not read an SDK helper the source imports,
   // such as a browser script built from formControlsCode, and guessed SDK paths that don't exist.
   it("tells Guardian the SDK a source imports is trusted host code", async () => {
