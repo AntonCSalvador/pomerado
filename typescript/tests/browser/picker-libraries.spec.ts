@@ -425,6 +425,111 @@ test("pickValues chooses several options of a native multiple select", async ({ 
   expect(await submitted(page)).toEqual({ days: "tue" });
 });
 
+test("pickValue matches a native select's option by stem only when asked", async ({ page }) => {
+  await serve(page, `<form><label>Specialty <select name="specialty">
+<option value="">Choose a specialty</option><option value="cd">Example Dentistry</option><option value="d">Dentistry</option>
+</select></label></form>`);
+  const specialty = 'page.getByLabel("Specialty")';
+  expect(await call(page, `return await pickValue(${specialty}, "Dentist", fast);`)).toMatchObject({
+    result: { picked: false, reason: "option_missing" },
+  });
+  expect(await call(page, `return await pickValue(${specialty}, "Dentist", { ...fast, stem: true });`)).toEqual({
+    result: { picked: true, kind: "select", label: "Dentistry", value: "d", rank: "stem", refills: 0 },
+  });
+  expect(await submitted(page)).toEqual({ specialty: "d" });
+});
+
+test("pickValues matches a native multiple select's options by stem only when asked", async ({ page }) => {
+  await serve(page, `<form><label>Specialties <select name="specialties" multiple size="4">
+<option value="cd">Example Dentistry</option><option value="d">Dentistry</option><option value="p">Pediatrics</option>
+<option value="po">Podiatry</option></select></label></form>`);
+  const specialties = 'page.getByLabel("Specialties")';
+  expect(await call(page, `return await pickValues(${specialties}, ["Dentist", "Pediatric"], fast);`)).toMatchObject({
+    result: { picked: false, reason: "option_missing", wanted: "Dentist" },
+  });
+  expect(await call(page, `return await pickValues(${specialties}, ["Dentist", "Pediatric"], { ...fast, stem: true });`)).toEqual({
+    result: {
+      picked: true,
+      kind: "select",
+      values: [
+        { label: "Dentistry", value: "d", added: true },
+        { label: "Pediatrics", value: "p", added: true },
+      ],
+      removed: [],
+    },
+  });
+  expect(await submitted(page)).toEqual({ specialties: "d,p" });
+});
+
+// The chips field with specialties for suggestions, and Enter making a free-entry chip.
+const specialtyChips = chips
+  .replace('const all = ["Red", "Green", "Blue", "Black", "Blue Grey"];', 'const all = ["Example Dentistry", "Dentistry"];')
+  .replace(
+    "list.addEventListener(\"mousedown\"",
+    `input.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || input.value.trim() === "") return;
+  event.preventDefault();
+  const name = input.value.trim();
+  input.insertAdjacentHTML("beforebegin", '<div class="Chip-root" role="button" data-value="' + name.toLowerCase() + '"><span class="Chip-label">' + name + "</span></div>");
+  input.value = "";
+  list.hidden = true;
+  sync();
+});
+list.addEventListener("mousedown"`,
+  );
+
+test("pickValues adds a chip suggestion by stem when asked", async ({ page }) => {
+  await serve(page, specialtyChips);
+  const field = 'page.getByRole("combobox", { name: "Colors" })';
+  expect(await call(page, `return await pickValues(${field}, ["Dentist"], { ...fast, stem: true });`)).toEqual({
+    result: { picked: true, kind: "typeahead", values: [{ label: "Dentistry", value: "", added: true }], removed: [] },
+  });
+  expect(await submitted(page)).toEqual({ colors: "red,dentistry" });
+});
+
+// Replace removes the chips the call did not choose, never one it just picked by stem or as whole
+// words, which its whole name does not match.
+test("pickValues with replace keeps the chip it picked by stem", async ({ page }) => {
+  await serve(page, specialtyChips);
+  const field = 'page.getByRole("combobox", { name: "Colors" })';
+  expect(await call(page, `return await pickValues(${field}, ["Dentist"], { ...fast, stem: true, mode: "replace" });`)).toEqual({
+    result: { picked: true, kind: "typeahead", values: [{ label: "Dentistry", value: "", added: true }], removed: ["Red"] },
+  });
+  expect(await submitted(page)).toEqual({ colors: "dentistry" });
+});
+
+test("pickValues with replace keeps the chip it picked as whole words", async ({ page }) => {
+  await serve(page, chips);
+  const field = 'page.getByRole("combobox", { name: "Colors" })';
+  expect(await call(page, `return await pickValues(${field}, ["Grey"], { ...fast, mode: "replace" });`)).toEqual({
+    result: { picked: true, kind: "typeahead", values: [{ label: "Blue Grey", value: "", added: true }], removed: ["Red"] },
+  });
+  expect(await submitted(page)).toEqual({ colors: "blue grey" });
+});
+
+// The field stops suggesting a chosen option, so a second call finds the chip it made by stem among
+// the chips, ranked as the options were, instead of refusing the value as missing.
+test("pickValues finds the chip it picked by stem again once the site stops suggesting it", async ({ page }) => {
+  await serve(page, specialtyChips);
+  const field = 'page.getByRole("combobox", { name: "Colors" })';
+  expect(await call(page, `return await pickValues(${field}, ["Dentist"], { ...fast, stem: true });`)).toMatchObject({
+    result: { picked: true, values: [{ label: "Dentistry", added: true }] },
+  });
+  expect(await call(page, `return await pickValues(${field}, ["Dentist"], { ...fast, stem: true });`)).toEqual({
+    result: { picked: true, kind: "typeahead", values: [{ label: "Dentistry", value: "dentistry", added: false }], removed: [] },
+  });
+  expect(await submitted(page)).toEqual({ colors: "red,dentistry" });
+});
+
+test("pickValues with create makes the typed tag rather than take a suggestion that matches only by stem", async ({ page }) => {
+  await serve(page, specialtyChips);
+  const field = 'page.getByRole("combobox", { name: "Colors" })';
+  expect(await call(page, `return await pickValues(${field}, ["Dentist"], { ...fast, stem: true, create: true });`)).toEqual({
+    result: { picked: true, kind: "typeahead", values: [{ label: "Dentist", value: "", added: true }], removed: [] },
+  });
+  expect(await submitted(page)).toEqual({ colors: "red,dentist" });
+});
+
 test("pickerOptions lists every option of a list that renders as it scrolls, then closes it", async ({ page }) => {
   await serve(page, `<button type="button" aria-label="Seat" aria-haspopup="listbox" aria-controls="seats" aria-expanded="false">Choose</button>
 <div id="seats" role="listbox" hidden style="height:100px;overflow-y:auto;position:relative"><div id="rows" style="position:relative"></div></div>

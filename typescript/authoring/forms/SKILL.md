@@ -105,7 +105,10 @@ its spellings (`["CA", "California"]`). `pickValues` adds or replaces chips and 
 multi-select, and `pickerOptions` returns the options a picker lists, for a caller question.
 They wait for suggestions to settle, scroll lists that render as they scroll, match the value
 exactly, then loosely, never pick an "Add" or "Create" row, and confirm the field kept the choice,
-picking again when the page reverts it. A value the picker lacks, or several options that tie,
+picking again when the page reverts it. A read of a category or term, such as a specialty, passes
+`stem: true`, so a caller's word also matches an option word it begins or that begins it, such as
+Dentist and Dentistry, and returns the option it used. Leave it off for names of people and places,
+and on writes, which ask the caller or list the options instead. A value the picker lacks, or several options that tie,
 comes back as `{ picked: false, reason, available, matches }`: decode it with `PickOutcome` and
 throw `pickRefusal(outcome, field)`, or, on a write, ask the caller to choose among `matches`. On
 a write, a single suggestion for a free-text value the caller typed is the site's correction
