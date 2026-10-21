@@ -135,7 +135,7 @@ During the session:
   row. Prefer `saveAndReadBack` from `pomerado/runtime` for such a page's save: it does both
   and returns the values that still differ. When one still differs, or a page whose save adds
   an item kept a different value, stop before the final commit's mark and throw
-  `InputNotApplied` with its `field`, `requested` and `applied`.
+  `InputNotApplied` with its `field`, `requested` and `applied`.<!-- pomerado:section writes.several-saves -->
 - When the write changes state that already exists, such as a saved record or a cart
   (.agents/cart/SKILL.md), read that state before the committing step and again after it,
   in the session and in the composed script. Fail when a field the input sets did not change

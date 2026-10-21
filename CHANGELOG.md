@@ -164,6 +164,7 @@
 
 ### Other changes
 
+- The writes skill has a `writes.several-saves` section a host can add its own guidance to. Its standalone text is unchanged.
 - The forms skill tells a script to name a conditional pop-up's close control as `dismiss` of `waitForReady`, which closes it whenever it opens, rather than checking for it at one point. The testing skill adds a live case for a free-text input with a value the example used written another way, such as in other case or with other spacing, punctuation or accents. The core skill says to prefer a unique input, such as an ID: a tool that acts on one record takes the ID the site's other tools use for it, and finds the record another way, such as by name, only when the caller gives none.
   - A recorded minter response keyed on the exact forms, testing or core skill text needs recording again.
 - The core skill says to declare input fields in the order a person fills in the site's form: what or where first, then when, then who and how many, then optional refinements, with sorting and paging last.
