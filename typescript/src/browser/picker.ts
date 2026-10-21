@@ -501,12 +501,13 @@ const pickerPageCode = String.raw`(element, args) => {
  * accents and punctuation, then, only for `pickValue` with `tie: "first"`, a name whose text
  * before its first comma (not one between digits) is the value, ignoring the same (rank `leading`:
  * York, UK for York), then a name holding the value as whole words (New York for York), then,
- * only with `options.stem` set to true (as a read sets it; `pickValues` takes it too), a name whose
- * words each begin the value's or begin with them, such as Dentistry for Dentist (rank `stem`). An
- * option's names are its text, first line, accessible name, `title` and, for a table row, each
- * cell, and its value is `data-value`, `value`, `data-id`, `data-key` or `data-code` (put others
- * first with `options.valueAttributes`). Two options at the best rank are ambiguous; an "Add ..."
- * or "Create ..." row is never matched.
+ * only with `options.stem` set to true (as a read sets it; `pickValues` takes it too), a name with
+ * as many words as the value whose words each equal the value's in order or, for words of Latin
+ * letters only, begin the value's or begin with them, the shorter of five or more letters, such as
+ * Dentistry for Dentist (rank `stem`). An option's names are its text, first line, accessible name,
+ * `title` and, for a table row, each cell, and its value is `data-value`, `value`, `data-id`,
+ * `data-key` or `data-code` (put others first with `options.valueAttributes`). Two options at the
+ * best rank are ambiguous; an "Add ..." or "Create ..." row is never matched.
  *
  * Waits follow the page, never a fixed pause: after typing, the options count once no loading
  * sign shows (a busy region, an indeterminate progress bar, a loading or spinner class, a
