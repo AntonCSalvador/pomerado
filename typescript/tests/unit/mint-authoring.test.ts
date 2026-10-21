@@ -989,6 +989,9 @@ it("has every unoffered-value rule name the task-asked substitute exception", as
   expect(text("caller-input")).toContain(
     `it follows .agents/core/SKILL.md ("Configure, then read"), which never substitutes another value; ${only} Asking the owner`,
   );
+  expect(text("caller-input")).toContain(
+    `- An option the page lists but greys out, such as a booked date or a sold-out size: not an error on a read, \`InvalidInput\` with \`available\` on a write (core skill, "Configure, then read"); ${only} - A write that declines`,
+  );
 });
 
 // An access code is asked privately, as the site-field question's secret classification treats it.
