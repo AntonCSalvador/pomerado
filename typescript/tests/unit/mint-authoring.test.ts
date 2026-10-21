@@ -831,6 +831,15 @@ it("has a write refuse a field no site-field question may ask once its click sav
   );
 });
 
+// An access code is asked privately, as the site-field question's secret classification treats it.
+it("asks for an access code with a private secret question", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("caller-input")).toContain(
+    "Prefer a `secret` question of kind `private_text` for an access code, such as a gate, door, alarm or lockbox code.",
+  );
+});
+
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /*

@@ -285,6 +285,27 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
   });
 });
 
+test("unfilledRequiredFields never offers an access code, such as a gate or door code, as a question", async ({
+  page,
+}) => {
+  const accessLabels = ["Gate code", "Door code", "Access code", "Alarm code", "Lockbox code", "Entry code", "Building ACCESS CODE"];
+  // Other codes, and the same words before something else, stay ordinary text.
+  const ordinaryLabels = ["Zip code", "Promo code", "Country code", "Postal code", "Area code", "Discount code", "Gate number", "Entry date"];
+  await page.setContent(`<form>
+  ${accessLabels.map((label, index) => `<label>${label}<input name="access${index}" required></label>`).join("")}
+  <label>Gate<input name="gate_code" required></label>
+  <label>Front door<input name="doorCode" required></label>
+  ${ordinaryLabels.map((label, index) => `<label>${label}<input name="plain${index}" required></label>`).join("")}
+</form>`);
+  expect(await call(page, `return await unfilledRequiredFields(page.locator("form"));`)).toEqual({
+    result: [
+      // By its label, or by a name such as gate_code or doorCode.
+      ...[...accessLabels, "Gate", "Front door"].map((label) => ({ label, shape: "other", unsupported: true })),
+      ...ordinaryLabels.map((label) => ({ label, shape: "text" })),
+    ],
+  });
+});
+
 test("unfilledRequiredFields lists a nested combobox once, refuses repeated options and leaves a long list unlisted", async ({
   page,
 }) => {
