@@ -1169,9 +1169,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       /**
        * A host check refused a step the build needs in this attempt: a publication its checks
        * refused, a sign-in the host refused, or a task update the host refused. A `host_refused`
-       * block stands on it.
+       * block stands on it. A later finish_build that gets past the host's checks to Guardian's
+       * review clears it, setting `hostRefusalPassed`.
        */
       let hostRefused = recovered?.hostRefused === true;
+      /**
+       * A host check refused a step earlier in this attempt, and a later finish_build got past the
+       * host's checks to Guardian's review, so no host refusal stands until another is recorded.
+       */
+      let hostRefusalPassed = recovered?.hostRefusalPassed === true;
       /**
        * This build's Guardian denials, the oldest first to go past the bound, for the blocked
        * explanation's review; a takeover restores them. A checkpoint from an older worker kept
@@ -1710,7 +1716,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           observations:
             "Private observations are available through the screened execution response.",
         };
-        executions.push(referenceOnly);
+        // An execution recorded again, as a resumed attempt's rejoined call is, replaces its entry.
+        const recorded = executions.findIndex((entry) => entry.executionId === evidence.executionId);
+        if (recorded === -1) executions.push(referenceOnly);
+        else executions[recorded] = referenceOnly;
         purposes.set(evidence.executionId, purpose);
         if (taskState.revision > 0) revisions.set(evidence.executionId, taskState.revision);
         if (purpose === "example") example = referenceOnly;
@@ -2199,6 +2208,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             ),
           );
           if (decision !== "suspended") return;
+          // A model run that ended meanwhile can no longer be stopped: the build ends instead.
+          if (modelRunEnded) {
+            yield* diagnose({ phase: "suspend_unanswered", reason: "model_run_ended" });
+            return;
+          }
           yield* Deferred.succeed(suspended, undefined);
           return yield* Effect.never;
         });
@@ -3146,7 +3160,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // refusal of an execution, or its publication refusal no correction gets past (an
         // escalation for missing evidence is not one), unless the host's own guidance names the
         // ending; the minter's reading of its own instructions is none. A host_refused block
-        // stands on a host check's refusal the host recorded in this attempt. The owner's no to a
+        // stands on a host check's refusal the host recorded in this attempt that no later
+        // finish_build got past to Guardian's review, or on a sign-in screen the host refused
+        // because the password's fills are spent, while they still are. The owner's no to a
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
@@ -3158,6 +3174,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               typeof answer === "object" && "confirmed" in answer && !answer.confirmed,
           );
         const unanswered = noAnswerHandBacks > 0;
+        const hostRefusing = hostRefused || dependencies.signInRefillRefused?.() === true;
         if (reason === "owner_declined" && !ownerRefused)
           return refused(
             "owner_not_declined",
@@ -3168,7 +3185,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "no_question_unanswered",
             "No question went unanswered in this build, so the build has not ended. Use question_unanswered only after a question you asked came back as no answer and the build cannot go on without it.",
           );
-        if (reason === "host_refused" && !hostRefused)
+        if (reason === "host_refused" && !hostRefusing && hostRefusalPassed)
+          return refused(
+            "host_refusal_passed",
+            "A host check refused a step earlier in this attempt, but a later finish_build got past it, so the build has not ended. Fix the findings the latest refusal names and call finish_build again. Use host_refused only when a host check still refuses a step and nothing left in this attempt can fix it.",
+          );
+        if (reason === "host_refused" && !hostRefusing)
           return refused(
             "host_not_refused",
             "No host check refused a step in this attempt, so the build has not ended. host_refused needs a host check that refused a step the build needs, such as finish_build, a sign-in form or a site change.",
@@ -4960,18 +4982,23 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               // make available is an infrastructure gap, and a refusal the host asks only once,
               // such as a one-time login URL or an untested HTTP version, is advice: finishing
               // again publishes.
-              if (
+              const hostChecksRefused =
                 publication._tag === "Left" &&
                 publication.left.code === "PublicationUnavailable" &&
                 !publicationOutage(publication.left) &&
                 publication.left.reason !== "example_output_unavailable" &&
-                !askedOnceReasons.has(publication.left.reason ?? "")
-              )
-                hostRefused = true;
+                !askedOnceReasons.has(publication.left.reason ?? "");
+              if (hostChecksRefused) hostRefused = true;
               if (publication._tag === "Right" || reviewDecided(publication.left)) {
                 yield* reviewCompleted;
                 // A completed review replaces the input feedback an earlier one returned.
                 inputFeedbackReview = undefined;
+                // This finish_build got past the host's checks to Guardian's review, so an earlier
+                // host refusal no longer stands: what Guardian decided is what the build answers.
+                if (hostRefused && !hostChecksRefused) {
+                  hostRefused = false;
+                  hostRefusalPassed = true;
+                }
               }
               const denial = publication._tag === "Left" ? publication.left.review : undefined;
               const deniedCategory = denial?.findings?.[0]?.category;
@@ -5770,10 +5797,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     // unavailable, worded by what the host saw, and its caller is never told to
                     // change the request. The owner's own no, and a question they left
                     // unanswered, keep their endings, a policy report renamed to one included.
+                    // A host refusal a later finish_build got past is still a refusal on record.
                     if (
                       ending.reason !== "owner_declined" &&
                       ending.reason !== "question_unanswered" &&
-                      (signInUnconfirmed || (signInRefusalOnly && !hostRefused)) &&
+                      (signInUnconfirmed ||
+                        (signInRefusalOnly && !hostRefused && !hostRefusalPassed)) &&
                       unresolvedSignIn === undefined &&
                       loginDeclined === undefined &&
                       !signInAbandoned
@@ -6368,6 +6397,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ...(guardianRefused ? { guardianRefused: true as const } : {}),
         ...(signInRefusalOnly ? { signInRefusalOnly: true as const } : {}),
         ...(hostRefused ? { hostRefused: true as const } : {}),
+        ...(hostRefusalPassed ? { hostRefusalPassed: true as const } : {}),
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),
         ...(loginHeld ? { loginHeld: true as const } : {}),
         ...(loginDeclined === undefined ? {} : { loginDeclined }),

@@ -40,3 +40,52 @@ export const foldChoiceText = (text: unknown): string => {
     .toLowerCase();
   return folded === "" ? String(text ?? "").trim() : folded;
 };
+
+/**
+ * Whether `shown`, text read from the page, names what `wanted` names, as a person reads them.
+ * Case, accents on Latin, Greek and Cyrillic letters, spacing and apostrophes are ignored, and so
+ * are periods, commas and hyphens between letters, while marks that change a word in other scripts,
+ * such as Hindi, Thai and Japanese, still count. A word `shown` writes short, such as St for Saint
+ * or Blvd for Boulevard, matches the full word in `wanted` when it starts with the same letter,
+ * keeps its letters in order and is at most half as long. This holds only for words of Latin
+ * letters, never inside an email, domain or file name. A short word in `wanted` never matches a
+ * longer one in `shown`, so a wanted Pen never matches a shown Pencil. Both texts need the same
+ * number of words in the same order, and a word holding a digit or another symbol, such as a slash
+ * or a bracket, must be the same word, so 12 never matches 123, C++ never matches C and Blue/Green
+ * never matches Blue Green. Compare numbers, dates and amounts as values instead. It is pure and
+ * self-contained, so page code can embed it.
+ */
+export const sameText = (shown: string, wanted: string): boolean => {
+  const fold = (text: string) => {
+    const raw = String(text ?? "").replace(/[\u00AD\u200B\u2060\uFEFF]/gu, "");
+    const folded = raw
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/gu, "")
+      .normalize("NFC")
+      .toLowerCase()
+      .replace(/(?<!\p{N})['\u2018\u2019\u02bc](?!\p{N})/gu, "")
+      .replace(/(?<!\p{N})[.,\-\u2010\u2011\u2012\u2013\u2014](?!\p{N})/gu, " ")
+      .replace(/\s+/gu, " ")
+      .trim();
+    return folded === "" ? raw.trim() : folded;
+  };
+  // The page's word writes the wanted one short: same first letter, its letters in order in the
+  // wanted word, and at most half as long. Never the other way round.
+  const shortens = (short: string, full: string) => {
+    const latin = /^\p{Script=Latin}+$/u.test(short + full);
+    if (!latin || short[0] !== full[0] || short.length * 2 > full.length) return false;
+    let next = 0;
+    for (const letter of full) if (letter === short[next]) next++;
+    return next === short.length;
+  };
+  // An email, domain or file name is a literal: none of its words reads as short for another. A
+  // period before two letters marks one; an abbreviation's own periods, as in D.C., do not.
+  const both = String(shown ?? "") + " " + String(wanted ?? "");
+  const literal = /@|[\p{L}\p{N}]\.\p{L}{2}/u.test(both);
+  const a = fold(shown).split(" ");
+  const b = fold(wanted).split(" ");
+  return (
+    a.length === b.length &&
+    a.every((word, index) => word === b[index] || (!literal && shortens(word, b[index] ?? "")))
+  );
+};

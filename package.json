@@ -216,6 +216,11 @@
       "import": "./dist/typescript/src/execution/declared-questions.js",
       "default": "./dist/typescript/src/execution/declared-questions.js"
     },
+    "./core/execution/playwright-execute": {
+      "types": "./dist/typescript/src/execution/playwright-execute.d.ts",
+      "import": "./dist/typescript/src/execution/playwright-execute.js",
+      "default": "./dist/typescript/src/execution/playwright-execute.js"
+    },
     "./core/execution/sign-in-diagnostics": {
       "types": "./dist/typescript/src/execution/sign-in-diagnostics.d.ts",
       "import": "./dist/typescript/src/execution/sign-in-diagnostics.js",
@@ -286,6 +291,31 @@
       "import": "./dist/typescript/src/mcp/schema.js",
       "default": "./dist/typescript/src/mcp/schema.js"
     },
+    "./core/mint/autofill-account-rejected": {
+      "types": "./dist/typescript/src/mint/autofill-account-rejected.d.ts",
+      "import": "./dist/typescript/src/mint/autofill-account-rejected.js",
+      "default": "./dist/typescript/src/mint/autofill-account-rejected.js"
+    },
+    "./core/mint/autofill-filled": {
+      "types": "./dist/typescript/src/mint/autofill-filled.d.ts",
+      "import": "./dist/typescript/src/mint/autofill-filled.js",
+      "default": "./dist/typescript/src/mint/autofill-filled.js"
+    },
+    "./core/mint/autofill-guards": {
+      "types": "./dist/typescript/src/mint/autofill-guards.d.ts",
+      "import": "./dist/typescript/src/mint/autofill-guards.js",
+      "default": "./dist/typescript/src/mint/autofill-guards.js"
+    },
+    "./core/mint/autofill-rejected": {
+      "types": "./dist/typescript/src/mint/autofill-rejected.d.ts",
+      "import": "./dist/typescript/src/mint/autofill-rejected.js",
+      "default": "./dist/typescript/src/mint/autofill-rejected.js"
+    },
+    "./core/mint/autofill-results": {
+      "types": "./dist/typescript/src/mint/autofill-results.d.ts",
+      "import": "./dist/typescript/src/mint/autofill-results.js",
+      "default": "./dist/typescript/src/mint/autofill-results.js"
+    },
     "./core/mint/contracts": {
       "types": "./dist/typescript/src/mint/contracts.d.ts",
       "import": "./dist/typescript/src/mint/contracts.js",
@@ -305,6 +335,11 @@
       "types": "./dist/typescript/src/mint/harness.d.ts",
       "import": "./dist/typescript/src/mint/harness.js",
       "default": "./dist/typescript/src/mint/harness.js"
+    },
+    "./core/mint/held-rejections": {
+      "types": "./dist/typescript/src/mint/held-rejections.d.ts",
+      "import": "./dist/typescript/src/mint/held-rejections.js",
+      "default": "./dist/typescript/src/mint/held-rejections.js"
     },
     "./core/mint/incident-contracts": {
       "types": "./dist/typescript/src/mint/incident-contracts.d.ts",
@@ -420,6 +455,11 @@
       "types": "./dist/typescript/src/mint/sign-in-version.d.ts",
       "import": "./dist/typescript/src/mint/sign-in-version.js",
       "default": "./dist/typescript/src/mint/sign-in-version.js"
+    },
+    "./core/mint/signed-in-marker": {
+      "types": "./dist/typescript/src/mint/signed-in-marker.d.ts",
+      "import": "./dist/typescript/src/mint/signed-in-marker.js",
+      "default": "./dist/typescript/src/mint/signed-in-marker.js"
     },
     "./core/mint/site-access-contracts": {
       "types": "./dist/typescript/src/mint/site-access-contracts.d.ts",
@@ -721,6 +761,11 @@
       "import": "./dist/typescript/src/runtime/login-field-asks.js",
       "default": "./dist/typescript/src/runtime/login-field-asks.js"
     },
+    "./core/runtime/kernel-compatibility": {
+      "types": "./dist/typescript/src/runtime/kernel-compatibility.d.ts",
+      "import": "./dist/typescript/src/runtime/kernel-compatibility.js",
+      "default": "./dist/typescript/src/runtime/kernel-compatibility.js"
+    },
     "./core/runtime/kernel-operation": {
       "types": "./dist/typescript/src/runtime/kernel-operation.d.ts",
       "import": "./dist/typescript/src/runtime/kernel-operation.js",
@@ -987,19 +1032,24 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.2.0",
+    "@openai/agents": "0.18.0",
     "@playwright/test": "1.63.0",
     "@types/node": "24.13.4",
+    "effect": "3.22.2",
+    "patchright": "1.63.0",
     "typescript": "7.0.2",
-    "vitest": "5.0.2",
-    "@openai/agents": "0.18.0",
-    "effect": "3.22.2"
+    "vitest": "5.0.2"
   },
   "peerDependencies": {
     "@openai/agents": "0.18.0",
     "effect": "3.22.2",
+    "patchright": "1.63.0",
     "vitest": "^5.0.2"
   },
   "peerDependenciesMeta": {
+    "patchright": {
+      "optional": true
+    },
     "vitest": {
       "optional": true
     }

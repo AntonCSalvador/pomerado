@@ -1,6 +1,6 @@
 import { Usage } from "@openai/agents";
 import type { AgentInputItem, ModelProvider, ModelRequest, ModelResponse } from "@openai/agents";
-import { Cause, Effect, Exit, Runtime } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Runtime } from "effect";
 import { afterEach, expect, it } from "vitest";
 import { MintFailure, MintServices } from "../../src/mint/contracts.js";
 import type {
@@ -276,6 +276,48 @@ it("resumes a suspended build with the owner's answer, then the host's message, 
   expect(inputOf(suspended.model.requests[2]).filter(isResumeMessage)).toHaveLength(1);
 });
 
+// Fails when the replay limit assumes the saved turn is in progress: the message would then come
+// before the replayed response instead of after its results.
+it("puts the host's message after a replayed response whose turn was not in progress", async () => {
+  const suspended = await suspendedBuild();
+  const checkpoint = suspended.store.checkpoints.at(-1);
+  if (checkpoint === undefined) throw new Error("No checkpoint");
+  const state = JSON.parse(checkpoint.agent.sdkState) as Record<string, unknown>;
+  expect(state.currentTurnInProgress).toBe(true);
+  const agent = {
+    ...checkpoint.agent,
+    sdkState: JSON.stringify({ ...state, currentTurnInProgress: false }),
+  };
+  const request = suspended.asked[0] as AgentInputRequest;
+  const resumed = await fixture(() => prose(), {
+    model: makeOpenAIMinter(
+      suspended.model.provider,
+      "medium",
+      {},
+      { recoveryFactory: suspended.store.factory(agent) },
+    ),
+    agentRecovery: {
+      save: suspended.store.save,
+      initial: { ...checkpoint, agent, resumeMessage },
+      recoverTool: (call) =>
+        Effect.succeed(
+          call.callId === "ask"
+            ? { input: { request, answers: { report: { type: "text", value: "Annual" } } } }
+            : undefined,
+        ),
+    },
+    websiteCredentialsAvailable: true,
+  });
+
+  expect(await resumed.run()).toMatchObject({ build: "published" });
+  const next = inputOf(suspended.model.requests[1]);
+  const answer = next.findIndex(
+    (item) => item.type === "function_call_result" && item.callId === "ask",
+  );
+  expect(answer).toBeGreaterThan(-1);
+  expect(next.findIndex(isResumeMessage)).toBe(next.length - 1);
+});
+
 it("tells a minter restored before a model call the host's message first", async () => {
   const suspended = await suspendedBuild();
   // The checkpoint the first attempt saved before its first model call holds no response.
@@ -471,4 +513,116 @@ it.each<{
   expect(offered).toEqual([variant.expected]);
   // The call that asked never returns to the minter.
   expect(returned).toBe(false);
+});
+
+/** The execution question a signed-in build's example asked and its owner left unanswered. */
+const unansweredExample = {
+  executionId: "asked",
+  status: "failed" as const,
+  effect: "not_sent" as const,
+  noResponse: { possibleCommit: false },
+  observations: "The script's question expired unanswered.",
+};
+
+/** An agent checkpoint the scripted model never reads. */
+const unreadAgent: MintAgentSnapshot = {
+  version: 1,
+  sdkVersion: "0.18.0",
+  sdkState: "",
+  modelCalls: 0,
+  finalsWithoutTool: 0,
+  tools: [],
+};
+
+// Fails when a rejoined execution is recorded beside the entry the suspended attempt's harness
+// checkpoint already holds.
+it("records a rejoined execution once when the host saved the harness inside its hook", async () => {
+  let capture: (() => MintHarnessSnapshot) | undefined;
+  let saved: MintHarnessSnapshot | undefined;
+  const first = await harnessFixture(
+    (turn) => turn.actions.execute(execution).pipe(Effect.asVoid),
+    {
+      websiteCredentialsAvailable: true,
+      reviewAndExecute: () => Effect.succeed(unansweredExample),
+      agentRecovery: {
+        save: () => Effect.void,
+        bindHarness: (bound) =>
+          Effect.sync(() => {
+            capture = bound;
+          }),
+      },
+      // The host saves the harness state it resumes from as it suspends.
+      suspendUnanswered: () =>
+        Effect.sync(() => {
+          saved = capture?.();
+          return "suspended" as const;
+        }),
+    },
+  );
+  const suspended = await Effect.runPromiseExit(
+    runMint(request).pipe(Effect.provideService(MintServices, first.dependencies)),
+  );
+  expect(Exit.isFailure(suspended) && Cause.isInterruptedOnly(suspended.cause)).toBe(true);
+  if (saved === undefined) throw new Error("No harness saved");
+
+  // The resumed attempt rejoins the call; the owner's answer reached the step meanwhile.
+  const { noResponse: _unanswered, ...answered } = unansweredExample;
+  const resumed = await harnessFixture(
+    (turn) =>
+      Effect.asVoid(
+        turn.recovery?.recoverTool?.({
+          callId: "run",
+          name: "execute",
+          arguments: JSON.stringify(execution),
+          native: false,
+        }) ?? Effect.succeed(undefined),
+      ),
+    {
+      websiteCredentialsAvailable: true,
+      agentRecovery: {
+        save: () => Effect.void,
+        initial: { agent: unreadAgent, harness: saved },
+        recoverTool: () => Effect.succeed({ execution: { purpose: "example", evidence: answered } }),
+      },
+    },
+  );
+  const outcome = await resumed.run();
+  expect(outcome.executions.filter((entry) => entry.executionId === "asked")).toHaveLength(1);
+});
+
+// Fails when a suspension that arrives after the model run ended is taken: the call that asked
+// then never returns, though nothing stops the run any more.
+it("ends the question as no_response when the model run ended before the host suspended it", async () => {
+  const release = Effect.runSync(Deferred.make<void>());
+  let asking: Fiber.RuntimeFiber<string, MintFailure> | undefined;
+  const f = await harnessFixture(
+    (turn) =>
+      // A model whose run ends while its question is still open.
+      Effect.forkDaemon(
+        turn.actions.requestInput({
+          questions: [{ id: "report", type: "text", prompt: "Which public report?" }],
+        }),
+      ).pipe(
+        Effect.tap((fiber) =>
+          Effect.sync(() => {
+            asking = fiber;
+          }),
+        ),
+        Effect.asVoid,
+      ),
+    {
+      websiteCredentialsAvailable: true,
+      suspendUnanswered: () => Deferred.await(release).pipe(Effect.as("suspended" as const)),
+    },
+  );
+  await f.run();
+  await Effect.runPromise(Deferred.succeed(release, undefined));
+  if (asking === undefined) throw new Error("No question asked");
+  const answered = await Effect.runPromise(
+    Fiber.join(asking).pipe(Effect.timeout("1 second"), Effect.option),
+  );
+  expect(answered._tag).toBe("Some");
+  expect(JSON.parse(answered._tag === "Some" ? answered.value : "{}")).toMatchObject({
+    status: "no_response",
+  });
 });

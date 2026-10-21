@@ -35,6 +35,7 @@ export interface MintAgentRecovery {
   /**
    * With `initial` only: one user message the restored run adds before its next model call. A
    * saved `response` replays first, with its tool calls, and the message follows their results.
+   * Checkpoints hold it from the next model call on; see `MintDependencies.agentRecovery`.
    */
   readonly resumeMessage?: string;
   /** Rejoins a fenced retained execution or reads its result. Must never dispatch the action. */

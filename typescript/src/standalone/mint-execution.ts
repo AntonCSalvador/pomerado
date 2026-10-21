@@ -16,7 +16,6 @@ import type { GuardianAction } from "../guardian/review-contracts.js";
 import type { MintReviewFeedback } from "../mint/input-feedback.js";
 import {
   hostAuthentication,
-  MintFailure,
   type AllowedExecution,
   type MintDependencies,
   type ExecutionEvidence,
@@ -55,13 +54,6 @@ import { siteDomain } from "../runtime/same-site.js";
 import { probeCallCode } from "../runtime/host-execute.js";
 import type { BrowserExecute } from "../runtime/browser-execution.js";
 import { trustedUrl } from "../runtime/sign-in-origins.js";
-import { failureDetail } from "../runtime/failure-detail.js";
-import type { SignInStepResult } from "../mint/sign-in-recorder.js";
-import {
-  signInOriginsToAsk,
-  trustSignInOriginsQuestion,
-  trustsSignInOrigins,
-} from "./sign-in-origin-question.js";
 import type { MintState } from "./mint-state.js";
 import {
   keptScriptAnswers,
@@ -138,68 +130,6 @@ const executeCommand = (
       }),
     );
   });
-/** The caller's answer to the trust question did not arrive, so nothing was trusted. */
-const trustQuestionFailure = (cause: unknown) =>
-  new MintFailure({
-    code: "Unavailable",
-    ...(cause instanceof InputRequestFailure && cause.code === "NoResponse"
-      ? { noResponse: { possibleCommit: false } }
-      : {}),
-    failureDetail: failureDetail("mint_host_dependency_failed", {
-      operation: "standalone.sign_in_origin",
-      phase: "sign_in_input",
-      error: cause,
-    }),
-  });
-
-/**
- * A signed-in check that found the login sent only to origins that are neither the site nor one
- * of its sign-in origins asks the caller once whether to trust them, when `signInOriginsToAsk`
- * allows. A yes trusts them for sign-in only, credits what the sign-in sent there and checks
- * again, typing nothing. They stay among the origins an unpublished build names until a sign-in
- * verifies. A no ends sign-in in the build. Anything else keeps the check's result, as does a
- * check that names two or more origins before a password or a code went anywhere, which marks
- * none of them asked.
- */
-const askToTrustSignInOrigins = (
-  state: MintState,
-  signIn: NonNullable<ExecutionRequest["signInStep"]>,
-  loginUrl: string | undefined,
-  checked: SignInStepResult,
-) =>
-  Effect.gen(function* () {
-    const { signInOrigins, recorder, context } = state;
-    const origins =
-      checked.untrustedSignInOrigins === undefined
-        ? undefined
-        : signInOriginsToAsk(checked.untrustedSignInOrigins, {
-            siteOrigin: context.siteOrigin,
-            trusted: signInOrigins.all(),
-            asked: signInOrigins.asked,
-            receivedProof: recorder.receivedProof(),
-          });
-    if (origins === undefined) return checked;
-    for (const origin of origins) signInOrigins.asked.add(origin);
-    // The site as the owner's questions name it: its host, without `www.`.
-    const site = new URL(context.siteOrigin).hostname.replace(/^www\./u, "");
-    const answers = yield* state
-      .mintAsk(trustSignInOriginsQuestion(site, origins))
-      .pipe(Effect.mapError(trustQuestionFailure));
-    if (!trustsSignInOrigins(answers))
-      return yield* new MintFailure({
-        code: "Unavailable",
-        authentication: {
-          phase: "credential_submit",
-          code: "CredentialTargetRefused",
-          afterSubmission: true,
-        },
-        spentSignIn: "sign_in_origin_untrusted",
-      });
-    signInOrigins.trusted.push(...origins);
-    recorder.trustOrigins(origins);
-    return yield* recorder.step(signIn, loginUrl, Effect.void);
-  });
-
 /**
  * A sign-in step: a screen the recorder fills, an approval, a rejected value or a signed-in check.
  * Each belongs to the sign-in under way, and after a verified sign-in the first one starts a new
@@ -219,25 +149,15 @@ const executeAuthentication = (
     yield* start.enter;
     start.signIn();
     if (!("signedIn" in signIn)) markers.signInStep();
-    const recorded = yield* recorder.step(
+    const step = yield* recorder.step(
       signIn,
       loginUrl,
       // The host fills the sign-in itself, after its own review of each screen.
       Effect.zipRight(markers.beforeTyping, beforeDispatch?.(hostAuthentication) ?? Effect.void),
     );
-    // The origins a check named stay named, by the build, until a sign-in verifies: the first
-    // check's before the caller answers, and the check after a yes's too.
-    const offSite = state.untrustedSignInOrigins;
-    for (const origin of recorded.untrustedSignInOrigins ?? []) offSite.add(origin);
-    const step =
-      "signedIn" in signIn
-        ? yield* askToTrustSignInOrigins(state, signIn, loginUrl, recorded)
-        : recorded;
-    for (const origin of step.untrustedSignInOrigins ?? []) offSite.add(origin);
     if ("fields" in signIn && step.report !== undefined) start.sent(step.report, signIn.fields);
     if (step.approved === true) start.approved();
     const authenticated = step.verified === true && start.verified();
-    if (authenticated) offSite.clear();
     const result =
       step.report === undefined
         ? step.result
