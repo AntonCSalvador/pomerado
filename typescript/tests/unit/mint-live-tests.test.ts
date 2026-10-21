@@ -489,6 +489,89 @@ it("keeps a batch whose failure still stands on the source in the example review
   expect(failing).toEqual(["nothing"]);
 });
 
+/**
+ * Runs `batches` in turn, each a list of case ids on an entrypoint, with each batch's outcomes by
+ * its index, then the example on src/tool.ts; returns the non-passing cases the example's review
+ * sees on unchanged source, with their verdicts.
+ */
+const failuresSeenByExample = async (
+  batches: readonly { readonly entrypoint: string; readonly cases: readonly string[] }[],
+  outcomes: (batch: number) => Readonly<Record<string, LiveTestOutcome>>,
+) => {
+  const { host } = liveTestHost(outcomes);
+  let bound: Effect.Effect<readonly ReviewedLiveTestBatch[]> | undefined;
+  const binding: LiveTestHost = {
+    ...host,
+    bindBatches: (batchesNow) => {
+      bound = batchesNow;
+    },
+  };
+  const reviewed: (readonly ReviewedLiveTestBatch[])[] = [];
+  const reviewAndExecute: MintDependencies["reviewAndExecute"] = (input, beforeDispatch) =>
+    Effect.gen(function* () {
+      reviewed.push(yield* bound ?? Effect.succeed([]));
+      return yield* completedExample(input, beforeDispatch);
+    });
+  const f = await fixture(
+    (_request, index) =>
+      [
+        ...batches.map(({ entrypoint, cases: ids }, batch) =>
+          call("live_tests", { ...runAll, entrypoint, cases: ids }, `batch-${batch}`),
+        ),
+        call("execute", example, "example"),
+      ][index] ?? prose(),
+    { liveTests: binding, deadline: Deadline.after(30 * 60_000), reviewAndExecute },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/other.ts": `${toolSource}// another version\n`,
+    "test/cases.json": JSON.stringify(cases),
+  });
+  await f.run();
+  return (reviewed[0] ?? []).flatMap((batch) =>
+    batch.sourceUnchanged && batch.entrypoint === "operation/src/tool.ts"
+      ? batch.cases.filter((ran) => ran.verdict !== "pass").map((ran) => `${ran.id}:${ran.verdict}`)
+      : [],
+  );
+};
+const allCases = ["repeat-1", "sort-price", "nothing", "page-2"];
+const singles = ["repeat-1", "sort-price", "page-2"].map((id) => ({ entrypoint: "src/tool.ts", cases: [id] }));
+const resultsForNothing = {
+  nothing: { status: "completed", output: { results: [{ name: "Lamp" }], has_next_page: false, next_cursor: null } },
+} as const;
+
+it("keeps a failure in review when the case passes only on another entrypoint", async () => {
+  const failures = await failuresSeenByExample(
+    [
+      { entrypoint: "src/tool.ts", cases: allCases },
+      { entrypoint: "src/other.ts", cases: ["nothing"] },
+      ...singles,
+    ],
+    // `nothing` fails on the first batch and passes on the other entrypoint's.
+    (batch) => (batch === 0 ? resultsForNothing : {}),
+  );
+  expect(failures).toEqual(["nothing:fail"]);
+});
+
+it("keeps a failure in review when its rerun on the same source was inconclusive", async () => {
+  const failures = await failuresSeenByExample(
+    [
+      { entrypoint: "src/tool.ts", cases: allCases },
+      { entrypoint: "src/tool.ts", cases: ["nothing"] },
+      ...singles,
+    ],
+    (batch) =>
+      batch === 0
+        ? resultsForNothing
+        : batch === 1
+          ? { nothing: { status: "inconclusive", reason: "challenge" } }
+          : {},
+  );
+  expect(failures).toEqual(["nothing:fail", "nothing:inconclusive"]);
+});
+
 it("tells the agent when the host could not read the schemas its verdicts and next pages need", async () => {
   const { host, batches } = liveTestHost({});
   const unreadable: LiveTestHost = {
