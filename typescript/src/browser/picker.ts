@@ -500,11 +500,14 @@ const pickerPageCode = String.raw`(element, args) => {
  * Matching (see `rankChoices`): a name or value as written, then ignoring case and spacing, then
  * accents and punctuation, then, only for `pickValue` with `tie: "first"`, a name whose text
  * before its first comma (not one between digits) is the value, ignoring the same (rank `leading`:
- * York, UK for York), then a name holding the value as whole words (New York for York). An
- * option's names are its text, first line, accessible name, `title` and, for a table row, each
- * cell, and its value is `data-value`, `value`, `data-id`, `data-key` or `data-code` (put others
- * first with `options.valueAttributes`). Two options at the best rank are ambiguous; an "Add ..."
- * or "Create ..." row is never matched.
+ * York, UK for York), then a name holding the value as whole words (New York for York), then,
+ * only with `options.stem` set to true (as a read sets it; `pickValues` takes it too), a name with
+ * as many words as the value whose words each equal the value's in order or, for words of Latin
+ * letters only, begin the value's or begin with them, the shorter of five or more letters, such as
+ * Dentistry for Dentist (rank `stem`). An option's names are its text, first line, accessible name,
+ * `title` and, for a table row, each cell, and its value is `data-value`, `value`, `data-id`,
+ * `data-key` or `data-code` (put others first with `options.valueAttributes`). Two options at the
+ * best rank are ambiguous; an "Add ..." or "Create ..." row is never matched.
  *
  * Waits follow the page, never a fixed pause: after typing, the options count once no loading
  * sign shows (a busy region, an indeterminate progress bar, a loading or spinner class, a
@@ -558,6 +561,7 @@ export const pickerCode = String.raw`
 const pickerFailure = (reason) => Object.assign(new Error(reason), { name: "PickerFailure" });
 const pickerFold = ${String(foldChoiceText)};
 const pickerRankChoices = ${String(rankChoices)};
+const pickerRank = (s, list, wanted) => pickerRankChoices(list, wanted, pickerFold, { leading: s.tie === true, stem: s.options.stem === true });
 const pickerPage = ${pickerPageCode};
 const pickerLimits = Object.freeze(${JSON.stringify({
   timeout: 10_000,
@@ -779,7 +783,7 @@ const pickerCollect = async (s, scan, wanted) => {
     else if (latest.scroll.end || latest.scroll.top === at || ++stuck >= 3) complete = !latest.loading;
   }
   const list = [...seen.values()].filter((option) => !option.creation);
-  const ranking = wanted ? pickerRankChoices(pickerChoices(list), wanted, pickerFold, { leading: s.tie === true }) : { status: "missing" };
+  const ranking = wanted ? pickerRank(s, pickerChoices(list), wanted) : { status: "missing" };
   return { list, ranking, scan: latest, complete: complete || seen.size >= 2000 };
 };
 // The enabled options as shown, never a native select's empty-valued prompt such as "Choose...".
@@ -1095,7 +1099,7 @@ const pickerNativeOptions = (control, s) =>
   }, undefined, s.act());
 const pickerNative = async (s, wanted) => {
   const list = await pickerNativeOptions(s.control, s);
-  const outcome = pickerOutcome({ ranking: pickerRankChoices(list, wanted, pickerFold, { leading: s.tie === true }), list }, wanted, s.tie);
+  const outcome = pickerOutcome({ ranking: pickerRank(s, list, wanted), list }, wanted, s.tie);
   if (outcome.status === "refused") return outcome.refusal;
   const option = outcome.option;
   const force = !(await pickerEval(s, "select-shown"));
@@ -1112,7 +1116,7 @@ const pickerNative = async (s, wanted) => {
 };
 const pickerDatalist = async (s, wanted) => {
   const list = await pickerNativeOptions(s.control, s);
-  const outcome = pickerOutcome({ ranking: pickerRankChoices(list, wanted, pickerFold, { leading: s.tie === true }), list }, wanted, s.tie);
+  const outcome = pickerOutcome({ ranking: pickerRank(s, list, wanted), list }, wanted, s.tie);
   if (outcome.status === "refused") return outcome.refusal;
   const option = outcome.option;
   for (let attempt = 0; attempt <= s.refills; attempt++) {
@@ -1172,10 +1176,11 @@ const pickValue = async (control, wanted, options = {}) => {
 };
 const pickerChips = (s) => pickerEval(s, "chips", { chips: s.options.chips ?? null });
 // A chip is the value only by its whole name (as written, or ignoring case, spacing, accents and
-// punctuation), never because its name holds the value as a word: "Blue Grey" is not "Blue".
+// punctuation), never because its name holds the value as a word or shares its stem: "Blue Grey"
+// is not "Blue".
 const pickerChipIs = (chips, wanted) => {
   const ranking = pickerRankChoices(chips, wanted, pickerFold);
-  return ranking.status === "picked" && ranking.rank !== "words" ? ranking : null;
+  return ranking.status === "picked" && ["exact", "normalized", "folded"].includes(ranking.rank) ? ranking : null;
 };
 const pickValues = async (control, values, options = {}) => {
   const list = (Array.isArray(values) ? values : [values]).map(pickerWanted);
@@ -1187,7 +1192,7 @@ const pickValues = async (control, values, options = {}) => {
       const all = await pickerNativeOptions(s.control, s);
       const picked = [];
       for (const wanted of list) {
-        const outcome = pickerOutcome({ ranking: pickerRankChoices(all, wanted, pickerFold), list: all }, wanted);
+        const outcome = pickerOutcome({ ranking: pickerRank(s, all, wanted), list: all }, wanted);
         if (outcome.status === "refused") return { ...outcome.refusal, values: [] };
         picked.push(outcome.option);
       }
@@ -1223,8 +1228,9 @@ const pickValues = async (control, values, options = {}) => {
       for (let attempt = 0; attempt <= s.refills && !done; attempt++) {
         const { method } = pickerTry(options, attempt, attempt);
         let found = await pickerFind(s, wanted);
-        // A free-entry value is created rather than replaced by a suggestion that only holds it.
-        if (options.create && found.status === "picked" && found.rank === "words")
+        // A free-entry value is created rather than replaced by a suggestion that only holds it
+        // or shares its stem.
+        if (options.create && found.status === "picked" && ["leading", "words", "stem"].includes(found.rank))
           found = { status: "refused", field: found.field, refusal: { picked: false, reason: "option_missing", wanted: wanted[0], available: [], matches: [] } };
         const since = pickerMark(s);
         const showsChip = (label) => async () => {
@@ -1232,6 +1238,18 @@ const pickValues = async (control, values, options = {}) => {
           return pickerChipIs(now.map(chipNames), [label]) !== null;
         };
         if (found.status === "refused") {
+          // A site that stops suggesting a chosen option no longer lists a chip an earlier call
+          // picked by stem or as whole words, so the chips are ranked as the options were.
+          if (!options.create && found.refusal.reason === "option_missing") {
+            const chips = await pickerChips(s);
+            const chosen = pickerRank(s, chips.map(chipNames), wanted);
+            if (chosen.status === "picked") {
+              await pickerClose(s, found.field);
+              results.push({ label: chips[chosen.index].label, value: chips[chosen.index].value, added: false });
+              done = true;
+              continue;
+            }
+          }
           if (!(options.create && found.refusal.reason === "option_missing")) {
             await pickerClose(s, found.field);
             return { ...found.refusal, values: results };
@@ -1257,7 +1275,9 @@ const pickValues = async (control, values, options = {}) => {
     if (mode === "replace") {
       for (let round = 0; round < 50 && Date.now() < s.until; round++) {
         const chips = await pickerChips(s);
-        const extra = chips.find((chip) => !list.some((wanted) => pickerChipIs([chipNames(chip)], wanted)));
+        // A chip this call chose stays, even one it picked by stem or as whole words.
+        const chosen = [...list, ...results.map((result) => [result.label])];
+        const extra = chips.find((chip) => !chosen.some((wanted) => pickerChipIs([chipNames(chip)], wanted)));
         if (!extra) break;
         if (!extra.removable) throw pickerFailure("not_committed");
         const since = pickerMark(s);

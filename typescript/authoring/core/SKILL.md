@@ -200,7 +200,9 @@ exception: it is optional unless the task can't run without it (below).
   caller's value into the site's own search, reads every suggestion, matches names loosely
   (case, accents, spacing, punctuation, and whole words, so a name with a neighborhood or an
   airport code in brackets still matches) with a whole-name or code match outranking a partial
-  one, and counts the matches at the best rank. With none, throw its `pickRefusal`, an
+  one, and counts the matches at the best rank. A read of a category or term passes `stem: true`
+  so a caller's word also matches an option word it begins or that begins it, such as Dentist and
+  Dentistry, and returns the option it used (forms skill). With none, throw its `pickRefusal`, an
   `InvalidInput` with `field` and `available`, the entries the site showed, except on a write
   whose site offered exactly one suggestion for a free-text value the caller typed, never a
   picker that selects a record: take it as the writes skill says for a value the site
