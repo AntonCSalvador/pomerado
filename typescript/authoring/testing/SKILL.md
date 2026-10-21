@@ -100,6 +100,8 @@ run no batch before then. Aim for a handful of cases, not dozens:
   one made-up key in the site's own format, with a serial past any the site lists, and expect
   `invalid_input`. Without a no-results answer, move on: it needs no
   `notTested` entry and no question;
+- for a free-text input, one case with a value the example used written another way, such as in
+  other case or with other spacing, punctuation or accents;
 - another case only where a different page structure or a real variant needs one, and each such
   case sets as many inputs as still return rows: another retailer, store or seller; another
   category; a record whose page is laid out differently (a single option, grouped options, a
