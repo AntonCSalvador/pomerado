@@ -114,8 +114,8 @@ export const CalendarDate = Schema.String.pipe(
  *   label, as `unfilledRequiredFields` names it, and by each name and id it carries. Read them in
  *   the marked call just before the click, for `blockingRequiredFields`. With `enabledOnly: true`
  *   it leaves out disabled fields, for `unfilledRequiredFields`' `before`.
- * - `blockingRequiredFields(scope, before, { timeout }?)`: after a click that should have saved or
- *   moved on, whether the page proves the click saved nothing. `before` is what
+ * - `blockingRequiredFields(scope, before, { timeout, unaskable }?)`: after a click that should
+ *   have saved or moved on, whether the page proves the click saved nothing. `before` is what
  *   `visibleFieldLabels` read just before the click; without it, it throws `labels_missing`. It
  *   returns `{ fields }` when the form still shows, once, and every control it flagged invalid is
  *   an empty required field a site-field question can ask, as `unfilledRequiredFields` lists
@@ -125,6 +125,11 @@ export const CalendarDate = Schema.String.pipe(
  *   may have flagged before. A flagged field whose label begins with a label shown before, as when
  *   the page writes its error inside the label, or reads as an error message, such as "Required"
  *   or "This field is required.", counts as one already showing.
+ *   With `unaskable: true`, when every flagged field is such a new, empty, required field with a
+ *   label but one or more are unsupported, fields no site-field question may ask, such as a card
+ *   or bank field, it returns `{ unaskable: true, labels }` instead of `null`, with the labels of
+ *   the unsupported ones: the click saved nothing, and no question can fill them. A flagged field
+ *   already showing, or one with no label, still gives `null`.
  *   Call it only once the click's wait found no confirmation and the form flagged a field, as a
  *   `{ invalid }` outcome of `waitForOutcomeResult` does.
  * - `fillRequiredField(scope, label, answer, { timeout }?)`: fills the one supported field
@@ -539,9 +544,13 @@ const blockingRequiredFields = async (scope, before, options = {}) => {
     [...seen].some((key) => label.length > key.length && label.startsWith(key) && !/[\p{L}\p{N}]/u.test(label.charAt(key.length)));
   const stale = (field) =>
     field.keys.some((key) => seen.has(key)) || extended(field.label) || formControlMessageWords.test(field.label);
-  if (fields.length === 0 || flaggedFilled > 0 || fields.some((field) => field.unsupported || stale(field)))
-    return null;
-  return { fields: fields.map(({ control, keys, ...field }) => field) };
+  if (fields.length === 0 || flaggedFilled > 0 || fields.some(stale)) return null;
+  const unasked = fields.filter((field) => field.unsupported);
+  if (unasked.length === 0) return { fields: fields.map(({ control, keys, ...field }) => field) };
+  // The click still saved nothing, but no site-field question may ask one of the fields, such as
+  // a card number. Only a labelled field can be told apart from one shown before, and named.
+  if (options.unaskable !== true || fields.some((field) => field.label === "")) return null;
+  return { unaskable: true, labels: unasked.map((field) => field.label) };
 };
 const fillRequiredField = async (scope, label, answer, options = {}) => {
   const timeout = options.timeout ?? 10000;

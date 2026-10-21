@@ -13,8 +13,9 @@ import type { KernelOperationContext } from "../../src/browser/index.js";
 // filled in, Continue opens a review step showing the item and the order total, some accounts
 // get a membership offer over the review, and Place order shows "Order ORD-…" on its
 // confirmation page. For an item that goes by courier, Place order instead keeps the review and
-// shows a delivery phone field, flagged empty, and places nothing. Adapt every selector and
-// condition from your own session's evidence.
+// shows a delivery phone field, flagged empty, and places nothing; an account with no card on
+// file gets card fields there instead. Adapt every selector and condition from your own
+// session's evidence.
 // Every on-path option is an input: the add-on is the caller's choice, never kept or cleared
 // unasked. An account-specific value (a passenger, saved card or address) would be a free-form
 // input, never an enum member, example or default.
@@ -60,6 +61,7 @@ const Review = Schema.Union(
 const Confirmed = Schema.Union(
   Schema.Struct({ order_number: Schema.NonEmptyTrimmedString }),
   Schema.Struct({ blocked: Schema.Array(RequiredField) }),
+  Schema.Struct({ unaskable: Schema.Array(Schema.String) }),
   Schema.Struct({ failure: Schema.Literal("review_missing", "total_changed", "not_confirmed") }),
 );
 const Answer = Schema.Struct({ label: Schema.String, answer: Schema.String });
@@ -272,8 +274,10 @@ const clickPlace = async ({ kernel, sessionId, errors }: Context, checkedTotal: 
       if (answer.outcome === "flagged") {
         // Only a review whose every flag is a required field the click showed, left empty, proves
         // the click saved nothing. Any other flag may be the site's answer to a saved order.
-        const blocked = await blockingRequiredFields(review, before);
-        return blocked === null ? { failure: "not_confirmed" } : { blocked: blocked.fields };
+        // With unaskable, it also says when one of those fields is one no question may ask.
+        const blocked = await blockingRequiredFields(review, before, { unaskable: true });
+        if (blocked === null) return { failure: "not_confirmed" };
+        return blocked.unaskable === true ? { unaskable: blocked.labels } : { blocked: blocked.fields };
       }
       const number = /^Order (ORD-[0-9]+)/.exec(await confirmation.innerText())?.[1];
       return number === undefined ? { failure: "not_confirmed" } : { order_number: number };
@@ -294,6 +298,15 @@ export const placeAndConfirm = async (context: FillContext, checkedTotal: number
   // The call below can send the order, so its commit step is marked first.
   enteringCommit("place-order");
   let result = await clickPlace(context, checkedTotal);
+  if ("unaskable" in result) {
+    // The click saved nothing, the same proof as below, but no site-field question may ask a
+    // field it showed, such as a card number. Record that it saved nothing, then refuse, naming
+    // each such field by its label. Never click again.
+    notCommitted("place-order");
+    throw new errors.InvalidInput(
+      `The site requires ${result.unaskable.join(", ")} to place the order, which this tool can't fill`,
+    );
+  }
   if ("blocked" in result) {
     // The review stayed, and its only flags are fields it showed on the click, left empty: that
     // click saved nothing. Ask for them and fill them, and check the review again, since an
@@ -308,7 +321,8 @@ export const placeAndConfirm = async (context: FillContext, checkedTotal: number
     result = await clickPlace(context, recheckedTotal);
   }
   // A review that still stops the order after its answers is the site's refusal, never resubmitted.
-  if ("blocked" in result)
+  // The step went back once already, so it stays possibly sent.
+  if ("blocked" in result || "unaskable" in result)
     throw new errors.OperationFailure("not_confirmed", { dispatch: "sent" });
   if ("failure" in result)
     throw new errors.OperationFailure(result.failure, {
