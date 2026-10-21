@@ -191,8 +191,10 @@ exception: it is optional unless the task can't run without it (below).
   from the one you saw.
 - Inputs are values a caller knows, such as codes, names, dates and counts, never a
   suggestion's full display text or an internal id the caller cannot know (an id the site
-  shows on its own pages, such as a product number, is not internal). A closed list
-  of options stays an enum of the site's options, as above. When the options come from a
+  shows on its own pages, such as a product number, is not internal). Prefer a unique input,
+  such as an ID: a tool that acts on one record takes the ID the site's other tools use for it,
+  and finds the record another way, such as by name, only when the caller gives none. A closed
+  list of options stays an enum of the site's options, as above. When the options come from a
   query, as in a search box, autocomplete, typeahead or searchable combobox, look the value
   up the way a person would, with `pickValue` from `pickerCode` (forms skill). It types the
   caller's value into the site's own search, reads every suggestion, matches names loosely
@@ -235,6 +237,9 @@ exception: it is optional unless the task can't run without it (below).
   offers: a collapsed group is not an absent one. Leave out controls unrelated to the purpose,
   such as a language switch or a newsletter opt-in on a search. The search skill's "Find the
   filters" says how a search records them.
+- Declare input fields in the order a person fills in the site's form: what or where first,
+  then when (a start date before an end date), then who and how many, then optional
+  refinements, with sorting and paging (`limit`, `cursor`) last.
 - Turn safety defaults off. They are never an input or a question ("Safety defaults", below).
 - Inputs that tailor the answer. Many sites tailor what they show to facts about the visitor,
   not just what they searched for: where they are (ZIP, address, store, delivery or pickup),
