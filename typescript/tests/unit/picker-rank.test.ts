@@ -116,10 +116,10 @@ describe("rankChoices", () => {
 describe("rankChoices word stems", () => {
   const dentistry = [
     choice("Dentistry"),
-    choice("Cosmetic Dentistry"),
-    choice("Pediatric Dentistry"),
-    choice("Emergency Dentistry"),
-    choice("General Dentistry (Dental Assistant)"),
+    choice("Example Dentistry"),
+    choice("Sample Dentistry"),
+    choice("Demo Dentistry"),
+    choice("Placeholder Dentistry (Test Annex)"),
   ];
 
   test("without the stem option, as on a write, nothing matches by stem", () => {
@@ -137,13 +137,13 @@ describe("rankChoices word stems", () => {
   });
 
   test("every word of the name must pair, in order", () => {
-    expect(stemRank(dentistry, "Pediatric Dentist")).toEqual({ status: "picked", index: 2, rank: "stem" });
+    expect(stemRank(dentistry, "Sample Dentist")).toEqual({ status: "picked", index: 2, rank: "stem" });
     expect(stemRank([choice("Sports Dentistry")], "Dentist")).toEqual({ status: "missing" });
-    expect(stemRank([choice("Dentistry Pediatric")], "Pediatric Dentist")).toEqual({ status: "missing" });
+    expect(stemRank([choice("Dentistry Sample")], "Sample Dentist")).toEqual({ status: "missing" });
   });
 
   test("two options that pair equally tie", () => {
-    expect(stemRank([choice("Dentistry"), choice("Dentists"), choice("Cosmetic Dentistry")], "Dentist")).toEqual({
+    expect(stemRank([choice("Dentistry"), choice("Dentists"), choice("Example Dentistry")], "Dentist")).toEqual({
       status: "ambiguous",
       indexes: [0, 1],
       rank: "stem",

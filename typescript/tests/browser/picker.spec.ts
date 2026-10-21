@@ -47,7 +47,7 @@ test("pickValue types into an ARIA combobox and clicks the matching option", asy
 // With the stem option, a word picks the one suggestion whose whole name is a word it begins, ahead
 // of the suggestions that hold that word among others.
 test("pickValue picks the suggestion whose whole name shares the value's stem when asked", async ({ page }) => {
-  const specialties = '[["1","Cosmetic Dentistry"],["2","Dentistry"],["3","Pediatric Dentistry"],["4","General Dentistry (Dental Assistant)"]]';
+  const specialties = '[["1","Example Dentistry"],["2","Dentistry"],["3","Sample Dentistry"],["4","Placeholder Dentistry (Test Annex)"]]';
   await serve(page, combobox.replace("Assignee", "Specialty").replace(/const people = \[.*\];/, `const people = ${specialties};`));
   const field = 'page.getByRole("combobox", { name: "Specialty" })';
   // Without the stem option, as on a write, the value is refused as missing.
