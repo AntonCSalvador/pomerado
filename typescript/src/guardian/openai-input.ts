@@ -10,6 +10,10 @@ import type { GuardianReasoningEffort } from "./model.js";
 import { guardianCompaction } from "./session.js";
 import { withReasoningContinuity } from "../models/reasoning-settings.js";
 import { reviewKindOf, reviewOutcomesOf } from "./review-layout.js";
+import { cutToLimit } from "./review-contracts.js";
+
+/** The most characters of the agent's note on a step that an execution review reads. */
+export const agentNoteLimit = 500;
 
 /** JSON.stringify leaves an undefined key out, so an empty list never reaches the model. */
 const absentWhenEmpty = <T>(list: readonly T[]) => (list.length === 0 ? undefined : list);
@@ -110,6 +114,10 @@ export const guardianReviewInput = (
     submitted_call: {
       entrypoint: turn.pending.entrypoint,
       input: turn.pending.screenedInput,
+      // The agent's own words about the step: untrusted call data, like the input beside it.
+      ...(turn.pending.agentNote === undefined || reviewKindOf(turn.pending) !== "execution"
+        ? {}
+        : { agentNote: cutToLimit(turn.pending.agentNote, agentNoteLimit) }),
       ...(turn.sources?.entrypoint === undefined
         ? {}
         : { entrypointSource: turn.sources.entrypoint }),

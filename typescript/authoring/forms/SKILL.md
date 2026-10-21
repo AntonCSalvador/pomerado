@@ -108,8 +108,10 @@ exactly, then loosely, never pick an "Add" or "Create" row, and confirm the fiel
 picking again when the page reverts it. A value the picker lacks, or several options that tie,
 comes back as `{ picked: false, reason, available, matches }`: decode it with `PickOutcome` and
 throw `pickRefusal(outcome, field)`, or, on a write, ask the caller to choose among `matches`. On
-a read, pass `tie: "first"`, so the picker takes the first of the tied options in the site's order
-and returns the one it used. Handle a site's quirk with the helper's options, such as `query`,
+a write, a single suggestion for a free-text value the caller typed is the site's correction
+instead, never for a picker that selects a record: take it as the writes skill says. On a read,
+pass `tie: "first"`, so the picker takes the first of the tied options in the site's order and
+returns the one it used. Handle a site's quirk with the helper's options, such as `query`,
 `answered`, `committed`, `commit: "keyboard"` or `blur: "tab"`, never with a picker of your own.
 `references/picker.ts` picks a typeahead value and refuses a missing one,
 `references/dates-and-dropdowns.ts` fills a split date and `references/selection.ts` a native
@@ -146,9 +148,9 @@ shows one, and otherwise with any of its controls, accept included. Name that co
 
 Decide whether each pop-up, banner or interstitial is conditional or always triggered. A
 conditional one shows only for some accounts, states or visits, such as a cookie banner, a
-one-time promotion or a membership upsell shown only to non-members: check for it, resolve it
-when it shows, and continue without error when it does not, as one outcome beside the page's
-next state. Never wait for it or require it. One the page always opens in answer to an action,
+one-time promotion or a membership upsell shown only to non-members: name its close control as
+`dismiss` of `waitForReady` (core skill), which closes it whenever it opens, rather than checking
+for it at one point. Never wait for it or require it. One the page always opens in answer to an action,
 such as a confirmation dialog a button always opens, may be expected, and the script accepts it
 when it only restates what this run entered or acts on. One that shows something new, such as a
 fee, a consequence beyond the request, another record or a warning about this input, goes to the

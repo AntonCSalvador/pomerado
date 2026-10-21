@@ -306,6 +306,7 @@ interface ReceiptInput {
       readonly outcome: "allow" | "deny" | "escalate";
       readonly rationale: string;
       readonly action?: GuardianAction | undefined;
+      readonly advice?: string | undefined;
     };
   };
   readonly journal: Journal;
@@ -320,6 +321,7 @@ const reviewFeedback = ({ reviewId, decision }: ReceiptInput["reviewed"]): MintR
   outcome: decision.outcome,
   rationale: decision.rationale,
   ...(decision.action === undefined ? {} : { action: decision.action }),
+  ...(decision.advice === undefined ? {} : { advice: decision.advice }),
 });
 const failedReceipt = (
   receipt: ReceiptInput,
@@ -490,6 +492,7 @@ const authoredExecution = (
           ...(mark === undefined ? {} : { input: mark }),
         },
         startsOnFreshPage: start.resets(execution),
+        ...(execution.agentNote === undefined ? {} : { agentNote: execution.agentNote }),
       },
       "not_sent",
     );
