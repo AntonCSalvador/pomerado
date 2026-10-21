@@ -103,6 +103,14 @@ interface ShopState extends StoreState {
    * the next once it holds a digit, as such widgets do.
    */
   codeBoxes: number;
+  /**
+   * How each code box takes one character: `maxlength` by its `maxlength="1"`, `script` by the
+   * widget's own script, as many one-time-code widgets do. A `script` box is a `tel` input with no
+   * `maxlength`, drawn see-through over its digit; the widget keeps one character in each box,
+   * spreads a code typed or pasted into one box across it and the boxes after it, and keeps the
+   * whole code in a hidden field beside the boxes.
+   */
+  codeBoxLimit: "maxlength" | "script";
   /** The code the code screen takes: `shopCode`, or a longer one split across more boxes. */
   code: string;
   /**
@@ -319,20 +327,48 @@ fetch('/api/products?q='+encodeURIComponent(new URLSearchParams(location.search)
   // code shows the form again under the error.
   const codeBoxes = () =>
     Array.from({ length: state.codeBoxes }, (_, at) => at + 1);
-  const codeForm = () =>
-    state.codeBoxes > 0
-      ? `<form method="post" action="/two-factor"><p>Enter the code we sent you</p><div class="code">${codeBoxes()
-          .map(
-            (box) =>
-              `<input id="code-${box}" name="code-${box}" maxlength="1" inputmode="numeric" aria-label="Digit ${box} of ${state.codeBoxes}"${box === 1 ? ' autocomplete="one-time-code"' : ""}>`,
-          )
-          .join("")}</div><button>Verify</button></form>
+  const maxlengthBoxes = () =>
+    `<form method="post" action="/two-factor"><p>Enter the code we sent you</p><div class="code">${codeBoxes()
+      .map(
+        (box) =>
+          `<input id="code-${box}" name="code-${box}" maxlength="1" inputmode="numeric" aria-label="Digit ${box} of ${state.codeBoxes}"${box === 1 ? ' autocomplete="one-time-code"' : ""}>`,
+      )
+      .join("")}</div><button>Verify</button></form>
 <script>
 const boxes = [...document.querySelectorAll(".code input")];
 boxes.forEach((box, at) => box.addEventListener("input", () => {
   if (box.value !== "" && boxes[at + 1]) boxes[at + 1].focus();
 }));
-</script>`
+</script>`;
+  const scriptBoxes = () =>
+    `<style>.code{position:relative;display:flex;gap:4px}.code input{width:32px;height:40px;opacity:0;margin:0;padding:0;border:0}.drawn{position:absolute;inset:0;display:flex;gap:4px;pointer-events:none}.drawn span{width:32px;height:40px;border:1px solid #888;box-sizing:border-box;text-align:center;line-height:40px}</style>
+<form method="post" action="/two-factor"><p>Enter the code we sent you</p><div class="code"><input type="hidden" name="code">${codeBoxes()
+      .map(
+        (box) =>
+          `<input id="code-${box}" name="code-${box}" type="tel" class="digit" inputmode="numeric" autocomplete="one-time-code" aria-label="Digit ${box} of ${state.codeBoxes}">`,
+      )
+      .join("")}<div class="drawn" aria-hidden="true">${codeBoxes()
+      .map(() => "<span></span>")
+      .join("")}</div></div><button>Verify</button></form>
+<script>
+const boxes = [...document.querySelectorAll(".code input.digit")];
+const drawn = [...document.querySelectorAll(".drawn span")];
+const whole = document.querySelector('.code input[type="hidden"]');
+boxes.forEach((box, at) => box.addEventListener("input", () => {
+  const typed = box.value.replace(/[^0-9]/g, "");
+  const spread = typed.length > 1 ? [...typed].slice(0, boxes.length - at) : [typed.slice(-1)];
+  spread.forEach((digit, offset) => { boxes[at + offset].value = digit; });
+  const next = boxes[at + spread.length];
+  if (typed !== "") (next ?? boxes[at + spread.length - 1]).focus();
+  boxes.forEach((each, index) => { drawn[index].textContent = each.value; });
+  whole.value = boxes.map((each) => each.value).join("");
+}));
+</script>`;
+  const codeForm = () =>
+    state.codeBoxes > 0
+      ? state.codeBoxLimit === "maxlength"
+        ? maxlengthBoxes()
+        : scriptBoxes()
       : `<form method="post" action="/two-factor"><label>Code<input name="code" autocomplete="one-time-code"></label>${state.codeSubmitsOnEnter ? "" : "<button>Verify</button>"}</form>`;
   const twoFactor: Route = async (request, response) => {
     if (request.method !== "POST") {
@@ -684,6 +720,7 @@ export const startShop = async (directory: string): Promise<Shop> => {
     loginCode: false,
     codeSubmitsOnEnter: false,
     codeBoxes: 0,
+    codeBoxLimit: "maxlength",
     code: shopCode,
     signedInLogin: "form",
     workspaceChooser: false,

@@ -33,6 +33,9 @@ import placeOrder, {
   placeAndConfirm,
   placeStep,
 } from "../../authoring/examples/write-session.js";
+import { formControlsCode } from "../../src/browser/form-controls.js";
+import { asksAsDeclared } from "../../src/execution/declared-questions.js";
+import type { InputRequest } from "../../src/runtime/input-request.js";
 import { defineOperation } from "../../src/runtime/operation.js";
 import {
   admitListCursor,
@@ -41,6 +44,7 @@ import {
   type ListCursorScope,
 } from "../../src/runtime/list-cursor.js";
 
+import { commitEvidenceOf, commitRetryRefusal, unenteredWrite } from "../../src/runtime/run-outcome.js";
 import { runExample, failure, localFiles } from "./authoring-fixture.js";
 
 const dialogPickerFixture = async (page: Page, mode: "success" | "ambiguous" | "no_commit") => {
@@ -1319,7 +1323,11 @@ test("write example settles a delayed submit before its outer call expires", asy
 /**
  * The checkout the write-session example was written against: fill, review, place, confirm. The
  * review prices each unit at 12.50 and shows the total, under a membership offer while
- * `site.offer` is set.
+ * `site.offer` is set. A pen adds a required engraving choice to the checkout once typed in,
+ * and a full name then adds its text. A ring adds three at once, a size, a metal and an
+ * inscription, and gold then adds its karat. A watch adds a strap and a strap size, shown greyed
+ * out until a strap is chosen. A bracelet adds a charm, and a heart renames the quantity, clears
+ * it and makes it required.
  */
 const checkoutSite = async (
   page: Page,
@@ -1338,20 +1346,102 @@ const checkoutSite = async (
         contentType: "text/html",
         body: `<form aria-label="Checkout" method="get" action="/checkout/review">
           <label>Item<input name="item"></label><label>Quantity<input name="quantity"></label>
-          <label><input type="checkbox" name="giftWrap"> Gift wrap</label><button>Continue</button>
-        </form>`,
+          <label><input type="checkbox" name="giftWrap"> Gift wrap</label>
+          <label hidden>Engraving<select name="engraving" required disabled>
+            <option value="">Choose</option><option>Initials</option><option>Full name</option>
+          </select></label>
+          <label hidden>Engraving text<input name="engraving_text" required disabled></label>
+          <label hidden>Ring size<select name="size" required disabled>
+            <option value="">Choose</option><option>Small</option><option>Medium</option><option>Large</option>
+          </select></label>
+          <label hidden>Metal<select name="metal" required disabled>
+            <option value="">Choose</option><option>Gold</option><option>Silver</option>
+          </select></label>
+          <label hidden>Inscription<input name="inscription" required disabled></label>
+          <label hidden>Gold karat<select name="karat" required disabled>
+            <option value="">Choose</option><option>14k</option><option>18k</option>
+          </select></label>
+          <label hidden>Strap<select name="strap" required disabled>
+            <option value="">Choose</option><option>Leather</option><option>Steel</option>
+          </select></label>
+          <label hidden>Strap size<select name="strap_size" required disabled>
+            <option value="">Choose</option><option>Small</option><option>Large</option>
+          </select></label>
+          <label hidden>Charm<select name="charm" required disabled>
+            <option value="">Choose</option><option>Star</option><option>Heart</option>
+          </select></label>
+          <button>Continue</button>
+        </form>
+        <script>
+          const show = (name, shown) => {
+            const field = document.querySelector("[name=" + name + "]");
+            field.disabled = !shown;
+            field.parentElement.hidden = !shown;
+          };
+          document.querySelector("[name=item]").addEventListener("input", (event) => {
+            show("engraving", event.target.value === "pen");
+            for (const name of ["size", "metal", "inscription"]) show(name, event.target.value === "ring");
+            show("strap", event.target.value === "watch");
+            document.querySelector("[name=strap_size]").parentElement.hidden = event.target.value !== "watch";
+            show("charm", event.target.value === "bracelet");
+          });
+          document.querySelector("[name=engraving]").addEventListener("change", (event) => {
+            show("engraving_text", event.target.value === "Full name");
+          });
+          document.querySelector("[name=metal]").addEventListener("change", (event) => {
+            show("karat", event.target.value === "Gold");
+          });
+          document.querySelector("[name=strap]").addEventListener("change", (event) => {
+            document.querySelector("[name=strap_size]").disabled = event.target.value === "";
+          });
+          document.querySelector("[name=charm]").addEventListener("change", (event) => {
+            if (event.target.value !== "Heart") return;
+            const quantity = document.querySelector("[name=quantity]");
+            quantity.parentElement.firstChild.textContent = "Quantity (max 2 with a heart)";
+            quantity.value = "";
+            quantity.required = true;
+          });
+        </script>`,
       });
+    // An armchair goes by courier, so the review asks for a delivery phone, but only once Place
+    // order is pressed: the click keeps the review, with the phone field shown and flagged.
+    const review = (item: string, total: string, extra = "") => `<p aria-label="Item">${item}</p>
+          <p aria-label="Order total">${total}</p>
+          <form aria-label="Review" method="post" action="/orders"><input type="hidden" name="item" value="${item}">
+          <input type="hidden" name="quantity" value="${url.searchParams.get("quantity") ?? "1"}">
+          <label hidden>Delivery phone<input type="tel" name="phone" aria-describedby="phone-error"></label>
+          <p id="phone-error" hidden>Enter a phone number for the courier</p>${extra}<button>Place order</button></form>
+          <script>
+            document.forms[0].addEventListener("submit", (event) => {
+              const phone = document.querySelector("[name=phone]");
+              if (${JSON.stringify(item)} !== "armchair" || phone.value.trim() !== "") return;
+              event.preventDefault();
+              phone.parentElement.hidden = false;
+              phone.setAttribute("aria-invalid", "true");
+              document.querySelector("#phone-error").hidden = false;
+            });
+          </script>`;
     if (url.pathname === "/checkout/review")
       return route.fulfill({
         contentType: "text/html",
-        body: `<p aria-label="Item">${url.searchParams.get("item") ?? ""}</p>
-          <p aria-label="Order total">$${(Number(url.searchParams.get("quantity")) * 12.5).toFixed(2)}</p>
-          <form method="post" action="/orders"><input type="hidden" name="item" value="${url.searchParams.get("item") ?? ""}"><button>Place order</button></form>
+        body: `${review(url.searchParams.get("item") ?? "", `$${(Number(url.searchParams.get("quantity")) * 12.5).toFixed(2)}`)}
           ${site.offer ? `<div role="dialog" aria-label="Membership offer"><button onclick="window.declineOffer(); this.parentElement.remove()">No thanks</button></div>` : ""}`,
       });
-    // The site answers the order's own POST with its confirmation.
+    // The site answers the order's own POST with its confirmation. A sofa's order is taken, but
+    // the site answers with the review again, its promo code flagged: the page can't tell whether
+    // the order went through.
     if (url.pathname === "/orders" && request.method() === "POST") {
-      orders.push(new URLSearchParams(request.postData() ?? "").get("item") ?? "");
+      const posted = new URLSearchParams(request.postData() ?? "");
+      orders.push(posted.get("item") ?? "");
+      if (posted.get("item") === "sofa")
+        return route.fulfill({
+          contentType: "text/html",
+          body: review(
+            "sofa",
+            `$${(Number(posted.get("quantity")) * 12.5).toFixed(2)}`,
+            `<label>Promo code<input name="promo" value="SPRING" aria-invalid="true"></label>`,
+          ),
+        });
       return route.fulfill({
         contentType: "text/html",
         body: `<p role="status" aria-label="Order confirmation">Order ORD-${1000 + orders.length} is placed.</p>`,
@@ -1405,6 +1495,894 @@ test("write-session example commits once across its act steps and reads the site
   expect(orders).toEqual(["lamp", "lamp"]);
 });
 
+test("write-session example asks for a required field the item added, before anything saves", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  const input = { item: "pen", quantity: 1, gift_wrap: false };
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, input, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o1" };
+    },
+  });
+  // The page's label and options reach the caller; the host words the question around them.
+  expect(asked.map((request) => request.questions)).toEqual([
+    [
+      {
+        id: "extra_field",
+        type: "choice",
+        prompt: "Engraving",
+        options: [
+          { id: "o1", label: "Initials" },
+          { id: "o2", label: "Full name" },
+        ],
+      },
+    ],
+  ]);
+  expect(asksAsDeclared(asked[0] as InputRequest, placeOrder.questions ?? {})).toBe(true);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["pen"]);
+});
+
+test("write-session example stops before its commit mark when the added field can't be asked", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const unanswered = await runExample(page, placeOrder, { item: "pen", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+  });
+  expect(failure(unanswered.result)).toMatchObject({ _tag: "ScriptInputFailure", code: "Unavailable" });
+  expect(unanswered.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
+  expect(orders).toEqual([]);
+});
+
+/** The fields each checkout sent on to its review, by name. */
+const checkoutsOf = async (page: Page, origin: string) => {
+  const sent: Record<string, string>[] = [];
+  await page.route(`${origin}/checkout/review**`, (route) => {
+    sent.push(Object.fromEntries(new URL(route.request().url()).searchParams));
+    return route.fallback();
+  });
+  return sent;
+};
+
+const ringQuestions = [
+  {
+    id: "extra_field",
+    type: "choice",
+    prompt: "Ring size",
+    options: [
+      { id: "o1", label: "Small" },
+      { id: "o2", label: "Medium" },
+      { id: "o3", label: "Large" },
+    ],
+  },
+  {
+    id: "extra_field_2",
+    type: "choice",
+    prompt: "Metal",
+    options: [
+      { id: "o1", label: "Gold" },
+      { id: "o2", label: "Silver" },
+    ],
+  },
+  { id: "extra_field_3", type: "text", prompt: "Inscription" },
+];
+
+test("write-session example asks every field a step adds in one round, in page order, and fills each answer into its own field", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  const checkouts = await checkoutsOf(page, origin);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "ring", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o2", extra_field_2: "o2", extra_field_3: "S & R" };
+    },
+  });
+  // One request: a site-field question per field, in the page's order, each with its own label
+  // and options, and each one the publication reviewed.
+  expect(asked.map((request) => request.questions)).toEqual([ringQuestions]);
+  expect(asksAsDeclared(asked[0] as InputRequest, placeOrder.questions ?? {})).toBe(true);
+  // Each answer went into the field it was asked for.
+  expect(checkouts).toEqual([
+    { item: "ring", quantity: "1", size: "Medium", metal: "Silver", inscription: "S & R" },
+  ]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["ring"]);
+});
+
+for (const [problem, answers] of [
+  ["an option the field does not offer", { extra_field: "o2", extra_field_2: "o9", extra_field_3: "S & R" }],
+  ["a field left unanswered", { extra_field: "o2", extra_field_2: "o2" }],
+] as const)
+  test(`write-session example checks each answer of its one round and saves nothing on ${problem}`, async ({
+    page,
+  }) => {
+    const origin = "https://shop.example.invalid";
+    const orders: string[] = [];
+    await checkoutSite(page, origin, orders);
+    const checkouts = await checkoutsOf(page, origin);
+    await page.goto("about:blank");
+    const asked: InputRequest[] = [];
+    const refused = await runExample(page, placeOrder, { item: "ring", quantity: 1, gift_wrap: false }, {
+      siteOrigin: origin,
+      answer: (request) => {
+        asked.push(request);
+        return answers;
+      },
+    });
+    expect(asked.map((request) => request.questions)).toEqual([ringQuestions]);
+    expect(failure(refused.result)).toMatchObject({ _tag: "ScriptInputFailure", code: "Unavailable" });
+    expect(refused.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
+    expect(checkouts).toEqual([]);
+    expect(orders).toEqual([]);
+  });
+
+test("write-session example asks a field the form adds after an answer in a second round", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  const checkouts = await checkoutsOf(page, origin);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "ring", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return asked.length === 1
+        ? { extra_field: "o2", extra_field_2: "o1", extra_field_3: "S & R" }
+        : { extra_field: "o2" };
+    },
+  });
+  // Gold shows the karat only once it is chosen, so the karat is asked on its own after it.
+  expect(asked.map((request) => request.questions)).toEqual([
+    ringQuestions,
+    [
+      {
+        id: "extra_field",
+        type: "choice",
+        prompt: "Gold karat",
+        options: [
+          { id: "o1", label: "14k" },
+          { id: "o2", label: "18k" },
+        ],
+      },
+    ],
+  ]);
+  for (const request of asked) expect(asksAsDeclared(request, placeOrder.questions ?? {})).toBe(true);
+  expect(checkouts).toEqual([
+    { item: "ring", quantity: "1", size: "Medium", metal: "Gold", inscription: "S & R", karat: "18k" },
+  ]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["ring"]);
+});
+
+test("write-session example asks a field an answer enables after showing it greyed out", async ({ page }) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  const checkouts = await checkoutsOf(page, origin);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "watch", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o2" };
+    },
+  });
+  // The strap size shows from the start, but greyed out: it is asked once the strap enables it.
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Strap"],
+    ["Strap size"],
+  ]);
+  expect(checkouts).toEqual([{ item: "watch", quantity: "1", strap: "Steel", strap_size: "Large" }]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["watch"]);
+});
+
+test("write-session example asks a field an answer adds whose label begins with the one answered", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  const checkouts = await checkoutsOf(page, origin);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "pen", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: asked.length === 1 ? "o2" : "S R" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Engraving"],
+    ["Engraving text"],
+  ]);
+  expect(checkouts).toEqual([
+    { item: "pen", quantity: "1", engraving: "Full name", engraving_text: "S R" },
+  ]);
+  expect(placed).toMatchObject({ result: Either.right({ order_number: "ORD-1001" }) });
+  expect(orders).toEqual(["pen"]);
+});
+
+test("write-session example never asks for an input it fills when an answer renames that field", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  const checkouts = await checkoutsOf(page, origin);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const stopped = await runExample(page, placeOrder, { item: "bracelet", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    deadlineMs: 4_000,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: asked.length === 1 ? "o2" : "7" };
+    },
+  });
+  // The quantity is the caller's input, known by its name under its new label, so it is never
+  // asked: the checkout stops before anything saves.
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([["Charm"]]);
+  expect(failure(stopped.result)).toBeDefined();
+  expect(stopped.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
+  expect(checkouts).toEqual([]);
+  expect(orders).toEqual([]);
+});
+
+test("a tool that declares one site-field question and asks it once per field still runs as before", async ({
+  page,
+}) => {
+  // A tool written before the example asked a step's fields in one round: one question, asked
+  // with askOne for each field in turn.
+  const oneByOne = defineOperation(
+    {
+      name: "fill_checkout",
+      input: OrderInput,
+      questions: { extra_field: { type: "site_field" } },
+      output: Schema.Struct({ review_shown: Schema.Boolean }),
+    },
+    async ({ kernel, sessionId, siteOrigin, input, askOne }) => {
+      const read = await kernel.browsers.playwright.execute(sessionId, {
+        timeout_sec: 60,
+        code: `
+          ${formControlsCode}
+          await page.goto(${JSON.stringify(`${siteOrigin}/checkout`)});
+          const form = page.getByRole("form", { name: "Checkout", exact: true });
+          await form.getByLabel("Item", { exact: true }).fill(${JSON.stringify(input.item)});
+          await form.getByLabel("Quantity", { exact: true }).fill(${JSON.stringify(String(input.quantity))});
+          return await unfilledRequiredFields(form);
+        `,
+      });
+      const fields = read.result as { label: string; options?: { value: string; label: string }[] }[];
+      const answers: { label: string; answer: string }[] = [];
+      for (const { label, options } of fields)
+        answers.push({
+          label,
+          answer: await askOne("extra_field", options === undefined ? { label } : { label, options }),
+        });
+      const continued = await kernel.browsers.playwright.execute(sessionId, {
+        timeout_sec: 60,
+        code: `
+          ${formControlsCode}
+          const form = page.getByRole("form", { name: "Checkout", exact: true });
+          for (const { label, answer } of ${JSON.stringify(answers)}) await fillRequiredField(form, label, answer);
+          await form.getByRole("button", { name: "Continue", exact: true }).click();
+          await page.getByRole("button", { name: "Place order", exact: true }).waitFor({ timeout: 10000 });
+          return true;
+        `,
+      });
+      return { review_shown: continued.success && continued.result === true };
+    },
+  );
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  const checkouts = await checkoutsOf(page, origin);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const filled = await runExample(page, oneByOne, { item: "ring", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: ["o2", "o2", "S & R"][asked.length - 1] ?? "" };
+    },
+  });
+  // Each field is still its own request, asked and checked as that tool declared it.
+  expect(asked.map((request) => request.questions)).toEqual(
+    ringQuestions.map((question) => [{ ...question, id: "extra_field" }]),
+  );
+  for (const request of asked)
+    expect(asksAsDeclared(request, { extra_field: { type: "site_field" } })).toBe(true);
+  expect(filled.result).toEqual(Either.right({ review_shown: true }));
+  expect(checkouts).toEqual([
+    { item: "ring", quantity: "1", size: "Medium", metal: "Silver", inscription: "S & R" },
+  ]);
+  expect(orders).toEqual([]);
+});
+
+test("write-session example asks for a field the review flags only after Place order, then places the order once", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  const phones: string[] = [];
+  await checkoutSite(page, origin, orders);
+  await page.route(`${origin}/orders`, (route) => {
+    phones.push(new URLSearchParams(route.request().postData() ?? "").get("phone") ?? "");
+    return route.fallback();
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "armchair", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "555-0100" };
+    },
+  });
+  // The click proved it saved nothing, so the field it showed is asked, filled, and the order
+  // placed by the second click alone.
+  expect(asked.map((request) => request.questions)).toEqual([
+    [{ id: "extra_field", type: "text", prompt: "Delivery phone" }],
+  ]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    effect: "verified",
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["armchair"]);
+  expect(phones).toEqual(["555-0100"]);
+});
+
+test("write-session example's act steps ask for a field the review flags only after Place order, then place the order once", async ({
+  page,
+}) => {
+  // An act step declares no write, so the step it marks is one it never declared: it still goes
+  // back once, so the build's act session can finish.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  const input = { item: "armchair", quantity: 1, gift_wrap: false };
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const filled = await runExample(page, fillStep, input, { siteOrigin: origin });
+  expect(filled.result).toEqual(Either.right({ review_shown: true }));
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeStep, input, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "555-0100" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([["Delivery phone"]]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["armchair"]);
+});
+
+test("write-session example asks nothing after a click whose page may have saved, and keeps it possibly sent", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const unsure = await runExample(page, placeOrder, { item: "sofa", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "555-0100" };
+    },
+  });
+  // The review came back with a filled field flagged: nothing proves the click saved nothing.
+  expect(failure(unsure.result)).toMatchObject({ _tag: "OperationFailure", message: "not_confirmed" });
+  expect(asked).toEqual([]);
+  expect(unsure.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  expect(orders).toEqual(["sofa"]);
+});
+
+test("write-session example keeps the order possibly sent when nobody answers the field a click proved missing", async ({
+  page,
+}) => {
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await checkoutSite(page, origin, orders);
+  await page.goto("about:blank");
+  const unanswered = await runExample(page, placeOrder, { item: "armchair", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+  });
+  expect(failure(unanswered.result)).toMatchObject({ _tag: "ScriptInputFailure", code: "Unavailable" });
+  // The step goes back only once the answer is in, so a run that ends on the question reports
+  // the click possibly sent, as it would without the question, and refuses a retry.
+  expect(unanswered.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  expect(commitRetryRefusal(commitEvidenceOf(unanswered.commits))).toBe("commit_entered");
+  expect(unenteredWrite(unanswered.effect, unanswered.commits)).toBe(false);
+  expect(orders).toEqual([]);
+});
+
+/**
+ * A review page after the checkout. Its form holds `fields`; Place order runs `refuseFirst` in
+ * the page instead of saving on the first click when set, and otherwise saves the order by a
+ * fetch and then runs `afterSave`, with `form`, the order's `number` and `confirm(ms)`, which
+ * shows the confirmation that many milliseconds later.
+ */
+const reviewSite = async (
+  page: Page,
+  origin: string,
+  orders: string[],
+  site: { fields: string; afterSave?: string; refuseFirst?: string; novalidate?: boolean },
+) => {
+  await page.route(`${origin}/**`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname === "/checkout")
+      return route.fulfill({
+        contentType: "text/html",
+        body: `<form aria-label="Checkout" method="get" action="/checkout/review">
+          <label>Item<input name="item"></label><label>Quantity<input name="quantity"></label>
+          <label><input type="checkbox" name="giftWrap"> Gift wrap</label>
+          <button>Continue</button>
+        </form>`,
+      });
+    if (url.pathname === "/checkout/review") {
+      const item = url.searchParams.get("item") ?? "";
+      const quantity = url.searchParams.get("quantity") ?? "1";
+      return route.fulfill({
+        contentType: "text/html",
+        body: `<p aria-label="Item">${item}</p><p aria-label="Order total">$${(Number(quantity) * 12.5).toFixed(2)}</p>
+          <form aria-label="Review" ${site.novalidate === true ? "novalidate" : ""}>
+          <input type="hidden" name="item" value="${item}"><input type="hidden" name="quantity" value="${quantity}">
+          ${site.fields}<button>Place order</button></form>
+          <script>
+            const form = document.forms[0];
+            let number = "";
+            const confirm = (delay) => setTimeout(() => {
+              const shown = document.createElement("p");
+              shown.setAttribute("role", "status");
+              shown.setAttribute("aria-label", "Order confirmation");
+              shown.textContent = "Order " + number + " is placed.";
+              document.body.append(shown);
+            }, delay);
+            let refused = ${site.refuseFirst === undefined ? "true" : "false"};
+            form.addEventListener("submit", async (event) => {
+              event.preventDefault();
+              if (!refused) {
+                refused = true;
+                ${site.refuseFirst ?? ""}
+                return;
+              }
+              const answer = await fetch("/orders", { method: "POST", body: new URLSearchParams(new FormData(form)) });
+              number = await answer.text();
+              ${site.afterSave ?? ""}
+            });
+          </script>`,
+      });
+    }
+    if (url.pathname === "/orders" && request.method() === "POST") {
+      const posted = new URLSearchParams(request.postData() ?? "");
+      const extra = [...posted.keys()].filter((key) => !["item", "quantity"].includes(key));
+      orders.push([posted.get("item") ?? "", ...extra.map((key) => `${key}=${posted.get(key)}`)].join("|"));
+      return route.fulfill({ contentType: "text/plain", body: `ORD-${1000 + orders.length}` });
+    }
+    return route.fulfill({ status: 404, body: "Not found" });
+  });
+};
+
+/**
+ * Review pages whose Place order click does save and then leave a field flagged that was already
+ * on the page before the click, some with its label rewritten as they flag it. The confirmation
+ * shows only later.
+ */
+const savingReviews = {
+  // An app that clears its form for the next order.
+  reset: {
+    fields: `<label>Contact email<input type="email" name="email" required value="sam@example.com"></label>`,
+    afterSave: `form.querySelector("[name=email]").value = ""; confirm(800);`,
+  },
+  // A form that skips the browser's check and has a stray required on an optional field.
+  novalidate: {
+    novalidate: true,
+    fields: `<label>Company<input name="company" required></label>`,
+    afterSave: `confirm(400);`,
+  },
+  // A field the page flagged before the click, while the confirmation is slow.
+  processing: {
+    fields: `<label>Delivery instructions<input name="instructions" aria-required="true" aria-invalid="true"></label>`,
+    afterSave: `document.body.insertAdjacentHTML("beforeend", "<p>Processing your order</p>"); confirm(4000);`,
+  },
+  // The cleared field's error message, written inside its label.
+  "message in the label": {
+    fields: `<label>Contact email <input type="email" name="email" required value="sam@example.com"></label>`,
+    afterSave: `const email = form.querySelector("[name=email]"); email.value = ""; email.setAttribute("aria-invalid", "true");
+      email.parentElement.insertAdjacentHTML("beforeend", '<span class="error">Enter an email address</span>'); confirm(800);`,
+  },
+  // A validator's error label, pointed at the field with for, which then names it.
+  "error label for the field": {
+    novalidate: true,
+    fields: `<label>Company <input id="company" name="company" required></label>`,
+    afterSave: `const company = form.querySelector("#company"); company.setAttribute("aria-invalid", "true");
+      company.parentElement.insertAdjacentHTML("afterend", '<label id="company-error" class="error" for="company">This field is required.</label>'); confirm(400);`,
+  },
+  // "(required)" added to the label of the field it flags.
+  "label marked required": {
+    fields: `<label for="instr">Delivery instructions</label><input id="instr" name="instructions" aria-required="true" aria-invalid="true">`,
+    afterSave: `document.body.insertAdjacentHTML("beforeend", "<p>Processing your order</p>");
+      document.querySelector("label[for=instr]").textContent = "Delivery instructions (required)"; confirm(4000);`,
+  },
+  // A field with no label before the click, named by the aria-label it gets when flagged.
+  "label given on flag": {
+    novalidate: true,
+    fields: `<input name="phone" placeholder="Phone" required>`,
+    afterSave: `const phone = form.querySelector("[name=phone]"); phone.setAttribute("aria-label", "Phone number"); phone.setAttribute("aria-invalid", "true"); confirm(400);`,
+  },
+  // A field with no name or id, whose label gains the error message the save writes inside it.
+  "unnamed field's label gains its error": {
+    fields: `<label>Contact phone <input type="tel" required value="555-0100"></label>`,
+    afterSave: `const phone = form.querySelector("[type=tel]"); phone.value = ""; phone.setAttribute("aria-invalid", "true");
+      phone.parentElement.insertAdjacentHTML("beforeend", '<span class="error">Required</span>'); confirm(1500);`,
+  },
+  // A named field the save clears and renames, with an error mark written inside its label.
+  "renamed field's label gains a star": {
+    fields: `<label>Contact email <input type="email" name="email_r1" required value="sam@example.com"></label>`,
+    afterSave: `const email = form.querySelector("[name=email_r1]"); email.value = ""; email.name = "email_r2"; email.setAttribute("aria-invalid", "true");
+      email.parentElement.insertAdjacentHTML("beforeend", '<span class="error">*</span>'); confirm(800);`,
+  },
+  "renamed field's label gains a word": {
+    fields: `<label>Contact email <input type="email" name="email_r1" required value="sam@example.com"></label>`,
+    afterSave: `const email = form.querySelector("[name=email_r1]"); email.value = ""; email.name = "email_r2"; email.setAttribute("aria-invalid", "true");
+      email.parentElement.insertAdjacentHTML("beforeend", '<span class="error">verplicht</span>'); confirm(800);`,
+  },
+  // A field with no name that the save gives one, with an error mark inside its label.
+  "unnamed field gains a name": {
+    fields: `<label>Contact email <input type="email" required value="sam@example.com"></label>`,
+    afterSave: `const email = form.querySelector("[type=email]"); email.value = ""; email.name = "email"; email.setAttribute("aria-invalid", "true");
+      email.parentElement.insertAdjacentHTML("beforeend", '<span class="error">*</span>'); confirm(800);`,
+  },
+  // A field the save mounts again with a new name and id, its label marked.
+  "field mounted again": {
+    fields: `<div id="email-box"><label for="email-a">Contact email</label><input type="email" id="email-a" name="email_a" required value="sam@example.com"></div>`,
+    afterSave: `document.querySelector("#email-box").innerHTML = '<label for="email-b">Contact email *</label><input type="email" id="email-b" name="email_b" required aria-invalid="true">';
+      confirm(800);`,
+  },
+  // aria-labelledby that gains the error's id, so its label becomes "Phone is required".
+  "error joins the label": {
+    fields: `<span id="ph-l">Phone</span><input name="phone" aria-labelledby="ph-l" required value="555-0100">`,
+    afterSave: `const phone = form.querySelector("[name=phone]"); phone.value = ""; phone.setAttribute("aria-invalid", "true");
+      phone.insertAdjacentHTML("afterend", '<span id="ph-e">is required</span>'); phone.setAttribute("aria-labelledby", "ph-l ph-e"); confirm(800);`,
+  },
+};
+
+for (const [variant, site] of Object.entries(savingReviews))
+  test(`write-session example never clicks again when a field on the page before the click is flagged after it (${variant})`, async ({
+    page,
+  }) => {
+    const origin = "https://shop.example.invalid";
+    const orders: string[] = [];
+    await reviewSite(page, origin, orders, site);
+    await page.goto("about:blank");
+    const asked: InputRequest[] = [];
+    const saved = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+      siteOrigin: origin,
+      // An answer each flagged field would take, so a wrong question shows as a second order.
+      answer: (request) => {
+        asked.push(request);
+        return { extra_field: "sam@example.com" };
+      },
+    });
+    // The flagged field was there before the click, so nothing proves the click saved nothing.
+    expect(orders).toHaveLength(1);
+    expect(asked).toEqual([]);
+    expect(saved.commits).toEqual([{ name: "place-order", state: "sent" }]);
+    expect(failure(saved.result)).toMatchObject({ _tag: "OperationFailure", message: "not_confirmed" });
+  });
+
+test("write-session example keeps a saved order possibly sent when nobody answers a field the save showed", async ({
+  page,
+}) => {
+  // The save resets the form to pickup, which shows a required store the page never showed before
+  // the click: no check can tell that from a refused click, but nobody answered, so it stays sent.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<label>Delivery method<select name="method"><option selected>Delivery</option><option>Pickup</option></select></label>
+      <label>Delivery address<input name="address" required value="1 Main St"></label>
+      <label hidden>Pickup store<select name="store"><option value="">Choose</option><option>North</option><option>South</option></select></label>`,
+    afterSave: `form.querySelector("[name=method]").value = "Pickup";
+      const address = form.querySelector("[name=address]"); address.parentElement.hidden = true; address.value = ""; address.required = false;
+      const store = form.querySelector("[name=store]"); store.parentElement.hidden = false; store.required = true; store.setAttribute("aria-invalid", "true");
+      confirm(800);`,
+  });
+  await page.goto("about:blank");
+  const unanswered = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+  });
+  expect(failure(unanswered.result)).toMatchObject({ _tag: "ScriptInputFailure", code: "Unavailable" });
+  expect(orders).toHaveLength(1);
+  expect(unanswered.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  expect(commitRetryRefusal(commitEvidenceOf(unanswered.commits))).toBe("commit_entered");
+});
+
+test("write-session example checks the review again before its second click when the answer changes the total", async ({
+  page,
+}) => {
+  // The click is refused until a delivery speed is chosen, and express adds 5.00 to the total.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<label hidden>Delivery speed<select name="speed"><option value="">Choose</option><option>Express</option><option>Standard</option></select></label>`,
+    refuseFirst: `const speed = form.querySelector("[name=speed]"); speed.parentElement.hidden = false; speed.setAttribute("aria-invalid", "true");
+      speed.addEventListener("change", () => {
+        const total = document.querySelector("[aria-label='Order total']");
+        total.textContent = speed.value === "Express" ? "$17.50" : "$12.50";
+      });`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o1" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([["Delivery speed"]]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["lamp|speed=Express"]);
+});
+
+test("write-session example asks a field the review adds after an answer in a second round, then clicks once more", async ({
+  page,
+}) => {
+  // The click is refused until a delivery method is chosen, and a courier then needs a phone.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<label hidden>Delivery method<select name="method"><option value="">Choose</option><option>Courier</option><option>Post</option></select></label>
+      <label hidden>Courier phone<input type="tel" name="phone" disabled></label>`,
+    refuseFirst: `const method = form.querySelector("[name=method]"); method.parentElement.hidden = false; method.setAttribute("aria-invalid", "true");
+      method.addEventListener("change", () => {
+        const phone = form.querySelector("[name=phone]");
+        const courier = method.value === "Courier";
+        phone.disabled = !courier;
+        phone.required = courier;
+        phone.parentElement.hidden = !courier;
+      });`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: asked.length === 1 ? "o1" : "555-0100" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Delivery method"],
+    ["Courier phone"],
+  ]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["lamp|method=Courier|phone=555-0100"]);
+});
+
+test("write-session example asks a field the review enables after an answer, then clicks once more", async ({
+  page,
+}) => {
+  // The courier phone shows greyed out from the start, and choosing a courier enables it.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<label hidden>Delivery method<select name="method"><option value="">Choose</option><option>Courier</option><option>Post</option></select></label>
+      <label>Courier phone<input type="tel" name="phone" disabled></label>`,
+    refuseFirst: `const method = form.querySelector("[name=method]"); method.parentElement.hidden = false; method.setAttribute("aria-invalid", "true");
+      method.addEventListener("change", () => {
+        const phone = form.querySelector("[name=phone]");
+        phone.disabled = method.value !== "Courier";
+        phone.required = !phone.disabled;
+      });`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: asked.length === 1 ? "o1" : "555-0100" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Delivery method"],
+    ["Courier phone"],
+  ]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["lamp|method=Courier|phone=555-0100"]);
+});
+
+test("write-session example asks no second round for a required box with no label", async ({ page }) => {
+  // The review has a required box with no label, name or id, which no question could ask.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<input class="reference" aria-required="true">
+      <label hidden>Delivery speed<select name="speed"><option value="">Choose</option><option>Express</option><option>Standard</option></select></label>`,
+    refuseFirst: `const speed = form.querySelector("[name=speed]"); speed.parentElement.hidden = false; speed.setAttribute("aria-invalid", "true");`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o1" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Delivery speed"],
+  ]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["lamp|speed=Express"]);
+});
+
+test("write-session example asks no second round for a required field the review showed before the answers", async ({
+  page,
+}) => {
+  // A review that marks an optional field required, which its own check never enforces: it was
+  // on the review all along, so it is no field an answer added.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<label>Company<input name="company" aria-required="true"></label>
+      <label hidden>Delivery speed<select name="speed"><option value="">Choose</option><option>Express</option><option>Standard</option></select></label>`,
+    refuseFirst: `const speed = form.querySelector("[name=speed]"); speed.parentElement.hidden = false; speed.setAttribute("aria-invalid", "true");`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o1" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Delivery speed"],
+  ]);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["lamp|company=|speed=Express"]);
+});
+
+test("write-session example asks the fields past its declared questions in the next round", async ({
+  page,
+}) => {
+  // The click is refused with four fields flagged at once, one more than the example declares.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<div id="contact" hidden><label>First name<input name="first"></label><label>Last name<input name="last"></label>
+      <label>Company<input name="company"></label><label>Phone<input type="tel" name="phone"></label></div>`,
+    refuseFirst: `const contact = form.querySelector("#contact"); contact.hidden = false;
+      contact.querySelectorAll("input").forEach((input) => { input.required = true; input.setAttribute("aria-invalid", "true"); });`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const placed = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return asked.length === 1
+        ? { extra_field: "Sam", extra_field_2: "Lee", extra_field_3: "Acme" }
+        : { extra_field: "555-0100" };
+    },
+  });
+  expect(
+    asked.map((request) => request.questions.map(({ id, prompt }) => `${id}: ${prompt}`)),
+  ).toEqual([
+    ["extra_field: First name", "extra_field_2: Last name", "extra_field_3: Company"],
+    ["extra_field: Phone"],
+  ]);
+  for (const request of asked) expect(asksAsDeclared(request, placeOrder.questions ?? {})).toBe(true);
+  expect(placed).toMatchObject({
+    result: Either.right({ order_number: "ORD-1001" }),
+    commits: [{ name: "place-order", state: "confirmed" }],
+  });
+  expect(orders).toEqual(["lamp|first=Sam|last=Lee|company=Acme|phone=555-0100"]);
+});
+
+test("write-session example never clicks again when an answer shows a field no question can ask", async ({
+  page,
+}) => {
+  // A courier needs a card on the review, which a site-field question never asks for.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<label hidden>Delivery method<select name="method"><option value="">Choose</option><option>Courier</option><option>Post</option></select></label>
+      <label hidden>Card number<input name="card" disabled></label>`,
+    refuseFirst: `const method = form.querySelector("[name=method]"); method.parentElement.hidden = false; method.setAttribute("aria-invalid", "true");
+      method.addEventListener("change", () => {
+        const card = form.querySelector("[name=card]");
+        const courier = method.value === "Courier";
+        card.disabled = !courier;
+        card.required = courier;
+        card.parentElement.hidden = !courier;
+      });`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const stopped = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o1" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Delivery method"],
+  ]);
+  // The step was never entered again, so it still reads possibly sent, as for an unanswered question.
+  expect(failure(stopped.result)).toMatchObject({ _tag: "OperationFailure", message: "not_confirmed" });
+  expect(stopped.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  expect(orders).toEqual([]);
+});
+
 test("write-session example refuses a total over the caller's limit before its commit mark", async ({
   page,
 }) => {
@@ -1443,6 +2421,11 @@ test("write-session example stops before clicking when the total moves after its
       name: "place_order",
       input: OrderInput,
       output: Schema.Struct({ order_number: Schema.String }),
+      questions: {
+        extra_field: { type: "site_field" },
+        extra_field_2: { type: "site_field" },
+        extra_field_3: { type: "site_field" },
+      },
       write: { confirmation: "readback", commits: ["place-order"] },
     },
     async (context) => {

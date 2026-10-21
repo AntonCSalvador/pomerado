@@ -209,7 +209,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   ["core", "- The code works for every value the schema accepts."],
   [
     "core",
-    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. When more than one option matches, list them for the caller instead of picking one.",
+    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime` matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one with a word added or dropped. Prefer it for confirming the pick, so the read-back agrees with the choice, but not for choosing from a list, where a short label can match a longer name it isn't, such as UK for Ukraine. When more than one option matches equally, a read takes the first in the site's order and returns the one it used, and a write lists them for the caller instead of picking one.",
   ],
   ["core", "Take the site origin from the context's `siteOrigin`."],
   ["core", "The tools and the files you may edit are in `AGENTS.md`."],
@@ -732,7 +732,7 @@ it("has the minter read back a write, accept recent-search saves and look before
   const text = (name: string) =>
     (contents(skills)[skills.findIndex((skill) => skill.name === name)] ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    "- Before committing, read back from the page what you are about to submit and check each value against the caller's input, normalized as the core skill's Confirm step says, in the session and on every branch of the composed script. Fail before the commit if one does not match. Never read back a field filled with a secret handle.",
+    "- Before committing, read back from the page what you are about to submit and check each value as the core skill's Confirm step says, against the option the tool picked when it picked one, in the session and on every branch of the composed script. Fail if one does not match, and prefer running this check before the step's commit mark, so a mismatch stops the step before it sends anything. Never read back a field filled with a secret handle.",
   );
   expect(text("core")).toContain(
     "Telemetry, analytics and bot-sensor POSTs are normal and need no change. So is an anonymous recent-search, prefill or search-state save the site fires when you submit a search.",
@@ -754,7 +754,7 @@ it("has a write confirm from its first matching read-back, never from state befo
     " ",
   );
   expect(writes).toContain(
-    "- When a read-back is needed, the first one that matches confirms the write; stop there. It matches when it shows the written record after the write, found by something the write produced or entered (its number, its own reference or the values entered), and every field the caller asked for that the view shows agrees (the read before the commit already checked what you entered). Sites reformat what they save, such as line breaks, spaces and dates in the viewer's format, so compare text after the commit normalized as before it (the core skill's Confirm step): pass the caller's text through `normalizeText` from `pomerado/runtime`, as `visibleText` already does with the page's. Compare a chosen option's value only where the view shows that value; otherwise compare the label it shows. When the write changed state that already existed, the same read is also the after read of the before-and-after comparison, which runs after `verified()` (\"Check the read-back\"). Write each read-back step to check the requested fields in its own code and call `verified()` when they hold, so the first one that matches is the confirming step. Read one confirmation, list or detail view: find the record there by that identity, never by its position, such as the first or newest row, and prefer finding each value in it by a stable id, its column header or a `data-` attribute over its cell's position. Read only that record, and the view's other rows only where the before-and-after check or another skill, such as the cart skill, compares them. Read another page, in that same step before `verified()`, only for a field the view did not show and the tool's output promises.",
+    "- When a read-back is needed, the first one that matches confirms the write; stop there. It matches when it shows the written record after the write, found by something the write produced or entered (its number, its own reference or the values entered), and every field the caller asked for that the view shows agrees (the read before the commit already checked what you entered). Sites reformat what they save, such as line breaks, spaces and dates in the viewer's format, so compare text after the commit with `sameText`, as before it (the core skill's Confirm step). Compare a chosen option's value only where the view shows that value; otherwise compare the label it shows. When the write changed state that already existed, the same read is also the after read of the before-and-after comparison, which runs after `verified()` (\"Check the read-back\"). Write each read-back step to check the requested fields in its own code and call `verified()` when they hold, so the first one that matches is the confirming step. Read one confirmation, list or detail view: find the record there by that identity, never by its position, such as the first or newest row, and prefer finding each value in it by a stable id, its column header or a `data-` attribute over its cell's position. Read only that record, and the view's other rows only where the before-and-after check or another skill, such as the cart skill, compares them. Read another page, in that same step before `verified()`, only for a field the view did not show and the tool's output promises.",
   );
   // Entered values find a record but never prove it new.
   expect(writes).toContain(
@@ -841,16 +841,16 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["71266d358734292ecaa03b79d6c2be0f00eb8a6884802d961bf9a6b8a7a54f05", "core"],
+    ["372521dfa1022e72033d202d94855e7f7f901b532b7a249b6e7373ba44341685", "core"],
     ["9fe0598c1dc41354e5dbddd42a372c6b628eecd206cf5ea9a3cf0fcbf10a6410", "search"],
     ["7e50c86ea30964f0e3610e090c7bd7d78aac6f59a7f644644c1ad99577d59f5f", "auth"],
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
-    ["62af125c1a868d2d579f2b451509558084883e1c8134f9bcdc0140d82ef92a03", "forms"],
-    ["6a3426b664481c8f215977ec3ea4ef03cafdec29acbd6b0f93ddba23648438b7", "writes"],
+    ["d71e45c5b1f13bcf26c6a22bc455b1da93c1276b8e73f5d7db6ec302f62a6a04", "forms"],
+    ["26a4bdf2c43624087a41022a59828d1782a528d46d9e11dc044de13aa7f6f14d", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["13dddd8a8506d196fadad2d5c8eaf74487eb0ad0c667044ee66ce81799774e7a", "caller-input"],
-    ["4334eb48b34d5464550242d55a6c6b75963bcce22c3e5f0090ea1addbe550f47", "publication"],
+    ["ea9d5d74105419ecb92233f65056b8fca62b4c5d70f1831e1ef2d8bb276f8fe7", "caller-input"],
+    ["af911dcfd7c16e3aa161cb09273d055589d080150a0c007f0a45a70db7ed2445", "publication"],
     ["2ba8341af604bb965b0beec5ae8ca19cf5fb907b0b535ba82a635be0845b79a3", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);

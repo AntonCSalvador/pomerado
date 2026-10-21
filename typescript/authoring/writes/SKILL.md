@@ -103,14 +103,22 @@ During the session:
   stop, as the cart skill's "Minimums and refusals" says. When they stop, or the session cannot
   reach the task's end, end with `report_blocked` (`site_declined` when the site refused this
   example). A build whose session never reached the end publishes nothing.
+- When a write's form adds required fields that depend on earlier answers, prefer declaring
+  the site-field question and asking it for a required field that no input covers, before that
+  step's commit mark, over refusing. When such a field shows only after the step's click, ask it
+  once `blockingRequiredFields` returns it, which proves the click saved nothing: fill the
+  answer, check the step again, then call `notCommitted`, then `enteringCommit` again with the
+  step's name, and click once. When a step shows several such fields at once, ask them in one
+  round, declaring one site-field question per field. It isn't for passwords, codes or logins.
 - A pop-up, banner or interstitial on the path, such as an upsell, is conditional unless the
   page always opens it in answer to an action: handle it as the forms skill says, so the tool
   still works for a caller who never sees it.
 - Before committing, read back from the page what you are about to submit and check each
-  value against the caller's input, normalized as the core skill's Confirm step says, in
-  the session and on every branch of the
-  composed script. Fail before the commit if one does not match. Never read back a
-  field filled with a secret handle.
+  value as the core skill's Confirm step says, against the option the tool picked when it
+  picked one, in the session and on every branch of the composed script. Fail if one does
+  not match, and prefer running this check before the step's commit mark, so a mismatch
+  stops the step before it sends anything. Never read back a field filled with a secret
+  handle.
 - When the write changes state that already exists, such as a saved record or a cart
   (.agents/cart/SKILL.md), read that state before the committing step and again after it,
   in the session and in the composed script. Fail when a field the input sets did not change
@@ -218,9 +226,8 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   number, its own reference or the values entered), and every field the caller asked
   for that the view shows agrees (the read before the commit already checked what you
   entered). Sites reformat what they save, such as line breaks, spaces and dates in the
-  viewer's format, so compare text after the commit normalized as before it (the core skill's
-  Confirm step): pass the caller's text through `normalizeText` from `pomerado/runtime`, as
-  `visibleText` already does with the page's. Compare a chosen option's value only where the
+  viewer's format, so compare text after the commit with `sameText`, as before it (the core
+  skill's Confirm step). Compare a chosen option's value only where the
   view shows that value; otherwise compare the label it shows. When the write changed state
   that already existed, the same read is also the after read of the before-and-after
   comparison, which runs after `verified()` ("Check the read-back"). Write each read-back step
