@@ -66,14 +66,21 @@ interface CheckRun {
   readonly output: { readonly title: string; readonly summary: string };
 }
 
+interface CompareFile {
+  readonly filename: string;
+  readonly status: string;
+  readonly sha?: string | null;
+  readonly previous_filename?: string;
+}
+
 interface Fixture {
   readonly pulls: readonly Pull[];
   /** The reviewer App's check runs per commit. */
   readonly checkRuns?: Readonly<Record<string, readonly CheckRun[]>>;
   /** Review threads per GraphQL page, when a test pages through them. */
   readonly threadPages?: readonly (readonly ReviewThread[])[];
-  /** What the compare API lists for the default branch against each commit. */
-  readonly compare?: Readonly<Record<string, readonly { filename: string; status: string; sha: string }[]>>;
+  /** What the compare API answers for `base...head`: the merge base and the files. */
+  readonly compare?: Readonly<Record<string, { readonly mergeBase: string; readonly files: readonly CompareFile[] }>>;
 }
 
 /** CodeRabbit's walkthrough comment, shaped as it writes it. */
@@ -182,7 +189,7 @@ const fakeApi = (fixture: Fixture) => {
   const posted: { path: string; body: unknown }[] = [];
   const patched: { path: string; body: unknown }[] = [];
   const pullPath = /^\/repos\/example-org\/example-repo\/pulls\/(\d+)(\/files|\/reviews)?$/;
-  const compare = /^\/repos\/example-org\/example-repo\/compare\/main\.\.\.([0-9a-f]{40})$/;
+  const compare = /^\/repos\/example-org\/example-repo\/compare\/(.+)$/;
   const comments = /^\/repos\/example-org\/example-repo\/issues\/(\d+)\/comments$/;
   const permission = /^\/repos\/example-org\/example-repo\/collaborators\/([^/]+)\/permission$/;
   const checks = /^\/repos\/example-org\/example-repo\/commits\/([0-9a-f]{40})\/check-runs$/;
@@ -218,8 +225,8 @@ const fakeApi = (fixture: Fixture) => {
     }
     const compared = compare.exec(pathname)?.[1];
     if (compared !== undefined) {
-      const files = fixture.compare?.[compared];
-      return files === undefined ? undefined : { files };
+      const answer = fixture.compare?.[decodeURIComponent(compared)];
+      return answer === undefined ? undefined : { merge_base_commit: { sha: answer.mergeBase }, files: answer.files };
     }
     const user = permission.exec(pathname)?.[1];
     if (user !== undefined) {
@@ -397,23 +404,46 @@ describe("review gate", () => {
 
   it("counts a review CodeRabbit carried across a merge of the base branch when the pull request's changes didn't move", async () => {
     const comments = [reviewer(walkthrough({ kind: "target_branch_merge_carry_forward", source: earlier }))];
-    const change = { filename: "typescript/src/runtime/list.ts", status: "modified", sha: "c".repeat(40) };
-    const carried = await gate({ comments }, { compare: { [earlier]: [change], [head]: [change] } });
-    expect(checkBody(carried.posted).conclusion).toBe("success");
-    // The merge changed a file the pull request touches, or brought a file of its own.
-    for (const atHead of [
-      [{ ...change, sha: "d".repeat(40) }],
-      [change, { filename: "typescript/src/runtime/extra.ts", status: "added", sha: "e".repeat(40) }],
-      [{ ...change, status: "renamed" }],
+    const oldBase = "1".repeat(40);
+    const newBase = "2".repeat(40);
+    const change: CompareFile = { filename: "typescript/src/runtime/list.ts", status: "modified", sha: "c".repeat(40) };
+    /** The comparisons for a merge of the default branch that moved the base from oldBase to newBase. */
+    const merge = (atHead: readonly CompareFile[], mainChanged: readonly CompareFile[] = [{ filename: "docs/notes.md", status: "modified", sha: "f".repeat(40) }]) => ({
+      [`main...${earlier}`]: { mergeBase: oldBase, files: [change] },
+      [`main...${head}`]: { mergeBase: newBase, files: atHead },
+      [`${oldBase}...${newBase}`]: { mergeBase: oldBase, files: mainChanged },
+    });
+    const verdict = async (compare: NonNullable<Fixture["compare"]>) => checkBody((await gate({ comments }, { compare })).posted);
+
+    expect((await verdict(merge([change]))).conclusion).toBe("success");
+    // A merge base that didn't move needs no look at what the default branch changed.
+    expect(
+      (await verdict({ [`main...${earlier}`]: { mergeBase: oldBase, files: [change] }, [`main...${head}`]: { mergeBase: oldBase, files: [change] } }))
+        .conclusion,
+    ).toBe("success");
+
+    for (const compare of [
+      // The merge changed a file the pull request touches, brought a file of its own, or renamed one.
+      merge([{ ...change, sha: "d".repeat(40) }]),
+      merge([change, { filename: "typescript/src/runtime/extra.ts", status: "added", sha: "e".repeat(40) }]),
+      merge([{ ...change, status: "renamed" }]),
+      // The merge kept the pull request's version of a file the default branch changed, undoing that change.
+      merge([change], [{ ...change, sha: "9".repeat(40) }]),
+      merge([change], [{ filename: "typescript/src/runtime/lists.ts", status: "renamed", previous_filename: change.filename }]),
+      // A file without a blob proves nothing.
+      merge([{ ...change, sha: null }]),
     ]) {
-      const check = checkBody((await gate({ comments }, { compare: { [earlier]: [change], [head]: atHead } })).posted);
+      const check = await verdict(compare);
       expect(check).toMatchObject({ conclusion: "action_required" });
       expect(check.output.summary).toContain("doesn't change every file the same way");
     }
-    // A comparison GitHub may have cut short can't vouch for the merge.
+    // A comparison GitHub may have cut short, or can't answer, can't vouch for the merge.
     const many = Array.from({ length: 300 }, (_, index) => ({ ...change, filename: `docs/file-${index}.md` }));
-    const cut = await gate({ comments }, { compare: { [earlier]: many, [head]: many } });
-    expect(checkBody(cut.posted).conclusion).toBe("action_required");
+    expect((await verdict({ [`main...${earlier}`]: { mergeBase: oldBase, files: many }, [`main...${head}`]: { mergeBase: newBase, files: many } })).conclusion).toBe(
+      "action_required",
+    );
+    const { [`${oldBase}...${newBase}`]: _moved, ...unanswered } = merge([change]);
+    expect((await verdict(unanswered)).conclusion).toBe("action_required");
   });
 
   it("asks a maintainer about any other kind of pass, or a review of another commit than it covers", async () => {

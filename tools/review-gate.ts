@@ -338,20 +338,27 @@ export const summaryFindings = (reviews: readonly Review[], policy: Policy): Rev
   );
 };
 
-/** What the pull request changes in each file from its merge base with `base`, or undefined if GitHub can't list it all. */
-const changesAt = async (github: GitHub, repo: string, base: string, commit: string) => {
-  const comparison = (await github.get(`/repos/${repo}/compare/${encodeURIComponent(base)}...${commit}`)) as
-    | { readonly files?: readonly ChangedFile[] }
+/** A comparison's merge base and files, or undefined when GitHub can't list every file. */
+const comparison = async (github: GitHub, repo: string, base: string, head: string) => {
+  const answer = (await github.get(`/repos/${repo}/compare/${encodeURIComponent(base)}...${head}`)) as
+    | { readonly merge_base_commit?: { readonly sha: string }; readonly files?: readonly ChangedFile[] }
     | undefined;
-  const files = comparison?.files;
-  if (files === undefined || files.length >= compareFileLimit) return undefined;
-  return new Map(files.map((file) => [file.filename, `${file.status ?? ""}:${file.previous_filename ?? ""}:${file.sha ?? ""}`]));
+  const files = answer?.files;
+  const mergeBase = answer?.merge_base_commit?.sha;
+  if (files === undefined || mergeBase === undefined || files.length >= compareFileLimit) return undefined;
+  return { mergeBase, files };
 };
 
+const pathsOf = (files: readonly ChangedFile[]) =>
+  new Set(files.flatMap((file) => [file.filename, file.previous_filename]).filter((path) => path !== undefined));
+
 /**
- * Whether the pull request changes every file at `covered` exactly as at `reviewed`, against its
- * merge base with the default branch each time. A merge of the default branch that brings nothing
- * of its own passes; a change of any file the pull request touches, or a new one, doesn't.
+ * Whether a review of `reviewed` still covers `covered`, a merge of the default branch into it.
+ * Against its merge base with the default branch each time, the pull request must change every file
+ * exactly as at `reviewed`, to the same blob, and the default branch must have changed none of those
+ * files between the two merge bases. A clean merge that brings only the default branch's other
+ * changes passes. A merge that adds or edits a file, or keeps the pull request's version of a file
+ * the default branch changed meanwhile, which would undo that change, doesn't.
  */
 export const sameChanges = async (
   github: GitHub,
@@ -361,11 +368,22 @@ export const sameChanges = async (
   covered: string,
 ): Promise<boolean> => {
   const [before, after] = await Promise.all([
-    changesAt(github, repo, base, reviewed),
-    changesAt(github, repo, base, covered),
+    comparison(github, repo, base, reviewed),
+    comparison(github, repo, base, covered),
   ]);
-  if (before === undefined || after === undefined || before.size !== after.size) return false;
-  return [...before].every(([path, change]) => after.get(path) === change);
+  if (before === undefined || after === undefined || before.files.length !== after.files.length) return false;
+  const change = (file: ChangedFile) =>
+    file.sha === undefined || file.sha === null ? undefined : `${file.status ?? ""}:${file.previous_filename ?? ""}:${file.sha}`;
+  const atCovered = new Map(after.files.map((file) => [file.filename, change(file)]));
+  for (const file of before.files) {
+    const expected = change(file);
+    if (expected === undefined || atCovered.get(file.filename) !== expected) return false;
+  }
+  if (before.mergeBase === after.mergeBase) return true;
+  const moved = await comparison(github, repo, before.mergeBase, after.mergeBase);
+  if (moved === undefined) return false;
+  const touched = pathsOf(before.files);
+  return [...pathsOf(moved.files)].every((path) => !touched.has(path));
 };
 
 const short = (sha: string) => sha.slice(0, 7);
