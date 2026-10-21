@@ -203,13 +203,13 @@ const regrouped: Pairs = [
   ["1 234", "12 34"],
 ];
 
-/** Grouped digits, then the same digits bare: kept only where the site grouped the bare run. */
+/** Grouped digits, then the same digits bare: never the same value, in either mode. */
 const grouped: Pairs = [
   ["3/4", "34"],
   ["10-12", "1012"],
+  ["14-20", "1420"],
   ["29 59", "2959"],
   ["29-59", "2959"],
-  ["(555) 123-4567", "5551234567"],
 ];
 
 it("reads a space, hyphen, dash, slash or parentheses between digits as one separator", () => {
@@ -229,6 +229,7 @@ it("reads a space, hyphen, dash, slash or parentheses between digits as one sepa
     [
       ...regrouped,
       ...grouped,
+      ["(555) 123-4567", "5551234567"],
       ["10.0", "100"],
       ["1,200", "1 200"],
       ["12", "123"],
@@ -277,8 +278,68 @@ it("says a site's rewrite kept the typed value when it only reformatted, shorten
       "12 elm parkway suite 4 springfield il 62704",
     ],
     ["USER@example.com", "user@example.com"],
+    ["12 RUE DE L'EGLISE", "12 rue de l’Église"],
+    // A word of one or two letters the site puts between two of the caller's, as a state.
+    ["Springfield, IL 62704", "Springfield 62704"],
   ];
   for (const [site, typed] of pairs) expect(kept(site, typed), `${site} | ${typed}`).toBe(true);
+});
+
+it("says a site's rewrite only reformatted a phone number, a date or a count it wrote another way", () => {
+  const pairs: Pairs = [
+    // Each pair is the site's version, then what the tool typed.
+    ["555.123.4567", "555-123-4567"],
+    ["555-123-4567", "555.123.4567"],
+    ["+1 (555) 123-4567", "555-123-4567"],
+    ["+1 555 123 4567", "5551234567"],
+    ["555-123-4567", "+1 555 123 4567"],
+    ["01/12", "1/12"],
+    ["2025-01-02", "2025-1-2"],
+    ["1,420", "1420"],
+    ["1,420,000", "1420000"],
+  ];
+  for (const [site, typed] of pairs) expect(kept(site, typed), `${site} | ${typed}`).toBe(true);
+  // The same rules never read a decimal or a range as groups, nor take a dropped comma or zero.
+  const changed: Pairs = [
+    ["1.5", "1-5"],
+    ["1-5", "1.5"],
+    ["1420", "1,420"],
+    ["14,20", "1420"],
+    ["1/12", "01/12"],
+    ["0123", "123"],
+    ["+1 (555) 123-4567", "+44 (555) 123-4567"],
+  ];
+  for (const [site, typed] of changed) expect(kept(site, typed), `${site} | ${typed}`).toBe(false);
+});
+
+it("says a site's rewrite changed the typed value when it cut a word, guessed one or added its own", () => {
+  const pairs: Pairs = [
+    // Each pair is the site's version, then what the tool typed.
+    // A word cut to its first four letters or more names another word, not a short form.
+    ["1420 Lark Rd", "1420 Larkspur Road"],
+    // An initial stands for too many words to be the caller's.
+    ["100 M St", "100 Main St"],
+    ["100 M L K Jr Blvd", "100 Martin Luther King Jr Blvd"],
+    // A word the site wrote longer is the caller's only when the caller's is at most half as long
+    // and, when it is the longer word's start, three letters at most.
+    ["100 Mainland St", "100 Main St"],
+    ["Suite 4", "Ste 4"],
+    // A word holding a digit is the same word, or added by the site.
+    ["Apt 4B", "Apt 4"],
+    ["Apt 4 B", "Apt 4"],
+    // A digit group added to a number that is not a postal code at the end.
+    ["1420-2 Larkspur Rd", "1420 Larkspur Rd"],
+    ["Unit 1420-2", "Unit 1420"],
+    // A unit or a place the site added.
+    ["1420 Larkspur Rd Apt 2", "1420 Larkspur Rd"],
+    ["1420 Larkspur Rd, Unit B, Springfield", "1420 Larkspur Rd, Springfield"],
+    ["1420 Larkspur Rd, Springfield", "1420 Larkspur Rd"],
+    ["1420 Larkspur Rd, Riverton, IL 62704", "1420 Larkspur Rd, IL 62704"],
+    ["1420 Old Larkspur Rd", "1420 Larkspur Rd"],
+    // A bare number the site grouped, too short to be a phone or account number.
+    ["14-20", "1420"],
+  ];
+  for (const [site, typed] of pairs) expect(kept(site, typed), `${site} | ${typed}`).toBe(false);
 });
 
 it("says a site's rewrite changed the typed value when it dropped or changed what the caller gave", () => {
@@ -311,11 +372,13 @@ it("says a site's rewrite changed the typed value when it dropped or changed wha
   }
 });
 
-it("says a site kept a bare number it grouped, as a phone number, but not one it ungrouped", () => {
+it("says a site kept a phone number typed bare that it grouped, but no shorter number and none it ungrouped", () => {
   for (const [site, typed] of grouped) {
-    expect(kept(site, typed), `${site} | ${typed}`).toBe(true);
+    expect(kept(site, typed), `${site} | ${typed}`).toBe(false);
     expect(kept(typed, site), `${typed} | ${site}`).toBe(false);
   }
+  expect(kept("(555) 123-4567", "5551234567")).toBe(true);
+  expect(kept("5551234567", "(555) 123-4567")).toBe(false);
   expect(kept("Call (555) 123-4567 after 5", "call 5551234567 after 5")).toBe(true);
   expect(kept("(555) 123-4568", "5551234567")).toBe(false);
   expect(kept("555-123", "5551234567")).toBe(false);
@@ -359,4 +422,6 @@ it("embeds as self-contained source, so page code can use it", () => {
   expect(embedded("29-59", "29 59")).toBe(true);
   expect(embedded("12 ELM PKWY", "12 Elm Parkway", { rewrite: true })).toBe(true);
   expect(embedded("13 ELM PKWY", "12 Elm Parkway", { rewrite: true })).toBe(false);
+  expect(embedded("+1 (555) 123-4567", "555.123.4567", { rewrite: true })).toBe(true);
+  expect(embedded("1420 Lark Rd Apt 2", "1420 Larkspur Road", { rewrite: true })).toBe(false);
 });
