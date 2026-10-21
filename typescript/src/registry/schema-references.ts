@@ -188,7 +188,9 @@ export const withLoneReferences = (schema: Readonly<Json>): Json => {
   const constrained = Object.keys(node).some(
     (key) => key !== "$ref" && !documentKeywords.has(key) && !annotationKeywords.has(key),
   );
-  if (typeof reference !== "string" || !constrained) return node;
+  // An `allOf` that is no list of schemas has no room for the reference, and must stay as written.
+  const malformed = "allOf" in node && !Array.isArray(node["allOf"]);
+  if (typeof reference !== "string" || !constrained || malformed) return node;
   return {
     ...Object.fromEntries(Object.entries(node).filter(([key]) => key !== "$ref")),
     allOf: [{ $ref: reference }, ...allOfIn(node)],

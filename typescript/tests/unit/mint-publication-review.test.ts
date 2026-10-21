@@ -460,25 +460,64 @@ describe("the public definition", () => {
     const node = Object.fromEntries(
       Object.entries(schema).map(([key, value]) => [key, draft7Reading(value)]),
     );
-    // The root keeps its definitions, which references resolve against.
-    return typeof node["$ref"] === "string" && node["$defs"] === undefined
+    // A root keeps its definitions, which references resolve against.
+    if (typeof node["$ref"] !== "string") return node;
+    return node["$defs"] === undefined
       ? { $ref: node["$ref"] }
-      : node;
+      : { $ref: node["$ref"], $defs: node["$defs"] };
   };
-  const shownInput = (input: unknown) =>
-    Schema.decodeUnknownSync(Schema.parseJson(Schema.Struct({ inputSchema: Schema.Unknown })))(
-      publicDefinition(metadata, { input, output: contractJsonSchema(Schema.Unknown) }),
-    ).inputSchema;
+  const shown = (input: unknown, output: unknown = contractJsonSchema(Schema.Unknown)) =>
+    Schema.decodeUnknownSync(
+      Schema.parseJson(Schema.Struct({ inputSchema: Schema.Unknown, outputSchema: Schema.Unknown })),
+    )(publicDefinition(metadata, { input, output }));
+  const shownInput = (input: unknown) => shown(input).inputSchema;
+  /** Every string in a JSON value, its keys included. */
+  const stringsIn = (value: unknown): string[] =>
+    typeof value === "string"
+      ? [value]
+      : Array.isArray(value)
+        ? value.flatMap(stringsIn)
+        : typeof value === "object" && value !== null
+          ? Object.entries(value).flatMap(([key, child]) => [key, ...stringsIn(child)])
+          : [];
 
   it("shows a bound on a named schema so a Draft-07 reading keeps it, and publishes the contract as Effect writes it", () => {
     const input = Schema.Struct({ m: Schema.NonEmptyString.pipe(Schema.maxLength(5)) });
-    const shown = shownInput(contractJsonSchema(input));
-    for (const schema of [shown, draft7Reading(shown)]) {
+    // A root that is a refined named schema has its bound beside a root reference.
+    const output = Schema.NonEmptyString.pipe(Schema.maxLength(5));
+    const definition = shown(contractJsonSchema(input), contractJsonSchema(output));
+    for (const schema of [definition.inputSchema, draft7Reading(definition.inputSchema)]) {
       expect(validDraft7(schema, { m: "abcde" })).toBe(true);
       expect(validDraft7(schema, { m: "abcdefgh" })).toBe(false);
       expect(validDraft7(schema, { m: "" })).toBe(false);
     }
+    for (const schema of [definition.outputSchema, draft7Reading(definition.outputSchema)]) {
+      expect(validDraft7(schema, "abcde")).toBe(true);
+      expect(validDraft7(schema, "abcdefgh")).toBe(false);
+      expect(validDraft7(schema, "")).toBe(false);
+    }
     expect(contractJsonSchema(input)).toEqual({ ...JSONSchema.make(input) });
+    expect(contractJsonSchema(output)).toEqual({ ...JSONSchema.make(output) });
+  });
+
+  it("shows every string the published schema holds, in an allOf that is no list too", () => {
+    const published = {
+      $schema: "https://schemas.example.invalid/dialect",
+      $defs: { Code: { type: "string", pattern: "^[A-Z]+$" } },
+      type: "object",
+      properties: {
+        code: { $ref: "#/$defs/Code", maxLength: 4, allOf: "a value an annotation set" },
+        other: { $ref: "#/$defs/Code", minLength: 2, allOf: { note: "an object, not a list" } },
+        plain: { $ref: "#/$defs/Code", maxLength: 3, description: "a note on the field" },
+        listed: { $ref: "#/$defs/Code", maxLength: 3, allOf: [{ title: "a listed note" }] },
+      },
+    };
+    const definition = shown(published, published);
+    for (const view of [definition.inputSchema, definition.outputSchema])
+      expect(stringsIn(view)).toEqual(expect.arrayContaining(stringsIn(published)));
+    expect(definition.inputSchema).toMatchObject({
+      properties: { code: published.properties.code, other: published.properties.other },
+    });
   });
 
   it("shows every keyword and value the published schema holds", () => {
