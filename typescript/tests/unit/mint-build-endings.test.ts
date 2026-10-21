@@ -323,6 +323,118 @@ it.each([
   }
 });
 
+/** The result of the call `callId` that the minter reads in `request`, parsed. */
+const resultOf = (request: ModelRequest | undefined, callId: string): unknown => {
+  const item = (Array.isArray(request?.input) ? request.input : []).find(
+    (entry) => entry.type === "function_call_result" && entry.callId === callId,
+  ) as { readonly output?: unknown } | undefined;
+  const output = item?.output;
+  return JSON.parse(
+    typeof output === "string"
+      ? output
+      : typeof output === "object" && output !== null && "text" in output
+        ? String(output.text)
+        : JSON.stringify(output),
+  );
+};
+/** A host check's refusal the minter fixes in its metadata: variants a Kernel script can't run. */
+const variantsUnsupported = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "variants_unsupported",
+});
+const hostRefusalPassed =
+  "A host check refused a step earlier in this attempt, but a later finish_build got past it, so the build has not ended. Fix the findings the latest refusal names and call finish_build again. Use host_refused only when a host check still refuses a step and nothing left in this attempt can fix it.";
+/** finish_build with its own coverage, so a submission after a denial is not the same again. */
+const finishAs = (n: number) =>
+  call(
+    "finish_build",
+    { ...finishBuild, coverage: `One actual example, round ${n}.` },
+    `finish_${n}`,
+  );
+
+// A host check's refusal the minter fixed no longer stands once a later finish_build gets past
+// the host's checks to Guardian's review. Guardian's correction is then what stops the build, and
+// the minter can still fix it, so host_refused is refused and the build goes on to publish.
+it("refuses host_refused once a later finish_build got past the host's refusal to Guardian", async () => {
+  const explanation = "A Pomerado check refused publication, so no tool was published.";
+  const refusals = [variantsUnsupported, guardianCorrection];
+  let published = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", pureExample),
+        finishAs(0),
+        finishAs(1),
+        call("report_blocked", { reason: "host_refused", explanation }, "report"),
+        finishAs(2),
+      ][index] ?? prose("Stopping."),
+    {
+      publish: () => {
+        const refusal = refusals[published++];
+        return refusal === undefined
+          ? Effect.succeed({ publicationRef: "published_revision", diagnostics: [] })
+          : Effect.fail(refusal);
+      },
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(outcome).toMatchObject({ build: "published" });
+  expect(published).toBe(3);
+  expect(resultOf(f.requests[2], "finish_0")).toMatchObject({ reason: "variants_unsupported" });
+  expect(resultOf(f.requests[3], "finish_1")).toMatchObject({ code: "ReviewDenied" });
+  expect(resultOf(f.requests[4], "report")).toEqual({
+    status: "blocked_refused",
+    reason: "host_refusal_passed",
+    userInputRequired: false,
+    instruction: hostRefusalPassed,
+  });
+});
+
+/** A host check's refusal that carries a review of its own, as a host may attach to one. */
+const reviewedHostRefusal = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "autofill_recipe_not_verified",
+  review: { outcome: "deny", rationale: "Fresh sign-in failure." },
+});
+
+// A host check's refusal that is the latest publication decision still stands, after Guardian's
+// correction and after an earlier refusal a later finish_build got past alike. One that carries a
+// review is still the host's refusal, not a finish_build that got past the host's checks.
+it.each([
+  { basis: "after Guardian's correction", publish: [guardianCorrection, variantsUnsupported] },
+  {
+    basis: "again after a finish_build got past the first",
+    publish: [variantsUnsupported, guardianCorrection, variantsUnsupported],
+  },
+  { basis: "with a review of its own", publish: [reviewedHostRefusal] },
+  {
+    basis: "with a review of its own after a finish_build got past the first",
+    publish: [variantsUnsupported, guardianCorrection, reviewedHostRefusal],
+  },
+])(
+  "ends as host_refused when a host check refused the latest publication $basis",
+  async ({ publish }) => {
+    const explanation = "A Pomerado check refused publication, so no tool was published.";
+    let published = 0;
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("execute", pureExample),
+          ...publish.map((_, n) => finishAs(n)),
+          call("report_blocked", { reason: "host_refused", explanation }),
+        ][index] ?? prose("Stopping."),
+      { publish: () => Effect.fail(publish[published++] ?? guardianCorrection) },
+    );
+    expect(await f.run()).toMatchObject({
+      build: "incomplete",
+      blocked: { reason: "host_refused", explanation },
+      stopReason: "host_refused",
+    });
+    expect(published).toBe(publish.length);
+  },
+);
+
 const moveSite = [
   call("request_input", {
     questions: [{ id: "move", type: "confirm", prompt: "May the build move to the sister site?" }],
@@ -1000,6 +1112,32 @@ it("keeps a host_refused block after Guardian also refused the sign-in", async (
     blocked: { reason: "host_refused", explanation },
     stopReason: "host_refused",
   });
+});
+// A host refusal a later finish_build got past is still a refusal on record beside Guardian's
+// refusal of the sign-in, so a policy report keeps its own ending.
+it("keeps a policy block after Guardian refused the sign-in and a finish_build got past a host refusal", async () => {
+  const explanation = "Guardian refused the only way to reach the requested page.";
+  const refusals = [variantsUnsupported, guardianCorrection];
+  let published = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate, "sign_in"),
+        call("execute", pureExample, "read"),
+        finishAs(0),
+        finishAs(1),
+        call("report_blocked", { reason: "policy", explanation }),
+      ][index] ?? prose("Stopping."),
+    {
+      ...refuseSignInOnly,
+      publish: () => Effect.fail(refusals[published++] ?? guardianCorrection),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "policy", explanation },
+    stopReason: "policy",
+  });
+  expect(published).toBe(2);
 });
 it("keeps a policy block once the build moved to another site after Guardian refused the sign-in", async () => {
   const explanation = "Guardian refused the only way to reach the requested page.";

@@ -10,7 +10,7 @@ export interface PickerChoice {
 }
 
 /** How closely the winning option matched, best first. */
-export const pickerRanks = ["exact", "normalized", "folded", "words"] as const;
+export const pickerRanks = ["exact", "normalized", "folded", "leading", "words"] as const;
 export type PickerRank = (typeof pickerRanks)[number];
 
 export type PickerRanking =
@@ -26,10 +26,13 @@ export type PickerRanking =
 /**
  * The one option `wanted` names, a list of spellings of one choice, by rank: a name or the value
  * as written (trimmed), then ignoring case and spacing, then also ignoring accents and
- * punctuation (`fold`), then a name holding a spelling as whole words. A name beats the value at
- * each rank. Options at the first rank that matches decide: one option (by key) is picked, or
- * reported disabled when every copy of it is; two or more are ambiguous, never guessed. A weaker
- * rank never overrules a stronger one, so a disabled exact match is not replaced by a looser one.
+ * punctuation (`fold`), then, only with `leading` set, a name whose leading part, its text before
+ * its first comma that is not between two digits, is a spelling, folded the same way (`leading`:
+ * York, UK for York, but not 1,000 miles for 1), then a name holding a spelling as whole words
+ * (New York for York). A name beats the value at each rank. Options at the first rank that matches
+ * decide: one option (by key) is picked, or reported disabled when every copy of it is; two or
+ * more are ambiguous, never guessed. A weaker rank never overrules a stronger one, so a disabled
+ * exact match is not replaced by a looser one. Without `leading`, no option ranks `leading`.
  *
  * It is pure and self-contained: the page code of `pickerCode` embeds this same function with
  * `fold` set to `foldChoiceText`.
@@ -38,6 +41,7 @@ export const rankChoices = (
   choices: readonly PickerChoice[],
   wanted: readonly string[],
   fold: (text: string) => string,
+  options: { readonly leading?: boolean } = {},
 ): PickerRanking => {
   const squash = (text: string) => String(text ?? "").replace(/\s+/gu, " ").trim();
   const lower = (text: string) => squash(text).toLowerCase();
@@ -64,6 +68,21 @@ export const rankChoices = (
         [rank, (choice: PickerChoice) => choice.value !== "" && forms.has(form(choice.value))],
       ] as const;
     }),
+    ...(options.leading === true
+      ? ([
+          [
+            "leading",
+            (choice: PickerChoice) => {
+              const forms = new Set(spellings.map(fold).filter((spelling) => spelling !== ""));
+              return choice.names.some((name) => {
+                // The first comma that is not a thousands separator, as in 1,000.
+                const comma = String(name ?? "").search(/(?<!\p{N}),|,(?!\p{N})/u);
+                return comma > 0 && forms.has(fold(String(name).slice(0, comma)));
+              });
+            },
+          ],
+        ] as const)
+      : []),
     [
       "words",
       (choice) => {

@@ -10,6 +10,8 @@ import type {
 } from "../../src/runtime/kernel-operation.js";
 import { makeLocalKernel } from "../../src/testing/local-kernel.js";
 import { executeKernelOperation } from "../../src/runtime/kernel-operation-run.js";
+import { makeScriptInput, ScriptInput } from "../../src/runtime/script-input.js";
+import type { InputAnswers, InputRequest } from "../../src/runtime/input-request.js";
 import type { FileChannel } from "../../src/runtime/files.js";
 import type { ListHost } from "../../src/runtime/list-host.js";
 import { makeRunFiles } from "../../src/runtime/file-transfer.js";
@@ -68,6 +70,8 @@ export const runExample = async <Input, EncodedInput, Output, EncodedOutput>(
     readonly files?: FileChannel;
     /** The list position a host checked, as a host that signs cursors passes it. */
     readonly list?: ListHost;
+    /** The caller's answers to the operation's declared questions; absent, nobody answers. */
+    readonly answer?: (request: InputRequest) => InputAnswers;
   } = {},
 ) => {
   const calls: string[] = [];
@@ -96,6 +100,16 @@ export const runExample = async <Input, EncodedInput, Output, EncodedOutput>(
           ...(options.files === undefined ? {} : { files: options.files }),
           ...(options.list === undefined ? {} : { list: options.list }),
         }).pipe(
+          (run) =>
+            options.answer === undefined
+              ? run
+              : Effect.provideService(
+                  run,
+                  ScriptInput,
+                  makeScriptInput(operation.questions, (request) =>
+                    Effect.sync(() => options.answer?.(request) ?? {}),
+                  ),
+                ),
           Effect.provideService(ExecutionContext, {
             deadline: Deadline.after(options.deadlineMs ?? 10_000),
             journal,

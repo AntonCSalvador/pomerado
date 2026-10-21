@@ -55,6 +55,13 @@ pomerado:section publication.metadata-readers:end -->:
 Before your first `finish_build`, prefer checking the tool against each rule the request states
 for its inputs, outputs and refusals.
 
+Before each `finish_build`, the first and every later one, prefer one pass over your own source
+with four questions: for each output field, which line fills it and whether its description says
+where that value comes from; for each branch that returns, whether it returns every required field
+with values read on this run; for each value the caller gave or answered through `ask`, whether the
+output labels it as caller input; and whether any live test case still ends failed or flaky on the
+source you publish. Fix what this finds before you call.
+
 Guardian reports what it finds in rounds, and each round costs minutes, so settle all of these
 first:
 
@@ -136,8 +143,9 @@ first:
     skill); with
     no results a sort has nothing to apply, so return the empty result ("Unapplied supplied
     input");
-  - a free-text place, name or venue that matches several of the site's options lists them for
-    the caller instead of picking one (inputs skill);
+  - a free-text place, name or venue that matches several of the site's options equally takes
+    the first in the site's order on a read and returns the one it used, and lists them for the
+    caller instead of picking one on a write (inputs skill);
   - a check that refuses a past date compares with today in the site's time zone, or the
     place's, not with today in UTC (rejections skill) ("Past date in UTC");
   - in a read signed out, each declared input is used, or changed from its default, by a passing

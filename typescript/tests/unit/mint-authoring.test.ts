@@ -268,7 +268,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   ["inputs", "- The code works for every value the schema accepts."],
   [
     "inputs",
-    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. When more than one option matches, list them for the caller instead of picking one.",
+    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime` matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one with a word added or dropped. Prefer it for confirming the pick, so the read-back agrees with the choice, but not for choosing from a list, where a short label can match a longer name it isn't, such as UK for Ukraine. When more than one option matches equally, a read takes the first in the site's order and returns the one it used, and a write lists them for the caller instead of picking one.",
   ],
   ["browser-code", "Take the site origin from the context's `siteOrigin`."],
   ["core", "The tools and the files you may edit are in `AGENTS.md`."],
@@ -352,6 +352,12 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   [
     "publication",
     "## Check before `finish_build` Before your first `finish_build`, prefer checking the tool against each rule the request states for its inputs, outputs and refusals.",
+  ],
+  // Most extra publication rounds were defects the builder could find in its own source, so before
+  // every call, not only the first, it checks its fields, returns, caller values and live cases.
+  [
+    "publication",
+    "Before each `finish_build`, the first and every later one, prefer one pass over your own source with four questions: for each output field, which line fills it and whether its description says where that value comes from; for each branch that returns, whether it returns every required field with values read on this run; for each value the caller gave or answered through `ask`, whether the output labels it as caller input; and whether any live test case still ends failed or flaky on the source you publish. Fix what this finds before you call.",
   ],
   [
     "publication",
@@ -791,7 +797,7 @@ it("has the minter read back a write, accept recent-search saves and look before
   const text = (name: string) =>
     (contents(skills)[skills.findIndex((skill) => skill.name === name)] ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    "- Before committing, read back from the page what you are about to submit and check each value against the caller's input, normalized as the inputs skill's Confirm step says, in the session and on every branch of the composed script. Fail before the commit if one does not match. Never read back a field filled with a secret handle.",
+    "- Before committing, read back from the page what you are about to submit and check each value as the inputs skill's Confirm step says, against the option the tool picked when it picked one, in the session and on every branch of the composed script. Fail if one does not match, and prefer running this check before the step's commit mark, so a mismatch stops the step before it sends anything. Never read back a field filled with a secret handle.",
   );
   expect(text("core")).toContain(
     "Telemetry, analytics and bot-sensor POSTs are normal and need no change. So is an anonymous recent-search, prefill or search-state save the site fires when you submit a search.",
@@ -813,7 +819,7 @@ it("has a write confirm from its first matching read-back, never from state befo
     " ",
   );
   expect(writes).toContain(
-    "- When a read-back is needed, the first one that matches confirms the write; stop there. It matches when it shows the written record after the write, found by something the write produced or entered (its number, its own reference or the values entered), and every field the caller asked for that the view shows agrees (the read before the commit already checked what you entered). Sites reformat what they save, such as line breaks, spaces and dates in the viewer's format, so compare text after the commit normalized as before it (the inputs skill's Confirm step): pass the caller's text through `normalizeText` from `pomerado/runtime`, as `visibleText` already does with the page's. Compare a chosen option's value only where the view shows that value; otherwise compare the label it shows. When the write changed state that already existed, the same read is also the after read of the before-and-after comparison, which runs after `verified()` (\"Check the read-back\"). Write each read-back step to check the requested fields in its own code and call `verified()` when they hold, so the first one that matches is the confirming step. Read one confirmation, list or detail view: find the record there by that identity, never by its position, such as the first or newest row, and prefer finding each value in it by a stable id, its column header or a `data-` attribute over its cell's position. Read only that record, and the view's other rows only where the before-and-after check or another skill, such as the cart skill, compares them. Read another page, in that same step before `verified()`, only for a field the view did not show and the tool's output promises.",
+    "- When a read-back is needed, the first one that matches confirms the write; stop there. It matches when it shows the written record after the write, found by something the write produced or entered (its number, its own reference or the values entered), and every field the caller asked for that the view shows agrees (the read before the commit already checked what you entered). Sites reformat what they save, such as line breaks, spaces and dates in the viewer's format, so compare text after the commit with `sameText`, as before it (the inputs skill's Confirm step). Compare a chosen option's value only where the view shows that value; otherwise compare the label it shows. When the write changed state that already existed, the same read is also the after read of the before-and-after comparison, which runs after `verified()` (\"Check the read-back\"). Write each read-back step to check the requested fields in its own code and call `verified()` when they hold, so the first one that matches is the confirming step. Read one confirmation, list or detail view: find the record there by that identity, never by its position, such as the first or newest row, and prefer finding each value in it by a stable id, its column header or a `data-` attribute over its cell's position. Read only that record, and the view's other rows only where the before-and-after check or another skill, such as the cart skill, compares them. Read another page, in that same step before `verified()`, only for a field the view did not show and the tool's output promises.",
   );
   // Entered values find a record but never prove it new.
   expect(writes).toContain(
@@ -880,6 +886,25 @@ it("teaches every write to call verified() with no argument and declare a read-b
   expect(bookSeat.write).toEqual({ confirmation: "readback", commits: ["book-seat"] });
 });
 
+// A click that saved nothing but flagged a field no question may ask ends as the caller's refusal,
+// with the step unsent, never a second click.
+it("has a write refuse a field no site-field question may ask once its click saved nothing", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("writes")).toContain(
+    "When `blockingRequiredFields(form, before, { unaskable: true })` returns `{ unaskable: true }` after the step's first click, the click saved nothing but a field it flagged is one no site-field question may ask, such as a card or bank field: call `notCommitted` for the step, then throw `InvalidInput` that names the field by its label, and don't click again.",
+  );
+});
+
+// An access code is asked privately, as the site-field question's secret classification treats it.
+it("asks for an access code with a private secret question", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("caller-input")).toContain(
+    "Prefer a `secret` question of kind `private_text` for an access code, such as a gate, door, alarm or lockbox code.",
+  );
+});
+
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /*
@@ -903,20 +928,20 @@ it("renders the pinned standalone authoring", async () => {
     ["f3cd5dd06cea70eac5a08d3b2b6ef7a6849aaefb4d1fdf92ce93e333f05e71d9", "core"],
     ["6c0ebbb7d10e8bcaa0049988b35fc406a4531b455b1dc89a80df6ba9b4fdf639", "waits"],
     ["ca1a1f966fdcbaee604939d475b8e1762997cf1a34846122ff0f52746a0a10e0", "browser-code"],
-    ["1c2bbf8eff07741347255c1b31f1b1678e8832e5c03fd3eeec19015e9efd5a01", "inputs"],
+    ["efdcb5184b4e979924f118c370762af1f288a7870d654872a9c8fd5bd48f11a6", "inputs"],
     ["4b237f768980907d07aa4b390d5169904abf146187f3b595f04526bd54813d5d", "outputs"],
     ["18ce73d1e000020c2218514c391c2d010b3d29c5d1c38779d63167ffa589b899", "tailoring"],
-    ["f0ef6e3d228e21684187b5426a8d34888c09e88b37fab33af979617199b50c14", "rejections"],
+    ["68950cdb4003df49ef63f8124da6c4316ddfe2c768197c1cbe69c0593076ded0", "rejections"],
     ["c6f7788e6c07c9ec577fec0f77027150065bacb9075e5aea999951d8def82afa", "site-tools"],
     ["7fc9099d1d7caf901350bbe17ce4e9920851c531b786b6262bb0fdfab2ee3d35", "search"],
     ["d0bb5ef45b346e97a0b40f32cc0c60a1db97f938992c05cacc7397c9f2a726ba", "auth"],
     ["251f10c061913d67be43812e1214938dd521c0007f84ae7ac0ed7b028f39e73f", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
-    ["66517ff1da864d5d6b2a48f61e58d0cf7eda8534f326c054583500824ccfa691", "forms"],
-    ["6c8041c3f2970cc4330b795b7d676e12d515c9691c70d11f674615cb941639f7", "writes"],
+    ["e5c50d55a6e068b6cdd642d94c70f3ab19fc2d34784b56b5310dc42fd2c365c2", "forms"],
+    ["7cfbf69521c6e4257040a955ff959ad838cc4e0ba1a0bb0c8635fa9b1d419954", "writes"],
     ["f699507941c80de5dc005d90242d9683a5eef535a323922368238ce4a6c16e83", "cart"],
-    ["398ff9a7dcc1dc64fd4d32e1013804bf75c76e599a06b7c5d961c3d48583d9e2", "caller-input"],
-    ["4fc59b74d080e61eaf17a89e95a635391802574bea7163d16fafa27c8fccfa7e", "publication"],
+    ["aa1671b28872d52f9b1102d33b8101275094ea0f440965230d91b04b8cdcde79", "caller-input"],
+    ["87f58158ef11e684aca41ed8edf457bd5e9909acadc1e85c808058b1e7544bab", "publication"],
     ["1a3f3f0c69f2fccab2ed3740ee05aebde734aeca6937cea21666c13c49e81ac3", "workspace/AGENTS.md"],
     ["be4c8e5bb9da0acad776cd0174b4b5271ca52c1925e232cf196e55d32e1aa60d", "workspace/README.md"],
   ]);

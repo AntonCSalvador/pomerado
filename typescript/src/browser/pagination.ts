@@ -322,7 +322,7 @@ const pagerScanInPage = (rowElements, args) => {
     }
     return null;
   };
-  const urlPage = param(["page", "p", "pg", "paged", "pagenum", "page_number", "pageNumber", "pageNo", "currentPage"], /^\d{1,6}$/);
+  const urlPage = param(["page", "p", "paged", "pagenum", "page_number", "pageNumber", "pageNo", "currentPage"], /^\d{1,6}$/);
   const urlOffset = param(["offset", "start", "skip", "from", "first"], /^\d{1,9}$/);
   const urlCursor = param(["cursor", "after", "before", "page_token", "pageToken", "next_token", "continuation", "token"], /^\S{1,512}$/);
 

@@ -15,12 +15,13 @@ Try first. Ask only for what the page or the caller uniquely knows at that point
 - whether to take a paid add-on within the tool's purpose that the page shows on the way to a
   commit when the input leaves it open, asked before the commit mark; a paid upsell outside the
   tool's purpose is declined, never asked (writes skill);
-- which of several site entries the caller's value matches equally, such as a restaurant
-  with several locations or a city with several airports, with those entries as the options.
-  That is ambiguous, as is a near-miss name the site offers alternatives for: prefer not
-  starting a refusal of either with "Caller input error:" (rejections skill). A day or option the
-  page greys out, with or without a reason, is not ambiguous and never a question (inputs skill,
-  "Configure, then read");
+- for a write, which of several site entries the caller's value matches equally, such as a
+  restaurant with several locations or a city with several airports, with those entries as the
+  options. A read takes the first in the site's order instead and returns which one it used
+  (inputs skill). That is ambiguous, as is a near-miss name the site offers alternatives for:
+  prefer not starting a refusal of either with "Caller input error:" (rejections skill). A day or
+  option the page greys out, with or without a reason, is not ambiguous and never a question
+  (inputs skill, "Configure, then read");
 - a code the site sends to confirm a protected action after sign-in, such as a confirmation code
   by text or email, never a code that is part of signing in (auth skill);
 - a fact only the caller has that the site now asks for.
@@ -80,7 +81,8 @@ already asked for, or to solve a CAPTCHA.
      when your explore, test or `act` source runs live, and only where it is the whole
      string passed to `fill`, `type` or `pressSequentially` or a field of a request to this
      site (core skill); the published script never holds a handle and asks for the value
-     with `ask` instead.
+     with `ask` instead. Prefer a `secret` question of kind `private_text` for an access
+     code, such as a gate, door, alarm or lockbox code.
    - For a payment card the checkout requires, ask for every part its card form shows
      at once, in one request with one `secret` question for each part: `card_number`,
      `card_expiry`, `card_cvc` and `billing_postal_code`. Those handles go only into a
@@ -123,9 +125,12 @@ already asked for, or to solve a CAPTCHA.
 
 The run waits with its browser open and its active budget stopped, and the next call
 starts on the same page. Continue from there. Do not reload, search again or repeat an
-earlier step, and never resubmit anything the run already submitted. The wait can be
-long, so in that next call confirm the page still shows the chosen option before acting
-on it.
+earlier step, and never resubmit anything the run already submitted. A second click on a
+marked step is not a resubmission when `blockingRequiredFields` returned the fields you
+asked for: fill the answers, check the step again, then call `notCommitted`, then
+`enteringCommit` again for that step, and click once, as the writes skill says. The wait
+can be long, so in that next call confirm the page still shows the chosen option before
+acting on it.
 
 ## When no answer comes
 

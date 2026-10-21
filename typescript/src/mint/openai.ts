@@ -11,6 +11,7 @@ import { modelUsageCounts } from "../models/model-usage.js";
 import { makeIdleCompaction, mintIdleCompactionTokens } from "./idle-compaction.js";
 import { solModel } from "../models/models.js";
 import { providerQuotaExhausted } from "../models/provider-quota.js";
+import { transientTransportFailure } from "../models/transport-failure.js";
 import { MaxTurnsExceededError, RunContext, RunState, Runner, Usage, tool } from "@openai/agents";
 import type {
   AgentInputItem,
@@ -171,7 +172,9 @@ const transientModelFailure = (error: unknown): boolean => {
   if (typeof name === "string" && transientProviderErrors.has(name)) return true;
   const status: unknown = Reflect.get(error, "status");
   if (typeof status === "number") return transientStatus(status);
-  return transientProviderCodes.has(Reflect.get(error, "code"));
+  return (
+    transientProviderCodes.has(Reflect.get(error, "code")) || transientTransportFailure(error)
+  );
 };
 
 /**
@@ -1357,12 +1360,34 @@ export const makeOpenAIMinter = (
             };
             diagnostics?.attach(runner);
             diagnostics?.started(turn.input);
+            /** The host's resume message, until the restored run's next model call carries it. */
+            let resumeMessage =
+              turn.recovery?.initial === undefined ? undefined : turn.recovery.resumeMessage;
+            /** Ends the restored run's first segment once its saved response's calls returned. */
+            let replayTurnLimit: number | undefined;
+            /** `history` followed by the resume message, which then has been delivered. */
+            const withResumeMessage = async (
+              history: AgentInputItem[],
+            ): Promise<AgentInputItem[]> => {
+              const content = resumeMessage;
+              resumeMessage = undefined;
+              replayTurnLimit = undefined;
+              if (content === undefined) return history;
+              await turn.runTool(
+                turn.reportTrace?.({
+                  phase: "continuation",
+                  reason: "resume_message",
+                  modelCalls,
+                }) ?? Effect.void,
+              );
+              return [...history, { role: "user", content }];
+            };
             const runSegment = (
               input: string | AgentInputItem[] | RunState<unknown, typeof agent>,
             ) =>
               runner.run(agent, input, {
                 signal,
-                maxTurns: turnsPerSegment,
+                maxTurns: replayTurnLimit ?? turnsPerSegment,
                 sandbox: { session: turn.session },
               });
             type SegmentResult = Awaited<ReturnType<typeof runSegment>>;
@@ -1371,6 +1396,25 @@ export const makeOpenAIMinter = (
                 turn.recovery?.initial === undefined
                   ? turn.input
                   : await RunState.fromString(agent, turn.recovery.initial.sdkState);
+              if (input instanceof RunState && resumeMessage !== undefined) {
+                if (turn.recovery?.initial?.response === undefined) {
+                  // Restored before a model call: the message follows the restored history.
+                  await archiveBeforeSegment(input);
+                  totalUsage.add(input.usage);
+                  input = await withResumeMessage(input.history);
+                } else {
+                  // The saved response replays first and its calls return. The segment then ends
+                  // before the next model call, which carries the message after their results.
+                  // A response is saved inside its model call, so its turn is still in progress
+                  // and replays as the same turn; a turn not in progress counts as the next one.
+                  // The SDK version is pinned, its declarations name both fields, and the resume
+                  // tests check where the message lands, so an SDK that counts turns otherwise
+                  // fails them.
+                  replayTurnLimit = input._currentTurnInProgress
+                    ? input._currentTurn
+                    : input._currentTurn + 1;
+                }
+              }
               for (;;) {
                 signal.throwIfAborted();
                 if (deadline.remainingMs() <= 0) {
@@ -1398,6 +1442,12 @@ export const makeOpenAIMinter = (
                     totalUsage.add(error.state.usage);
                     diagnostics?.completed(history, totalUsage);
                     return { history };
+                  }
+                  if (replayTurnLimit !== undefined) {
+                    // The restored response's calls returned: the resume message follows them.
+                    totalUsage.add(error.state.usage);
+                    input = await withResumeMessage(history);
+                    continue;
                   }
                   if (modelCalls >= modelCallCapacity || diagnostics?.durabilityFailure())
                     throw error;
@@ -1487,7 +1537,7 @@ export const makeOpenAIMinter = (
                 );
                 await archiveBeforeSegment(result.state);
                 input = [
-                  ...result.history,
+                  ...(await withResumeMessage(result.history)),
                   {
                     role: "user",
                     content:

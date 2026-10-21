@@ -92,8 +92,9 @@ an input that tailors the answer, which a read returns labeled with the value th
      never `InvalidInput` or `InputNotApplied`.
 
    Never pick another value for the caller, such as a near match, the page's default or the
-   first option, and never report a refused or unapplied value in the output instead of
-   throwing, such as a `sort_applied: false` flag or a "best-effort" or "lookup-only"
+   first option, except a read whose value matches several site entries equally, which takes
+   the first (inputs skill), and never report a refused or unapplied value in the output instead
+   of throwing, such as a `sort_applied: false` flag or a "best-effort" or "lookup-only"
    description. The cases
    above that return results with what applied are the only exceptions.
 
