@@ -827,7 +827,7 @@ it("has a write refuse a field no site-field question may ask once its click sav
   const texts = await renderedTexts("typescript/authoring");
   const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    "When `blockingRequiredFields(form, before, { unaskable: true })` returns `{ unaskable: true }`, the click saved nothing but a field it flagged is one no site-field question may ask, such as a card or bank field: call `notCommitted` for the step, then throw `InvalidInput` that names the field by its label, and don't click again.",
+    "When `blockingRequiredFields(form, before, { unaskable: true })` returns `{ unaskable: true }` after the step's first click, the click saved nothing but a field it flagged is one no site-field question may ask, such as a card or bank field: call `notCommitted` for the step, then throw `InvalidInput` that names the field by its label, and don't click again.",
   );
 });
 
@@ -879,7 +879,7 @@ it("renders the pinned standalone authoring", async () => {
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["d71e45c5b1f13bcf26c6a22bc455b1da93c1276b8e73f5d7db6ec302f62a6a04", "forms"],
-    ["8fee24487c24f73192fc1b9e8cfaee64c53d23e1da4ed27ac42b8f2644eaa8f1", "writes"],
+    ["f6f06fa508b473935fcd8650793d327e068732deaeed6172b754039592c73a4d", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["ac331ef51b2d9c3d53428b2de58cda6dc2f9b1efd1151787f6aa51f094a1c5ae", "caller-input"],
     ["af911dcfd7c16e3aa161cb09273d055589d080150a0c007f0a45a70db7ed2445", "publication"],
