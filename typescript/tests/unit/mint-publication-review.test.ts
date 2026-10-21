@@ -29,6 +29,7 @@ import {
   type PublicationCandidate,
   type PublicationReview,
 } from "../../src/mint/publication-review.js";
+import { canonicalSchema } from "../../src/registry/schema-references.js";
 import { contractJsonSchema } from "../../src/runtime/operation.js";
 
 const limit = 96 * 1024;
@@ -464,21 +465,14 @@ describe("the public definition", () => {
       ? { $ref: node["$ref"] }
       : node;
   };
-  const definitionOf = (input: Schema.Schema.Any) => {
-    const read = Schema.decodeUnknownSync(
-      Schema.parseJson(Schema.Struct({ inputSchema: Schema.Unknown })),
-    );
-    return read(
-      publicDefinition(metadata, {
-        input: contractJsonSchema(input),
-        output: contractJsonSchema(Schema.Unknown),
-      }),
+  const shownInput = (input: unknown) =>
+    Schema.decodeUnknownSync(Schema.parseJson(Schema.Struct({ inputSchema: Schema.Unknown })))(
+      publicDefinition(metadata, { input, output: contractJsonSchema(Schema.Unknown) }),
     ).inputSchema;
-  };
 
-  it("shows a bound on a named schema as callers receive it, and publishes the contract as Effect writes it", () => {
+  it("shows a bound on a named schema so a Draft-07 reading keeps it, and publishes the contract as Effect writes it", () => {
     const input = Schema.Struct({ m: Schema.NonEmptyString.pipe(Schema.maxLength(5)) });
-    const shown = definitionOf(input);
+    const shown = shownInput(contractJsonSchema(input));
     for (const schema of [shown, draft7Reading(shown)]) {
       expect(validDraft7(schema, { m: "abcde" })).toBe(true);
       expect(validDraft7(schema, { m: "abcdefgh" })).toBe(false);
@@ -487,7 +481,34 @@ describe("the public definition", () => {
     expect(contractJsonSchema(input)).toEqual({ ...JSONSchema.make(input) });
   });
 
-  it("shows a recursive schema with the definitions its references name", () => {
+  it("shows every keyword and value the published schema holds", () => {
+    const published: Record<string, unknown> = {
+      ...contractJsonSchema(
+        Schema.Struct({
+          m: Schema.NonEmptyString.pipe(Schema.maxLength(5)),
+          n: Schema.Int.pipe(Schema.between(1, 9)),
+          note: Schema.NonEmptyString.annotations({ description: "a note" }),
+        }),
+      ),
+      $id: "https://schemas.example.invalid/input.json",
+      $defs: {
+        ...(contractJsonSchema(Schema.Struct({ m: Schema.NonEmptyString, n: Schema.Int }))[
+          "$defs"
+        ] as Record<string, unknown>),
+        Unused: { type: "string", const: { $ref: "#/$defs/Int", maxLength: 2 } },
+      },
+    };
+    const shown = shownInput(published);
+    expect(shown).toMatchObject({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      $id: "https://schemas.example.invalid/input.json",
+      $defs: published["$defs"],
+    });
+    expect(canonicalSchema(shown as Record<string, unknown>)).toEqual(canonicalSchema(published));
+    expect(shownInput(shown)).toEqual(shown);
+  });
+
+  it("shows a bound inside a recursive schema so a Draft-07 reading keeps it", () => {
     interface Folder {
       readonly name: string;
       readonly folders: readonly Folder[];
@@ -496,13 +517,15 @@ describe("the public definition", () => {
       name: Schema.NonEmptyString.pipe(Schema.maxLength(5)),
       folders: Schema.Array(Schema.suspend((): Schema.Schema<Folder> => Folder)),
     }).annotations({ identifier: "Folder" });
-    const shown = definitionOf(Schema.Struct({ root: Folder }));
-    expect(validDraft7(shown, { root: { name: "a", folders: [{ name: "b", folders: [] }] } })).toBe(
-      true,
-    );
-    expect(validDraft7(shown, { root: { name: "a", folders: [{ name: "abcdefgh", folders: [] }] } })).toBe(
-      false,
-    );
+    const shown = shownInput(contractJsonSchema(Schema.Struct({ root: Folder })));
+    for (const schema of [shown, draft7Reading(shown)]) {
+      expect(validDraft7(schema, { root: { name: "a", folders: [{ name: "b", folders: [] }] } })).toBe(
+        true,
+      );
+      expect(
+        validDraft7(schema, { root: { name: "a", folders: [{ name: "abcdefgh", folders: [] }] } }),
+      ).toBe(false);
+    }
   });
 });
 

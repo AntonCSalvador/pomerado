@@ -164,6 +164,37 @@ const subschemasIn = (
   return data(value);
 };
 
+/** Keywords about the schema document, which stay where they are beside a root reference. */
+const documentKeywords = new Set(["$schema", "$id", "$defs", "definitions"]);
+
+/**
+ * A published schema, every keyword and value kept, with each reference that has a constraint
+ * beside it, such as a bound a refinement adds to a named schema, moved into `allOf` beside that
+ * constraint. Draft-07 ignores every keyword beside `$ref`, so a reader that follows it to the
+ * letter would miss the bound; beside `allOf` it applies. Data such as a default stays as it is,
+ * and the inliners here read both forms the same.
+ */
+export const withLoneReferences = (schema: Readonly<Json>): Json => {
+  const child = (value: unknown) => (isRecord(value) ? withLoneReferences(value) : value);
+  const node = Object.fromEntries(
+    Object.entries(schema).map(([key, value]) => [
+      key,
+      definitionContainers.has(key) && isRecord(value)
+        ? mapEntries(value, child)
+        : subschemasIn(key, value, child),
+    ]),
+  );
+  const reference = node["$ref"];
+  const constrained = Object.keys(node).some(
+    (key) => key !== "$ref" && !documentKeywords.has(key) && !annotationKeywords.has(key),
+  );
+  if (typeof reference !== "string" || !constrained) return node;
+  return {
+    ...Object.fromEntries(Object.entries(node).filter(([key]) => key !== "$ref")),
+    allOf: [{ $ref: reference }, ...allOfIn(node)],
+  };
+};
+
 /** The definition a canonical reference (`#/$defs/<name>`) names. */
 const definitionNamed = (reference: unknown) =>
   typeof reference === "string" ? /^#\/\$defs\/([^/]+)$/.exec(reference)?.[1] : undefined;
