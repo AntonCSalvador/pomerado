@@ -432,16 +432,27 @@ test("pickValue with tie first takes the first of the options that tie, in the s
   expect(await submitted(page)).toEqual({ city: "shb" });
 });
 
-test("pickValue takes a city whose name before its comma is the value over one holding it as a word", async ({ page }) => {
+test("pickValue with tie first takes a city whose name before its comma is the value over one holding it as a word", async ({ page }) => {
   await serve(page, `<form><label>City <select name="city">
 <option value="">Choose a city</option><option value="nyc">New York</option>
 <option value="yrk">York, UK</option><option value="ykt">Yorktown</option></select></label></form>`);
   const city = 'page.getByLabel("City")';
-  // York, UK is York before its comma; New York only holds York as a word, so nothing ties.
-  for (const options of ["fast", '{ ...fast, tie: "first" }'])
-    expect(await call(page, `return await pickValue(${city}, "York", ${options});`)).toEqual({
-      result: { picked: true, kind: "select", label: "York, UK", value: "yrk", rank: "leading", refills: 0 },
-    });
+  // Without tie first, both hold York as a word and tie, refused as before.
+  expect(await call(page, `return await pickValue(${city}, "York", fast);`)).toEqual({
+    result: {
+      picked: false,
+      reason: "option_ambiguous",
+      wanted: "York",
+      available: ["New York", "York, UK", "Yorktown"],
+      matches: ["New York", "York, UK"],
+    },
+  });
+  expect(await submitted(page)).toEqual({ city: "" });
+  // With it, York, UK is York before its comma, while New York only holds York as a word, so
+  // nothing ties.
+  expect(await call(page, `return await pickValue(${city}, "York", { ...fast, tie: "first" });`)).toEqual({
+    result: { picked: true, kind: "select", label: "York, UK", value: "yrk", rank: "leading", refills: 0 },
+  });
   expect(await submitted(page)).toEqual({ city: "yrk" });
   expect(await call(page, `return await pickValue(${city}, "New York", fast);`)).toEqual({
     result: { picked: true, kind: "select", label: "New York", value: "nyc", rank: "exact", refills: 0 },

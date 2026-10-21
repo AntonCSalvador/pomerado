@@ -10,6 +10,8 @@ const choice = (names: string | readonly string[], value = "", disabled = false)
 };
 const rank = (choices: readonly PickerChoice[], ...wanted: string[]) =>
   rankChoices(choices, wanted, foldChoiceText);
+const rankLeading = (choices: readonly PickerChoice[], ...wanted: string[]) =>
+  rankChoices(choices, wanted, foldChoiceText, { leading: true });
 
 describe("rankChoices", () => {
   test("a name as written beats one that matches only once case and spacing are ignored", () => {
@@ -40,17 +42,40 @@ describe("rankChoices", () => {
     expect(rank(choices, "Chic")).toEqual({ status: "missing" });
   });
 
-  test("a name whose text before its first comma is the value beats one holding it as a word", () => {
+  test("with leading, a name whose text before its first comma is the value beats one holding it as a word", () => {
     const choices = [choice("New York, NY"), choice("York, UK"), choice("Yorkshire")];
-    expect(rank(choices, "York")).toEqual({ status: "picked", index: 1, rank: "leading" });
-    expect(rank(choices, "york")).toEqual({ status: "picked", index: 1, rank: "leading" });
-    expect(rank([choice("New York"), choice("York, UK")], "York")).toEqual({ status: "picked", index: 1, rank: "leading" });
+    expect(rankLeading(choices, "York")).toEqual({ status: "picked", index: 1, rank: "leading" });
+    expect(rankLeading(choices, "york")).toEqual({ status: "picked", index: 1, rank: "leading" });
+    expect(rankLeading([choice("New York"), choice("York, UK")], "York")).toEqual({ status: "picked", index: 1, rank: "leading" });
     // Two leading parts that are the value still tie, and with none only whole words match.
-    expect(rank([choice("York, UK"), choice("York, PA")], "York")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "leading" });
-    expect(rank([choice("New York"), choice("York Minster")], "York")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "words" });
+    expect(rankLeading([choice("York, UK"), choice("York, PA")], "York")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "leading" });
+    expect(rankLeading([choice("New York"), choice("York Minster")], "York")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "words" });
     // A whole name still beats a leading part, and a leading part is never a prefix of a word.
-    expect(rank([choice("York, UK"), choice("York")], "York")).toEqual({ status: "picked", index: 1, rank: "exact" });
-    expect(rank([choice("Yorktown, VA")], "York")).toEqual({ status: "missing" });
+    expect(rankLeading([choice("York, UK"), choice("York")], "York")).toEqual({ status: "picked", index: 1, rank: "exact" });
+    expect(rankLeading([choice("Yorktown, VA")], "York")).toEqual({ status: "missing" });
+  });
+
+  test("without leading, options that hold the value as a word or before a comma tie as before", () => {
+    expect(rank([choice("New York"), choice("York, UK")], "York")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "words" });
+    expect(rank([choice("Springfield, IL"), choice("West Springfield, MA")], "Springfield")).toEqual({
+      status: "ambiguous",
+      indexes: [0, 1],
+      rank: "words",
+    });
+    expect(rank([choice("Smith, John"), choice("Jane Smith")], "Smith")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "words" });
+    expect(rank([choice("New York, NY"), choice("York, UK")], "York").status).toBe("ambiguous");
+  });
+
+  test("a comma between two digits never ends a leading part", () => {
+    // 1,000 miles has no leading part, so 1 matches both options only as a whole word.
+    expect(rankLeading([choice("1 adult"), choice("1,000 miles")], "1")).toEqual({ status: "ambiguous", indexes: [0, 1], rank: "words" });
+    expect(rankLeading([choice("1,000 miles")], "1")).toEqual({ status: "picked", index: 0, rank: "words" });
+    // The first comma that is not between digits still ends it.
+    expect(rankLeading([choice("1,000 miles, economy"), choice("1,000 points")], "1,000 miles")).toEqual({
+      status: "picked",
+      index: 0,
+      rank: "leading",
+    });
   });
 
   test("any spelling of the value may match, but two spellings naming two options tie", () => {
