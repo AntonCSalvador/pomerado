@@ -843,7 +843,7 @@ it("has a write put its step back before asking a field its click proved missing
   const texts = await renderedTexts("typescript/authoring");
   const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    "When such a field shows only after the step's click, ask it once `blockingRequiredFields` returns it, which proves the click saved nothing: call `notCommitted` for the step, fill the answer, check the step again, then call `enteringCommit` again with the step's name, and click once.",
+    "When such a field shows only after the step's click, ask it once `blockingRequiredFields` returns it, which proves the click saved nothing: call `notCommitted` for the step before you ask, then fill the answer, check the step again, then call `enteringCommit` again with the step's name, and click once.",
   );
   expect(text("caller-input")).toContain(
     "A second click on a marked step is not a resubmission when `blockingRequiredFields` returned the fields you asked for and you called `notCommitted` for that step before asking: fill the answers, check the step again, then call `enteringCommit` again for that step, and click once, as the writes skill says.",
@@ -885,7 +885,7 @@ it("renders the pinned standalone authoring", async () => {
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["d71e45c5b1f13bcf26c6a22bc455b1da93c1276b8e73f5d7db6ec302f62a6a04", "forms"],
-    ["f6f06fa508b473935fcd8650793d327e068732deaeed6172b754039592c73a4d", "writes"],
+    ["4cad65d9e9e1d394ce284de8114780eda8331d645eb22c21c0ac4d6ab166e4ab", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["ac331ef51b2d9c3d53428b2de58cda6dc2f9b1efd1151787f6aa51f094a1c5ae", "caller-input"],
     ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],
