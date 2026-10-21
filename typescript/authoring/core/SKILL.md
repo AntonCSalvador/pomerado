@@ -84,6 +84,8 @@ answers `{ success, result, error, stderr }`. Throw
   result: name it, and throw `InvalidInput` with `field` and what the page shows, before any
   commit mark, never a readiness timeout; below says when it starts "Caller input error:". The waits paragraph below shows how to
   paste `waitCode` and call it.
+- For a search step, wait for either the site's results or its own no-match state, and return the
+  site's no-match answer with its message rather than waiting on results that may never appear.
 - Wait for a change (`waitForChange`, or a settle of your own) only after a step that changed the
   page or should have, such as a click, fill or navigation that loads new results. Skip it when no
   step changed the page since the last wait, such as after closing a panel without picking
@@ -189,8 +191,10 @@ exception: it is optional unless the task can't run without it (below).
   from the one you saw.
 - Inputs are values a caller knows, such as codes, names, dates and counts, never a
   suggestion's full display text or an internal id the caller cannot know (an id the site
-  shows on its own pages, such as a product number, is not internal). A closed list
-  of options stays an enum of the site's options, as above. When the options come from a
+  shows on its own pages, such as a product number, is not internal). Prefer a unique input,
+  such as an ID: a tool that acts on one record takes the ID the site's other tools use for it,
+  and finds the record another way, such as by name, only when the caller gives none. A closed
+  list of options stays an enum of the site's options, as above. When the options come from a
   query, as in a search box, autocomplete, typeahead or searchable combobox, look the value
   up the way a person would, with `pickValue` from `pickerCode` (forms skill). It types the
   caller's value into the site's own search, reads every suggestion, matches names loosely

@@ -12,6 +12,11 @@ bad value before the tool touches the site, and fail loudly whenever the run can
 the caller asked for. Never return results computed without a value the caller supplied, except
 an input that tailors the answer, which a read returns labeled with the value the site applied.
 
+Apply each caller input the way the site applies it, and only that. Don't add your own
+constraints between inputs, filter them, or swap in a value the caller didn't give. For example,
+a store and a delivery ZIP that the site sets separately are both applied as given, even when
+they're far apart.
+
 1. Express in the input schema everything it can hold, so the host refuses a bad value before
    the script runs: each field's type, an enum of the site's full set of options when the
    options are fixed, a minimum and maximum for numbers, counts and lengths, a format such as a
@@ -174,7 +179,8 @@ already asked for, or to solve a CAPTCHA.
      when your explore, test or `act` source runs live, and only where it is the whole
      string passed to `fill`, `type` or `pressSequentially` or a field of a request to this
      site (core skill); the published script never holds a handle and asks for the value
-     with `ask` instead.
+     with `ask` instead. Prefer a `secret` question of kind `private_text` for an access
+     code, such as a gate, door, alarm or lockbox code.
    - For a payment card the checkout requires, ask for every part its card form shows
      at once, in one request with one `secret` question for each part: `card_number`,
      `card_expiry`, `card_cvc` and `billing_postal_code`. Those handles go only into a

@@ -285,6 +285,55 @@ test("unfilledRequiredFields never offers a card, code, password or identity num
   });
 });
 
+test("unfilledRequiredFields never offers an access code, such as a gate or door code, as a question", async ({
+  page,
+}) => {
+  const accessLabels = ["Gate code", "Door code", "Access code", "Alarm code", "Lockbox code", "Entry code", "Building ACCESS CODE"];
+  // Other codes, the same words before something else, and an offer's code or a note that only
+  // mentions an access code stay ordinary text.
+  const ordinaryLabels = [
+    "Zip code",
+    "Promo code",
+    "Country code",
+    "Postal code",
+    "Area code",
+    "Discount code",
+    "Gate number",
+    "Entry date",
+    "Delivery instructions (gate code, buzzer)",
+    "Notes, such as a door code",
+    "Promo/Access code",
+    "Presale access code",
+    "Coupon or access code",
+    "Early access code",
+  ];
+  await page.setContent(`<form>
+  ${accessLabels.map((label, index) => `<label>${label}<input name="access${index}" required></label>`).join("")}
+  <label>Gate<input name="gate_code" required></label>
+  <label>Front door<input name="doorCode" required></label>
+  <label>Card number (see note)<input name="card" required></label>
+  <label>Gate code<input name="delivery_notes[gate_code]" required></label>
+  <label for="orderNotesGate">Door code</label><input id="orderNotesGate" required>
+  <label>Access code<input name="presale_code" required></label>
+  ${ordinaryLabels.map((label, index) => `<label>${label}<input name="plain${index}" required></label>`).join("")}
+  <label>Delivery instructions<input name="gate_code_2" required></label>
+</form>`);
+  expect(await call(page, `return await unfilledRequiredFields(page.locator("form"));`)).toEqual({
+    result: [
+      // By its label, or by a name such as gate_code or doorCode. A note beside another secret,
+      // such as a card number, doesn't change it, and only the label shown can make an access
+      // code a note or an offer's code, not a name or id the page gave it.
+      ...[...accessLabels, "Gate", "Front door", "Card number (see note)", "Gate code", "Door code", "Access code"].map((label) => ({
+        label,
+        shape: "other",
+        unsupported: true,
+      })),
+      // A label that is a note keeps a field named for an access code ordinary too.
+      ...[...ordinaryLabels, "Delivery instructions"].map((label) => ({ label, shape: "text" })),
+    ],
+  });
+});
+
 test("unfilledRequiredFields lists a nested combobox once, refuses repeated options and leaves a long list unlisted", async ({
   page,
 }) => {
@@ -526,6 +575,93 @@ test("blockingRequiredFields proves a click saved nothing only when every flag i
   expect(await blocking(["Item"])).toEqual({ result: null });
   await page.setContent(`${blockedReview("", `<input aria-label="Delivery phone" aria-invalid="true">`)}${blockedReview("")}`);
   expect(await blocking(["Item"])).toEqual({ result: null });
+});
+
+/**
+ * A review whose Place order click saves nothing: it shows the fields in `hidden` and makes every
+ * field marked `data-flag` required and flags it. `shown` is on the page before the click.
+ */
+const refusingReview = (hidden: string, shown = "") => `
+<form aria-label="Review">
+  <label>Item<input name="item" required value="Fountain pen"></label>
+  ${shown}
+  <div id="later" hidden>${hidden}</div>
+  <button>Place order</button>
+</form>
+<script>
+  document.forms[0].addEventListener("submit", (event) => {
+    event.preventDefault();
+    document.querySelector("#later").hidden = false;
+    for (const field of document.querySelectorAll("[data-flag]")) {
+      field.required = true;
+      field.setAttribute("aria-invalid", "true");
+    }
+  });
+</script>`;
+
+test("blockingRequiredFields with unaskable says when a click that saved nothing flagged a field no question can ask", async ({
+  page,
+}) => {
+  const form = `page.getByRole("form", { name: "Review" })`;
+  // The labels read just before the click, then the click, then both judgments of the page it left.
+  const judge = async (hidden: string, shown = "") => {
+    await page.setContent(refusingReview(hidden, shown));
+    const before = ((await call(page, `return await visibleFieldLabels(${form});`)) as { result: string[] }).result;
+    await page.getByRole("button", { name: "Place order" }).click();
+    const blocking = (options: string) =>
+      call(page, `return await blockingRequiredFields(${form}, ${JSON.stringify(before)}${options});`);
+    return { asked: await blocking(", { unaskable: true }"), plain: await blocking("") };
+  };
+  // The click showed a card number and a bank's routing number, new, empty and required: it saved
+  // nothing, and neither is a field a site-field question may ask.
+  const card = `<label>Card number<input name="card_number" autocomplete="cc-number" data-flag></label>`;
+  const routing = `<label>Routing number<input name="routing" data-flag></label>`;
+  expect(await judge(`${card}${routing}`)).toEqual({
+    asked: { result: { unaskable: true, labels: ["Card number", "Routing number"] } },
+    plain: { result: null },
+  });
+  // Beside a field a question can ask, only the ones it can't are named.
+  expect(await judge(`<label>Delivery phone<input name="phone" data-flag></label>${card}`)).toEqual({
+    asked: { result: { unaskable: true, labels: ["Card number"] } },
+    plain: { result: null },
+  });
+  // Any other field a question can't ask, such as a box to tick, a date or a choice of buttons,
+  // is left to a repair that can teach the tool to fill it, alone or beside a card.
+  const unasked = [
+    `<label><input type="checkbox" name="terms" data-flag> I accept the terms</label>`,
+    `<label>Delivery date<input type="date" name="date" data-flag></label>`,
+    `<label><input type="radio" name="speed" value="fast" data-flag> Fast</label><label><input type="radio" name="speed" value="slow" data-flag> Slow</label>`,
+    `${card}<label>Delivery date<input type="date" name="date" data-flag></label>`,
+    // A box or a choice of buttons that names a card or a bank is never the card or bank itself.
+    `<label><input type="checkbox" name="charge" data-flag> I authorize a charge to my credit card</label>`,
+    `<label><input type="radio" name="pay" value="card" data-flag> Credit card</label><label><input type="radio" name="pay" value="bank" data-flag> Bank account</label>`,
+  ];
+  for (const hidden of unasked) expect(await judge(hidden)).toEqual({ asked: { result: null }, plain: { result: null } });
+  // A new field a question can ask is still returned to ask, with or without the option.
+  const phone = { result: { fields: [{ label: "Delivery phone", shape: "text" }] } };
+  expect(await judge(`<label>Delivery phone<input name="phone" data-flag></label>`)).toEqual({
+    asked: phone,
+    plain: phone,
+  });
+  // A card field already showing before the click proves nothing, since a save may have cleared it.
+  expect(await judge("", card)).toEqual({ asked: { result: null }, plain: { result: null } });
+  expect(await judge(routing, card)).toEqual({ asked: { result: null }, plain: { result: null } });
+  // Nothing flagged, a flagged value beside the card, or a flagged field with no label to tell it
+  // by proves nothing either.
+  expect(await judge(`<label>Card number<input name="card_number" autocomplete="cc-number"></label>`)).toEqual({
+    asked: { result: null },
+    plain: { result: null },
+  });
+  expect(await judge(`${card}<label>Promo code<input name="promo" value="OLD10" data-flag></label>`)).toEqual({
+    asked: { result: null },
+    plain: { result: null },
+  });
+  expect(await judge(`<input name="reference" data-flag>`)).toEqual({ asked: { result: null }, plain: { result: null } });
+  // The form gone is no longer the same step.
+  await page.setContent(`<p>Order ORD-1001 is placed.</p>`);
+  expect(await call(page, `return await blockingRequiredFields(${form}, ["Item"], { unaskable: true });`)).toEqual({
+    result: null,
+  });
 });
 
 test("unfilledRequiredFields with before lists only the labelled fields that answers showed or enabled", async ({
