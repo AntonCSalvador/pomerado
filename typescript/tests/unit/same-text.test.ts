@@ -194,6 +194,83 @@ it("needs a word holding a digit or another symbol to be the same word", () => {
   );
 });
 
+it("reads spaces, hyphens, dashes, slashes and parentheses between digits as formatting", () => {
+  expectEach(
+    [
+      ["29 59", "29-59"],
+      ["29/59", "2959"],
+      ["29 – 59", "29 59"],
+      ["46204-1234", "46204 1234"],
+      ["(317) 555-1234", "317-555-1234"],
+      ["Unit 29-59 Elm St", "unit 2959 elm st"],
+    ],
+    true,
+  );
+  // Periods and commas between digits still count, and so does every digit.
+  expectEach(
+    [
+      ["10.0", "100"],
+      ["1,200", "1 200"],
+      ["12", "123"],
+      ["29 59", "29 58"],
+      ["(12)", "12"],
+    ],
+    false,
+  );
+});
+
+it("keeps words as they were by default, short forms and the half-length rule alike", () => {
+  expect(sameText("UK", "Ukraine")).toBe(true);
+  expect(sameText("Ukraine", "UK")).toBe(false);
+  expect(sameText("12 Elm Pkwy", "12 Elm Parkway")).toBe(false);
+  expect(sameText("Ste 4", "Suite 4")).toBe(false);
+  expect(sameText("100 N Main St", "100 Main St")).toBe(false);
+  expect(sameText("12 ELM ST", "12 Elm Street")).toBe(true);
+});
+
+/** The site rewrote what the tool typed: whether it kept everything the caller gave. */
+const kept = (site: string, typed: string) => sameText(site, typed, { rewrite: true });
+
+it("says a site's rewrite kept the typed value when it only reformatted, shortened or added", () => {
+  const pairs: Pairs = [
+    // Each pair is the site's version, then what the tool typed.
+    ["29-59", "29 59"],
+    ["2959", "29/59"],
+    ["12 ELM PKWY", "12 Elm Parkway"],
+    ["STE 4", "Suite 4"],
+    ["22 BIRCH CT", "22 Birch Court"],
+    ["12 Elm Street", "12 Elm St"],
+    ["46204-1234", "46204"],
+    ["100 N Main St", "100 Main St"],
+    ["(317) 555-1234", "3175551234"],
+    [
+      "12 Elm Pkwy, Ste 4, Springfield, IL 62704-0001",
+      "12 elm parkway suite 4 springfield il 62704",
+    ],
+    ["USER@example.com", "user@example.com"],
+  ];
+  for (const [site, typed] of pairs) expect(kept(site, typed), `${site} | ${typed}`).toBe(true);
+});
+
+it("says a site's rewrite changed the typed value when it dropped or changed what the caller gave", () => {
+  const pairs: Pairs = [
+    // Each pair is the site's version, then what the tool typed.
+    ["1420 Oak Rd, Riverton", "1420 Oak Road, Springfield"],
+    ["13 Elm Pkwy", "12 Elm Pkwy"],
+    ["123", "12"],
+    ["100", "10.0"],
+    ["1200", "1,200"],
+    ["100 Main St", "100 N Main St"],
+    ["12 Elm", "12 Elm Pkwy"],
+    ["Elm Pkwy 12", "12 Elm Pkwy"],
+    ["user@mail.example.com", "user@example.com"],
+    ["Мск", "Москва"],
+    ["12 Elm", ""],
+    ["12 Elm", "-"],
+  ];
+  for (const [site, typed] of pairs) expect(kept(site, typed), `${site} | ${typed}`).toBe(false);
+});
+
 it("folds only Latin accents, so a mark that spells another word in another script counts", () => {
   expectEach(
     [
@@ -229,4 +306,7 @@ it("embeds as self-contained source, so page code can use it", () => {
   expect(embedded("St-Jean", "Saint Jean")).toBe(true);
   expect(embedded("Saint Jean", "St-Jean")).toBe(false);
   expect(embedded("St-Jean", "St-Jean-de-Luz")).toBe(false);
+  expect(embedded("29-59", "29 59")).toBe(true);
+  expect(embedded("12 ELM PKWY", "12 Elm Parkway", { rewrite: true })).toBe(true);
+  expect(embedded("13 ELM PKWY", "12 Elm Parkway", { rewrite: true })).toBe(false);
 });

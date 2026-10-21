@@ -52,10 +52,30 @@ export const foldChoiceText = (text: unknown): string => {
  * longer one in `shown`, so a wanted Pen never matches a shown Pencil. Both texts need the same
  * number of words in the same order, and a word holding a digit or another symbol, such as a slash
  * or a bracket, must be the same word, so 12 never matches 123, C++ never matches C and Blue/Green
- * never matches Blue Green. Compare numbers, dates and amounts as values instead. It is pure and
- * self-contained, so page code can embed it.
+ * never matches Blue Green. Spaces, hyphens, dashes, slashes and parentheses between digits are
+ * formatting, though, so 29 59, 29-59, 29/59 and 2959 match, and so do (317) 555-1234 and
+ * 317-555-1234, while a period or comma between digits counts, so 10.0 never matches 100. Compare
+ * numbers, dates and amounts as values instead.
+ *
+ * With `{ rewrite: true }`, `shown` is the site's own version of a value the tool typed, `wanted`,
+ * such as an address the site standardized as it was entered, and the answer is whether it kept
+ * everything the caller gave, which tells a rewrite that only reformatted the value from one that
+ * changed it. Every word and number of `wanted` must appear in `shown`, in order, and `shown` may
+ * add its own, as 100 N Main St adds N to 100 Main St. A word may be written short or in full
+ * either way, with the same first letter, its letters in order and no length limit, so Parkway
+ * matches PKWY and St matches Street. A number may be split or joined at the separators above, and
+ * extended only after one, so 46204 matches 46204-1234 but 12 never matches 123. Other punctuation
+ * is ignored. A dropped or changed word or number fails, so 1420 Oak Road, Springfield never
+ * matches 1420 Oak Rd, Riverton. An email, domain or file name, or a `wanted` with no letter or
+ * digit, compares as it does without the option.
+ *
+ * It is pure and self-contained, so page code can embed it.
  */
-export const sameText = (shown: string, wanted: string): boolean => {
+export const sameText = (
+  shown: string,
+  wanted: string,
+  options: { readonly rewrite?: boolean } = {},
+): boolean => {
   const fold = (text: string) => {
     const raw = String(text ?? "").replace(/[\u00AD\u200B\u2060\uFEFF]/gu, "");
     const folded = raw
@@ -69,11 +89,18 @@ export const sameText = (shown: string, wanted: string): boolean => {
       .trim();
     return folded === "" ? raw.trim() : folded;
   };
-  // The page's word writes the wanted one short: same first letter, its letters in order in the
-  // wanted word, and at most half as long. Never the other way round.
-  const shortens = (short: string, full: string) => {
+  // Spaces, hyphens, dashes, slashes and parentheses between digits are formatting, as is the
+  // opening parenthesis of a group such as (317) before more digits.
+  const joinDigits = (text: string) =>
+    text
+      .replace(/\((?=\p{N}+\)[\s/\-\u2010-\u2014]*\p{N})/gu, "")
+      .replace(/(?<=\p{N})[\s/()\-\u2010-\u2014]+(?=\p{N})/gu, "");
+  // One word writes another short: same first letter and its letters in order in the other word,
+  // at most half as long when `halfLength` holds.
+  const shortens = (short: string, full: string, halfLength: boolean) => {
     const latin = /^\p{Script=Latin}+$/u.test(short + full);
-    if (!latin || short[0] !== full[0] || short.length * 2 > full.length) return false;
+    if (!latin || short[0] !== full[0]) return false;
+    if (halfLength ? short.length * 2 > full.length : short.length >= full.length) return false;
     let next = 0;
     for (const letter of full) if (letter === short[next]) next++;
     return next === short.length;
@@ -82,10 +109,68 @@ export const sameText = (shown: string, wanted: string): boolean => {
   // period before two letters marks one; an abbreviation's own periods, as in D.C., do not.
   const both = String(shown ?? "") + " " + String(wanted ?? "");
   const literal = /@|[\p{L}\p{N}]\.\p{L}{2}/u.test(both);
-  const a = fold(shown).split(" ");
-  const b = fold(wanted).split(" ");
+  // Words and numbers, a number keeping a period or comma between its digits. A number that
+  // follows another across separators alone continues it, `joined`.
+  type Part = { text: string; number: boolean; joined: boolean };
+  const parts = (text: string) => {
+    const folded = fold(text);
+    const found: Part[] = [];
+    let end = 0;
+    for (const match of folded.matchAll(/\p{N}+(?:[.,]\p{N}+)*|[\p{L}\p{M}\u200C\u200D]+/gu)) {
+      const number = /^\p{N}/u.test(match[0]);
+      const gap = folded.slice(end, match.index);
+      const previous = found[found.length - 1];
+      const joined = number && previous?.number === true && /^[\s/()\-\u2010-\u2014]*$/u.test(gap);
+      found.push({ text: match[0], number, joined });
+      end = (match.index ?? 0) + match[0].length;
+    }
+    return found;
+  };
+  // The site's version keeps each of the caller's words and numbers, in order, and may add its
+  // own. A number the caller gave starts one of the site's and may end before a separator in it.
+  const kept = (site: readonly Part[], given: readonly Part[]) => {
+    const items: Part[] = [];
+    for (const part of given) {
+      const last = items[items.length - 1];
+      if (part.joined && last !== undefined) last.text += part.text;
+      else items.push({ ...part });
+    }
+    let at = 0;
+    for (const item of items) {
+      let next = -1;
+      for (let index = at; next < 0 && index < site.length; index++) {
+        const part = site[index];
+        if (part === undefined || part.number !== item.number) continue;
+        if (!item.number) {
+          const alike =
+            part.text === item.text ||
+            shortens(part.text, item.text, false) ||
+            shortens(item.text, part.text, false);
+          if (alike) next = index + 1;
+          continue;
+        }
+        if (part.joined) continue;
+        let digits = part.text;
+        let last = index;
+        while (digits.length < item.text.length && site[last + 1]?.joined === true)
+          digits += site[++last]?.text ?? "";
+        if (digits === item.text) next = last + 1;
+      }
+      if (next < 0) return false;
+      at = next;
+    }
+    return true;
+  };
+  if (options?.rewrite === true && !literal) {
+    const given = parts(wanted);
+    if (given.length > 0) return kept(parts(shown), given);
+  }
+  const a = joinDigits(fold(shown)).split(" ");
+  const b = joinDigits(fold(wanted)).split(" ");
   return (
     a.length === b.length &&
-    a.every((word, index) => word === b[index] || (!literal && shortens(word, b[index] ?? "")))
+    a.every(
+      (word, index) => word === b[index] || (!literal && shortens(word, b[index] ?? "", true)),
+    )
   );
 };

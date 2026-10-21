@@ -115,10 +115,20 @@ During the session:
   still works for a caller who never sees it.
 - Before committing, read back from the page what you are about to submit and check each
   value as the core skill's Confirm step says, against the option the tool picked when it
-  picked one, in the session and on every branch of the composed script. Fail if one does
-  not match, and prefer running this check before the step's commit mark, so a mismatch
-  stops the step before it sends anything. Never read back a field filled with a secret
-  handle.
+  picked one, or the site's version of a typed value it rewrote (below), in the session and
+  on every branch of the composed script. Fail if one does not match, and prefer running
+  this check before the step's commit mark, so a mismatch stops the step before it sends
+  anything. Never read back a field filled with a secret handle.
+- Read each typed value back once its field settles, before the step's commit. When the site
+  rewrote it as it was typed or on leaving the field, such as an address it standardized, or
+  offered exactly one suggestion for it, take the site's version, as you would a picked
+  option: later read-backs, such as a review page, summary or confirmation, compare against
+  it, and the output returns it for that field. Check it once with
+  `sameText(shown, typed, { rewrite: true })`; when that fails, the site dropped or changed
+  part of what the caller gave, so go on and add an optional output field `<input>_note`,
+  such as `address_note`, naming what the caller sent and what the site kept. Never throw
+  `InputNotApplied` for such a rewrite. A value the site replaces only when a step saves
+  follows the read-back rules below.
 - When the write changes state that already exists, such as a saved record or a cart
   (.agents/cart/SKILL.md), read that state before the committing step and again after it,
   in the session and in the composed script. Fail when a field the input sets did not change
