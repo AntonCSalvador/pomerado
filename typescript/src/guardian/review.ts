@@ -483,7 +483,35 @@ export interface PendingExecution {
       readonly entrypoint?: string;
       readonly outcome: "done" | "not_done" | "unknown" | "unassessed";
     }[];
+    /**
+     * Execution reviews only: this attempt's latest live test batches, and any older one holding
+     * a failure that still stands on its source, oldest first, as the harness judged them
+     * (`LiveTestHost.bindBatches`). Empty before a batch ran in this attempt,
+     * a takeover's included; absent from a host that does not bind them.
+     */
+    readonly liveTests?: readonly ReviewedLiveTestBatch[];
   };
+}
+
+/**
+ * One live test batch as an execution review sees it: the host facts that show which cases passed
+ * on which source, so a review can tell whether a suite already ran on the source it judges.
+ */
+export interface ReviewedLiveTestBatch {
+  /** The batch's own Guardian review, or the harness's id for a host that names none. */
+  readonly batchId: string;
+  /** The entrypoint the batch ran, under `operation/` as the review reads it. */
+  readonly entrypoint: string;
+  /** The digest of the source the batch ran: its entrypoint and its static import closure. */
+  readonly sourceDigest: string;
+  /** Whether that entrypoint and its static import closure are unchanged since the batch ran. */
+  readonly sourceUnchanged: boolean;
+  readonly cases: readonly {
+    readonly id: string;
+    readonly verdict: "pass" | "fail" | "inconclusive";
+    /** `cold`: the case ran first on a new browser with an empty profile. */
+    readonly start?: "cold" | "warm";
+  }[];
 }
 
 /** Token counts of one review's model calls, summed over its calls. */
