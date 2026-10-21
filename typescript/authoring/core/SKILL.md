@@ -237,6 +237,9 @@ exception: it is optional unless the task can't run without it (below).
   offers: a collapsed group is not an absent one. Leave out controls unrelated to the purpose,
   such as a language switch or a newsletter opt-in on a search. The search skill's "Find the
   filters" says how a search records them.
+- Declare input fields in the order a person fills in the site's form: what or where first,
+  then when (a start date before an end date), then who and how many, then optional
+  refinements, with sorting and paging (`limit`, `cursor`) last.
 - Turn safety defaults off. They are never an input or a question ("Safety defaults", below).
 - Inputs that tailor the answer. Many sites tailor what they show to facts about the visitor,
   not just what they searched for: where they are (ZIP, address, store, delivery or pickup),
@@ -597,7 +600,8 @@ call: `readRows` and `waitForRows` read every returned row at once. A list of te
 page, such as bullets, highlights or option names, can hold blank entries the site renders
 invisibly: trim each entry and drop the empty ones, so one blank entry does not fail the result.
 A single text field that can be blank on some records is nullable, and its description says when
-(a needed value also takes a field that says why, as "Never loosen a value" says). Never select
+(a needed value also takes a field that says why, as "Never loosen a value" says). Return a value
+the site shows blank as null, never a question to the owner. Never select
 by a generated CSS class, a hashed or build-numbered name such as `.e-1a2b3c` or `.css-1x2y3z`:
 it changes on the site's next deploy.
 Never read it from a broad container, whole-page text, tag-stripped HTML, a regex over page-wide
