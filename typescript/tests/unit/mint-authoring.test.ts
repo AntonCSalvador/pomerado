@@ -861,11 +861,15 @@ it("points a write's commit confirmation at confirmCommit", async () => {
     " ",
   );
   expect(writes).toContain(
-    "- Prefer confirming the final commit with `confirmCommit(answer, page)`: import `confirmCommitCode` from `pomerado/runtime`, paste it after `waitCode` at the top of the commit call, before the click, and pass it the `{ response }` answer of that click's `waitForOutcomeResult` and the page. It applies the commit-response and page-error rules above in one place, so prefer it over writing your own status and body checks, and call `verified()` only when it reports done.",
+    "- Prefer confirming the final commit with `confirmCommit(answer, page)`: import `confirmCommitCode` from `pomerado/runtime`, paste it after `waitCode` in the commit call, once the form is filled and just before the click's wait, and pass it the `{ response }` answer of that click's `waitForOutcomeResult` and the page. It applies the commit-response and page-error rules above in one place, so prefer it over writing your own status and body checks, and call `verified()` only when it reports done.",
   );
   const reference = await readFile("typescript/authoring/examples/write-readback.ts", "utf8");
   expect(reference).toContain("${confirmCommitCode}");
   expect(reference).toContain("await confirmCommit(answer, page)");
+  // Pasted after the fills, so what the fills draw is noted, and before the click's wait.
+  const paste = reference.indexOf("${confirmCommitCode}");
+  expect(paste).toBeGreaterThan(reference.lastIndexOf(".fill("));
+  expect(paste).toBeLessThan(reference.indexOf("await waitForOutcomeResult("));
 });
 
 // A write that passed the page's headings to `verified` lost its receipt. With no argument there
@@ -974,7 +978,7 @@ it("renders the pinned standalone authoring", async () => {
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["d71e45c5b1f13bcf26c6a22bc455b1da93c1276b8e73f5d7db6ec302f62a6a04", "forms"],
-    ["36ccb74e342247eb3b7dd9de336f94eb716ffb6aacbca393caf6376443f1e4d2", "writes"],
+    ["fc7e4266ff9c24953776915a7d225d4e2bb6d4f025ed5fa3db9e648edf46d3b7", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["a97a3bdb8a979d6f0230005ce8ae12b4789af3f5afccca8fb1ce4a450d8b668d", "caller-input"],
     ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],

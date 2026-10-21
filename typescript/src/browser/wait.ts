@@ -1175,34 +1175,38 @@ return { outcomeWaitFailure, outcomeWaitNote, outcomeWaitChanged, outcomeWaitObs
 `;
 
 /**
- * `confirmCommit(outcome, page)`, pasted after `waitCode` at the top of a write's commit call,
- * before the click. It declares that one name, its helpers inside, so code that pastes `waitCode`
+ * `confirmCommit(outcome, page)`, pasted after `waitCode` in a write's commit call, just before the
+ * click's wait. It declares that one name, its helpers inside, so code that pastes `waitCode`
  * beside a `confirmCommit` of its own still parses. It uses `page`, and `waitCode`'s `waitLimits`,
  * `waitBounded`, `waitSleep`, `outcomeWaitClean` and `outcomeWaitInvalidInPage`. Pasting it notes
- * the page's messages and flagged fields as they stand, so the check counts only those that appear
- * or change after; on a page the call replaced since, every message is new.
+ * the page's address, the text of each message it shows and its flagged fields as they stand. A
+ * message whose text was there then is stale after, whatever element or page shows it, so a page
+ * that draws its messages again, or a redirect to a page with the same banner, adds no error.
  *
  * It judges the commit from the `{ response }` answer of the click's `waitForOutcomeResult` and
  * the page, and returns `CommitConfirmation`, plain data a call can return. It never marks a write
  * done or not done without proof: whatever the response and the page leave open is `unclear`.
  *
- * - A response that is not 2xx or 3xx is `not_done`; a 201 with a Location is `done` at once.
+ * - A response that is not 2xx or 3xx is `not_done`; a 201 with a Location is `done` at once. A 3xx
+ *   whose Location is the page that posted (same path), or whose query names an error or failure,
+ *   is `unclear` unless the page shows an error.
  * - A 2xx body that reads as JSON is `not_done` for a success field (`success`, `succeeded`,
  *   `isSuccess`, any case) that is false, `"false"`, 0 or `"no"` or holds an error word, `ok:
  *   false`, an `error`, `errors` or `userErrors` field holding an error (not empty, and not a word
- *   for none such as "No error"), a status of 400 or more, or an error word in a status or message.
- *   It is `unclear` for a success field holding anything but true, `"true"`, 1, `"yes"`, `"ok"` or
- *   `"success"`, or a status or message that refuses a value ("required", "unable", "could not")
- *   or says declined. A string holding JSON, as in `{ d: "..." }`, is read too. A body that is
+ *   for none such as "No error", up to four levels down), a status of 400 or more, or an error
+ *   word in a status or message. It is `unclear` for a success field holding anything but true,
+ *   `"true"`, 1, `"yes"`, `"ok"` or `"success"`, or a status or message that refuses a value
+ *   ("required", "unable", "could not") or says declined, rejected or denied, words a write may
+ *   itself have meant. A string holding JSON, as in `{ d: "..." }`, is read too. A body that is
  *   neither JSON nor HTML, or can't be read within 1 s, is `unclear`; a 3xx's or an empty one is no
  *   body.
- * - The page then gets the settle window (`settle`, 0.5 s). A field newly marked invalid, or a new
- *   or changed message with words of an error or a refusal, is `not_done`, whatever the body's
- *   message said. A message is an alert, an assertive live region or anything styled as an error,
- *   with letters, outside links, buttons and labels, and not one only a screen reader hears. A new
- *   message styled as an error with no such words, one that mixes them with a success, one that
- *   says declined, an alert that says neither error nor success, or a field still marked invalid
- *   as before, is `unclear`.
+ * - The page then gets the settle window (`settle`, 0.5 s). A field newly marked invalid, or a
+ *   message whose text is new with words of an error or a refusal, is `not_done`, whatever the
+ *   body's message said. A message is an alert, an assertive live region or anything styled as an
+ *   error, with letters, outside links, buttons and labels, and not one only a screen reader hears.
+ *   A new message styled as an error with no such words, one that mixes them with a success, one
+ *   that says declined, rejected or denied, an alert that says neither error nor success, or a
+ *   field still marked invalid as before, is `unclear`.
  * - Otherwise the commit is `done`: `queued` for a 202, or a body whose status says queued, pending
  *   or processing, with that word as `status_label`, else `completed`. An outcome with no response
  *   is `not_done` when the page shows a new error, else `unclear`. A native dialog that opened
@@ -1213,12 +1217,12 @@ return { outcomeWaitFailure, outcomeWaitNote, outcomeWaitChanged, outcomeWaitObs
  */
 export const confirmCommitCode = String.raw`
 const confirmCommit = await (async () => {
-  // Words that say a write failed; "no errors" says none. Words that refuse a value, and words
-  // that leave a record possibly made, prove nothing on their own.
-  const errorWords = /\b(?:errors?|fail(?:s|ed|ure)?|invalid|denied|rejected|forbidden|unauthori[sz]ed)\b/i;
+  // Words that say a write failed; "no errors" says none. Words that refuse a value prove nothing
+  // on their own, nor do words a write may itself have meant, as declining or rejecting something.
+  const errorWords = /\b(?:errors?|fail(?:s|ed|ure)?|invalid|forbidden|unauthori[sz]ed)\b/i;
   const noErrors = /\b(?:no|without|zero|0)\s+errors?\b/i;
   const refusalWords = /\b(?:required|must|cannot|can't|could not|couldn't|unable|not valid|please (?:enter|select|choose|provide|fill|complete|correct|try again))\b/i;
-  const openWords = /\bdeclined\b/i;
+  const openWords = /\b(?:declined|rejected|denied)\b/i;
   const successWords = /\b(?:success(?:ful|fully)?|saved|created|updated|submitted|completed|confirmed|thank you)\b/i;
   const queuedWords = /\b(?:queued|enqueued|pending|processing|in progress)\b/i;
   const words = (value) => String(value).replace(/[_-]+/g, " ");
@@ -1242,13 +1246,15 @@ const confirmCommit = await (async () => {
     return (Array.isArray(value) ? value : Object.values(value)).some((each) => filled(each, depth + 1));
   };
   // What a JSON body says: the first sign the write failed, the first that leaves it unclear, and
-  // the site's word for queued work. Success, ok and error fields count up to two levels down, as
-  // in { data: { save: { errors } } }; status and message words up to one. A string that holds
-  // JSON, as some frameworks wrap a body in { d: "..." }, is read as one more level.
+  // the site's word for queued work. Error fields count up to four levels down, as in
+  // { data: { records: { save: { userErrors } } } }; success and ok fields up to two; status and
+  // message words up to one. A string that holds JSON, as some frameworks wrap a body in
+  // { d: "..." }, is read as one more level. It looks at 2,000 values at most.
   const judgeBody = (body) => {
     const found = {};
+    let budget = 2000;
     const visit = (value, depth) => {
-      if (depth > 2 || value === null || typeof value !== "object") return;
+      if (depth > 4 || value === null || typeof value !== "object" || (budget -= 1) < 0) return;
       if (Array.isArray(value)) {
         for (const each of value.slice(0, 50)) visit(each, depth + 1);
         return;
@@ -1256,11 +1262,11 @@ const confirmCommit = await (async () => {
       for (const [key, field] of Object.entries(value)) {
         const name = key.toLowerCase().replace(/[_-]/g, "");
         const said = key + " is " + clip(field);
-        if (/^(?:is)?succe(?:ss|ssful|eded)$/.test(name)) {
+        if (depth <= 2 && /^(?:is)?succe(?:ss|ssful|eded)$/.test(name)) {
           const holds = truth(field);
           if (holds === false) found.failed ??= said;
           else if (holds === undefined) found.unclear ??= said + ", not true";
-        } else if (name === "ok" && field === false) found.failed ??= said;
+        } else if (depth <= 2 && name === "ok" && field === false) found.failed ??= said;
         else if (/errors?$|^error(?:message|msg|text|code)s?$/.test(name)) {
           if (filled(field)) found.failed ??= said;
         } else if (depth <= 1 && (name === "status" || name === "statuscode") && typeof field === "number" && field >= 400)
@@ -1299,19 +1305,10 @@ const confirmCommit = await (async () => {
   // as an error.
   const messages =
     '[role="alert"], [role="alertdialog"], [aria-live="assertive"], [class*="error" i], [class*="danger" i], [class*="invalid" i]';
-  // Runs in the page: notes each such element's text and whether it shows, under key.
-  const noteInPage = (elements, key) => {
-    const noted = new WeakMap();
-    for (const element of elements)
-      noted.set(element, { text: String(element.innerText ?? ""), shown: element.getClientRects().length > 0 });
-    globalThis[Symbol.for(key)] = noted;
-  };
   // Runs in the page: each visible message with letters, outside links, buttons and labels and
   // wider than a pixel, its text (500 characters at most), what its styling says (its own or up
-  // to two elements around it), whether it is an alert, and whether it is new or changed since
-  // the note.
-  const messagesInPage = (elements, key) => {
-    const noted = globalThis[Symbol.for(key)];
+  // to two elements around it), and whether it is an alert.
+  const messagesInPage = (elements) => {
     const shows = (element) =>
       typeof element.checkVisibility === "function"
         ? element.checkVisibility({ visibilityProperty: true, opacityProperty: true })
@@ -1327,14 +1324,11 @@ const confirmCommit = await (async () => {
         return [];
       const box = element.getBoundingClientRect();
       if (box.width <= 1 || box.height <= 1) return [];
-      const full = String(element.innerText ?? "");
-      const text = full.replace(/\s+/g, " ").trim().slice(0, 500);
+      const text = String(element.innerText ?? "").replace(/\s+/g, " ").trim().slice(0, 500);
       if (!/\p{L}/u.test(text)) return [];
-      const before = noted?.get(element);
       const style = styling(element);
       return [{
         text,
-        fresh: before === undefined || !before.shown || before.text !== full,
         errorStyle: /error|danger|invalid|fail/i.test(style),
         successStyle: /success/i.test(style),
         alert: element.matches('[role="alert"], [role="alertdialog"], [aria-live="assertive"]'),
@@ -1343,20 +1337,24 @@ const confirmCommit = await (async () => {
   };
   const fieldKey = (field) => field.field + "\u0000" + field.message;
   const fieldText = (field) => field.field + (field.message === "" ? " is marked invalid" : ": " + field.message);
-  // Notes the page as it stands now, before the click.
-  const key = "pomerado.confirmCommit." + Date.now() + "." + Math.random();
+  // Notes the page as it stands now, before the click: its address, the text of each message it
+  // shows and its flagged fields. A message whose text was on the page then is stale, whatever
+  // element or page shows it after, as a page that draws its messages again or a redirect to a
+  // page with the same banner.
   const read = (promise) => waitBounded(promise.catch(() => undefined), 1000);
-  await read(page.locator(messages).evaluateAll(noteInPage, key));
+  const postedFrom = page.url();
+  const shownBefore = await read(page.locator(messages).evaluateAll(messagesInPage));
+  const staleTexts = new Set((shownBefore ?? []).map((message) => message.text.toLowerCase()));
   const flaggedBefore = await read(page.locator("body").evaluateAll(outcomeWaitInvalidInPage));
   const staleFields = new Set((flaggedBefore ?? []).map(fieldKey));
   // One look at the page: the new errors it shows, and what it shows that leaves the write open.
   const look = async (page) => {
     const fields = await page.locator("body").evaluateAll(outcomeWaitInvalidInPage);
-    const shown = await page.locator(messages).evaluateAll(messagesInPage, key);
+    const shown = await page.locator(messages).evaluateAll(messagesInPage);
     const errors = fields.filter((field) => !staleFields.has(fieldKey(field))).map(fieldText);
     const open = fields.filter((field) => staleFields.has(fieldKey(field))).map((field) => fieldText(field) + ", as before the click");
     for (const message of shown) {
-      if (!message.fresh) continue;
+      if (staleTexts.has(message.text.toLowerCase())) continue;
       const refuses = saysError(message.text) || saysRefusal(message.text);
       const succeeds = message.successStyle || successWords.test(message.text);
       if (refuses && !succeeds) errors.push(message.text);
@@ -1383,6 +1381,24 @@ const confirmCommit = await (async () => {
       if ((seen !== undefined && elapsed >= waitLimits.settle) || elapsed >= capMs) return seen;
       await waitSleep(100);
     }
+  };
+  // A redirect gives no body, so one back to the page that posted, or to an address whose query
+  // names an error or failure, may carry a refusal the page check can't see: why, or undefined.
+  const redirectedBack = (response) => {
+    const location = String(response.headers()["location"] ?? "").trim();
+    if (location === "") return undefined;
+    try {
+      const to = new URL(location, response.url());
+      const from = new URL(postedFrom);
+      let query = to.search + to.hash;
+      try {
+        query = decodeURIComponent(query);
+      } catch {}
+      if (/error|fail/i.test(query)) return "it redirected to " + clip(location) + ", whose query names an error";
+      if (to.origin === from.origin && to.pathname === from.pathname)
+        return "it redirected back to the page that posted, " + clip(to.pathname);
+    } catch {}
+    return undefined;
   };
   return async (outcome, page) => {
     const done = (reason, queued, label) => ({
@@ -1416,6 +1432,8 @@ const confirmCommit = await (async () => {
     if (found.failed !== undefined) return notDone(where + "; its body's " + found.failed);
     const seen = await watch(page);
     if (seen !== undefined && seen.errors.length > 0) return notDone(where + "; the page shows " + list(seen.errors));
+    const back = status >= 300 ? redirectedBack(response) : undefined;
+    if (back !== undefined) return unclear(where + "; " + back);
     if (body.unclear !== undefined) return unclear(where + "; " + body.unclear);
     if (found.unclear !== undefined) return unclear(where + "; its body's " + found.unclear);
     if (seen === undefined) return unclear(where + "; the page could not be read after it");
