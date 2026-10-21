@@ -80,7 +80,9 @@ When the results, prices or availability depend on a location or store, offer it
 input, a ZIP or postal code or a store as the site takes them, even when the request names
 neither: it tailors the answer. Apply it, read it back and always return it, as `applied_store`
 or `applied_zip`, the site's default included when the caller gave none, as the core skill's
-input schema says ("Inputs that tailor the answer").
+input schema says ("Inputs that tailor the answer"). When the caller gives a location but no
+store, use what the site would show for that location, such as the nearest store, rather than
+what the site guessed from the browser's own location, and return what was applied.
 
 ## Results
 
