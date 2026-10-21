@@ -17,7 +17,9 @@ import { pageControlsCode } from "./page-controls.js";
  * - or, with no `maxlength` limit, by the page's own script, as many one-time-code widgets limit
  *   their boxes, when the step names two or more code fields: among the visible, enabled, editable
  *   text inputs that are children of its parent element, when those are two to
- *   `maximumCodeBoxes`, all of its type and none with a `maxlength` limit. When the step's boxes
+ *   `maximumCodeBoxes`, all of its type and none with a `maxlength` limit. A field that is the only
+ *   such input in its parent counts one level up instead, among its parent and the parent's
+ *   siblings, when each of them holds one such input as its only element. When the step's boxes
  *   found so disagree on how many there are, or two take one place, as boxes split between two
  *   containers do, none of them is a box.
  * A field that is no box, or a screen with fewer than two, has none. Attributes only, never a value.
@@ -48,7 +50,12 @@ for (const [index, field] of fields.entries()) {
       return place(Array.from(screen.querySelectorAll("input")).filter((control) => editable(control) && control.maxLength === 1), "maxlength");
     }
     if (element.maxLength >= 0 || codeFields < 2 || element.parentNode === null) return null;
-    const boxes = Array.from(element.parentNode.children).filter(editable);
+    let boxes = Array.from(element.parentNode.children).filter(editable);
+    const wrapper = element.parentElement;
+    if (boxes.length === 1 && wrapper?.parentNode) {
+      boxes = Array.from(wrapper.parentNode.children, (child) => (child.children.length === 1 ? child.firstElementChild : null));
+      if (!boxes.every((control) => control !== null && editable(control))) return null;
+    }
     if (boxes.length > mostBoxes || boxes.some((control) => control.maxLength >= 0 || control.type !== element.type))
       return null;
     return place(boxes, "script");
