@@ -84,6 +84,8 @@ answers `{ success, result, error, stderr }`. Throw
   result: name it, and throw `InvalidInput` with `field` and what the page shows, before any
   commit mark, never a readiness timeout; below says when it starts "Caller input error:". The waits paragraph below shows how to
   paste `waitCode` and call it.
+- For a search step, wait for either the site's results or its own no-match state, and return the
+  site's no-match answer with its message rather than waiting on results that may never appear.
 - Wait for a change (`waitForChange`, or a settle of your own) only after a step that changed the
   page or should have, such as a click, fill or navigation that loads new results. Skip it when no
   step changed the page since the last wait, such as after closing a panel without picking
