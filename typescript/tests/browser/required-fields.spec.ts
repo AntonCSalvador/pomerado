@@ -305,20 +305,25 @@ test("unfilledRequiredFields never offers an access code, such as a gate or door
     "Promo/Access code",
     "Presale access code",
     "Coupon or access code",
+    "Early access code",
   ];
   await page.setContent(`<form>
   ${accessLabels.map((label, index) => `<label>${label}<input name="access${index}" required></label>`).join("")}
   <label>Gate<input name="gate_code" required></label>
   <label>Front door<input name="doorCode" required></label>
   <label>Card number (see note)<input name="card" required></label>
+  <label>Gate code<input name="delivery_notes[gate_code]" required></label>
+  <label for="orderNotesGate">Door code</label><input id="orderNotesGate" required>
+  <label>Access code<input name="presale_code" required></label>
   ${ordinaryLabels.map((label, index) => `<label>${label}<input name="plain${index}" required></label>`).join("")}
   <label>Delivery instructions<input name="gate_code_2" required></label>
 </form>`);
   expect(await call(page, `return await unfilledRequiredFields(page.locator("form"));`)).toEqual({
     result: [
       // By its label, or by a name such as gate_code or doorCode. A note beside another secret,
-      // such as a card number, doesn't change it.
-      ...[...accessLabels, "Gate", "Front door", "Card number (see note)"].map((label) => ({
+      // such as a card number, doesn't change it, and only the label shown can make an access
+      // code a note or an offer's code, not a name or id the page gave it.
+      ...[...accessLabels, "Gate", "Front door", "Card number (see note)", "Gate code", "Door code", "Access code"].map((label) => ({
         label,
         shape: "other",
         unsupported: true,
@@ -627,6 +632,9 @@ test("blockingRequiredFields with unaskable says when a click that saved nothing
     `<label>Delivery date<input type="date" name="date" data-flag></label>`,
     `<label><input type="radio" name="speed" value="fast" data-flag> Fast</label><label><input type="radio" name="speed" value="slow" data-flag> Slow</label>`,
     `${card}<label>Delivery date<input type="date" name="date" data-flag></label>`,
+    // A box or a choice of buttons that names a card or a bank is never the card or bank itself.
+    `<label><input type="checkbox" name="charge" data-flag> I authorize a charge to my credit card</label>`,
+    `<label><input type="radio" name="pay" value="card" data-flag> Credit card</label><label><input type="radio" name="pay" value="bank" data-flag> Bank account</label>`,
   ];
   for (const hidden of unasked) expect(await judge(hidden)).toEqual({ asked: { result: null }, plain: { result: null } });
   // A new field a question can ask is still returned to ask, with or without the option.
