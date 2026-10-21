@@ -781,6 +781,33 @@ it("has a write take the site's rewrite of a typed value and note when it change
 });
 
 /*
+ * A read's search step waited only for the site's results, so a value the site did not recognise
+ * timed out instead of returning the site's own no-match answer. Both hosts read the line once,
+ * right after the core skill's bullet on waiting for every answer a step can give.
+ */
+it("has a search step wait for the site's results or its own no-match state", async () => {
+  const line =
+    "- For a search step, wait for either the site's results or its own no-match state, and return the site's no-match answer with its message rather than waiting on results that may never appear.";
+  const root = await authoringCopy((_path, text) => text.replace(sectionMarker, ""));
+  try {
+    const hosts = [
+      await renderedTexts("typescript/authoring"),
+      await renderedTexts(root, (text) => {
+        if (text.includes("pomerado:")) throw new Error("Uncomposed section");
+        return text;
+      }),
+    ];
+    for (const texts of hosts) {
+      const core = (texts.get("core") ?? "").replace(/\s+/g, " ");
+      expect(core.split(line)).toHaveLength(2);
+      expect(core).toContain(`paste \`waitCode\` and call it. ${line} - Wait for a change`);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+/*
  * An accounting app's invoice list already showed the sent invoice, and the minter kept reading
  * other pages for minutes, some of them refused for not proving the record or for reading without
  * bound. The first bounded read-back that matches confirms the write, and nothing from before the
@@ -981,7 +1008,7 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["604104be02124a0e59c8c3c61d935bfade185d46a7a94e4153481322557ed8c8", "core"],
+    ["fac392b269bb2bcf42984f67f23d6fcdd339059d821ccabb6b51b37eaec3de98", "core"],
     ["a896a59d7b924a2940a90437b8d4488cd515c4f4afc70da9fe14953b1583dd93", "search"],
     ["7e50c86ea30964f0e3610e090c7bd7d78aac6f59a7f644644c1ad99577d59f5f", "auth"],
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
