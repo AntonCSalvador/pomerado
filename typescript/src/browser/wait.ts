@@ -1179,9 +1179,10 @@ return { outcomeWaitFailure, outcomeWaitNote, outcomeWaitChanged, outcomeWaitObs
  * click's wait. It declares that one name, its helpers inside, so code that pastes `waitCode`
  * beside a `confirmCommit` of its own still parses. It uses `page`, and `waitCode`'s `waitLimits`,
  * `waitBounded`, `waitSleep`, `outcomeWaitClean` and `outcomeWaitInvalidInPage`. Pasting it notes
- * the page's address, the text of each message it shows and its flagged fields as they stand. A
- * message whose text was there then is stale after, whatever element or page shows it, so a page
- * that draws its messages again, or a redirect to a page with the same banner, adds no error.
+ * the page's address, how many messages show each text, and its flagged fields as they stand.
+ * After, as many messages with a text as showed it then are stale, whatever element or page shows
+ * them, so a page that draws its messages again, or a redirect to a page with the same banner,
+ * adds no error, while one more message with an old text is new.
  *
  * It judges the commit from the `{ response }` answer of the click's `waitForOutcomeResult` and
  * the page, and returns `CommitConfirmation`, plain data a call can return. It never marks a write
@@ -1192,9 +1193,11 @@ return { outcomeWaitFailure, outcomeWaitNote, outcomeWaitChanged, outcomeWaitObs
  *   is `unclear` unless the page shows an error.
  * - A 2xx body that reads as JSON is `not_done` for a success field (`success`, `succeeded`,
  *   `isSuccess`, any case) that is false, `"false"`, 0 or `"no"` or holds an error word, `ok:
- *   false`, an `error`, `errors` or `userErrors` field holding an error (not empty, and not a word
- *   for none such as "No error", up to four levels down), a status of 400 or more, or an error
- *   word in a status or message. It is `unclear` for a success field holding anything but true,
+ *   false`, an error field holding an error (not empty, and not a word for none such as "No
+ *   error"), a status of 400 or more, or an error word in a status or message. An error field is
+ *   any named for errors up to two levels down, and `error`, `errors` or `userErrors` up to four;
+ *   true counts only under `error`, `errors` or `hasError(s)`, and a setting such as
+ *   `notifyOnError` is never one. It is `unclear` for a success field holding anything but true,
  *   `"true"`, 1, `"yes"`, `"ok"` or `"success"`, or a status or message that refuses a value
  *   ("required", "unable", "could not") or says declined, rejected or denied, words a write may
  *   itself have meant. A string holding JSON, as in `{ d: "..." }`, is read too. A body that is
@@ -1245,11 +1248,20 @@ const confirmCommit = await (async () => {
     if (typeof value !== "object" || depth > 3) return true;
     return (Array.isArray(value) ? value : Object.values(value)).some((each) => filled(each, depth + 1));
   };
+  // Whether a field is an error field: up to two levels down, any named for errors, as in
+  // { data: { save: { errors } } }; deeper, only error, errors and userErrors. A setting for what
+  // to do on an error, such as notifyOnError, never is.
+  const errorField = (name, depth) =>
+    !/onerrors?$/.test(name) &&
+    (depth <= 2 ? /errors?$|^error(?:message|msg|text|code)s?$/.test(name) : ["error", "errors", "usererrors"].includes(name));
+  // Whether an error field holds an error; true does only under error, errors or hasError(s).
+  const holdsError = (name, field) =>
+    field === true ? ["error", "errors", "haserror", "haserrors"].includes(name) : filled(field);
   // What a JSON body says: the first sign the write failed, the first that leaves it unclear, and
-  // the site's word for queued work. Error fields count up to four levels down, as in
-  // { data: { records: { save: { userErrors } } } }; success and ok fields up to two; status and
-  // message words up to one. A string that holds JSON, as some frameworks wrap a body in
-  // { d: "..." }, is read as one more level. It looks at 2,000 values at most.
+  // the site's word for queued work. Error fields count up to four levels down (see errorField),
+  // as in { data: { records: { save: { userErrors } } } }; success and ok fields up to two;
+  // status and message words up to one. A string that holds JSON, as some frameworks wrap a body
+  // in { d: "..." }, is read as one more level. It looks at 2,000 values at most.
   const judgeBody = (body) => {
     const found = {};
     let budget = 2000;
@@ -1267,8 +1279,8 @@ const confirmCommit = await (async () => {
           if (holds === false) found.failed ??= said;
           else if (holds === undefined) found.unclear ??= said + ", not true";
         } else if (depth <= 2 && name === "ok" && field === false) found.failed ??= said;
-        else if (/errors?$|^error(?:message|msg|text|code)s?$/.test(name)) {
-          if (filled(field)) found.failed ??= said;
+        else if (errorField(name, depth)) {
+          if (holdsError(name, field)) found.failed ??= said;
         } else if (depth <= 1 && (name === "status" || name === "statuscode") && typeof field === "number" && field >= 400)
           found.failed ??= said;
         else if (depth <= 1 && /^(?:status|state|result|outcome|message|msg|statusmessage|detail)$/.test(name) && typeof field === "string") {
@@ -1337,14 +1349,18 @@ const confirmCommit = await (async () => {
   };
   const fieldKey = (field) => field.field + "\u0000" + field.message;
   const fieldText = (field) => field.field + (field.message === "" ? " is marked invalid" : ": " + field.message);
-  // Notes the page as it stands now, before the click: its address, the text of each message it
-  // shows and its flagged fields. A message whose text was on the page then is stale, whatever
-  // element or page shows it after, as a page that draws its messages again or a redirect to a
-  // page with the same banner.
+  // Notes the page as it stands now, before the click: its address, how many messages show each
+  // text, and its flagged fields. After, as many messages with a text as showed it then are stale,
+  // whatever element or page shows them, as a page that draws its messages again or a redirect to
+  // a page with the same banner; one more with that text is new.
   const read = (promise) => waitBounded(promise.catch(() => undefined), 1000);
   const postedFrom = page.url();
   const shownBefore = await read(page.locator(messages).evaluateAll(messagesInPage));
-  const staleTexts = new Set((shownBefore ?? []).map((message) => message.text.toLowerCase()));
+  const staleCounts = new Map();
+  for (const message of shownBefore ?? []) {
+    const text = message.text.toLowerCase();
+    staleCounts.set(text, (staleCounts.get(text) ?? 0) + 1);
+  }
   const flaggedBefore = await read(page.locator("body").evaluateAll(outcomeWaitInvalidInPage));
   const staleFields = new Set((flaggedBefore ?? []).map(fieldKey));
   // One look at the page: the new errors it shows, and what it shows that leaves the write open.
@@ -1353,8 +1369,11 @@ const confirmCommit = await (async () => {
     const shown = await page.locator(messages).evaluateAll(messagesInPage);
     const errors = fields.filter((field) => !staleFields.has(fieldKey(field))).map(fieldText);
     const open = fields.filter((field) => staleFields.has(fieldKey(field))).map((field) => fieldText(field) + ", as before the click");
+    const counted = new Map();
     for (const message of shown) {
-      if (staleTexts.has(message.text.toLowerCase())) continue;
+      const text = message.text.toLowerCase();
+      counted.set(text, (counted.get(text) ?? 0) + 1);
+      if (counted.get(text) <= (staleCounts.get(text) ?? 0)) continue;
       const refuses = saysError(message.text) || saysRefusal(message.text);
       const succeeds = message.successStyle || successWords.test(message.text);
       if (refuses && !succeeds) errors.push(message.text);
