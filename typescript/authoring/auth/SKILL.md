@@ -158,10 +158,12 @@ attribute.
     into one-character boxes is one `code` field per box, every box from the first to the last, in
     order, as a split date is one field per part (below), even when the page moves the focus to
     the next box or takes a pasted code in the first. Count the boxes on the screen before you
-    send the step. The host asks once, types one character into each and submits only once each
-    box holds one. A step that names only some of the boxes, or names them out of order, comes
-    back refused as `code_boxes_incomplete`, typing nothing: its `codeBoxes` says how many boxes
-    the screen shows and which ones the step named; send the step again with all of them.
+    send the step. A step field never carries `codeBox` or any box number: the host reads each
+    box's place from the page, so send only `selector` and `slot` for each box. The host asks
+    once, types one character into each and submits only once each box holds one. A step that
+    names only some of the boxes, or names them out of order, comes back refused as
+    `code_boxes_incomplete`, typing nothing: its `codeBoxes` says how many boxes the screen shows
+    and which ones the step named; send the step again with all of them.
   - `slot: "date_of_birth"` for a date of birth, with `format`, how the field takes it, read from
     its placeholder, label, input mask or hint: `MM/DD/YYYY`, `DD/MM/YYYY`, `M/D/YYYY`,
     `D/M/YYYY`, `MM-DD-YYYY`, `DD-MM-YYYY`, `DD.MM.YYYY`, `YYYY-MM-DD`, `YYYY/MM/DD`, `MMDDYYYY`,
