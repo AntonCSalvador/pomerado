@@ -528,6 +528,86 @@ test("blockingRequiredFields proves a click saved nothing only when every flag i
   expect(await blocking(["Item"])).toEqual({ result: null });
 });
 
+/**
+ * A review whose Place order click saves nothing: it shows the fields in `hidden` and makes every
+ * field marked `data-flag` required and flags it. `shown` is on the page before the click.
+ */
+const refusingReview = (hidden: string, shown = "") => `
+<form aria-label="Review">
+  <label>Item<input name="item" required value="Fountain pen"></label>
+  ${shown}
+  <div id="later" hidden>${hidden}</div>
+  <button>Place order</button>
+</form>
+<script>
+  document.forms[0].addEventListener("submit", (event) => {
+    event.preventDefault();
+    document.querySelector("#later").hidden = false;
+    for (const field of document.querySelectorAll("[data-flag]")) {
+      field.required = true;
+      field.setAttribute("aria-invalid", "true");
+    }
+  });
+</script>`;
+
+test("blockingRequiredFields with unaskable says when a click that saved nothing flagged a field no question can ask", async ({
+  page,
+}) => {
+  const form = `page.getByRole("form", { name: "Review" })`;
+  // The labels read just before the click, then the click, then both judgments of the page it left.
+  const judge = async (hidden: string, shown = "") => {
+    await page.setContent(refusingReview(hidden, shown));
+    const before = ((await call(page, `return await visibleFieldLabels(${form});`)) as { result: string[] }).result;
+    await page.getByRole("button", { name: "Place order" }).click();
+    const blocking = (options: string) =>
+      call(page, `return await blockingRequiredFields(${form}, ${JSON.stringify(before)}${options});`);
+    return { asked: await blocking(", { unaskable: true }"), plain: await blocking("") };
+  };
+  // The click showed a card number and a bank's routing number, new, empty and required: it saved
+  // nothing, and neither is a field a site-field question may ask.
+  const card = `<label>Card number<input name="card_number" autocomplete="cc-number" data-flag></label>`;
+  const routing = `<label>Routing number<input name="routing" data-flag></label>`;
+  expect(await judge(`${card}${routing}`)).toEqual({
+    asked: { result: { unaskable: true, labels: ["Card number", "Routing number"] } },
+    plain: { result: null },
+  });
+  // Beside a field a question can ask, only the ones it can't are named.
+  expect(await judge(`<label>Delivery phone<input name="phone" data-flag></label>${card}`)).toEqual({
+    asked: { result: { unaskable: true, labels: ["Card number"] } },
+    plain: { result: null },
+  });
+  // Any other field a question can't ask counts too, such as a box to tick.
+  expect(await judge(`<label><input type="checkbox" name="terms" data-flag> I accept the terms</label>`)).toEqual({
+    asked: { result: { unaskable: true, labels: ["I accept the terms"] } },
+    plain: { result: null },
+  });
+  // A new field a question can ask is still returned to ask, with or without the option.
+  const phone = { result: { fields: [{ label: "Delivery phone", shape: "text" }] } };
+  expect(await judge(`<label>Delivery phone<input name="phone" data-flag></label>`)).toEqual({
+    asked: phone,
+    plain: phone,
+  });
+  // A card field already showing before the click proves nothing, since a save may have cleared it.
+  expect(await judge("", card)).toEqual({ asked: { result: null }, plain: { result: null } });
+  expect(await judge(routing, card)).toEqual({ asked: { result: null }, plain: { result: null } });
+  // Nothing flagged, a flagged value beside the card, or a flagged field with no label to tell it
+  // by proves nothing either.
+  expect(await judge(`<label>Card number<input name="card_number" autocomplete="cc-number"></label>`)).toEqual({
+    asked: { result: null },
+    plain: { result: null },
+  });
+  expect(await judge(`${card}<label>Promo code<input name="promo" value="OLD10" data-flag></label>`)).toEqual({
+    asked: { result: null },
+    plain: { result: null },
+  });
+  expect(await judge(`<input name="reference" data-flag>`)).toEqual({ asked: { result: null }, plain: { result: null } });
+  // The form gone is no longer the same step.
+  await page.setContent(`<p>Order ORD-1001 is placed.</p>`);
+  expect(await call(page, `return await blockingRequiredFields(${form}, ["Item"], { unaskable: true });`)).toEqual({
+    result: null,
+  });
+});
+
 test("unfilledRequiredFields with before lists only the labelled fields that answers showed or enabled", async ({
   page,
 }) => {
