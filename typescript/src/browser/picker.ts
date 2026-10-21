@@ -498,13 +498,15 @@ const pickerPageCode = String.raw`(element, args) => {
  * Select or OK button, or double-clicks the row, when a click alone leaves the dialog open).
  *
  * Matching (see `rankChoices`): a name or value as written, then ignoring case and spacing, then
- * accents and punctuation, then a name holding the value as whole words, then, only with
- * `options.stem` set to true (as a read sets it; `pickValues` takes it too), a name whose words
- * each begin the value's or begin with them, such as Dentistry for Dentist (rank `stem`). An
+ * accents and punctuation, then, only for `pickValue` with `tie: "first"`, a name whose text
+ * before its first comma (not one between digits) is the value, ignoring the same (rank `leading`:
+ * York, UK for York), then a name holding the value as whole words (New York for York), then,
+ * only with `options.stem` set to true (as a read sets it; `pickValues` takes it too), a name whose
+ * words each begin the value's or begin with them, such as Dentistry for Dentist (rank `stem`). An
  * option's names are its text, first line, accessible name, `title` and, for a table row, each
  * cell, and its value is `data-value`, `value`, `data-id`, `data-key` or `data-code` (put others
- * first with `options.valueAttributes`). Two options at the best rank are ambiguous; an "Add ..." or
- * "Create ..." row is never matched.
+ * first with `options.valueAttributes`). Two options at the best rank are ambiguous; an "Add ..."
+ * or "Create ..." row is never matched.
  *
  * Waits follow the page, never a fixed pause: after typing, the options count once no loading
  * sign shows (a busy region, an indeterminate progress bar, a loading or spinner class, a
@@ -544,8 +546,11 @@ const pickerPageCode = String.raw`(element, args) => {
  * `{ picked: false, reason, wanted, available, matches }`, where `reason` is `option_missing`,
  * `option_ambiguous` (`matches` lists the options that tie) or `option_disabled`, and
  * `available` every enabled option it listed. Decode with `PickOutcome` and throw
- * `pickRefusal(outcome, field)` (`InvalidInput` with `field` and `available`), or ask the caller to
- * choose among `matches`. Success is `{ picked: true, kind, label, value, rank, refills }`.
+ * `pickRefusal(outcome, field)` (`InvalidInput` with `field` and `available`), or, on a write, ask
+ * the caller to choose among `matches`. On a read, pass `tie: "first"`, so the picker takes the
+ * first of the tied options in the site's order and returns the one it used. Success is
+ * `{ picked: true, kind, label, value, rank, refills }`, plus `tied`, the options that tied, when
+ * `tie: "first"` took one.
  * Everything else throws an Error named `PickerFailure` whose message is a fixed reason, never a
  * value: `wanted_missing`, `popup_missing` (the control opened nothing), `options_loading` (still
  * loading, or more list to read, at the timeout), `not_committed` (the field never kept the
@@ -555,7 +560,7 @@ export const pickerCode = String.raw`
 const pickerFailure = (reason) => Object.assign(new Error(reason), { name: "PickerFailure" });
 const pickerFold = ${String(foldChoiceText)};
 const pickerRankChoices = ${String(rankChoices)};
-const pickerRank = (s, list, wanted) => pickerRankChoices(list, wanted, pickerFold, { stem: s.options.stem === true });
+const pickerRank = (s, list, wanted) => pickerRankChoices(list, wanted, pickerFold, { leading: s.tie === true, stem: s.options.stem === true });
 const pickerPage = ${pickerPageCode};
 const pickerLimits = Object.freeze(${JSON.stringify({
   timeout: 10_000,
@@ -790,10 +795,16 @@ const pickerMatches = (options) => {
   const texts = options.map((option, index) => (labels.indexOf(labels[index]) === labels.lastIndexOf(labels[index]) ? labels[index] : option.names?.[1] ?? labels[index]));
   return texts.map((text, index) => (texts.indexOf(text) === texts.lastIndexOf(text) || !options[index].value ? text : text + " [" + options[index].value + "]"));
 };
-const pickerOutcome = (found, wanted) => {
+// With tie "first", options that tie give the first enabled one in the list's order, kept by its
+// position (its key or index), never found again by a label another option may share; every
+// tied option greyed out is a value the site does not offer now.
+const pickerOutcome = (found, wanted, tie = false) => {
   const { ranking, list } = found;
   if (ranking.status === "picked") return { status: "picked", option: list[ranking.index], rank: ranking.rank };
-  const reason = ranking.status === "ambiguous" ? "option_ambiguous" : ranking.status === "disabled" ? "option_disabled" : "option_missing";
+  const tied = ranking.status === "ambiguous" ? ranking.indexes.map((index) => list[index]) : [];
+  const first = tie ? tied.find((option) => !option.disabled) : undefined;
+  if (first) return { status: "picked", option: first, rank: ranking.rank, tied: pickerMatches(tied) };
+  const reason = ranking.status === "ambiguous" ? (tie ? "option_disabled" : "option_ambiguous") : ranking.status === "disabled" ? "option_disabled" : "option_missing";
   return {
     status: "refused",
     refusal: {
@@ -801,10 +812,20 @@ const pickerOutcome = (found, wanted) => {
       reason,
       wanted: wanted[0],
       available: pickerAvailable(list),
-      matches: ranking.status === "ambiguous" ? pickerMatches(ranking.indexes.map((index) => list[index])) : ranking.status === "disabled" ? [list[ranking.index].label] : [],
+      matches: ranking.status === "ambiguous" ? pickerMatches(tied) : ranking.status === "disabled" ? [list[ranking.index].label] : [],
     },
   };
 };
+// The success a pick returns, naming the options that tied when tie "first" took one of them.
+const pickerPicked = (kind, found, refills) => ({
+  picked: true,
+  kind,
+  label: found.option.label,
+  value: found.option.value,
+  rank: found.rank,
+  refills,
+  ...(found.tied ? { tied: found.tied } : {}),
+});
 const pickerFieldValue = (field, s) =>
   field.evaluate((node) => (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ? node.value : node.textContent ?? ""), undefined, s.act());
 // Types a query three ways, each a fallback for a field that ignored the one before: filled at
@@ -883,7 +904,7 @@ const pickerOpen = async (s) => {
 const pickerFind = async (s, wanted) => {
   if (s.kind === "typeahead") {
     const { found, field, available } = await pickerQuery(s, s.control, wanted);
-    const outcome = pickerOutcome(found, wanted);
+    const outcome = pickerOutcome(found, wanted, s.tie);
     if (outcome.status === "refused" && available && outcome.refusal.reason === "option_missing")
       outcome.refusal.available = [...new Set([...outcome.refusal.available, ...available])].slice(0, 100);
     return { ...outcome, field, scan: found.scan };
@@ -894,9 +915,9 @@ const pickerFind = async (s, wanted) => {
   const search = s.options.search ?? (found.scan.search || scan.search ? pickerTag(s, "data-pomerado-pick-search", s.token) : null);
   // A list too long to read whole is narrowed with its search box, or not judged at all.
   if (!found.complete && search === null) throw pickerFailure("options_loading");
-  if (strong || search === null) return { ...pickerOutcome(found, wanted), field: s.control, scan: found.scan, popupKind: scan.kind };
+  if (strong || search === null) return { ...pickerOutcome(found, wanted, s.tie), field: s.control, scan: found.scan, popupKind: scan.kind };
   const queried = await pickerQuery(s, search, wanted, pickerAvailable(found.list));
-  const outcome = pickerOutcome(queried.found.ranking.status === "missing" && found.complete && found.ranking.status !== "missing" ? found : queried.found, wanted);
+  const outcome = pickerOutcome(queried.found.ranking.status === "missing" && found.complete && found.ranking.status !== "missing" ? found : queried.found, wanted, s.tie);
   if (outcome.status === "refused" && queried.available && outcome.refusal.reason === "option_missing")
     outcome.refusal.available = [...new Set([...outcome.refusal.available, ...queried.available])].slice(0, 100);
   return { ...outcome, field: search, scan: queried.found.scan ?? found.scan, popupKind: scan.kind };
@@ -1077,7 +1098,7 @@ const pickerNativeOptions = (control, s) =>
   }, undefined, s.act());
 const pickerNative = async (s, wanted) => {
   const list = await pickerNativeOptions(s.control, s);
-  const outcome = pickerOutcome({ ranking: pickerRank(s, list, wanted), list }, wanted);
+  const outcome = pickerOutcome({ ranking: pickerRank(s, list, wanted), list }, wanted, s.tie);
   if (outcome.status === "refused") return outcome.refusal;
   const option = outcome.option;
   const force = !(await pickerEval(s, "select-shown"));
@@ -1087,14 +1108,14 @@ const pickerNative = async (s, wanted) => {
     const kept = await pickerConfirm(s, option, since, () =>
       s.control.evaluate((select, index) => select.selectedIndex === index, option.index, { timeout: Math.min(1000, s.left()) }).catch(() => false),
     );
-    if (kept === "kept") return { picked: true, kind: "select", label: option.label, value: option.value, rank: outcome.rank, refills: attempt };
+    if (kept === "kept") return pickerPicked("select", outcome, attempt);
     if (Date.now() >= s.until) break;
   }
   throw pickerFailure("not_committed");
 };
 const pickerDatalist = async (s, wanted) => {
   const list = await pickerNativeOptions(s.control, s);
-  const outcome = pickerOutcome({ ranking: pickerRank(s, list, wanted), list }, wanted);
+  const outcome = pickerOutcome({ ranking: pickerRank(s, list, wanted), list }, wanted, s.tie);
   if (outcome.status === "refused") return outcome.refusal;
   const option = outcome.option;
   for (let attempt = 0; attempt <= s.refills; attempt++) {
@@ -1102,7 +1123,7 @@ const pickerDatalist = async (s, wanted) => {
     await s.control.fill(option.value, s.act());
     await pickerBlur(s, pickerTry(s.options, attempt, 0).blur, s.control);
     const kept = await pickerConfirm(s, option, since, async () => (await pickerFieldValue(s.control, s).catch(() => null)) === option.value);
-    if (kept === "kept") return { picked: true, kind: "datalist", label: option.label, value: option.value, rank: outcome.rank, refills: attempt };
+    if (kept === "kept") return pickerPicked("datalist", outcome, attempt);
   }
   throw pickerFailure("not_committed");
 };
@@ -1118,6 +1139,7 @@ const pickValue = async (control, wanted, options = {}) => {
   const spellings = pickerWanted(wanted);
   const s = await pickerStart(control, options);
   try {
+    s.tie = options.tie === "first";
     s.kind = await pickerDetect(s);
     if (s.kind === "select" || s.kind === "select-multiple") return await pickerNative(s, spellings);
     if (s.kind === "datalist") return await pickerDatalist(s, spellings);
@@ -1138,7 +1160,7 @@ const pickValue = async (control, wanted, options = {}) => {
       if (did) {
         await pickerBlur(s, blur, found.field === s.control ? s.control : null);
         if ((await pickerConfirm(s, found.option, since)) === "kept")
-          return { picked: true, kind: s.kind, label: found.option.label, value: found.option.value, rank: found.rank, refills: attempt };
+          return pickerPicked(s.kind, found, attempt);
       } else switches++;
       if (Date.now() >= s.until && !acted) throw pickerFailure("timeout");
       if (attempt >= s.refills || Date.now() >= s.until) throw pickerFailure("not_committed");
@@ -1207,7 +1229,7 @@ const pickValues = async (control, values, options = {}) => {
         let found = await pickerFind(s, wanted);
         // A free-entry value is created rather than replaced by a suggestion that only holds it
         // or shares its stem.
-        if (options.create && found.status === "picked" && ["words", "stem"].includes(found.rank))
+        if (options.create && found.status === "picked" && ["leading", "words", "stem"].includes(found.rank))
           found = { status: "refused", field: found.field, refusal: { picked: false, reason: "option_missing", wanted: wanted[0], available: [], matches: [] } };
         const since = pickerMark(s);
         const showsChip = (label) => async () => {
@@ -1326,6 +1348,8 @@ export const PickOutcome = Schema.Union(
     value: Schema.String,
     rank: Schema.Literal(...pickerRanks),
     refills: Schema.Number,
+    // Only after `tie: "first"` took the first of several: the options that tied, as `matches` lists them.
+    tied: Schema.optional(Schema.Array(Schema.String)),
   }),
   NotPicked,
 );
