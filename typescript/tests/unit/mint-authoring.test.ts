@@ -938,6 +938,32 @@ it("has a write follow the site's substitute only when the caller's task asks fo
   );
 });
 
+// The core and caller-input rules that refuse an unoffered value or forbid another one each name
+// that one exception, so no older rule reads as overriding it.
+it("has every unoffered-value rule name the task-asked substitute exception", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  const only =
+    "a write follows the site's preselected substitute only when the caller's own task asks for whatever the site ends up with (writes skill).";
+  const instead =
+    "A write follows the site's preselected substitute instead when the caller's own task asks for whatever the site ends up with (writes skill).";
+  expect(text("core")).toContain(
+    `Never pick a near match, the page's default or the first option; the same proper noun in another usual form is not a near match (input schema above). ${instead} A broader choice that covers the value`,
+  );
+  expect(text("core")).toContain(
+    `A write throws \`InvalidInput\` with \`field\` and \`available\`, the selectable options. Neither picks another value for the caller; ${only} - For an input whose options depend on another`,
+  );
+  expect(text("caller-input")).toContain(
+    `Don't add your own constraints between inputs, filter them, or swap in a value the caller didn't give; ${only} For example,`,
+  );
+  expect(text("caller-input")).toContain(
+    `as selectable, exactly as shown, whenever the page lists them. The caller corrects the input and runs again. ${instead} - \`InputNotApplied\`:`,
+  );
+  expect(text("caller-input")).toContain(
+    `it follows .agents/core/SKILL.md ("Configure, then read"), which never substitutes another value; ${only} Asking the owner`,
+  );
+});
+
 // An access code is asked privately, as the site-field question's secret classification treats it.
 it("asks for an access code with a private secret question", async () => {
   const texts = await renderedTexts("typescript/authoring");
