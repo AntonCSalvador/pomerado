@@ -143,7 +143,8 @@ During the session:
   for the caller's values, from a summary, a review page or each saved page, in the session
   and in the composed script. Compare each value the site shows with
   `readBackMatches(shown, wanted)` from `pomerado/runtime`, against the option the tool picked
-  when it picked one: `wanted` is that option's label, and the caller's value otherwise. It
+  when it picked one, or the site's version of a typed value it rewrote (above): `wanted` is
+  that option's label or that version, and the caller's value otherwise. It
   accepts the same value in another format or word order, and every number must match
   exactly, the same numbers in the same order. When the site kept a different value, save that
   page again once with the same entries and read it back again, but only when saving it again
