@@ -827,6 +827,25 @@ it("teaches every write to call verified() with no argument and declare a read-b
   expect(bookSeat.write).toEqual({ confirmation: "readback", commits: ["book-seat"] });
 });
 
+// A click that saved nothing but flagged a field no question may ask ends as the caller's refusal,
+// with the step unsent, never a second click.
+it("has a write refuse a field no site-field question may ask once its click saved nothing", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("writes")).toContain(
+    "When `blockingRequiredFields(form, before, { unaskable: true })` returns `{ unaskable: true }` after the step's first click, the click saved nothing but a field it flagged is one no site-field question may ask, such as a card or bank field: call `notCommitted` for the step, then throw `InvalidInput` that names the field by its label, and don't click again.",
+  );
+});
+
+// An access code is asked privately, as the site-field question's secret classification treats it.
+it("asks for an access code with a private secret question", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("caller-input")).toContain(
+    "Prefer a `secret` question of kind `private_text` for an access code, such as a gate, door, alarm or lockbox code.",
+  );
+});
+
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /*
@@ -853,9 +872,9 @@ it("renders the pinned standalone authoring", async () => {
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["d71e45c5b1f13bcf26c6a22bc455b1da93c1276b8e73f5d7db6ec302f62a6a04", "forms"],
-    ["26a4bdf2c43624087a41022a59828d1782a528d46d9e11dc044de13aa7f6f14d", "writes"],
+    ["14bc762731cf3b3bec15b3e0561f26847f99a279f8123abf5379db8eacf2dfd2", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["069745a7850f9bc4bb26c7d4699532309c44d371072d2f4b8a826e6eada2379c", "caller-input"],
+    ["a97a3bdb8a979d6f0230005ce8ae12b4789af3f5afccca8fb1ce4a450d8b668d", "caller-input"],
     ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],
     ["ca25d414d25ba51222fbd7014de75173308bc46d6fc237cc527f47837b1992fc", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
