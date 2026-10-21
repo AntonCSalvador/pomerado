@@ -495,8 +495,15 @@ it("keeps a batch whose failure still stands on the source in the example review
  * sees on unchanged source, with their verdicts.
  */
 const failuresSeenByExample = async (
-  batches: readonly { readonly entrypoint: string; readonly cases: readonly string[] }[],
+  batches: readonly {
+    readonly entrypoint: string;
+    readonly cases: readonly string[];
+    /** src/tool.ts as the agent rewrites it before this batch runs. */
+    readonly source?: string;
+  }[],
   outcomes: (batch: number) => Readonly<Record<string, LiveTestOutcome>>,
+  /** src/tool.ts as the agent leaves it before the example. */
+  sourceAtExample?: string,
 ) => {
   const { host } = liveTestHost(outcomes);
   let bound: Effect.Effect<readonly ReviewedLiveTestBatch[]> | undefined;
@@ -512,18 +519,25 @@ const failuresSeenByExample = async (
       reviewed.push(yield* bound ?? Effect.succeed([]));
       return yield* completedExample(input, beforeDispatch);
     });
+  let root = "";
   const f = await fixture(
-    (_request, index) =>
-      [
-        ...batches.map(({ entrypoint, cases: ids }, batch) =>
-          call("live_tests", { ...runAll, entrypoint, cases: ids }, `batch-${batch}`),
-        ),
-        call("execute", example, "example"),
-      ][index] ?? prose(),
+    async (_request, index) => {
+      const source = index < batches.length ? batches[index]?.source : sourceAtExample;
+      if (index <= batches.length && source !== undefined)
+        await writeWorkspace(root, { "src/tool.ts": source });
+      return (
+        [
+          ...batches.map(({ entrypoint, cases: ids }, batch) =>
+            call("live_tests", { ...runAll, entrypoint, cases: ids }, `batch-${batch}`),
+          ),
+          call("execute", example, "example"),
+        ][index] ?? prose()
+      );
+    },
     { liveTests: binding, deadline: Deadline.after(30 * 60_000), reviewAndExecute },
     read,
   );
-  const root = (f.workspace as unknown as { root: string }).root;
+  root = (f.workspace as unknown as { root: string }).root;
   await writeWorkspace(root, {
     "src/tool.ts": toolSource,
     "src/other.ts": `${toolSource}// another version\n`,
@@ -541,6 +555,10 @@ const singles = ["repeat-1", "sort-price", "page-2"].map((id) => ({ entrypoint: 
 const resultsForNothing = {
   nothing: { status: "completed", output: { results: [{ name: "Lamp" }], has_next_page: false, next_cursor: null } },
 } as const;
+/** `nothing` finds no results, as it expects, so it passes. */
+const nothingPasses = {
+  nothing: { status: "completed", output: { results: [], has_next_page: false, next_cursor: null } },
+} as const;
 
 it("keeps a failure in review when the case passes only on another entrypoint", async () => {
   const failures = await failuresSeenByExample(
@@ -550,7 +568,25 @@ it("keeps a failure in review when the case passes only on another entrypoint", 
       ...singles,
     ],
     // `nothing` fails on the first batch and passes on the other entrypoint's.
-    (batch) => (batch === 0 ? resultsForNothing : {}),
+    (batch) => (batch === 0 ? resultsForNothing : nothingPasses),
+  );
+  expect(failures).toEqual(["nothing:fail"]);
+});
+
+it("keeps a failure in review when the source goes back to the one it failed on", async () => {
+  const edited = `${toolSource}// edited\n`;
+  const onEdited = (ids: readonly string[]) => ({ entrypoint: "src/tool.ts", cases: ids, source: edited });
+  const failures = await failuresSeenByExample(
+    [
+      // `nothing` fails on the original source, then on the edited one, then passes there.
+      { entrypoint: "src/tool.ts", cases: allCases },
+      onEdited(["nothing"]),
+      ...["repeat-1", "sort-price", "page-2", "repeat-1"].map((id) => onEdited([id])),
+      onEdited(["nothing"]),
+    ],
+    (batch) => (batch === 6 ? nothingPasses : resultsForNothing),
+    // The agent reverts the edit exactly before the example.
+    toolSource,
   );
   expect(failures).toEqual(["nothing:fail"]);
 });

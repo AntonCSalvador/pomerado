@@ -3750,52 +3750,59 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         (record) => record.retired === true,
       );
       /**
-       * This attempt's latest judged live test batches, each with the digest of the source it ran,
-       * for the host's execution reviews. In memory: a takeover starts without them.
+       * This attempt's judged live test batches that an execution review may still read, oldest
+       * first, each with the digest of the source it ran and the failing cases a later pass on the
+       * same entrypoint and source released. In memory: a takeover starts without them.
        */
-      const judgedBatches: Omit<ReviewedLiveTestBatch, "sourceUnchanged">[] = [];
-      /** Every batch judged in this attempt, oldest first, which decides whose failures stand. */
-      const batchHistory: (typeof judgedBatches)[number][] = [];
+      const batchHistory: {
+        readonly batch: Omit<ReviewedLiveTestBatch, "sourceUnchanged">;
+        readonly released: Set<string>;
+      }[] = [];
       /**
        * The failures a batch holds that still stand, each keyed by entrypoint, case and verdict:
        * cases that did not pass in it and have not passed since in a batch on the same entrypoint
        * and source. A pass elsewhere, or an inconclusive rerun, releases nothing.
        */
-      const standingFailures = (batch: (typeof judgedBatches)[number]) => {
-        const later = batchHistory
-          .slice(batchHistory.indexOf(batch) + 1)
-          .filter(
-            (next) =>
-              next.entrypoint === batch.entrypoint && next.sourceDigest === batch.sourceDigest,
-          );
-        return batch.cases
-          .filter(
-            (ran) =>
-              ran.verdict !== "pass" &&
-              !later.some((next) =>
-                next.cases.some((rerun) => rerun.id === ran.id && rerun.verdict === "pass"),
-              ),
-          )
+      const standingFailures = ({ batch, released }: (typeof batchHistory)[number]) =>
+        batch.cases
+          .filter((ran) => ran.verdict !== "pass" && !released.has(ran.id))
           .map((ran) => `${batch.entrypoint}\n${ran.id}\n${ran.verdict}`);
-      };
       /**
-       * Keeps the latest `reviewedLiveTestBatches` batches, and past them any batch holding a
-       * failure that still stands and no newer kept batch holds, so passing reruns of some cases
-       * never push a failure of another out of the review's view. At most one older batch stays
-       * for each entrypoint, case and verdict.
+       * What a review reads: the latest `reviewedLiveTestBatches` batches, and the newest batch
+       * holding each failure that still stands, so passing reruns of some cases never push a
+       * failure of another out of view and a failure on a source the workspace returns to is
+       * still there. At most one older batch stays for each entrypoint, case and verdict.
        */
-      const dropOldBatches = () => {
-        for (let index = judgedBatches.length - reviewedLiveTestBatches - 1; index >= 0; index -= 1) {
-          const batch = judgedBatches[index];
-          if (batch === undefined) continue;
-          const newer = new Set(judgedBatches.slice(index + 1).flatMap(standingFailures));
-          if (standingFailures(batch).every((failure) => newer.has(failure)))
-            judgedBatches.splice(index, 1);
+      const reviewedBatches = () => {
+        const latest = batchHistory.slice(-reviewedLiveTestBatches);
+        const newestHolders = new Map(
+          batchHistory.flatMap((entry) => standingFailures(entry).map((key) => [key, entry] as const)),
+        );
+        const shown = new Set([...latest, ...newestHolders.values()]);
+        return batchHistory.filter((entry) => shown.has(entry)).map((entry) => entry.batch);
+      };
+      /** Records a judged batch, its passes releasing earlier failures on the same source. */
+      const recordBatch = (batch: (typeof batchHistory)[number]["batch"]) => {
+        const passed = batch.cases.filter((ran) => ran.verdict === "pass").map((ran) => ran.id);
+        for (const earlier of batchHistory)
+          if (
+            earlier.batch.entrypoint === batch.entrypoint &&
+            earlier.batch.sourceDigest === batch.sourceDigest
+          )
+            for (const id of passed) earlier.released.add(id);
+        batchHistory.push({ batch, released: new Set() });
+        // A batch outside the latest few with no standing failure can never be read again.
+        const latest = new Set(batchHistory.slice(-reviewedLiveTestBatches));
+        for (let index = batchHistory.length - 1; index >= 0; index -= 1) {
+          const entry = batchHistory[index];
+          if (entry !== undefined && !latest.has(entry) && standingFailures(entry).length === 0)
+            batchHistory.splice(index, 1);
         }
       };
+      let batchesJudged = 0;
       dependencies.liveTests?.bindBatches?.(
         Effect.suspend(() =>
-          Effect.forEach([...judgedBatches], (batch) =>
+          Effect.forEach(reviewedBatches(), (batch) =>
             stepDigest(batch.entrypoint).pipe(
               Effect.map(
                 (digest): ReviewedLiveTestBatch => ({
@@ -4286,8 +4293,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               ...(signedInBatch ? { signedIn: true as const } : {}),
             });
           }
-          const judgedBatch = {
-            batchId: result.reviewId ?? `live-tests-${batchHistory.length + 1}`,
+          batchesJudged += 1;
+          recordBatch({
+            batchId: result.reviewId ?? `live-tests-${batchesJudged}`,
             entrypoint: request.entrypoint,
             sourceDigest,
             cases: judgedRuns.map(({ run, judged }) => ({
@@ -4295,10 +4303,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               verdict: judged.verdict,
               ...(run.start === undefined ? {} : { start: run.start }),
             })),
-          };
-          batchHistory.push(judgedBatch);
-          judgedBatches.push(judgedBatch);
-          dropOldBatches();
+          });
           yield* reportBestEffort(
             dependencies.diagnostics?.emit("mint.live_tests", {
               cases: selected.length,
