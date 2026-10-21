@@ -294,6 +294,12 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "publication",
     "## Check before `finish_build` Before your first `finish_build`, prefer checking the tool against each rule the request states for its inputs, outputs and refusals.",
   ],
+  // Most extra publication rounds were defects the builder could find in its own source, so before
+  // every call, not only the first, it checks its fields, returns, caller values and live cases.
+  [
+    "publication",
+    "Before each `finish_build`, the first and every later one, prefer one pass over your own source with four questions: for each output field, which line fills it and whether its description says where that value comes from; for each branch that returns, whether it returns every required field with values read on this run; for each value the caller gave or answered through `ask`, whether the output labels it as caller input; and whether any live test case still ends failed or flaky on the source you publish. Fix what this finds before you call.",
+  ],
   [
     "publication",
     "- Published files are all of `src/`, the named entrypoints and any `explore/`, `test/` or `scratch/` module they import",
@@ -867,7 +873,7 @@ it("renders the pinned standalone authoring", async () => {
     ["7bf5c2296c39e505b24194fd3310ef26c0e0ee40195d06c6dc0b19bbd20918e9", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["ea9d5d74105419ecb92233f65056b8fca62b4c5d70f1831e1ef2d8bb276f8fe7", "caller-input"],
-    ["af911dcfd7c16e3aa161cb09273d055589d080150a0c007f0a45a70db7ed2445", "publication"],
+    ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],
     ["ca25d414d25ba51222fbd7014de75173308bc46d6fc237cc527f47837b1992fc", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
