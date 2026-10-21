@@ -1002,6 +1002,52 @@ it("has a write refuse a field no site-field question may ask once its click sav
   );
 });
 
+// A write still refuses an option the page does not offer, unless the caller's own task asks for
+// whatever the site ends up with: then it follows the site's preselected substitute and returns it.
+it("has a write follow the site's substitute only when the caller's task asks for what it ends up with", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const writes = (texts.get("writes") ?? "").replace(/\s+/g, " ");
+  // The refusal rule stays as it was, and the exception comes right after it.
+  expect(writes).toContain(
+    "- When one of those checks rules the task out, such as a total over the caller's limit, an item out of stock or a variant the page does not offer, the script refuses before the mark with `InvalidInput` (the caller-input skill, \"Throw the error that matches what happened\"), or returns a refusal its output schema declares before its first mark (below).",
+  );
+  expect(writes).toContain(
+    "A report of the form's fields, its validation messages or the options to pick from is a refusal (`InvalidInput` with `available`) or a failure (`OperationFailure`), not the write's output.",
+  );
+  expect(writes).toContain(
+    "(`site_declined` when the site refused this example). A build whose session never reached the end publishes nothing. - When the caller's own task asks for whatever the site ends up with, such as the product a quote ended up on, follow the site's preselected substitute and return the value the site used instead of throwing `InvalidInput`. Only the caller's task text counts this way; an output field or description you wrote does not. - When a write's form adds required fields",
+  );
+});
+
+// The core and caller-input rules that refuse an unoffered value or forbid another one each name
+// that one exception, so no older rule reads as overriding it.
+it("has every unoffered-value rule name the task-asked substitute exception", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  const only =
+    "a write follows the site's preselected substitute only when the caller's own task asks for whatever the site ends up with (writes skill).";
+  const instead =
+    "A write follows the site's preselected substitute instead when the caller's own task asks for whatever the site ends up with (writes skill).";
+  expect(text("core")).toContain(
+    `Never pick a near match, the page's default or the first option; the same proper noun in another usual form is not a near match (input schema above). ${instead} A broader choice that covers the value`,
+  );
+  expect(text("core")).toContain(
+    `A write throws \`InvalidInput\` with \`field\` and \`available\`, the selectable options. Neither picks another value for the caller; ${only} - For an input whose options depend on another`,
+  );
+  expect(text("caller-input")).toContain(
+    `Don't add your own constraints between inputs, filter them, or swap in a value the caller didn't give; ${only} For example,`,
+  );
+  expect(text("caller-input")).toContain(
+    `as selectable, exactly as shown, whenever the page lists them. The caller corrects the input and runs again. ${instead} - \`InputNotApplied\`:`,
+  );
+  expect(text("caller-input")).toContain(
+    `it follows .agents/core/SKILL.md ("Configure, then read"), which never substitutes another value; ${only} Asking the owner`,
+  );
+  expect(text("caller-input")).toContain(
+    `- An option the page lists but greys out, such as a booked date or a sold-out size: not an error on a read, \`InvalidInput\` with \`available\` on a write (core skill, "Configure, then read"); ${only} - A write that declines`,
+  );
+});
+
 // An access code is asked privately, as the site-field question's secret classification treats it.
 it("asks for an access code with a private secret question", async () => {
   const texts = await renderedTexts("typescript/authoring");
@@ -1031,17 +1077,17 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["d505d23c2ef6b234262cdf0d1ec48af4d8916ee60c77a52280df33ab733f4452", "core"],
+    ["e8146b7d1b924a0b1c24da4f167c64f653fa3e8832e1169ca11eeccffe8db4fb", "core"],
     ["a896a59d7b924a2940a90437b8d4488cd515c4f4afc70da9fe14953b1583dd93", "search"],
     ["e1b24b29d645071fa265f37d0fae3bb5be2b38798a32ecdbd7d5a6826a1c9248", "auth"],
     ["d720cd4d66afaf411cf14dbce6a026f72e2830e203c284e87248dfaff920f44c", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["d2256259f30d4da5f46f50e6d012834a29f0f08526b02a5696fada8e9b47bbda", "forms"],
-    ["3595bdee2bbaca82abd714893adb503a1244e375bee51923acfd624334a578ca", "writes"],
+    ["e67bf0f3784993f9f3c1ec29d00d5bc4e46450026600f6ae88d76b4f149d9f5d", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["ef6f1840e268b678cf0a9367f3314cc408854a015359199b1f37b736abbadf71", "caller-input"],
+    ["b9a8d04d893e49bd617fe5faa7b92966f1bf58bb9a5c364cc51b313acb711a51", "caller-input"],
     ["3855dfaddc3e2ef61282b67344e61f667723f120dd0cd33d70d394504aa274ab", "publication"],
-    ["ca25d414d25ba51222fbd7014de75173308bc46d6fc237cc527f47837b1992fc", "workspace/AGENTS.md"],
+    ["2ba8341af604bb965b0beec5ae8ca19cf5fb907b0b535ba82a635be0845b79a3", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
@@ -1162,7 +1208,7 @@ it("renders the search URL fast path only when a host turns it on", async () => 
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
     ["ea3c3bc8472c8c9db7aa9dd9b99b682f525f5ab55c091b944946dcf75f5ec83e", "search"],
-    ["957b0dd8a40a455582a99b28ee2f487cb6c3aecf165ba25d4bcfe6659aefd9c6", "workspace/AGENTS.md"],
+    ["0ae14c27e398eb641d96eaef6d4ebe0a47ef6a5d1297d1071524f50f467d1fab", "workspace/AGENTS.md"],
   ]);
   expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(
     off.digests.filter(([, name]) => name !== "search"),

@@ -2843,3 +2843,310 @@ it("counts no result that ran on an earlier source", async () => {
   expect(published.seen).toHaveLength(1);
   expect(published.seen[0]?.coverage).toContain("0 pass, 0 fail, 0 inconclusive, 23 stale");
 });
+
+// A host can hold publication review while a counted case fails on the source being published
+// (`LiveTestHost.holdReviewOnFailingCases`). The review would deny such a build on that case
+// anyway, as a schema mismatch at the line it threw from, after minutes of review time. So
+// finish_build names the failing cases and starts no review, and the minter fixes the code or
+// retires the case. Once no case can run again, the review decides on the record as before.
+
+/** `host` as a host that holds publication review while a counted case fails. */
+const holdingReview = (host: LiveTestHost): LiveTestHost => ({
+  ...host,
+  holdReviewOnFailingCases: true,
+});
+
+/**
+ * Publication through a scripted Guardian review, as a host runs it: Guardian starts, then holds
+ * publication back on each case that fails on the published Playwright source, as a schema
+ * mismatch at the line it threw from, and allows it otherwise. `events` lists what each review
+ * emitted.
+ */
+const guardianPublication = () => {
+  const events: string[] = [];
+  const publish: MintDependencies["publish"] = (_request, _evidence, hostEvidence) =>
+    Effect.suspend(() => {
+      events.push("guardian.started");
+      const record = hostEvidence?.liveTests as
+        | { readonly cases: readonly { readonly id: string; readonly results: Record<string, { readonly status: string }> }[] }
+        | undefined;
+      const failing = (record?.cases ?? []).filter(
+        (testCase) => testCase.results["playwright"]?.status === "fail",
+      );
+      if (failing.length === 0) {
+        events.push("guardian.completed:allow");
+        return Effect.succeed({ publicationRef: "published_revision", diagnostics: [] });
+      }
+      events.push("guardian.completed:deny");
+      return Effect.fail(
+        new MintFailure({
+          code: "ReviewDenied",
+          review: {
+            outcome: "deny",
+            reason: "source_correction",
+            reviewId: "review_publication",
+            rationale: "A live test case fails on the source being published.",
+            findings: failing.map((testCase) => ({
+              path: "src/tool.ts",
+              byteStart: 0,
+              byteEnd: 10,
+              category: "schema_mismatch" as const,
+              explanation: `Case ${testCase.id} fails on this source.`,
+            })),
+          },
+        }),
+      );
+    });
+  return { events, publish };
+};
+
+/** Runs one batch with `counts`, the example, then `finish_build`, through `guardianPublication`. */
+const finishThroughGuardian = async (
+  counts: Parameters<typeof scoredBatch>[0],
+  holdReview: boolean,
+) => {
+  const { file, outcomes } = scoredBatch(counts);
+  const { host, batches } = liveTestHost(outcomes);
+  const guardian = guardianPublication();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("live_tests", runAll, "run"),
+        call("execute", example, "example"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: holdReview ? holdingReview(host) : host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: guardian.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  const outcome = await f.run();
+  expect(batches).toHaveLength(1);
+  return { outcome, events: guardian.events, finished: () => resultOf(f.requests[3], "finish") };
+};
+
+/** What the refusal tells the minter after it names the failing cases. */
+const failingCasesGuidance =
+  "and the review holds publication back on a failing case. Prefer fixing the code where a case fails; retire a case, by changing or deleting it in test/cases.json, only where the case itself is wrong. After a code fix, run every case again; then call finish_build.";
+
+it("names a case that fails on the published source instead of starting publication review", async () => {
+  // Six of seven cases pass, 85%, which clears the 70% bar.
+  const { outcome, events, finished } = await finishThroughGuardian({ pass: 6, fail: 1 }, true);
+
+  // No review started, so no Guardian event: finish_build answered at once, naming the case.
+  expect(events).toEqual([]);
+  expect(outcome.build).not.toBe("published");
+  expect(finished()).toMatchObject({
+    status: "not_published",
+    code: "PublicationUnavailable",
+    reason: "live_test_cases_failing",
+    userInputRequired: false,
+    instruction: `Publication review not started: live test case case-7 on src/tool.ts fails on this source, ${failingCasesGuidance}`,
+  });
+});
+
+it("names every failing case of the published version", async () => {
+  const { events, finished } = await finishThroughGuardian({ pass: 8, fail: 2 }, true);
+  expect(events).toEqual([]);
+  expect(finished()).toMatchObject({
+    reason: "live_test_cases_failing",
+    instruction: `Publication review not started: live test cases case-9 and case-10 on src/tool.ts fail on this source, ${failingCasesGuidance}`,
+  });
+});
+
+// A host that does not hold the review sends the same build to it, as before: the review starts
+// and holds publication back on the failing case as a schema mismatch.
+it("sends a read with a failing case to publication review on a host that does not hold it", async () => {
+  const { outcome, events, finished } = await finishThroughGuardian({ pass: 6, fail: 1 }, false);
+  expect(events).toEqual(["guardian.started", "guardian.completed:deny"]);
+  expect(outcome.build).not.toBe("published");
+  expect(finished()).toMatchObject({ status: "not_published", code: "ReviewDenied" });
+  expect(JSON.stringify(finished())).toContain("schema_mismatch");
+});
+
+it.each([
+  { label: "every case passes", counts: { pass: 7, fail: 0 } },
+  // Inconclusive cases tested nothing about the tool, so they hold nothing back.
+  { label: "the rest are inconclusive", counts: { pass: 5, fail: 0, inconclusive: 2 } },
+])("starts publication review as before when no counted case fails: $label", async ({ counts }) => {
+  const { outcome, events } = await finishThroughGuardian(counts, true);
+  expect(events).toEqual(["guardian.started", "guardian.completed:allow"]);
+  expect(outcome.build).toBe("published");
+});
+
+// Below 70% the bar's own refusal stands, worded as before.
+it("keeps the bar's refusal for a read whose cases pass below 70%", async () => {
+  const { events, finished } = await finishThroughGuardian({ pass: 2, fail: 5 }, true);
+  expect(events).toEqual([]);
+  expect(finished()).toMatchObject({ reason: "live_tests_below_threshold" });
+});
+
+// Retiring the case releases the hold: the review then judges the retired failure from the
+// record, as it does any retired case.
+it("starts publication review once the minter retires the failing case", async () => {
+  const { file, outcomes } = scoredBatch({ pass: 6, fail: 1 });
+  const { host } = liveTestHost(outcomes);
+  const guardian = guardianPublication();
+  const recorded: PublicationDecision[] = [];
+  let root = "";
+  const f = await fixture(
+    async (_request, index) => {
+      // After the refusal, the minter deletes the case it judged wrong.
+      if (index === 3)
+        await writeWorkspace(root, {
+          "test/cases.json": JSON.stringify({ cases: file.cases.filter(({ id }) => id !== "case-7") }),
+        });
+      return (
+        [
+          call("live_tests", runAll, "run"),
+          call("execute", example, "example"),
+          call("finish_build", finish, "finish"),
+          call("finish_build", finish, "again"),
+        ][index] ?? prose()
+      );
+    },
+    {
+      liveTests: holdingReview(host),
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: guardian.publish,
+      publicationDecisions: {
+        record: (decision) =>
+          Effect.sync(() => {
+            recorded.push(decision);
+          }),
+        list: Effect.sync(() => recorded),
+      },
+    },
+    read,
+  );
+  root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  const outcome = await f.run();
+  expect(resultOf(f.requests[3], "finish")).toMatchObject({ reason: "live_test_cases_failing" });
+  // The refusal is the minter's to fix and needs a new live observation, like the bar's.
+  expect(recorded[0]).toMatchObject({
+    outcome: "refused",
+    code: "PublicationUnavailable",
+    reason: "live_test_cases_failing",
+    failedChecks: ["live_test_cases_failing"],
+    recovery: "new_observation",
+  });
+  expect(guardian.events).toEqual(["guardian.started", "guardian.completed:allow"]);
+  expect(outcome.build).toBe("published");
+});
+
+// A refusal that names failing cases is the minter's to fix, so it grants no host_refused ending.
+it("grants no host_refused ending after naming a failing case", async () => {
+  const { file, outcomes } = scoredBatch({ pass: 6, fail: 1 });
+  const { host } = liveTestHost(outcomes);
+  const guardian = guardianPublication();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("live_tests", runAll, "run"),
+        call("execute", example, "example"),
+        call("finish_build", finish, "finish"),
+        call(
+          "report_blocked",
+          { reason: "host_refused", explanation: "A Pomerado check refused publication." },
+          "blocked",
+        ),
+      ][index] ?? prose(),
+    {
+      liveTests: holdingReview(host),
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: guardian.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  const outcome = await f.run();
+  expect(guardian.events).toEqual([]);
+  expect(JSON.stringify(resultOf(f.requests[4], "blocked"))).toContain("host_not_refused");
+  expect(outcome.blocked?.reason).not.toBe("host_refused");
+});
+
+// Once no case can run again, a refusal that asks for that could never be met: the review decides
+// on the record as it is, as for the bar.
+it.each([
+  { label: "no further batch fits after the last one", way: "capped" },
+  { label: "a later batch the host refused as no_time", way: "no_time" },
+  { label: "a case the attempt's deadline stopped", way: "deadline" },
+] as const)("starts publication review with a failing case once no case can run again: $label", async ({ way }) => {
+  const { file, outcomes } = scoredBatch({ pass: 6, fail: 1 });
+  const scored =
+    way === "deadline"
+      ? { ...outcomes, "case-3": { status: "inconclusive" as const, reason: "deadline" as const } }
+      : outcomes;
+  const { host, batches } = liveTestHost(scored);
+  // Hold first, then cap: the cap reads the batches each time it is asked.
+  const holding = holdingReview(host);
+  const liveTests = way === "deadline" ? holding : cappedAfterOneBatch(holding, batches);
+  const steps =
+    way === "no_time"
+      ? [call("live_tests", runAll, "run"), call("live_tests", runAll, "again")]
+      : [call("live_tests", runAll, "run")];
+  const guardian = guardianPublication();
+  const f = await fixture(
+    (_request, index) =>
+      [...steps, call("execute", example, "example"), call("finish_build", finish, "finish")][index] ??
+      prose(),
+    {
+      liveTests,
+      deadline: Deadline.after(way === "deadline" ? 5 * 60_000 : 30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: guardian.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  await f.run();
+  expect(batches).toHaveLength(1);
+  if (way === "no_time") expect(resultOf(f.requests[2], "again")).toMatchObject({ status: "no_time" });
+  expect(guardian.events).toEqual(["guardian.started", "guardian.completed:deny"]);
+});
+
+// Only the version finish_build publishes is held: an HTTP version's failures beside a published
+// Playwright version go to the review from its own results, as before.
+it("never holds a published Playwright version back on an HTTP version's failing cases", async () => {
+  const { host } = liveTestHost((batch) =>
+    batch === 0
+      ? { nothing: emptyResults }
+      : { "repeat-1": httpFailure, "sort-price": httpFailure, nothing: httpFailure, "page-2": httpFailure },
+  );
+  const guardian = guardianPublication();
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("live_tests", runAll, "run_playwright"),
+        call("live_tests", runHttp, "run_http"),
+        call("execute", example, "example"),
+        call("finish_build", finish, "finish"),
+      ][index] ?? prose(),
+    {
+      liveTests: holdingReview(host),
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: guardian.publish,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, {
+    "src/tool.ts": toolSource,
+    "src/tool-http.mjs": httpSource,
+    "test/cases.json": JSON.stringify(cases),
+  });
+  const outcome = await f.run();
+  expect(guardian.events).toEqual(["guardian.started", "guardian.completed:allow"]);
+  expect(outcome.build).toBe("published");
+});
