@@ -187,8 +187,9 @@ export interface KernelOperationContext<
    * call it right before `enteringCommit` and the click once more. Until then the step reads
    * sent, so a run that ends on the question, unanswered or declined, reports it possibly sent.
    * When `blockingRequiredFields(scope, before, { unaskable: true })` returned
-   * `{ unaskable: true, labels }` instead, the click saved nothing but no question may ask those
-   * fields: call it, then throw `InvalidInput` naming them, and never click again.
+   * `{ unaskable: true, labels }` instead after the step's first click, the click saved nothing
+   * but no question may ask those fields, such as a card number: call it, then throw
+   * `InvalidInput` naming them, and never click again.
    * It works once per step in a run, and only for a step in the contract's `write.commits` when it
    * declares any: a second call for the same step, another name, a step this run did not enter
    * from unsent, or one confirmed since throws `CommitAlreadySent`, which ends the run with the

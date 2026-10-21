@@ -274,7 +274,7 @@ const clickPlace = async ({ kernel, sessionId, errors }: Context, checkedTotal: 
       if (answer.outcome === "flagged") {
         // Only a review whose every flag is a required field the click showed, left empty, proves
         // the click saved nothing. Any other flag may be the site's answer to a saved order.
-        // With unaskable, it also says when one of those fields is one no question may ask.
+        // With unaskable, it also says when one of those fields is a secret no question may ask.
         const blocked = await blockingRequiredFields(review, before, { unaskable: true });
         if (blocked === null) return { failure: "not_confirmed" };
         return blocked.unaskable === true ? { unaskable: blocked.labels } : { blocked: blocked.fields };
