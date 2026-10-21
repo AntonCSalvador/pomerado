@@ -14,8 +14,9 @@ import { outputCheckMeaning, outputChecks, type OutputCheck } from "../runtime/o
  * them, and the agent sees every result. Each case run says whether it started warm or cold (see
  * `LiveTestStart`).
  * The publication review reads the record and judges the cases against what the tool claims. The
- * only rule here that holds publication back is `liveTestsShortfall`: a version whose cases
- * mostly fail on the source it publishes is not sent to review at all.
+ * rules here that hold publication back are `liveTestsShortfall`: a version whose cases mostly
+ * fail on the source it publishes is not sent to review at all; and, on a host that asks for it,
+ * `failingLiveTestCases`: no review starts while any of its counted cases fails there.
  *
  * The same cases run on both versions of a read: the Playwright version (`src/tool.mjs`) and the
  * HTTP version (`src/tool-http.mjs`). Each version keeps its own result for each case, so a batch
@@ -1295,6 +1296,64 @@ export const liveTestsShortfall = (
     counted,
     percent: Math.floor((passed * 100) / counted),
   };
+};
+
+/** The published version's counted cases that fail on its source. */
+export interface LiveTestsFailing {
+  readonly version: LiveTestVersion;
+  readonly entrypoint?: string;
+  /** The failing cases' ids, in the cases file's order. */
+  readonly ids: readonly string[];
+}
+
+/**
+ * The counted cases of the version `finish_build` publishes, `published`, that fail on its source,
+ * from the publication record; undefined when none does. They are the failing cases among those
+ * `liveTestsShortfall` counts: cases in `test/cases.json` as written now whose latest result on
+ * that version's published source is a fail. An inconclusive, stale or not_run case is not one,
+ * and neither is a retired case, which the review judges from the record's `retired`. Only the
+ * published version is read, as for the bar. On a host that sets
+ * `LiveTestHost.holdReviewOnFailingCases`, the harness starts no publication review while any
+ * such case remains, unless no case can run again.
+ */
+export const failingLiveTestCases = (
+  record: {
+    readonly versions: readonly { readonly version: LiveTestVersion; readonly entrypoint?: string }[];
+    readonly cases: readonly {
+      readonly id: string;
+      readonly results: Readonly<Record<string, { readonly status: string }>>;
+    }[];
+  },
+  published: LiveTestVersion,
+): LiveTestsFailing | undefined => {
+  const entry = record.versions.find((candidate) => candidate.version === published);
+  if (entry === undefined) return undefined;
+  const ids = record.cases
+    .filter((testCase) => testCase.results[published]?.status === "fail")
+    .map((testCase) => testCase.id);
+  if (ids.length === 0) return undefined;
+  return {
+    version: entry.version,
+    ...(entry.entrypoint === undefined ? {} : { entrypoint: entry.entrypoint }),
+    ids,
+  };
+};
+
+/** The most failing cases `failingCasesRefusal` names; it counts the rest. */
+export const maximumNamedFailingCases = 10;
+
+/** What the minter is told when `finish_build` names failing cases instead of starting review. */
+export const failingCasesRefusal = (failing: LiveTestsFailing): string => {
+  const named = failing.ids.slice(0, maximumNamedFailingCases);
+  const more = failing.ids.length - named.length;
+  const list =
+    more > 0
+      ? `${named.join(", ")} and ${more} more`
+      : named.length === 1
+        ? named.join("")
+        : `${named.slice(0, -1).join(", ")} and ${named.at(-1) ?? ""}`;
+  const one = failing.ids.length === 1;
+  return `Publication review not started: live test case${one ? "" : "s"} ${list}${failing.entrypoint === undefined ? "" : ` on ${failing.entrypoint}`} fail${one ? "s" : ""} on this source, and the review holds publication back on a failing case. Prefer fixing the code where a case fails; retire a case, by changing or deleting it in ${liveTestCasesPath}, only where the case itself is wrong. After a code fix, run every case again; then call finish_build.`;
 };
 
 /** The record when the host could not build it, so the publication review knows why it is bare. */
