@@ -104,10 +104,11 @@ export const CalendarDate = Schema.String.pipe(
  *   number field, by its `autocomplete` (`cc-…`, `current-password`, `new-password`,
  *   `one-time-code`) or by a label, name or id such as card number, card #, credit card, security
  *   code, card verification, CVV, CVN, CID, a card's expiry (next to "card", or as MM/YY or valid
- *   thru), SSN, verification, authentication or SMS code, OTP, a 6-digit code, a PIN (not a PIN
- *   code, which can be a postcode), password, passport, driver's licence, national ID or national
- *   insurance number, a TIN or EIN, IBAN, bank account, routing number or sort code, and a few of
- *   their German, Spanish and French names. With `before`, what `visibleFieldLabels(scope,
+ *   thru), SSN, verification, authentication or SMS code, a gate, door, access, alarm, lockbox or
+ *   entry code, OTP, a 6-digit code, a PIN (not a PIN code, which can be a postcode), password,
+ *   passport, driver's licence, national ID or national insurance number, a TIN or EIN, IBAN, bank
+ *   account, routing number or sort code, and a few of their German, Spanish and French names.
+ *   With `before`, what `visibleFieldLabels(scope,
  *   { enabledOnly: true })` read before some answers were filled, it lists only the labelled
  *   fields those answers showed or enabled: none whose label, name or id is among `before`.
  * - `visibleFieldLabels(scope, { timeout, enabledOnly }?)`: every field the form shows now, by its
@@ -399,7 +400,7 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
     // protected forms, never a site-field question.
     const secretTokens = /^(cc-.*|current-password|new-password|one-time-code)$/;
     // A PIN code or pincode is a postcode in some countries, so only a PIN alone counts.
-    const secretWords = /\b(?:card ?(?:number|no)|cc ?(?:number|num)|credit card|card verification|security ?code|cvv2?|cvc2?|csc|cvn|cid|ssn|social security|verification ?code|authentication code|sms ?code|otp|\d[- ]?digit code|pass ?word|passcode|passport|driv(?:er|ing).?s? ?licen[cs]e|national ?(?:insurance|id|identity|identification)|iban|bank ?account|routing ?(?:transit )?(?:number|no)|sort ?code|card ?(?:expiry|expiration|exp)|cc ?exp(?:iry|iration)?|(?:expiry|expiration) (?:date )?(?:of|on) (?:your |the )?card|valid ?(?:thru|through)|mm ?\/ ?yy|kartennummer|n[uú]mero de tarjeta|num[eé]ro de carte|passwort|kennwort|contrase[nñ]a|mot de passe|reisepass|pasaporte|passeport|f[uü]hrerschein|(?:permiso|licencia|carn[eé]) de conducir|permis de conduire|personalausweis|ausweisnummer|documento de identidad|carte d.identit|sozialversicherung(?:snummer)?|seguridad social|s[eé]curit[eé] sociale|kontonummer|bankleitzahl|cuenta bancaria|compte bancaire)\b|\bcard ?#|\bpin\b(?! ?code)/i;
+    const secretWords = /\b(?:card ?(?:number|no)|cc ?(?:number|num)|credit card|card verification|security ?code|cvv2?|cvc2?|csc|cvn|cid|ssn|social security|verification ?code|authentication code|sms ?code|(?:gate|door|access|alarm|lockbox|entry) ?code|otp|\d[- ]?digit code|pass ?word|passcode|passport|driv(?:er|ing).?s? ?licen[cs]e|national ?(?:insurance|id|identity|identification)|iban|bank ?account|routing ?(?:transit )?(?:number|no)|sort ?code|card ?(?:expiry|expiration|exp)|cc ?exp(?:iry|iration)?|(?:expiry|expiration) (?:date )?(?:of|on) (?:your |the )?card|valid ?(?:thru|through)|mm ?\/ ?yy|kartennummer|n[uú]mero de tarjeta|num[eé]ro de carte|passwort|kennwort|contrase[nñ]a|mot de passe|reisepass|pasaporte|passeport|f[uü]hrerschein|(?:permiso|licencia|carn[eé]) de conducir|permis de conduire|personalausweis|ausweisnummer|documento de identidad|carte d.identit|sozialversicherung(?:snummer)?|seguridad social|s[eé]curit[eé] sociale|kontonummer|bankleitzahl|cuenta bancaria|compte bancaire)\b|\bcard ?#|\bpin\b(?! ?code)/i;
     // Short codes that are ordinary words in some languages count only in capitals.
     const secretCodes = /\b(?:EIN|TIN|DNI|NIE)\b/;
     const spaced = (text) => words(String(text ?? "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\-.[\]]+/g, " "));
