@@ -277,6 +277,52 @@ const cases: readonly Case[] = [
     reply: { status: 200, body: json({ errors: { email: [] } }) },
     expected: done,
   },
+  // A message whose text was on the page before counts again when more elements show it after.
+  {
+    name: "a refusal repeating a hint's text in one more element is not done",
+    reply: { status: 200, body: json({ id: 1 }) },
+    extra: `<span class="text-danger">Required</span>`,
+    after: `say('<div class="invalid-feedback">Required</div>');`,
+    expected: notDone,
+  },
+  {
+    name: "a second alert identical to one shown before the click is not done",
+    reply: { status: 200, body: json({ id: 1 }) },
+    extra: `<div role="alert" class="alert alert-danger">Something went wrong. Please try again.</div>`,
+    after: `say('<div role="alert" class="alert alert-danger">Something went wrong. Please try again.</div>');`,
+    expected: notDone,
+  },
+  // Settings and record fields that only name errors say nothing about the save.
+  {
+    name: "a setting for what to do on an error leaves the commit done",
+    reply: { status: 200, body: json({ id: 1, notifyOnError: true }) },
+    expected: done,
+  },
+  {
+    name: "a record's setting to continue on an error leaves the commit done",
+    reply: { status: 200, body: json({ data: { record: { continueOnError: true } } }) },
+    expected: done,
+  },
+  {
+    name: "a deep record field holding a past sync error leaves the commit done",
+    reply: { status: 200, body: json({ data: { account: { integration: { lastSyncError: "Token expired" } } } }) },
+    expected: done,
+  },
+  {
+    name: "a deep setting to stop on an error leaves the commit done",
+    reply: { status: 200, body: json({ data: { project: { pipeline: { settings: { stopOnError: true } } } } }) },
+    expected: done,
+  },
+  {
+    name: "error fields holding nothing leave the commit done",
+    reply: { status: 200, body: json({ data: { record: { lastRunErrors: [], validationErrors: null } } }) },
+    expected: done,
+  },
+  {
+    name: "an error flag that is true is not done",
+    reply: { status: 200, body: json({ hasErrors: true }) },
+    expected: notDone,
+  },
 ];
 
 /** Serves `pages` by path and query, or path alone, and answers each POST by its path. */
@@ -372,6 +418,16 @@ const redirects: readonly {
     pages: { "/form": postForm("/form") },
     post: () => ({ status: 302, headers: { location: "/form" } }),
     expected: unclear,
+  },
+  {
+    name: "a redirect back to the form with an error in its query and a new error message is not done",
+    start: "/form",
+    pages: {
+      "/form": postForm("/form"),
+      "/form?error=reference_required": `<div class="alert alert-danger">Reference number is required</div>${postForm("/form")}`,
+    },
+    post: () => ({ status: 302, headers: { location: "/form?error=reference_required" } }),
+    expected: notDone,
   },
 ];
 
