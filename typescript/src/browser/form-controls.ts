@@ -104,18 +104,21 @@ export const CalendarDate = Schema.String.pipe(
  *   number field, by its `autocomplete` (`cc-…`, `current-password`, `new-password`,
  *   `one-time-code`) or by a label, name or id such as card number, card #, credit card, security
  *   code, card verification, CVV, CVN, CID, a card's expiry (next to "card", or as MM/YY or valid
- *   thru), SSN, verification, authentication or SMS code, OTP, a 6-digit code, a PIN (not a PIN
- *   code, which can be a postcode), password, passport, driver's licence, national ID or national
- *   insurance number, a TIN or EIN, IBAN, bank account, routing number or sort code, and a few of
- *   their German, Spanish and French names. With `before`, what `visibleFieldLabels(scope,
- *   { enabledOnly: true })` read before some answers were filled, it lists only the labelled
- *   fields those answers showed or enabled: none whose label, name or id is among `before`.
+ *   thru), SSN, verification, authentication or SMS code, a gate, door, access, alarm, lockbox or
+ *   entry code (not one whose label is also an offer's code or a note, such as a promo, coupon,
+ *   discount, presale or early access code, or instructions or notes that mention one), OTP, a
+ *   6-digit code, a PIN (not a PIN code, which can be a postcode), password, passport, driver's
+ *   licence, national ID or national insurance number, a TIN or EIN, IBAN, bank account, routing
+ *   number or sort code, and a few of their German, Spanish and French names. With `before`,
+ *   what `visibleFieldLabels(scope, { enabledOnly: true })` read before some answers were
+ *   filled, it lists only the labelled fields those answers showed or enabled: none whose label,
+ *   name or id is among `before`.
  * - `visibleFieldLabels(scope, { timeout, enabledOnly }?)`: every field the form shows now, by its
  *   label, as `unfilledRequiredFields` names it, and by each name and id it carries. Read them in
  *   the marked call just before the click, for `blockingRequiredFields`. With `enabledOnly: true`
  *   it leaves out disabled fields, for `unfilledRequiredFields`' `before`.
- * - `blockingRequiredFields(scope, before, { timeout }?)`: after a click that should have saved or
- *   moved on, whether the page proves the click saved nothing. `before` is what
+ * - `blockingRequiredFields(scope, before, { timeout, unaskable }?)`: after a click that should
+ *   have saved or moved on, whether the page proves the click saved nothing. `before` is what
  *   `visibleFieldLabels` read just before the click; without it, it throws `labels_missing`. It
  *   returns `{ fields }` when the form still shows, once, and every control it flagged invalid is
  *   an empty required field a site-field question can ask, as `unfilledRequiredFields` lists
@@ -125,6 +128,14 @@ export const CalendarDate = Schema.String.pipe(
  *   may have flagged before. A flagged field whose label begins with a label shown before, as when
  *   the page writes its error inside the label, or reads as an error message, such as "Required"
  *   or "This field is required.", counts as one already showing.
+ *   With `unaskable: true`, when every flagged field is such a new, empty, required field with a
+ *   label, but one or more are a card, password, code or identity number field as
+ *   `unfilledRequiredFields` names them, which no site-field question may ask, such as a card or
+ *   bank field, and every other one a question can ask, it returns `{ unaskable: true, labels }`
+ *   instead of `null`, with the labels of those secret ones: the click saved nothing, and no
+ *   question can fill them. A flagged field already showing, one with no label, or another
+ *   unsupported one, such as a date, or a box to tick or a button to choose even when it names a
+ *   card, still gives `null`, so a repair can teach the tool to fill it.
  *   Call it only once the click's wait found no confirmation and the form flagged a field, as a
  *   `{ invalid }` outcome of `waitForOutcomeResult` does.
  * - `fillRequiredField(scope, label, answer, { timeout }?)`: fills the one supported field
@@ -397,6 +408,10 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
     const secretWords = /\b(?:card ?(?:number|no)|cc ?(?:number|num)|credit card|card verification|security ?code|cvv2?|cvc2?|csc|cvn|cid|ssn|social security|verification ?code|authentication code|sms ?code|otp|\d[- ]?digit code|pass ?word|passcode|passport|driv(?:er|ing).?s? ?licen[cs]e|national ?(?:insurance|id|identity|identification)|iban|bank ?account|routing ?(?:transit )?(?:number|no)|sort ?code|card ?(?:expiry|expiration|exp)|cc ?exp(?:iry|iration)?|(?:expiry|expiration) (?:date )?(?:of|on) (?:your |the )?card|valid ?(?:thru|through)|mm ?\/ ?yy|kartennummer|n[uú]mero de tarjeta|num[eé]ro de carte|passwort|kennwort|contrase[nñ]a|mot de passe|reisepass|pasaporte|passeport|f[uü]hrerschein|(?:permiso|licencia|carn[eé]) de conducir|permis de conduire|personalausweis|ausweisnummer|documento de identidad|carte d.identit|sozialversicherung(?:snummer)?|seguridad social|s[eé]curit[eé] sociale|kontonummer|bankleitzahl|cuenta bancaria|compte bancaire)\b|\bcard ?#|\bpin\b(?! ?code)/i;
     // Short codes that are ordinary words in some languages count only in capitals.
     const secretCodes = /\b(?:EIN|TIN|DNI|NIE)\b/;
+    // An access code, such as a gate or door code, unless its label shows an offer's code or a
+    // note that mentions one, such as delivery instructions.
+    const accessCodes = /\b(?:gate|door|access|alarm|lockbox|entry) ?code\b/i;
+    const notAccessCodes = /\b(?:promo|coupon|discount|pre ?sale|early ?access|instruction|note)/i;
     const spaced = (text) => words(String(text ?? "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\-.[\]]+/g, " "));
     const flagMarks = '[aria-invalid="true"], .is-invalid' +
       (globalThis.CSS?.supports?.("selector(:user-invalid)") ? ", :user-invalid" : "");
@@ -474,6 +489,7 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
       }
       const label = nameOf(element);
       const tokens = (element.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/);
+      const texts = [label, element.getAttribute("name"), element.id].map(spaced);
       const listed = optionsOf(element);
       return [{
         index,
@@ -481,11 +497,12 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
         options: listed.options,
         duplicate: listed.duplicate === true,
         input: element instanceof HTMLInputElement ? element.type : undefined,
+        // A box to tick or a button to choose that names a card or a bank is never one itself.
         secret:
-          tokens.some((token) => secretTokens.test(token)) ||
-          [label, element.getAttribute("name"), element.id].some(
-            (text) => secretWords.test(spaced(text)) || secretCodes.test(spaced(text)),
-          ),
+          !(element instanceof HTMLInputElement && (element.type === "checkbox" || element.type === "radio")) &&
+          (tokens.some((token) => secretTokens.test(token)) ||
+            texts.some((text) => secretWords.test(text) || secretCodes.test(text)) ||
+            (texts.some((text) => accessCodes.test(text)) && !notAccessCodes.test(texts[0]))),
         readOnly: element.readOnly === true,
         flagged,
         keys: keysOf(element),
@@ -509,6 +526,7 @@ const formControlRequiredFields = async (scope, timeout, mode = "required") => {
       shape,
       ...(supported && shape !== "text" && field.options !== undefined ? { options: field.options } : {}),
       ...(supported ? {} : { unsupported: true }),
+      secret: field.secret,
       keys: field.keys,
       control,
     });
@@ -522,7 +540,7 @@ const unfilledRequiredFields = async (scope, options = {}) => {
   const seen = new Set((before ?? []).map(String));
   return (await formControlRequiredFields(scope, options.timeout ?? 10000))
     .filter((field) => before === undefined || (field.label !== "" && !field.keys.some((key) => seen.has(key))))
-    .map(({ control, keys, ...field }) => field);
+    .map(({ control, keys, secret, ...field }) => field);
 };
 const visibleFieldLabels = async (scope, options = {}) =>
   formControlRequiredFields(scope, options.timeout ?? 10000, options.enabledOnly === true ? "enabled labels" : "labels");
@@ -539,9 +557,14 @@ const blockingRequiredFields = async (scope, before, options = {}) => {
     [...seen].some((key) => label.length > key.length && label.startsWith(key) && !/[\p{L}\p{N}]/u.test(label.charAt(key.length)));
   const stale = (field) =>
     field.keys.some((key) => seen.has(key)) || extended(field.label) || formControlMessageWords.test(field.label);
-  if (fields.length === 0 || flaggedFilled > 0 || fields.some((field) => field.unsupported || stale(field)))
-    return null;
-  return { fields: fields.map(({ control, keys, ...field }) => field) };
+  if (fields.length === 0 || flaggedFilled > 0 || fields.some(stale)) return null;
+  const unasked = fields.filter((field) => field.unsupported);
+  if (unasked.length === 0) return { fields: fields.map(({ control, keys, secret, ...field }) => field) };
+  // The click still saved nothing, but no site-field question may ask a secret, such as a card
+  // number. Any other kind, such as a date, is left to a repair that can teach the tool to fill
+  // it. Only a labelled field can be told apart from one shown before, and named.
+  if (options.unaskable !== true || unasked.some((field) => field.label === "" || !field.secret)) return null;
+  return { unaskable: true, labels: unasked.map((field) => field.label) };
 };
 const fillRequiredField = async (scope, label, answer, options = {}) => {
   const timeout = options.timeout ?? 10000;
