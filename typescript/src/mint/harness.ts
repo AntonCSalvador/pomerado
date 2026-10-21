@@ -2996,15 +2996,20 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             settled.assessments.every((assessment) => assessment?.outcome === "not_done")
           )
             return undefined;
+          const writes = earlier.map((write) => write.executionId).join(", ");
+          // With no outcome reviewer, nothing can clear the write, so the refusal lasts the
+          // attempt, and a copy of the step is the double write this guard prevents.
+          if (dependencies.outcomeReview === undefined)
+            return `This step repeats a write that may already have changed the site (${writes}). No outcome review runs here, so ${submitted.entrypoint} stays refused for the rest of this attempt. Never run a copy of it to send the write again: read back what happened in a new file that changes nothing. A write whose outcome stays unknown is reported as possibly applied. Nothing was executed.`;
           const applied = settled.assessments.some((assessment) => assessment?.outcome === "done");
           // A read-back that reuses the write's file is refused as this same repeat.
           const newFile = earlier.some((write) => write.entrypoint === submitted.entrypoint)
-            ? ` Write a read-back as a new file: any step that runs ${submitted.entrypoint} again is refused as this repeat.`
+            ? ` Write the read-back as a new file. A step that runs ${submitted.entrypoint} stays refused as this repeat only until the outcome review finds the earlier write did not happen; then run ${submitted.entrypoint} itself again, not a copy, since a repair publishes only the entrypoint its confirming step ran.`
             : "";
           return (
             (applied
-              ? `This step repeats a write that already changed the site (${earlier.map((write) => write.executionId).join(", ")}), as the outcome review found. Never run it again: continue with the next step, read back the result, or publish. Nothing was executed.`
-              : `This step repeats a write that may already have changed the site (${earlier.map((write) => write.executionId).join(", ")}), and no review has shown it did not. A write is never repeated unless its outcome review finds it did not happen. Read back the account or page in a step that changes nothing, so the review can settle it, or publish: a write whose outcome stays unknown is reported as possibly applied. Nothing was executed.`) +
+              ? `This step repeats a write that already changed the site (${writes}), as the outcome review found. Never run it again: continue with the next step, read back the result, or publish. Nothing was executed.`
+              : `This step repeats a write that may already have changed the site (${writes}), and no review has shown it did not. A write is never repeated unless its outcome review finds it did not happen. Read back the account or page in a step that changes nothing, so the review can settle it, or publish: a write whose outcome stays unknown is reported as possibly applied. Nothing was executed.`) +
             newFile
           );
         });
