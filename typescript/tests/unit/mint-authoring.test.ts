@@ -743,6 +743,33 @@ it("has the minter read back a write, accept recent-search saves and look before
 });
 
 /*
+ * A read's search step waited only for the site's results, so a value the site did not recognise
+ * timed out instead of returning the site's own no-match answer. Both hosts read the line once,
+ * right after the core skill's bullet on waiting for every answer a step can give.
+ */
+it("has a search step wait for the site's results or its own no-match state", async () => {
+  const line =
+    "- For a search step, wait for either the site's results or its own no-match state, and return the site's no-match answer with its message rather than waiting on results that may never appear.";
+  const root = await authoringCopy((_path, text) => text.replace(sectionMarker, ""));
+  try {
+    const hosts = [
+      await renderedTexts("typescript/authoring"),
+      await renderedTexts(root, (text) => {
+        if (text.includes("pomerado:")) throw new Error("Uncomposed section");
+        return text;
+      }),
+    ];
+    for (const texts of hosts) {
+      const core = (texts.get("core") ?? "").replace(/\s+/g, " ");
+      expect(core.split(line)).toHaveLength(2);
+      expect(core).toContain(`paste \`waitCode\` and call it. ${line} - Wait for a change`);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+/*
  * An accounting app's invoice list already showed the sent invoice, and the minter kept reading
  * other pages for minutes, some of them refused for not proving the record or for reading without
  * bound. The first bounded read-back that matches confirms the write, and nothing from before the
