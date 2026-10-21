@@ -473,9 +473,9 @@ export interface ReviewedLiveTestBatch {
   readonly batchId: string;
   /** The entrypoint the batch ran, under `operation/` as the review reads it. */
   readonly entrypoint: string;
-  /** The digest of the source the batch ran: its entrypoint and every file that loads. */
+  /** The digest of the source the batch ran: its entrypoint and its static import closure. */
   readonly sourceDigest: string;
-  /** Whether that entrypoint and every file it loads are unchanged since the batch ran. */
+  /** Whether that entrypoint and its static import closure are unchanged since the batch ran. */
   readonly sourceUnchanged: boolean;
   readonly cases: readonly {
     readonly id: string;
