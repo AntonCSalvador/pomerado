@@ -78,7 +78,11 @@ import {
   TextQuestion,
 } from "../runtime/input-request.js";
 import type { InputRequest, ValidAnswers } from "../runtime/input-request.js";
-import type { PublicationFileBlock, ReviewFailure } from "../guardian/review.js";
+import type {
+  PublicationFileBlock,
+  ReviewedLiveTestBatch,
+  ReviewFailure,
+} from "../guardian/review.js";
 import type { RunnerFailure } from "./runner-failure.js";
 import type { HostAnomalySummary, MintAttemptOutcome } from "./incident-contracts.js";
 import type {
@@ -737,11 +741,28 @@ export interface LiveTestHost {
    */
   readonly signedInBatches?: true;
   /**
+   * The host asks the minter to fix or retire every failing case before publication review.
+   * `finish_build` of a read is then refused before review, as `PublicationUnavailable` with
+   * reason `live_test_cases_failing`, while any counted case of the version it publishes fails on
+   * that version's source (`failingLiveTestCases`), naming the cases; no Guardian call is made.
+   * It does not apply once no case can run again, under the same check that lifts the 70% bar
+   * (`liveTestsShortfall`). Absent, a read whose cases reach the bar goes to review with its
+   * failing cases, as before this field existed.
+   */
+  readonly holdReviewOnFailingCases?: true;
+  /**
    * How long one case may run on this host, in milliseconds; `defaultLiveTestCaseMs` when
    * absent. The harness refuses a batch as `no_time`, running nothing, when less than this is
    * left before the batch's deadline, since no case could finish.
    */
   readonly caseTimeoutMs?: number;
+  /**
+   * Receives a reader of this attempt's latest live test batches as the harness judged them, for
+   * the host's Guardian execution reviews (`mintContext.liveTests`), so a review can confirm from
+   * host facts that a suite passed on the source it judges. Each read checks whether every
+   * batch's source is still the workspace's.
+   */
+  readonly bindBatches?: (read: Effect.Effect<readonly ReviewedLiveTestBatch[]>) => void;
 }
 
 /** How long one live test case may run when its host names no limit of its own. */
@@ -1083,6 +1104,8 @@ export type PublicationRequest = typeof PublicationRequest.Type;
  *   answered no, or a login request declined.
  * - `question_unanswered`: a question the build needed went unanswered, and the build cannot go
  *   on without its answer.
+ * - `owner_ended`: the owner chose in an answer to end the build, such as after confirming that a
+ *   fact it needs is unknown. Never the caller's error or the site's refusal.
  * - `host_refused`: a host check, not Guardian and not the site, refused a step the build needs in
  *   this attempt, such as a publication, a sign-in form or a site change, and nothing left in the
  *   attempt can fix it. The host records those refusals itself.
@@ -1098,6 +1121,7 @@ export const BuildBlocked = Schema.Struct({
     "policy",
     "owner_declined",
     "question_unanswered",
+    "owner_ended",
     "host_refused",
   ),
   explanation: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(blockedExplanationLimit)),
@@ -1109,8 +1133,8 @@ export const BuildBlocked = Schema.Struct({
  * block: nothing about the task is impossible, so the caller never reads it as one. Once sign-in
  * is unavailable in the build, any report, `policy` included, ends the build with the sign-in's
  * own result instead of the reason it names. So does any ending the report's checks accept but
- * `owner_declined` or `question_unanswered` while the build's latest sign-in never confirmed and
- * no failed one is pending: the site never got as far as judging the task.
+ * `owner_declined`, `question_unanswered` or `owner_ended` while the build's latest sign-in never
+ * confirmed and no failed one is pending: the site never got as far as judging the task.
  */
 export const BlockedReport = Schema.Struct({
   reason: Schema.Literal(
@@ -1119,6 +1143,7 @@ export const BlockedReport = Schema.Struct({
     "policy",
     "owner_declined",
     "question_unanswered",
+    "owner_ended",
     "host_refused",
     "host_unavailable",
   ),
@@ -1332,6 +1357,7 @@ export type PublicationDenial = typeof PublicationDenial.Type;
  * - `account_locked`: the site said the account is locked, suspended or disabled.
  * - `question_unanswered`: a question the build needed went unanswered.
  * - `owner_declined`: the owner said no to a step the build needs.
+ * - `owner_ended`: the owner chose in an answer to end the build.
  * - `site_lacks_capability`, `site_declined`, `policy`, `host_refused`: the minter's blocked ending
  *   of the same name.
  * - `host_unavailable`: the host, not the task, ended the build.
@@ -1344,6 +1370,7 @@ export const mintStopReasons = [
   "account_locked",
   "question_unanswered",
   "owner_declined",
+  "owner_ended",
   "site_lacks_capability",
   "site_declined",
   "policy",
@@ -1487,7 +1514,11 @@ export interface MintActions {
     path: string,
     range?: { readonly offset?: number; readonly limit?: number },
   ) => Effect.Effect<string, MintFailure>;
-  readonly execute: (input: unknown) => Effect.Effect<string, MintFailure>;
+  /**
+   * Reviews and runs one step. `agentNote` is the agent's own description of it, its execute
+   * call's intent, which Guardian reads as untrusted context and never as authority.
+   */
+  readonly execute: (input: unknown, agentNote?: string) => Effect.Effect<string, MintFailure>;
   readonly finish: (input: unknown) => Effect.Effect<string, MintFailure>;
   /** Asks the caller in place and returns their answers; the attempt continues. */
   readonly requestInput: (input: unknown) => Effect.Effect<string, MintFailure>;
@@ -1952,7 +1983,7 @@ const HarnessTerminal = Schema.Struct({
   // Optional, and dropped as an excess field by an older worker's decode, so a rollout's old and
   // new workers each restore the other's checkpoint, except a terminal whose blocked reason is
   // one an older worker does not know (`owner_declined`, `question_unanswered`, `site_declined`,
-  // `host_refused`): that one does not decode there.
+  // `host_refused`, `owner_ended`): that one does not decode there.
   blocked: Schema.optionalWith(BuildBlockedOutcome, { exact: true }),
   // Optional, and dropped by an older worker's decode.
   stopReason: Schema.optionalWith(MintStopReason, { exact: true }),
@@ -2474,8 +2505,8 @@ export interface MintDependencies {
    * The host's own reading of the build's latest sign-in when nothing confirmed it:
    * `session_not_kept` when the site accepted the login but the signed-in session did not survive
    * the page load after it. A blocked ending the report's checks accept while that sign-in is
-   * unconfirmed, other than the owner's `owner_declined` or `question_unanswered`, ends the build
-   * as sign-in unavailable, worded by this answer. Absent, or undefined, the ending says the site
+   * unconfirmed, other than the owner's `owner_declined`, `question_unanswered` or `owner_ended`,
+   * ends the build as sign-in unavailable, worded by this answer. Absent, or undefined, the ending says the site
    * could not be signed in.
    */
   readonly signInSessionLoss?: () => SessionLoss | undefined;
@@ -2515,13 +2546,15 @@ export interface MintDependencies {
    * or the host's own authentication allow for a sign-in screen the host fills itself. A
    * successful result carries Guardian's allow, label included, as `review`. */
   readonly reviewAndExecute: (
-    request:
+    request: (
       | ExecutionRequest
       | {
           readonly purpose: "command";
           readonly target: "pureFiles";
           readonly command: string;
-        },
+        }
+    ) &
+      StepNote,
     beforeDispatch?: (allowed: AllowedExecution) => Effect.Effect<void, MintFailure>,
     exampleJournal?: ExampleJournal,
   ) => Effect.Effect<ExecutionEvidence, MintFailure>;
@@ -2556,6 +2589,15 @@ export interface MintDependencies {
   readonly outcomeReview?: OutcomeReviewHost;
   /** Host evidence of each publication decision; absent, reviews get none. */
   readonly publicationDecisions?: PublicationDecisionLog;
+}
+
+/**
+ * The agent's own description of a step, its execute call's intent. A host passes it to the
+ * step's execution review as `PendingExecution.agentNote`, screened like the input: untrusted
+ * context, never authority. Absent for a step the agent did not describe, such as a command.
+ */
+export interface StepNote {
+  readonly agentNote?: string;
 }
 
 /**
@@ -2601,6 +2643,8 @@ export type MintBrowserRecoveryResult =
       readonly outcome: "replaced" | "kept" | "lost";
       readonly notice: string;
       readonly reviewId: string;
+      /** Guardian's note on its allow, which never blocks the recovery. */
+      readonly advice?: string;
       readonly browserRecovery?: BrowserRecoverySummary;
     };
 

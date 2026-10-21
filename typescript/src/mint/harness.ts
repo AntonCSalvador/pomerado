@@ -60,6 +60,7 @@ import {
   withOwnWords,
 } from "./contracts.js";
 import { answersForReview, type AnsweredQuestion } from "../guardian/question.js";
+import type { ReviewedLiveTestBatch } from "../guardian/review.js";
 import {
   cutToLimit,
   publicationRefusalUnfixable,
@@ -117,6 +118,8 @@ import {
   decodeCasesFile,
   judgeCase,
   liveTestCasesPath,
+  failingCasesRefusal,
+  failingLiveTestCases,
   liveTestsEvidence,
   liveTestsEvidencePath,
   liveTestsEvidenceProblem,
@@ -361,6 +364,11 @@ const runnerResultNotice = (runner: RunnerResultDefect) =>
 /** How many of the latest publication refusals a question or blocked-explanation review reads. */
 const reviewedPublicationRefusals = 8;
 /**
+ * How many of the latest live test batches an execution review reads (`LiveTestHost.bindBatches`),
+ * beside older ones whose failures still stand.
+ */
+const reviewedLiveTestBatches = 4;
+/**
  * The bounds of a blocked explanation review's decision ledger: the latest denials, each one's
  * rationale and finding explanations capped, and the latest failing live test cases.
  */
@@ -409,6 +417,8 @@ const newObservationReasons: ReadonlySet<string> = new Set([
   "input_contract_changed",
   // Too few cases pass on the published source: fix, then run them again.
   "live_tests_below_threshold",
+  // A counted case fails on the published source: fix the code and run the cases again, or retire it.
+  "live_test_cases_failing",
 ]);
 /**
  * Publication refusals the host asks about only once in an attempt: finishing again, or passing
@@ -940,6 +950,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const answeredQuestions = new Map<string, AnsweredQuestion>(
         (recovered?.answeredQuestions ?? []).map(({ id, answer }) => [id, answer]),
       );
+      /**
+       * Whether the owner's latest request_input kept an answer Guardian reads, with no other call
+       * through the turn's actions since: what `owner_ended` stands on. A secret or sign-in answer
+       * is never kept.
+       */
+      let ownerAnsweredLast = false;
       // A write build's one live session: its first act step takes the example claim and the
       // step that records the site's confirmation closes it. A takeover restores this session;
       // an unrelated attempt with an existing claim keeps it closed.
@@ -1547,6 +1563,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 if (entry === undefined) return;
                 answeredQuestions.delete(question.id);
                 answeredQuestions.set(question.id, entry);
+                ownerAnsweredLast = true;
               }),
             ),
           ),
@@ -1698,6 +1715,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   review: {
                     ...evidence.review,
                     rationale: yield* screenRationale(evidence.review.rationale),
+                    ...(evidence.review.advice === undefined
+                      ? {}
+                      : { advice: yield* screenRationale(evidence.review.advice) }),
                   },
                 }),
             siteAccess,
@@ -2996,15 +3016,20 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             settled.assessments.every((assessment) => assessment?.outcome === "not_done")
           )
             return undefined;
+          const writes = earlier.map((write) => write.executionId).join(", ");
+          // With no outcome reviewer, nothing can clear the write, so the refusal lasts the
+          // attempt, and a copy of the step is the double write this guard prevents.
+          if (dependencies.outcomeReview === undefined)
+            return `This step repeats a write that may already have changed the site (${writes}). No outcome review runs here, so ${submitted.entrypoint} stays refused for the rest of this attempt. Never run a copy of it to send the write again: read back what happened in a new file that changes nothing. A write whose outcome stays unknown is reported as possibly applied. Nothing was executed.`;
           const applied = settled.assessments.some((assessment) => assessment?.outcome === "done");
           // A read-back that reuses the write's file is refused as this same repeat.
           const newFile = earlier.some((write) => write.entrypoint === submitted.entrypoint)
-            ? ` Write a read-back as a new file: any step that runs ${submitted.entrypoint} again is refused as this repeat.`
+            ? ` Write the read-back as a new file. A step that runs ${submitted.entrypoint} stays refused as this repeat only until the outcome review finds the earlier write did not happen; then run ${submitted.entrypoint} itself again, not a copy, since a repair publishes only the entrypoint its confirming step ran.`
             : "";
           return (
             (applied
-              ? `This step repeats a write that already changed the site (${earlier.map((write) => write.executionId).join(", ")}), as the outcome review found. Never run it again: continue with the next step, read back the result, or publish. Nothing was executed.`
-              : `This step repeats a write that may already have changed the site (${earlier.map((write) => write.executionId).join(", ")}), and no review has shown it did not. A write is never repeated unless its outcome review finds it did not happen. Read back the account or page in a step that changes nothing, so the review can settle it, or publish: a write whose outcome stays unknown is reported as possibly applied. Nothing was executed.`) +
+              ? `This step repeats a write that already changed the site (${writes}), as the outcome review found. Never run it again: continue with the next step, read back the result, or publish. Nothing was executed.`
+              : `This step repeats a write that may already have changed the site (${writes}), and no review has shown it did not. A write is never repeated unless its outcome review finds it did not happen. Read back the account or page in a step that changes nothing, so the review can settle it, or publish: a write whose outcome stays unknown is reported as possibly applied. Nothing was executed.`) +
             newFile
           );
         });
@@ -3226,7 +3251,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
-        // one of those takes its name, so neither ever ends as policy.
+        // one of those takes its name, so neither ever ends as policy. `owner_ended` needs the
+        // owner's latest answer with nothing run since, so a build that went on from an answer
+        // never ends as the owner's choice.
         const ownerRefused =
           loginDeclined !== undefined ||
           [...answeredQuestions.values()].some(
@@ -3244,6 +3271,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           return refused(
             "no_question_unanswered",
             "No question went unanswered in this build, so the build has not ended. Use question_unanswered only after a question you asked came back as no answer and the build cannot go on without it.",
+          );
+        if (reason === "owner_ended" && !ownerAnsweredLast)
+          return refused(
+            "owner_not_ended",
+            "The owner gave no answer since this build's last step that could end it, so the build has not ended. Use owner_ended only right after the owner chose in an answer to end the build.",
           );
         if (reason === "host_refused" && !hostRefusing && hostRefusalPassed)
           return refused(
@@ -3264,7 +3296,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           if (unanswered) return { reason: "question_unanswered" };
           return refused(
             "policy_not_refused",
-            "Nothing in this attempt refused this: Guardian made no final refusal of an execution, and refused no publication for privacy or authority or for a finding no correction gets past. Use host_refused when a host check refused a step the build needs and nothing left in this attempt can fix it. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
+            "Nothing in this attempt refused this: Guardian made no final refusal of an execution, and refused no publication for privacy or authority or for a finding no correction gets past. Use host_refused when a host check refused a step the build needs and nothing left in this attempt can fix it. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, their choice to end the build is owner_ended, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
           );
         }
         return { reason };
@@ -3737,6 +3769,91 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       const liveTestReplaced: LiveTestRecord[] = recoveredLiveTests.filter(
         (record) => record.retired === true,
+      );
+      /**
+       * This attempt's judged live test batches that an execution review may still read, oldest
+       * first, each with the digest of the source it ran and the failing cases a later pass on the
+       * same entrypoint and source released. In memory: a takeover starts without them.
+       */
+      const batchHistory: {
+        readonly batch: Omit<ReviewedLiveTestBatch, "sourceUnchanged">;
+        readonly released: Set<string>;
+      }[] = [];
+      /**
+       * The failures a batch holds that still stand: cases that did not pass in it and have not
+       * passed since in a batch on the same entrypoint and source. A pass elsewhere, or an
+       * inconclusive rerun, releases nothing.
+       */
+      const standingFailures = ({ batch, released }: (typeof batchHistory)[number]) =>
+        batch.cases.filter((ran) => ran.verdict !== "pass" && !released.has(ran.id));
+      /**
+       * What a review reads, given each entrypoint's current digest: the latest
+       * `reviewedLiveTestBatches` batches, and for each entrypoint, case and verdict that still
+       * fails, the newest batch holding it on the entrypoint's current source, else the newest
+       * holding it. So passing reruns of some cases never push a failure of another out of view,
+       * and a failure on a source the workspace returns to is still there.
+       */
+      const reviewedBatches = (current: ReadonlyMap<string, string | undefined>) => {
+        const onCurrent = ({ batch }: (typeof batchHistory)[number]) =>
+          batch.sourceDigest === current.get(batch.entrypoint);
+        const holders = new Map<string, (typeof batchHistory)[number]>();
+        for (const entry of batchHistory)
+          for (const ran of standingFailures(entry)) {
+            const key = `${entry.batch.entrypoint}\n${ran.id}\n${ran.verdict}`;
+            const held = holders.get(key);
+            if (held === undefined || onCurrent(entry) || !onCurrent(held)) holders.set(key, entry);
+          }
+        const shown = new Set([...batchHistory.slice(-reviewedLiveTestBatches), ...holders.values()]);
+        return batchHistory.filter((entry) => shown.has(entry)).map((entry) => entry.batch);
+      };
+      /**
+       * Records a judged batch, its passes releasing earlier failures on the same source. A batch
+       * outside the latest few is dropped once every failure it holds is released or held by a
+       * newer batch on the same source, which one pass would release with it.
+       */
+      const recordBatch = (batch: (typeof batchHistory)[number]["batch"]) => {
+        const passed = batch.cases.filter((ran) => ran.verdict === "pass").map((ran) => ran.id);
+        for (const earlier of batchHistory)
+          if (
+            earlier.batch.entrypoint === batch.entrypoint &&
+            earlier.batch.sourceDigest === batch.sourceDigest
+          )
+            for (const id of passed) earlier.released.add(id);
+        batchHistory.push({ batch, released: new Set() });
+        const sourceKeys = (entry: (typeof batchHistory)[number]) =>
+          standingFailures(entry).map(
+            (ran) =>
+              `${entry.batch.entrypoint}\n${entry.batch.sourceDigest}\n${ran.id}\n${ran.verdict}`,
+          );
+        const latest = new Set(batchHistory.slice(-reviewedLiveTestBatches));
+        for (let index = batchHistory.length - 1; index >= 0; index -= 1) {
+          const entry = batchHistory[index];
+          if (entry === undefined || latest.has(entry)) continue;
+          const newer = new Set(batchHistory.slice(index + 1).flatMap(sourceKeys));
+          if (sourceKeys(entry).every((key) => newer.has(key))) batchHistory.splice(index, 1);
+        }
+      };
+      let batchesJudged = 0;
+      dependencies.liveTests?.bindBatches?.(
+        Effect.suspend(() =>
+          Effect.forEach(
+            [...new Set(batchHistory.map(({ batch }) => batch.entrypoint))],
+            (entrypoint) => stepDigest(entrypoint).pipe(Effect.map((digest) => [entrypoint, digest] as const)),
+          ),
+        ).pipe(
+          Effect.map((digests) => {
+            const current = new Map(digests);
+            return reviewedBatches(current).map(
+              (batch): ReviewedLiveTestBatch => ({
+                ...batch,
+                entrypoint: `operation/${batch.entrypoint}`,
+                sourceUnchanged:
+                  current.get(batch.entrypoint) !== undefined &&
+                  current.get(batch.entrypoint) === batch.sourceDigest,
+              }),
+            );
+          }),
+        ),
       );
       /**
        * The blocked explanation review's decision ledger: this attempt's denials, each case's
@@ -4216,6 +4333,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               ...(signedInBatch ? { signedIn: true as const } : {}),
             });
           }
+          batchesJudged += 1;
+          recordBatch({
+            batchId: result.reviewId ?? `live-tests-${batchesJudged}`,
+            entrypoint: request.entrypoint,
+            sourceDigest,
+            cases: judgedRuns.map(({ run, judged }) => ({
+              id: run.id,
+              verdict: judged.verdict,
+              ...(run.start === undefined ? {} : { start: run.start }),
+            })),
+          });
           yield* reportBestEffort(
             dependencies.diagnostics?.emit("mint.live_tests", {
               cases: selected.length,
@@ -4467,7 +4595,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         code: "ScopeDenied",
                       }),
               }),
-        execute: (input) =>
+        execute: (input, agentNote) =>
           serial.withPermits(1)(
             Effect.gen(function* () {
               if (questionOnly) return yield* new MintFailure({ code: "ScopeDenied" });
@@ -4582,16 +4710,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               let crossedDispatchBoundary = false;
               /** The allow the host's dispatch fence followed, with Guardian's action label. */
               let allowed: AllowedExecution | undefined;
-              const evidence = yield* reviewedExecution(submitted, (fenced) =>
-                Effect.sync(() => {
-                  crossedDispatchBoundary = true;
-                  allowed = fenced;
-                  // Guardian allowed it and it is going out: the input counts from now on.
-                  if (signedInTestInput !== undefined)
-                    signedInTestInputs.push(
-                      ...uncountedTestInputs(signedInTestInputs, [signedInTestInput]),
-                    );
-                }),
+              const evidence = yield* reviewedExecution(
+                agentNote === undefined ? submitted : { ...submitted, agentNote },
+                (fenced) =>
+                  Effect.sync(() => {
+                    crossedDispatchBoundary = true;
+                    allowed = fenced;
+                    // Guardian allowed it and it is going out: the input counts from now on.
+                    if (signedInTestInput !== undefined)
+                      signedInTestInputs.push(
+                        ...uncountedTestInputs(signedInTestInputs, [signedInTestInput]),
+                      );
+                  }),
               ).pipe(
                 Effect.onExit((result) =>
                   Effect.suspend(() => {
@@ -4949,7 +5079,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     );
               // The host's own record of a read's live tests on this source goes to the review
               // as evidence, and its line to coverage. It refuses publication by itself only
-              // when the published version's cases pass below the bar on its source: the review
+              // when the published version's cases pass below the bar on its source, or, on a
+              // host that holds the review for it, when any of them fails there: the review
               // would hold it back on those failures anyway, so it is not started. Once the
               // attempt ran out of time for live tests, or no further batch fits, as after a
               // host's batch cap, no case can run again, so the review decides on the record as
@@ -4983,6 +5114,28 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   reason,
                   userInputRequired: false,
                   instruction: `Publication review not started: only ${shortfall.passed} of ${shortfall.counted} live test cases${shortfall.entrypoint === undefined ? "" : ` on ${shortfall.entrypoint}`} pass on this source (${shortfall.percent}%), and review starts at ${reviewPassPercent}%. Fix the code where a case fails, or the case where it is wrong, run every case again, then call finish_build.`,
+                  executionContext: yield* executionContext(),
+                });
+              }
+              // A host that holds the review while a counted case fails on this source has the
+              // minter fix the code or retire the case first: the review would hold publication
+              // back on that case anyway. It lifts with the bar, once no case can run again.
+              const failing =
+                liveTests === undefined ||
+                !testsCanRunAgain ||
+                dependencies.liveTests?.holdReviewOnFailingCases !== true
+                  ? undefined
+                  : failingLiveTestCases(liveTests.record, liveTestVersion(proposed.entrypoint));
+              if (failing !== undefined) {
+                const reason = "live_test_cases_failing";
+                pendingDecision = hostRefusalDecision(reason, evidence.executionId, write);
+                yield* diagnose({ phase: "publication", code: "PublicationUnavailable", reason });
+                return JSON.stringify({
+                  status: "not_published",
+                  code: "PublicationUnavailable",
+                  reason,
+                  userInputRequired: false,
+                  instruction: failingCasesRefusal(failing),
                   executionContext: yield* executionContext(),
                 });
               }
@@ -5505,7 +5658,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     (error.reason === "confirmation_undeclared"
                       ? "Not published: the composed script declares no write confirmation. Add write: {confirmation: 'message' | 'readback' | 'unverifiable'} to its defineOperation, matching what the session read, and call finish_build again with the same executionId."
                       : error.reason === "commit_marks_undeclared"
-                        ? "Not published: the composed script names none of its commit steps. List every step that can change the site (an autosave, a saved form step, the final submit) in order as write.commits, such as commits: ['save-address', 'place-order'], using short lowercase hyphenated names, and mark each with the context's enteringCommit(name) right before the execute call that can send it (an HTTP implementation calls journal.enteringCommit(name) before that request). Opening or filling an unsaved form is not a commit step. Then call finish_build again with the same executionId."
+                        ? "Not published: the composed script names none of its commit steps. List every step that can change the site (an autosave, a saved form step, the final submit) in order as write.commits, such as commits: ['save-address', 'place-order'], using short lowercase hyphenated names, and mark each with the context's enteringCommit(name) right before the execute call that can send it (an HTTP implementation calls journal.enteringCommit(name) before that request). Opening a form and typing into its fields are not commit steps unless the site's requests show they save the caller's change; a lookup, suggestion, validation or analytics request saves nothing. Then call finish_build again with the same executionId."
                         : error.reason === "commit_marks_unentered"
                           ? "Not published: the composed script declares a commit step that no act step of the session entered, so nothing shows its marks follow the real commit. Declare exactly the marks the session's act steps entered, marked by the same helper the composed script uses, and call finish_build again with the same executionId. If the session's steps entered none, it cannot publish: never run the write again for this; end the build and say its commit steps were not marked."
                           : error.reason === "confirmation_unrecorded"
@@ -5861,12 +6014,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     // stopped it stopped a sign-in. With no failed sign-in pending, whose own
                     // refusal above asks the agent to resolve it, the build ends as sign-in
                     // unavailable, worded by what the host saw, and its caller is never told to
-                    // change the request. The owner's own no, and a question they left
-                    // unanswered, keep their endings, a policy report renamed to one included.
-                    // A host refusal a later finish_build got past is still a refusal on record.
+                    // change the request. The owner's own no, a question they left unanswered and
+                    // their choice to end the build keep their endings, a policy report renamed to
+                    // one included. A host refusal a later finish_build got past is still a
+                    // refusal on record.
                     if (
                       ending.reason !== "owner_declined" &&
                       ending.reason !== "question_unanswered" &&
+                      ending.reason !== "owner_ended" &&
                       (signInUnconfirmed ||
                         (signInRefusalOnly && !hostRefused && !hostRefusalPassed)) &&
                       unresolvedSignIn === undefined &&
@@ -6396,12 +6551,55 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         return notices.length === 0 ? undefined : notices;
       };
       const published = () => terminal?.build === "published";
+      // Any call through the turn's actions but a question or a blocked report is work after the
+      // owner's latest answer, so `owner_ended` no longer stands on it. Cleared before and after, so
+      // a call queued behind the question still counts. Sandbox commands and file edits are not
+      // actions and leave it as it is.
+      const working =
+        <A extends readonly unknown[]>(
+          action: (...args: A) => Effect.Effect<string, MintFailure>,
+        ) =>
+        (...args: A) =>
+          Effect.suspend(() => {
+            ownerAnsweredLast = false;
+            return action(...args);
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                ownerAnsweredLast = false;
+              }),
+            ),
+          );
       const reviewedActions: MintActions = {
         ...actions,
+        ...(actions.retainCapture === undefined
+          ? {}
+          : { retainCapture: working(actions.retainCapture) }),
+        readSource: working(actions.readSource),
+        execute: working(actions.execute),
+        requestInput: (input) =>
+          Effect.suspend(() => {
+            ownerAnsweredLast = false;
+            return actions.requestInput(input);
+          }),
+        ...(actions.updateTask === undefined ? {} : { updateTask: working(actions.updateTask) }),
+        ...(actions.captchaState === undefined
+          ? {}
+          : { captchaState: working(actions.captchaState) }),
+        ...(actions.liveTests === undefined ? {} : { liveTests: working(actions.liveTests) }),
+        ...(actions.requestBrowserRecovery === undefined
+          ? {}
+          : { requestBrowserRecovery: working(actions.requestBrowserRecovery) }),
+        ...(actions.checkSignedInMarker === undefined
+          ? {}
+          : { checkSignedInMarker: working(actions.checkSignedInMarker) }),
+        ...(actions.abandonSignIn === undefined
+          ? {}
+          : { abandonSignIn: working(actions.abandonSignIn) }),
         // A published build with a write unresolved gives the reviewer its last turn;
         // publication itself never waits for it.
         finish: (input) =>
-          actions.finish(input).pipe(
+          working(actions.finish)(input).pipe(
             Effect.tap((result) =>
               Effect.sync(() => {
                 publications.push(result);

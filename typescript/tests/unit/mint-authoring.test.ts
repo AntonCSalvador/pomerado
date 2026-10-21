@@ -27,6 +27,7 @@ import {
 } from "../../src/mint/skills.js";
 import { ExecutionContext, makeEffectJournal } from "../../src/runtime/context.js";
 import { Deadline } from "../../src/runtime/deadline.js";
+import { readBackMatches, sameText } from "../../src/runtime/text.js";
 import { offlineKernel } from "../support/offline-kernel.js";
 import { executeKernelOperation } from "../../src/runtime/kernel-operation-run.js";
 import { runLocalOperation } from "../../src/execution/local-operation.js";
@@ -745,7 +746,7 @@ it("has the minter read back a write, accept recent-search saves and look before
   const text = (name: string) =>
     (contents(skills)[skills.findIndex((skill) => skill.name === name)] ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    "- Before committing, read back from the page what you are about to submit and check each value as the core skill's Confirm step says, against the option the tool picked when it picked one, in the session and on every branch of the composed script. Fail if one does not match, and prefer running this check before the step's commit mark, so a mismatch stops the step before it sends anything. Never read back a field filled with a secret handle.",
+    "- Before committing, read back from the page what you are about to submit and check each value as the core skill's Confirm step says, against the option the tool picked when it picked one, or the site's version of a typed value it rewrote (below), in the session and on every branch of the composed script. Fail if one does not match, and prefer running this check before the step's commit mark, so a mismatch stops the step before it sends anything. Never read back a field filled with a secret handle.",
   );
   expect(text("core")).toContain(
     "Telemetry, analytics and bot-sensor POSTs are normal and need no change. So is an anonymous recent-search, prefill or search-state save the site fires when you submit a search.",
@@ -753,6 +754,65 @@ it("has the minter read back a write, accept recent-search saves and look before
   expect(guide.instructions.replace(/\s+/g, " ")).toContain(
     "Do not infer invalid input from a timeout, missing observation, lost authentication, or failure of our automation. Not finding a value where you first looked is not that evidence. Before you call a value unavailable, check where the site would show it for the requested scope, such as the requested date's calendar or the results for the requested search. Settled evidence for the requested option, such as the site not listing it, is enough, and so is the site showing it sold out or unavailable for a write. A read that finds the requested option greyed out or sold out returns it as unavailable data with the page's alternatives instead",
   );
+});
+
+/*
+ * A site rewrote an address as it was typed, writing Parkway as PKWY, and the read-back refused a
+ * correct save. A write takes the site's version of a typed value, as it would a picked option,
+ * and notes in its output whether the rewrite only reformatted or changed what the caller gave,
+ * never refusing it.
+ */
+it("has a write take the site's rewrite of a typed value and note whether it changed the caller's", async () => {
+  const skills = await Effect.runPromise(loadAuthoringSkills("typescript/authoring"));
+  const text = (name: string) =>
+    (contents(skills)[skills.findIndex((skill) => skill.name === name)] ?? "").replace(/\s+/g, " ");
+  expect(text("writes")).toContain(
+    "- Read each typed value back once its field settles, before the step's commit. When the site rewrote it as it was typed or on leaving the field, such as an address it standardized, or offered exactly one suggestion for it, take the site's version, as you would a picked option: later read-backs, such as a review page, summary or confirmation, compare against it, and the output returns it for that field. The one suggestion counts only for a free-text value the caller typed, such as an address or a name in a text box the site completes, never for a picker that selects a record, such as a person, assignee, customer, linked record, store or account, which keeps the reference rules in \"Check the read-back\" and the caller-input skill's. Add an optional output field `<input>_note`, such as `address_note`, that reports the rewrite with what the caller sent and what the site kept. Check it once with `sameText(shown, typed, { rewrite: true })`, which only decides what the note says: when it holds, the site only reformatted the value, and the note says so; when it fails, the site dropped or changed part of what the caller gave, and the note says it changed. The write goes on either way: never throw `InputNotApplied` for such a rewrite. A value cut short by the field's length limit, digits an input mask dropped, or a field that cleared is a failed fill, not a rewrite: fill it again in the field's format, or refuse as today. A value the site replaces only when a step saves follows the read-back before committing, above.",
+  );
+  expect(text("core")).toContain(
+    "With none, throw its `pickRefusal`, an `InvalidInput` with `field` and `available`, the entries the site showed, except on a write whose site offered exactly one suggestion for a free-text value the caller typed, never a picker that selects a record: take it as the writes skill says for a value the site rewrites.",
+  );
+  expect(text("core")).toContain(
+    "`wanted` being the option the tool picked from the site's list when it picked one, the site's version of a value a write typed and the site rewrote (writes skill), and the caller's value otherwise. It ignores case, accents, spacing, apostrophes, periods, commas and hyphens between letters, reads a space, hyphen, slash or parentheses between digits as one separator while the groups still count, so 29 59 matches 29-59 but never 2959 or 2 959, and accepts a word the page shortened, such as St for Saint.",
+  );
+  expect(text("forms")).toContain(
+    "On a write, a single suggestion for a free-text value the caller typed is the site's correction instead, never for a picker that selects a record: take it as the writes skill says.",
+  );
+  expect(text("caller-input")).toContain(
+    "or a value a write typed that the site rewrote before any save, kept and reported as the writes skill says.",
+  );
+  // The publication review and the minter's publication skill excuse the note in the same words.
+  const note =
+    "A write's `<input>_note` reporting a value the site rewrote as it was typed, on leaving the field, or through its one suggestion is not unapplied input; the tool read the site's version back and returns it.";
+  expect(publicationOutputPolicy).toContain(note);
+  expect(text("publication")).toContain(note);
+});
+
+/*
+ * A read's search step waited only for the site's results, so a value the site did not recognise
+ * timed out instead of returning the site's own no-match answer. Both hosts read the line once,
+ * right after the core skill's bullet on waiting for every answer a step can give.
+ */
+it("has a search step wait for the site's results or its own no-match state", async () => {
+  const line =
+    "- For a search step, wait for either the site's results or its own no-match state, and return the site's no-match answer with its message rather than waiting on results that may never appear.";
+  const root = await authoringCopy((_path, text) => text.replace(sectionMarker, ""));
+  try {
+    const hosts = [
+      await renderedTexts("typescript/authoring"),
+      await renderedTexts(root, (text) => {
+        if (text.includes("pomerado:")) throw new Error("Uncomposed section");
+        return text;
+      }),
+    ];
+    for (const texts of hosts) {
+      const core = (texts.get("core") ?? "").replace(/\s+/g, " ");
+      expect(core.split(line)).toHaveLength(2);
+      expect(core).toContain(`paste \`waitCode\` and call it. ${line} - Wait for a change`);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 /*
@@ -775,7 +835,7 @@ it("has a write confirm from its first matching read-back, never from state befo
   );
   // The rules on commit marks and uncertain outcomes stay as they were.
   expect(writes).toContain(
-    "- Mark only the step whose click saves or submits. Opening or filling an unsaved form is not a commit step.",
+    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler sends the caller's change to the site.",
   );
   expect(writes).toContain(
     "- Never repeat a step blindly. If an `act` step fails after the page sent a state-changing request or opened a socket, after it entered a commit mark, or without returning a result at all (its page was lost), the write may already be committed;",
@@ -784,6 +844,42 @@ it("has a write confirm from its first matching read-back, never from state befo
   expect(
     (await readFile("typescript/authoring/examples/write-readback.ts", "utf8")).replace(/\s+/g, " "),
   ).toContain("// The 201 with its Location confirmed the write. Record it now, with no further call.");
+});
+
+/*
+ * A write marked opening a form and typing an address as commits, then waited only for the
+ * address suggestions. For an address outside the area the site serves, the site showed a notice
+ * instead, so the run timed out with two marks entered and reported a possible change when
+ * nothing had been sent. Marks go only on steps that send, and a wait names every answer.
+ */
+it("has a write mark only the steps that send and wait for every answer the site can give", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  // A lookup, suggestion, validation or analytics call from a control's handler, such as an
+  // address autocomplete, sends no change, so it is never a commit.
+  expect(writes).toContain(
+    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler sends the caller's change to the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests show they save the caller's change, such as an autosave; a lookup, suggestion, validation or analytics request saves nothing. Place the first commit mark at the first step that saves on the site.",
+  );
+  expect(writes).toContain(
+    "or a control whose handler sends the caller's change to the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests show they save the caller's change, such as an autosave; a lookup, suggestion, validation or analytics request saves nothing. Mark every such step, including autosaves,",
+  );
+  expect(writes).toContain(
+    "- Mark the commit at the step that submits the booking or order; a hold that expires on its own, such as a reserved table or a cart timer, is not the commit.",
+  );
+  // The wait is its own rule, and a refusal it reads ends as the caller's input before any mark.
+  expect(writes).toContain(
+    "the next step uses. - When a step waits for the site's answer, wait for every answer the site can give, such as results, a no-results message or an out-of-area notice, and throw `InvalidInput` naming the field the site refused, with the options the site offers as `available` when it lists them, before the mark of the commit it guards, rather than waiting for results alone.",
+  );
+  // The narrower click-only rule it replaces is gone, so the two never disagree.
+  expect(writes).not.toContain("Mark only the step whose click saves or submits.");
+  expect(writes).not.toContain("Opening or filling an unsaved form is not a commit step.");
+  // These rules are hard rules, never a preference.
+  expect(writes).not.toContain("Prefer placing the first commit mark");
+  expect(writes).not.toContain("Prefer marking the commit");
+  expect(writes).not.toContain("a control whose handler calls the site");
+  expect(writes).not.toContain("return the site's refusal with the caller's options");
 });
 
 /*
@@ -834,6 +930,53 @@ it("teaches every write to call verified() with no argument and declare a read-b
   expect(bookSeat.write).toEqual({ confirmation: "readback", commits: ["book-seat"] });
 });
 
+/*
+ * A form saved over several pages: the first save of one page kept the site's own value for a
+ * number the caller gave, the next page did not show it, and the final commit went out with the
+ * site's value. A second save of that page keeps the caller's value. The write reads back each
+ * saved value the site shows before its final commit, saves the page once more when one differs
+ * and saving it again updates the same record, and stops when it still differs. A value the tool
+ * picked from the site's list is compared as the label it picked: a caller's CA picked as
+ * California reads back as California, which readBackMatches never confirms for CA.
+ */
+it("has a write read back each saved caller value before its final commit, and save a page again once", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  expect(writes).toContain(
+    "- On a form saved over several pages, before the final commit, read back what the site saved for the caller's values, from a summary, a review page or each saved page, in the session and in the composed script. Compare each value the site shows with `readBackMatches(shown, wanted)` from `pomerado/runtime`, against the option the tool picked when it picked one, or the site's version of a typed value it rewrote (above): `wanted` is that option's label or that version, and the caller's value otherwise. It accepts the same value in another format or word order, and every number must match exactly, the same numbers in the same order. When the site kept a different value, save that page again once with the same entries and read it back again, but only when saving it again updates the same record or page, never when the save adds an item, such as a cart line or a row. Prefer `saveAndReadBack` from `pomerado/runtime` for such a page's save: it does both and returns the values that still differ. When one still differs, or a page whose save adds an item kept a different value, stop before the final commit's mark and throw `InputNotApplied` with its `field`, `requested` and `applied`.",
+  );
+  expect(readBackMatches("California", "California")).toBe(true);
+  expect(readBackMatches("California", "CA")).toBe(false);
+  expect(readBackMatches("Yes", "true")).toBe(false);
+});
+
+/*
+ * The read-back after a commit decides whether the tool calls verified(). It compares with
+ * sameText, which refuses a different value that holds the wanted one, such as Not paid for Paid.
+ * readBackMatches, for a page saved before the final commit, accepts it.
+ */
+it("has a write compare its read-back after the commit with sameText, which refuses Not paid for Paid", async () => {
+  const writes = ((await renderedTexts("typescript/authoring")).get("writes") ?? "").replace(
+    /\s+/g,
+    " ",
+  );
+  expect(writes).toContain(
+    "so compare text after the commit with `sameText`, as before it (the core skill's Confirm step).",
+  );
+  expect(writes).not.toContain("compare text after the commit with `readBackMatches`");
+  for (const [shown, wanted] of [
+    ["Not paid", "Paid"],
+    ["Premium Economy", "Economy"],
+    ["West Virginia", "Virginia"],
+    ["Jane Mary Doe", "Jane Doe"],
+  ] as const) {
+    expect(sameText(shown, wanted), `${shown} | ${wanted}`).toBe(false);
+    expect(readBackMatches(shown, wanted), `${shown} | ${wanted}`).toBe(true);
+  }
+});
+
 // A click that saved nothing but flagged a field no question may ask ends as the caller's refusal,
 // with the step unsent, never a second click.
 it("has a write refuse a field no site-field question may ask once its click saved nothing", async () => {
@@ -841,6 +984,52 @@ it("has a write refuse a field no site-field question may ask once its click sav
   const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
     "When `blockingRequiredFields(form, before, { unaskable: true })` returns `{ unaskable: true }` after the step's first click, the click saved nothing but a field it flagged is one no site-field question may ask, such as a card or bank field: call `notCommitted` for the step, then throw `InvalidInput` that names the field by its label, and don't click again.",
+  );
+});
+
+// A write still refuses an option the page does not offer, unless the caller's own task asks for
+// whatever the site ends up with: then it follows the site's preselected substitute and returns it.
+it("has a write follow the site's substitute only when the caller's task asks for what it ends up with", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const writes = (texts.get("writes") ?? "").replace(/\s+/g, " ");
+  // The refusal rule stays as it was, and the exception comes right after it.
+  expect(writes).toContain(
+    "- When one of those checks rules the task out, such as a total over the caller's limit, an item out of stock or a variant the page does not offer, the script refuses before the mark with `InvalidInput` (the caller-input skill, \"Throw the error that matches what happened\"), or returns a refusal its output schema declares before its first mark (below).",
+  );
+  expect(writes).toContain(
+    "A report of the form's fields, its validation messages or the options to pick from is a refusal (`InvalidInput` with `available`) or a failure (`OperationFailure`), not the write's output.",
+  );
+  expect(writes).toContain(
+    "(`site_declined` when the site refused this example). A build whose session never reached the end publishes nothing. - When the caller's own task asks for whatever the site ends up with, such as the product a quote ended up on, follow the site's preselected substitute and return the value the site used instead of throwing `InvalidInput`. Only the caller's task text counts this way; an output field or description you wrote does not. - When a write's form adds required fields",
+  );
+});
+
+// The core and caller-input rules that refuse an unoffered value or forbid another one each name
+// that one exception, so no older rule reads as overriding it.
+it("has every unoffered-value rule name the task-asked substitute exception", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  const only =
+    "a write follows the site's preselected substitute only when the caller's own task asks for whatever the site ends up with (writes skill).";
+  const instead =
+    "A write follows the site's preselected substitute instead when the caller's own task asks for whatever the site ends up with (writes skill).";
+  expect(text("core")).toContain(
+    `Never pick a near match, the page's default or the first option; the same proper noun in another usual form is not a near match (input schema above). ${instead} A broader choice that covers the value`,
+  );
+  expect(text("core")).toContain(
+    `A write throws \`InvalidInput\` with \`field\` and \`available\`, the selectable options. Neither picks another value for the caller; ${only} - For an input whose options depend on another`,
+  );
+  expect(text("caller-input")).toContain(
+    `Don't add your own constraints between inputs, filter them, or swap in a value the caller didn't give; ${only} For example,`,
+  );
+  expect(text("caller-input")).toContain(
+    `as selectable, exactly as shown, whenever the page lists them. The caller corrects the input and runs again. ${instead} - \`InputNotApplied\`:`,
+  );
+  expect(text("caller-input")).toContain(
+    `it follows .agents/core/SKILL.md ("Configure, then read"), which never substitutes another value; ${only} Asking the owner`,
+  );
+  expect(text("caller-input")).toContain(
+    `- An option the page lists but greys out, such as a booked date or a sold-out size: not an error on a read, \`InvalidInput\` with \`available\` on a write (core skill, "Configure, then read"); ${only} - A write that declines`,
   );
 });
 
@@ -873,17 +1062,17 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["372521dfa1022e72033d202d94855e7f7f901b532b7a249b6e7373ba44341685", "core"],
-    ["9fe0598c1dc41354e5dbddd42a372c6b628eecd206cf5ea9a3cf0fcbf10a6410", "search"],
-    ["7e50c86ea30964f0e3610e090c7bd7d78aac6f59a7f644644c1ad99577d59f5f", "auth"],
-    ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
+    ["e8146b7d1b924a0b1c24da4f167c64f653fa3e8832e1169ca11eeccffe8db4fb", "core"],
+    ["a896a59d7b924a2940a90437b8d4488cd515c4f4afc70da9fe14953b1583dd93", "search"],
+    ["e1b24b29d645071fa265f37d0fae3bb5be2b38798a32ecdbd7d5a6826a1c9248", "auth"],
+    ["d720cd4d66afaf411cf14dbce6a026f72e2830e203c284e87248dfaff920f44c", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
-    ["d71e45c5b1f13bcf26c6a22bc455b1da93c1276b8e73f5d7db6ec302f62a6a04", "forms"],
-    ["14bc762731cf3b3bec15b3e0561f26847f99a279f8123abf5379db8eacf2dfd2", "writes"],
+    ["d2256259f30d4da5f46f50e6d012834a29f0f08526b02a5696fada8e9b47bbda", "forms"],
+    ["f3ae1c582163402c306e1b7bef46f637a4eda26559704a6f8d21f8e476c3170c", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["b878173156d608df50612163e73637f1e9129b1eb568b72c597af27adca06df9", "caller-input"],
-    ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],
-    ["f81651e9fd497bb8085245524e1f9ff0362f68fa35ae6a6f39e86dd01c67f7b5", "workspace/AGENTS.md"],
+    ["b9a8d04d893e49bd617fe5faa7b92966f1bf58bb9a5c364cc51b313acb711a51", "caller-input"],
+    ["3855dfaddc3e2ef61282b67344e61f667723f120dd0cd33d70d394504aa274ab", "publication"],
+    ["2ba8341af604bb965b0beec5ae8ca19cf5fb907b0b535ba82a635be0845b79a3", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
@@ -1003,8 +1192,8 @@ it("renders the search URL fast path only when a host turns it on", async () => 
     ...on.digests.filter(([, name]) => name === "search"),
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
-    ["ee7e45fcc9cb8ae5d2969538754841c34d07b20baf12371143e8ad081651fbfb", "search"],
-    ["b2472baebf7631398cc71cbb53b96cfe74f4355403c03d0a8061e42430c4e851", "workspace/AGENTS.md"],
+    ["ea3c3bc8472c8c9db7aa9dd9b99b682f525f5ab55c091b944946dcf75f5ec83e", "search"],
+    ["0ae14c27e398eb641d96eaef6d4ebe0a47ef6a5d1297d1071524f50f467d1fab", "workspace/AGENTS.md"],
   ]);
   expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(
     off.digests.filter(([, name]) => name !== "search"),

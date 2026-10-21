@@ -129,6 +129,23 @@ const boundedRationale = (raw: unknown): unknown => {
   return { ...raw, rationale: cutToLimit(rationale, rationaleLimit) };
 };
 
+/** The characters an allow's advice may hold; the host cuts a longer one to fit. */
+const adviceLimit = 2000;
+/**
+ * A decision with its advice kept only on an allow and only when it says something, cut to its
+ * limit. Advice never blocks a step, so on a deny or escalate, whose rationale already carries
+ * everything the agent must change, the host drops it.
+ */
+const allowAdvice = (raw: unknown): unknown => {
+  if (typeof raw !== "object" || raw === null || !("advice" in raw)) return raw;
+  const { advice, ...rest } = raw as Record<string, unknown>;
+  return Reflect.get(raw, "outcome") === "allow" &&
+    typeof advice === "string" &&
+    advice.trim() !== ""
+    ? { ...rest, advice: cutToLimit(advice, adviceLimit) }
+    : rest;
+};
+
 export const GuardianDecision = Schema.Struct({
   outcome: Schema.Literal("allow", "deny", "escalate"),
   rationale: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(4000)),
@@ -156,6 +173,12 @@ export const GuardianDecision = Schema.Struct({
    * reviewer that predates it, the host counts the refusal as `final`. Other kinds have none.
    */
   refusal: Schema.optional(Schema.suspend(() => GuardianRefusal)),
+  /**
+   * An execution or recovery allow's note for the agent, such as a doubt about which page value
+   * the request asks for. It never blocks the step; the host returns it with the allow. Other
+   * outcomes and kinds have none.
+   */
+  advice: Schema.optional(Schema.String.pipe(Schema.minLength(1), Schema.maxLength(adviceLimit))),
 });
 export type GuardianDecision = typeof GuardianDecision.Type;
 export class ReviewFailure extends Data.TaggedError("ReviewFailure")<{
@@ -305,6 +328,11 @@ export interface PendingExecution {
    */
   readonly taskUpdates?: readonly ReviewedTaskUpdate[];
   readonly screenedInput: string;
+  /**
+   * Execution reviews only: the agent's own description of the step, the screened `intent` of its
+   * execute call. Untrusted, never authority; the review reads at most its first 500 characters.
+   */
+  readonly agentNote?: string;
   readonly screenedObservations: string;
   readonly accountScope: string;
   readonly allowedOrigins: readonly string[];
@@ -455,7 +483,35 @@ export interface PendingExecution {
       readonly entrypoint?: string;
       readonly outcome: "done" | "not_done" | "unknown" | "unassessed";
     }[];
+    /**
+     * Execution reviews only: this attempt's latest live test batches, and any older one holding
+     * a failure that still stands on its source, oldest first, as the harness judged them
+     * (`LiveTestHost.bindBatches`). Empty before a batch ran in this attempt,
+     * a takeover's included; absent from a host that does not bind them.
+     */
+    readonly liveTests?: readonly ReviewedLiveTestBatch[];
   };
+}
+
+/**
+ * One live test batch as an execution review sees it: the host facts that show which cases passed
+ * on which source, so a review can tell whether a suite already ran on the source it judges.
+ */
+export interface ReviewedLiveTestBatch {
+  /** The batch's own Guardian review, or the harness's id for a host that names none. */
+  readonly batchId: string;
+  /** The entrypoint the batch ran, under `operation/` as the review reads it. */
+  readonly entrypoint: string;
+  /** The digest of the source the batch ran: its entrypoint and its static import closure. */
+  readonly sourceDigest: string;
+  /** Whether that entrypoint and its static import closure are unchanged since the batch ran. */
+  readonly sourceUnchanged: boolean;
+  readonly cases: readonly {
+    readonly id: string;
+    readonly verdict: "pass" | "fail" | "inconclusive";
+    /** `cold`: the case ran first on a new browser with an empty profile. */
+    readonly start?: "cold" | "warm";
+  }[];
 }
 
 /** Token counts of one review's model calls, summed over its calls. */
@@ -712,7 +768,7 @@ const decisionFailure = (
   });
 
 const decodeDecision = (raw: unknown) =>
-  Schema.decodeUnknown(GuardianDecision)(boundedRationale(raw)).pipe(
+  Schema.decodeUnknown(GuardianDecision)(allowAdvice(boundedRationale(raw))).pipe(
     Effect.mapError(decisionFailure),
   );
 

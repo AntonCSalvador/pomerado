@@ -72,9 +72,25 @@ const ask = (prompt: string) => ({
 
 const fixture = makeMintContinuationFixture(cleanups, portableJobSession, makeOpenAIMinter);
 
+/** The owner's choice to stop, as a choice question the minter asks once a needed fact is unknown. */
+const stopChoice = {
+  questions: [
+    {
+      id: "next",
+      type: "choice",
+      prompt: "The form needs a start date the request doesn't give. How should the build go on?",
+      options: [
+        { id: "stop", label: "Stop here; I don't know it" },
+        { id: "wait", label: "I'll find it and answer" },
+      ],
+    },
+  ],
+};
+
 it.each([
   { reason: "question_unanswered", refusal: "no_question_unanswered" },
   { reason: "owner_declined", refusal: "owner_not_declined" },
+  { reason: "owner_ended", refusal: "owner_not_ended" },
 ] as const)(
   "refuses $reason with nothing on record, then ends with it once its basis is recorded",
   async ({ reason, refusal }) => {
@@ -85,15 +101,17 @@ it.each([
           call("report_blocked", { reason, explanation }, "before"),
           reason === "question_unanswered"
             ? call("request_input", ask("Which report?"))
-            : call("request_input", {
-                questions: [
-                  {
-                    id: "proceed",
-                    type: "confirm",
-                    prompt: "May the tool do this?",
-                  },
-                ],
-              }),
+            : reason === "owner_ended"
+              ? call("request_input", stopChoice)
+              : call("request_input", {
+                  questions: [
+                    {
+                      id: "proceed",
+                      type: "confirm",
+                      prompt: "May the tool do this?",
+                    },
+                  ],
+                }),
           call("report_blocked", { reason, explanation }, "after"),
         ][index] ?? prose("Stopping."),
       reason === "owner_declined"
@@ -103,7 +121,12 @@ it.each([
                 proceed: { type: "confirm", value: { confirmed: false } },
               }),
           }
-        : {},
+        : reason === "owner_ended"
+          ? {
+              askInput: () =>
+                Effect.succeed({ next: { type: "choice", value: "stop" } }),
+            }
+          : {},
     );
     const outcome = await f.run();
     expect(JSON.stringify(f.requests[1]?.input)).toContain(refusal);
@@ -1279,6 +1302,103 @@ it("ends a policy report that stands on the owner's no as owner_declined after a
   expect(await f.run()).toMatchObject({
     blocked: { reason: "owner_declined" },
     stopReason: "owner_declined",
+  });
+});
+
+// owner_ended stands only on the owner's latest answer with nothing run since: an answer the build
+// went on from, such as a date it then tried on a site that failed, never ends it as the owner's
+// choice, and neither does a secret answer, which Guardian never sees, or a sign-in after the answer.
+const failedSiteStep = {
+  executionId: "example_failed",
+  status: "failed" as const,
+  effect: "not_sent" as const,
+  resultRef: "example_failed_result",
+  observations: { error: "The site showed an error page." },
+};
+const stopAnswer = { next: { type: "choice", value: "stop" } } as const;
+it.each([
+  {
+    after: "a step that failed on the site after a date answer",
+    steps: [
+      call("request_input", {
+        questions: [{ id: "start", type: "text", prompt: "Which start date should the example use?" }],
+      }),
+      call("execute", pureExample),
+    ],
+    answers: { start: { type: "text", value: "2026-11-02" } },
+  },
+  {
+    after: "a secret answer after the owner chose to stop",
+    steps: [
+      call("request_input", stopChoice),
+      call(
+        "request_input",
+        {
+          questions: [
+            { id: "note", type: "secret", secretKind: "private_text", prompt: "Which reference?" },
+          ],
+        },
+        "secret",
+      ),
+    ],
+    answers: { ...stopAnswer, note: { type: "secret", value: "private-reference" } },
+  },
+  {
+    after: "a sign-in after the owner chose to stop",
+    steps: [call("request_input", stopChoice), signIn],
+    answers: stopAnswer,
+  },
+] as const)("refuses owner_ended after $after", async ({ steps, answers }) => {
+  const explanation = "You chose to stop because the start date is unknown.";
+  const f = await fixture(
+    (_request, index) =>
+      [...steps, call("report_blocked", { reason: "owner_ended", explanation })][index] ??
+      prose("Stopping."),
+    {
+      reviewAndExecute: (submitted, beforeDispatch = () => Effect.void) =>
+        submitted.purpose === "authenticate"
+          ? beforeDispatch({ reviewId: "review_sign_in", action: "authentication" }).pipe(
+              Effect.as(submittedScreen),
+            )
+          : Effect.succeed(failedSiteStep),
+      askInput: (request) =>
+        Effect.succeed(
+          Object.fromEntries(
+            request.questions.flatMap((question) =>
+              question.id in answers ? [[question.id, answers[question.id as keyof typeof answers]]] : [],
+            ),
+          ),
+        ),
+    },
+  );
+  const outcome = await f.run();
+  expect(outcome).not.toMatchObject({ blocked: { reason: "owner_ended" } });
+  expect(JSON.stringify(f.requests[steps.length + 1]?.input ?? null)).toContain("owner_not_ended");
+});
+
+// The owner's own choice to end the build keeps its ending, sign-in or not, as their no does.
+it("keeps owner_ended after an unconfirmed sign-in", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        signIn,
+        call("request_input", stopChoice),
+        call("report_blocked", {
+          reason: "owner_ended",
+          explanation: "You chose to stop because the start date is unknown.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: (_submitted, beforeDispatch = () => Effect.void) =>
+        beforeDispatch({ reviewId: "review_sign_in", action: "authentication" }).pipe(
+          Effect.as(submittedScreen),
+        ),
+      askInput: () => Effect.succeed({ next: { type: "choice", value: "stop" } }),
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "owner_ended" },
+    stopReason: "owner_ended",
   });
 });
 

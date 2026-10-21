@@ -600,6 +600,8 @@ never with final text, which the host treats as unfinished work:
   the build needs that step.
 - `question_unanswered`: a question you asked came back `no_answer`, and the build cannot go on
   without its answer.
+- `owner_ended`: the owner chose in an answer to end the build, such as after confirming that a
+  fact it needs is unknown.
 - `host_refused`: a host check refused a step the build needs, such as `finish_build`, a sign-in
   form or a site change, and nothing left in this attempt can fix it. Name the check in
   `explanation`.

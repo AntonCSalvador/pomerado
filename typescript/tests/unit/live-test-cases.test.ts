@@ -4,8 +4,11 @@ import {
   caseDigest,
   cursorPairOf,
   decodeCasesFile,
+  failingCasesRefusal,
+  failingLiveTestCases,
   judgeCase,
   liveTestsEvidence,
+  liveTestsEvidenceProblem,
   primaryListOf,
   signedInTestInputRefusal,
   testInputKey,
@@ -316,5 +319,59 @@ describe("liveTestsEvidence", () => {
         clearedBy: expect.objectContaining({ ways: ["changedExpectationBy", "excusedBy"] }),
       }),
     ]);
+  });
+});
+
+describe("failingLiveTestCases", () => {
+  const record = (statuses: Readonly<Record<string, Readonly<Record<string, string>>>>) => ({
+    versions: [
+      { version: "playwright" as const, entrypoint: "src/tool.mjs" },
+      { version: "http" as const, entrypoint: "src/tool-http.mjs" },
+    ],
+    cases: Object.entries(statuses).map(([id, results]) => ({
+      id,
+      results: Object.fromEntries(
+        Object.entries(results).map(([version, status]) => [version, { status }]),
+      ),
+    })),
+  });
+
+  it("names the published version's failing cases in the cases file's order, and nothing else", () => {
+    const both = record({
+      a: { playwright: "pass", http: "fail" },
+      b: { playwright: "fail", http: "pass" },
+      c: { playwright: "inconclusive", http: "fail" },
+      d: { playwright: "stale", http: "fail" },
+      e: { playwright: "not_run", http: "fail" },
+      f: { playwright: "fail", http: "fail" },
+    });
+    expect(failingLiveTestCases(both, "playwright")).toEqual({
+      version: "playwright",
+      entrypoint: "src/tool.mjs",
+      ids: ["b", "f"],
+    });
+    expect(failingLiveTestCases(both, "http")?.ids).toEqual(["a", "c", "d", "e", "f"]);
+  });
+
+  it("finds none when no counted case fails, the version is missing or the record is bare", () => {
+    expect(failingLiveTestCases(record({ a: { playwright: "pass" } }), "playwright")).toBeUndefined();
+    expect(
+      failingLiveTestCases(
+        { versions: [{ version: "playwright" }], cases: [{ id: "a", results: { http: { status: "fail" } } }] },
+        "http",
+      ),
+    ).toBeUndefined();
+    expect(failingLiveTestCases(liveTestsEvidenceProblem("unreadable").record, "playwright")).toBeUndefined();
+  });
+
+  it("names up to ten cases and counts the rest", () => {
+    const ids = Array.from({ length: 12 }, (_unused, index) => `case-${index + 1}`);
+    const text = failingCasesRefusal({ version: "playwright", entrypoint: "src/tool.mjs", ids });
+    expect(text).toContain(
+      "live test cases case-1, case-2, case-3, case-4, case-5, case-6, case-7, case-8, case-9, case-10 and 2 more on src/tool.mjs fail on this source,",
+    );
+    expect(failingCasesRefusal({ version: "playwright", ids: ["a", "b", "c"] })).toContain(
+      "live test cases a, b and c fail on this source,",
+    );
   });
 });

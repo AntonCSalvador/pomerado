@@ -84,6 +84,8 @@ answers `{ success, result, error, stderr }`. Throw
   result: name it, and throw `InvalidInput` with `field` and what the page shows, before any
   commit mark, never a readiness timeout; below says when it starts "Caller input error:". The waits paragraph below shows how to
   paste `waitCode` and call it.
+- For a search step, wait for either the site's results or its own no-match state, and return the
+  site's no-match answer with its message rather than waiting on results that may never appear.
 - Wait for a change (`waitForChange`, or a settle of your own) only after a step that changed the
   page or should have, such as a click, fill or navigation that loads new results. Skip it when no
   step changed the page since the last wait, such as after closing a panel without picking
@@ -189,18 +191,23 @@ exception: it is optional unless the task can't run without it (below).
   from the one you saw.
 - Inputs are values a caller knows, such as codes, names, dates and counts, never a
   suggestion's full display text or an internal id the caller cannot know (an id the site
-  shows on its own pages, such as a product number, is not internal). A closed list
-  of options stays an enum of the site's options, as above. When the options come from a
+  shows on its own pages, such as a product number, is not internal). Prefer a unique input,
+  such as an ID: a tool that acts on one record takes the ID the site's other tools use for it,
+  and finds the record another way, such as by name, only when the caller gives none. A closed
+  list of options stays an enum of the site's options, as above. When the options come from a
   query, as in a search box, autocomplete, typeahead or searchable combobox, look the value
   up the way a person would, with `pickValue` from `pickerCode` (forms skill). It types the
   caller's value into the site's own search, reads every suggestion, matches names loosely
   (case, accents, spacing, punctuation, and whole words, so a name with a neighborhood or an
   airport code in brackets still matches) with a whole-name or code match outranking a partial
   one, and counts the matches at the best rank. With none, throw its `pickRefusal`, an
-  `InvalidInput` with `field` and `available`, the entries the site showed. With one, use it.
-  With several, a read takes the first in the site's own order and returns the one it used, as
-  the site labels it. A write asks the caller which one with a declared choice question whose
-  options are those matches as the site labels them (.agents/caller-input/SKILL.md).
+  `InvalidInput` with `field` and `available`, the entries the site showed, except on a write
+  whose site offered exactly one suggestion for a free-text value the caller typed, never a
+  picker that selects a record: take it as the writes skill says for a value the site
+  rewrites. With one, use it. With several, a read takes the first in the site's own order and
+  returns the one it used, as the site labels it. A write asks the caller which one with a
+  declared choice question whose options are those matches as the site labels them
+  (.agents/caller-input/SKILL.md).
 - Match the caller's proper nouns, such as places, venues and company names, with a fuzzy
   match that accepts the usual forms of the same name, such as a name with or without its
   accents (Abaca for Abacá), a city alone or with its state and country, or a company with
@@ -233,6 +240,9 @@ exception: it is optional unless the task can't run without it (below).
   offers: a collapsed group is not an absent one. Leave out controls unrelated to the purpose,
   such as a language switch or a newsletter opt-in on a search. The search skill's "Find the
   filters" says how a search records them.
+- Declare input fields in the order a person fills in the site's form: what or where first,
+  then when (a start date before an end date), then who and how many, then optional
+  refinements, with sorting and paging (`limit`, `cursor`) last.
 - Turn safety defaults off. They are never an input or a question ("Safety defaults", below).
 - Inputs that tailor the answer. Many sites tailor what they show to facts about the visitor,
   not just what they searched for: where they are (ZIP, address, store, delivery or pickup),
@@ -512,14 +522,17 @@ that depends on them:
    selectable, exactly as shown. Leave disabled, sold-out and other unselectable options out of
    `available`, and say in the message that they were left out. Never pick a near match, the
    page's default or the first option; the same proper noun in another usual form is not a near
-   match (input schema above). A broader choice that covers the value, such as "Show all", is
-   allowed on a search (search skill).
+   match (input schema above). A write follows the site's preselected substitute instead when
+   the caller's own task asks for whatever the site ends up with (writes skill). A broader
+   choice that covers the value, such as "Show all", is allowed on a search (search skill).
    - An option the page lists but greys out, disables or marks unavailable, such as a booked
      date, a sold-out size or a full time slot: a read returns it as data, the requested value
      with `available: false`, the page's own reason when it shows one, and the alternatives the
      page offers beside it, such as the in-stock sizes, the open times or the valid stays, and
      the run succeeds. A write throws `InvalidInput` with `field` and `available`, the
-     selectable options. Neither picks another value for the caller.
+     selectable options. Neither picks another value for the caller; a write follows the site's
+     preselected substitute only when the caller's own task asks for whatever the site ends up
+     with (writes skill).
    - For an input whose options depend on another, such as a check-out after a check-in or a
      time after a date, apply the input it depends on first and read `available` from that
      state, then drop the options the input alone rules out. Never list options read before
@@ -536,9 +549,11 @@ that depends on them:
    before the page updates belongs to the previous choice. A choice already in the requested
    state needs no step and no wait. Compare text read back with `sameText(shown, wanted)` from
    `pomerado/runtime`, `wanted` being the option the tool picked from the site's list when it
-   picked one, and the caller's value otherwise. It ignores case, accents, spacing,
-   apostrophes, and periods, commas and hyphens between letters, and accepts a word the page
-   shortened, such as St for Saint. Prefer it over
+   picked one, the site's version of a value a write typed and the site rewrote (writes skill),
+   and the caller's value otherwise. It ignores case, accents, spacing, apostrophes, periods,
+   commas and hyphens between letters, reads a space, hyphen, slash or parentheses between
+   digits as one separator while the groups still count, so 29 59 matches 29-59 but never 2959
+   or 2 959, and accepts a word the page shortened, such as St for Saint. Prefer it over
    exact equality, since a page may echo a query or name in its own case or short form, and
    prefer comparing numbers, dates and amounts as values. When the page kept another value
    after the tool's bounded retries, throw
@@ -593,7 +608,8 @@ call: `readRows` and `waitForRows` read every returned row at once. A list of te
 page, such as bullets, highlights or option names, can hold blank entries the site renders
 invisibly: trim each entry and drop the empty ones, so one blank entry does not fail the result.
 A single text field that can be blank on some records is nullable, and its description says when
-(a needed value also takes a field that says why, as "Never loosen a value" says). Never select
+(a needed value also takes a field that says why, as "Never loosen a value" says). Return a value
+the site shows blank as null, never a question to the owner. Never select
 by a generated CSS class, a hashed or build-numbered name such as `.e-1a2b3c` or `.css-1x2y3z`:
 it changes on the site's next deploy.
 Never read it from a broad container, whole-page text, tag-stripped HTML, a regex over page-wide
