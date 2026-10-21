@@ -752,14 +752,15 @@ it("has the minter read back a write, accept recent-search saves and look before
 /*
  * A site rewrote an address as it was typed, writing Parkway as PKWY, and the read-back refused a
  * correct save. A write takes the site's version of a typed value, as it would a picked option,
- * and notes in its output when the rewrite changed what the caller gave, never refusing it.
+ * and notes in its output whether the rewrite only reformatted or changed what the caller gave,
+ * never refusing it.
  */
-it("has a write take the site's rewrite of a typed value and note when it changed the caller's", async () => {
+it("has a write take the site's rewrite of a typed value and note whether it changed the caller's", async () => {
   const skills = await Effect.runPromise(loadAuthoringSkills("typescript/authoring"));
   const text = (name: string) =>
     (contents(skills)[skills.findIndex((skill) => skill.name === name)] ?? "").replace(/\s+/g, " ");
   expect(text("writes")).toContain(
-    "- Read each typed value back once its field settles, before the step's commit. When the site rewrote it as it was typed or on leaving the field, such as an address it standardized, or offered exactly one suggestion for it, take the site's version, as you would a picked option: later read-backs, such as a review page, summary or confirmation, compare against it, and the output returns it for that field. The one suggestion counts only for a free-text value the caller typed, such as an address or a name in a text box the site completes, never for a picker that selects a record, such as a person, assignee, customer, linked record, store or account, which keeps the reference rules in \"Check the read-back\" and the caller-input skill's. Check it once with `sameText(shown, typed, { rewrite: true })`; when that fails, the site dropped or changed part of what the caller gave, so go on and add an optional output field `<input>_note`, such as `address_note`, naming what the caller sent and what the site kept. Never throw `InputNotApplied` for such a rewrite. A value cut short by the field's length limit, digits an input mask dropped, or a field that cleared is a failed fill, not a rewrite: fill it again in the field's format, or refuse as today. A value the site replaces only when a step saves follows the read-back before committing, above.",
+    "- Read each typed value back once its field settles, before the step's commit. When the site rewrote it as it was typed or on leaving the field, such as an address it standardized, or offered exactly one suggestion for it, take the site's version, as you would a picked option: later read-backs, such as a review page, summary or confirmation, compare against it, and the output returns it for that field. The one suggestion counts only for a free-text value the caller typed, such as an address or a name in a text box the site completes, never for a picker that selects a record, such as a person, assignee, customer, linked record, store or account, which keeps the reference rules in \"Check the read-back\" and the caller-input skill's. Add an optional output field `<input>_note`, such as `address_note`, that reports the rewrite with what the caller sent and what the site kept. Check it once with `sameText(shown, typed, { rewrite: true })`, which only decides what the note says: when it holds, the site only reformatted the value, and the note says so; when it fails, the site dropped or changed part of what the caller gave, and the note says it changed. The write goes on either way: never throw `InputNotApplied` for such a rewrite. A value cut short by the field's length limit, digits an input mask dropped, or a field that cleared is a failed fill, not a rewrite: fill it again in the field's format, or refuse as today. A value the site replaces only when a step saves follows the read-back before committing, above.",
   );
   expect(text("core")).toContain(
     "With none, throw its `pickRefusal`, an `InvalidInput` with `field` and `available`, the entries the site showed, except on a write whose site offered exactly one suggestion for a free-text value the caller typed, never a picker that selects a record: take it as the writes skill says for a value the site rewrites.",
@@ -1014,7 +1015,7 @@ it("renders the pinned standalone authoring", async () => {
     ["d720cd4d66afaf411cf14dbce6a026f72e2830e203c284e87248dfaff920f44c", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["d2256259f30d4da5f46f50e6d012834a29f0f08526b02a5696fada8e9b47bbda", "forms"],
-    ["7ca2d68a6c620e5270a806f5c945844cf7c139bab1e48c38b97b00cb5f518da4", "writes"],
+    ["9bce752bcb92092f2b31d5c3fbbd8846a7f71b2395c029fa08298b55eb00a7fd", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["ef6f1840e268b678cf0a9367f3314cc408854a015359199b1f37b736abbadf71", "caller-input"],
     ["3855dfaddc3e2ef61282b67344e61f667723f120dd0cd33d70d394504aa274ab", "publication"],
