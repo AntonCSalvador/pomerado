@@ -1,5 +1,10 @@
 import { DateTime, Effect } from "effect";
-import type { GuardianDecision, PendingExecution, ReviewFailure } from "../guardian/review.js";
+import type {
+  GuardianDecision,
+  PendingExecution,
+  ReviewedLiveTestBatch,
+  ReviewFailure,
+} from "../guardian/review.js";
 import { failureDetailMetadata } from "../runtime/failure-detail.js";
 import { MintFailure } from "./contracts.js";
 import { executedSourceClosure } from "./operation-source.js";
@@ -39,6 +44,11 @@ export interface MintReviewHost {
   readonly signInCodes: () => readonly string[];
   /** This build's tracked writes and their newest assessments; only execution reviews carry them. */
   readonly writes?: () => readonly WriteOutcome[];
+  /**
+   * This attempt's latest judged live test batches (`LiveTestHost.bindBatches`), undefined until
+   * the harness binds them; only execution reviews carry them.
+   */
+  readonly liveTests?: () => Effect.Effect<readonly ReviewedLiveTestBatch[]> | undefined;
 }
 
 /**
@@ -129,6 +139,8 @@ export const mintReviewContext = (
     const schema = reviewsSource ? host.inputSchema() : undefined;
     const signInCodes = currentExecution === undefined ? [] : host.signInCodes();
     const writes = currentExecution === undefined ? [] : (host.writes?.() ?? []);
+    const readLiveTests = currentExecution === undefined ? undefined : host.liveTests?.();
+    const liveTests = readLiveTests === undefined ? undefined : yield* readLiveTests;
     return {
       repeatableRead: host.repeatableRead(),
       operationSources: [...step.sources.keys()],
@@ -146,6 +158,8 @@ export const mintReviewContext = (
         : { currentPage: page }),
       executions: [...host.executions()],
       ...(writes.length === 0 ? {} : { writes: trackedWrites(writes) }),
+      // Empty once bound, so a review after a takeover sees that no batch is on record now.
+      ...(liveTests === undefined ? {} : { liveTests: [...liveTests] }),
     };
   });
 
