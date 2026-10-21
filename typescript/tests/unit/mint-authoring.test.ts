@@ -768,7 +768,7 @@ it("has a write confirm from its first matching read-back, never from state befo
   );
   // The rules on commit marks and uncertain outcomes stay as they were.
   expect(writes).toContain(
-    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler calls the site.",
+    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler sends the caller's change to the site.",
   );
   expect(writes).toContain(
     "- Never repeat a step blindly. If an `act` step fails after the page sent a state-changing request or opened a socket, after it entered a commit mark, or without returning a result at all (its page was lost), the write may already be committed;",
@@ -790,15 +790,29 @@ it("has a write mark only the steps that send and wait for every answer the site
     /\s+/g,
     " ",
   );
+  // A lookup, suggestion, validation or analytics call from a control's handler, such as an
+  // address autocomplete, sends no change, so it is never a commit.
   expect(writes).toContain(
-    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler calls the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests or handlers show they save something. Prefer placing the first commit mark at the first step that saves on the site.",
+    "- Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler sends the caller's change to the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests show they save the caller's change, such as an autosave; a lookup, suggestion, validation or analytics request saves nothing. Place the first commit mark at the first step that saves on the site.",
   );
   expect(writes).toContain(
-    "with `waitForOutcome` naming the element the next step uses. When a step waits for the site's answer, wait for every answer the site can give, such as results, a no-results message or an out-of-area notice, and return the site's refusal with the caller's options rather than waiting for results alone.",
+    "or a control whose handler sends the caller's change to the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests show they save the caller's change, such as an autosave; a lookup, suggestion, validation or analytics request saves nothing. Mark every such step, including autosaves,",
+  );
+  expect(writes).toContain(
+    "- Mark the commit at the step that submits the booking or order; a hold that expires on its own, such as a reserved table or a cart timer, is not the commit.",
+  );
+  // The wait is its own rule, and a refusal it reads ends as the caller's input before any mark.
+  expect(writes).toContain(
+    "the next step uses. - When a step waits for the site's answer, wait for every answer the site can give, such as results, a no-results message or an out-of-area notice, and throw `InvalidInput` naming the field the site refused, with the options the site offers as `available` when it lists them, before any commit mark, rather than waiting for results alone.",
   );
   // The narrower click-only rule it replaces is gone, so the two never disagree.
   expect(writes).not.toContain("Mark only the step whose click saves or submits.");
   expect(writes).not.toContain("Opening or filling an unsaved form is not a commit step.");
+  // These rules are hard rules, never a preference.
+  expect(writes).not.toContain("Prefer placing the first commit mark");
+  expect(writes).not.toContain("Prefer marking the commit");
+  expect(writes).not.toContain("a control whose handler calls the site");
+  expect(writes).not.toContain("return the site's refusal with the caller's options");
 });
 
 /*
