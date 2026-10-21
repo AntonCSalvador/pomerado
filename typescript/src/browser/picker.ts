@@ -500,7 +500,7 @@ const pickerPageCode = String.raw`(element, args) => {
  * Matching (see `rankChoices`): a name or value as written, then ignoring case and spacing, then
  * accents and punctuation, then a name holding the value as whole words, then, only with
  * `options.stem` set to true (as a read sets it; `pickValues` takes it too), a name whose words
- * each share a long start with the value's, such as Dentistry for Dentist (rank `stem`). An
+ * each begin the value's or begin with them, such as Dentistry for Dentist (rank `stem`). An
  * option's names are its text, first line, accessible name, `title` and, for a table row, each
  * cell, and its value is `data-value`, `value`, `data-id`, `data-key` or `data-code` (put others
  * first with `options.valueAttributes`). Two options at the best rank are ambiguous; an "Add ..." or

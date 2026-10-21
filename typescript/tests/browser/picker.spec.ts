@@ -44,8 +44,8 @@ test("pickValue types into an ARIA combobox and clicks the matching option", asy
   expect(await submitted(page)).toEqual({ person: "3" });
 });
 
-// With the stem option, a word picks the one suggestion whose whole name is a word sharing a long
-// start with it, ahead of the suggestions that hold that word among others.
+// With the stem option, a word picks the one suggestion whose whole name is a word it begins, ahead
+// of the suggestions that hold that word among others.
 test("pickValue picks the suggestion whose whole name shares the value's stem when asked", async ({ page }) => {
   const specialties = '[["1","Cosmetic Dentistry"],["2","Dentistry"],["3","Pediatric Dentistry"],["4","General Dentistry (Dental Assistant)"]]';
   await serve(page, combobox.replace("Assignee", "Specialty").replace(/const people = \[.*\];/, `const people = ${specialties};`));
