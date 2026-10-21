@@ -410,6 +410,13 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "workspace/AGENTS.md",
     "A build can't ask for a file. When the task needs one the request doesn't carry, say so in report_blocked, naming the file the owner should attach when they build again.",
   ],
+  // The host takes `owner_declined` only after a confirm answered no, and a confirm asked after
+  // the owner picked a stop option repeats their answer, so a plain go-on-or-stop decision is
+  // asked as a confirm. Going on with a changed task still needs an option pick or their words.
+  [
+    "workspace/AGENTS.md",
+    "When the owner decides only whether to go on as asked or stop, prefer a `confirm` question whose no stops the build over a stop option in a `choice` question, so you can end it as `owner_declined` on their no.",
+  ],
 ];
 
 /*
@@ -1077,17 +1084,17 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["e8146b7d1b924a0b1c24da4f167c64f653fa3e8832e1169ca11eeccffe8db4fb", "core"],
+    ["a9dbd4ce6b6f06f18b31235b910ee5a82b55d1d750fc89cade0326aa95428939", "core"],
     ["a896a59d7b924a2940a90437b8d4488cd515c4f4afc70da9fe14953b1583dd93", "search"],
     ["e1b24b29d645071fa265f37d0fae3bb5be2b38798a32ecdbd7d5a6826a1c9248", "auth"],
     ["d720cd4d66afaf411cf14dbce6a026f72e2830e203c284e87248dfaff920f44c", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
-    ["d2256259f30d4da5f46f50e6d012834a29f0f08526b02a5696fada8e9b47bbda", "forms"],
+    ["da972d9b65ff424210686366db36843a6aa966dce4dbb203fcfcfcaad9f84853", "forms"],
     ["e67bf0f3784993f9f3c1ec29d00d5bc4e46450026600f6ae88d76b4f149d9f5d", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["b9a8d04d893e49bd617fe5faa7b92966f1bf58bb9a5c364cc51b313acb711a51", "caller-input"],
+    ["d4216aa7fddeae0c6e664d1803b2d438f4d78e9bafa36bf11d48f2a2033c67c2", "caller-input"],
     ["3855dfaddc3e2ef61282b67344e61f667723f120dd0cd33d70d394504aa274ab", "publication"],
-    ["2ba8341af604bb965b0beec5ae8ca19cf5fb907b0b535ba82a635be0845b79a3", "workspace/AGENTS.md"],
+    ["cc8954534e8490523ff8e9e3299a5bce5609b1b6ebcd25a10cf1a008bc161862", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
@@ -1208,7 +1215,7 @@ it("renders the search URL fast path only when a host turns it on", async () => 
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
     ["ea3c3bc8472c8c9db7aa9dd9b99b682f525f5ab55c091b944946dcf75f5ec83e", "search"],
-    ["0ae14c27e398eb641d96eaef6d4ebe0a47ef6a5d1297d1071524f50f467d1fab", "workspace/AGENTS.md"],
+    ["c237d72fe99b05a963fd97cbaacfc591f82fe541289c57cb021f43f2a509a5b0", "workspace/AGENTS.md"],
   ]);
   expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(
     off.digests.filter(([, name]) => name !== "search"),

@@ -287,6 +287,10 @@ whose answers come back to you while this attempt continues, when:
    capability: support it, or end with `report_blocked` saying why the site cannot; never offer
    to leave it out.
 
+When the owner decides only whether to go on as asked or stop, prefer a `confirm` question whose
+no stops the build over a stop option in a `choice` question, so you can end it as
+`owner_declined` on their no.
+
 When nobody answers before the question expires, `request_input` returns `no_answer`. Decide
 how to go on without it: continue with a sensible default and list it in `finish_build`
 `assumptions`, narrow the tool so it does not need the answer, or end with `report_blocked`,

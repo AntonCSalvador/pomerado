@@ -44,6 +44,22 @@ test("pickValue types into an ARIA combobox and clicks the matching option", asy
   expect(await submitted(page)).toEqual({ person: "3" });
 });
 
+// With the stem option, a word picks the one suggestion whose whole name is a word it begins, ahead
+// of the suggestions that hold that word among others.
+test("pickValue picks the suggestion whose whole name shares the value's stem when asked", async ({ page }) => {
+  const specialties = '[["1","Example Dentistry"],["2","Dentistry"],["3","Sample Dentistry"],["4","Placeholder Dentistry (Test Annex)"]]';
+  await serve(page, combobox.replace("Assignee", "Specialty").replace(/const people = \[.*\];/, `const people = ${specialties};`));
+  const field = 'page.getByRole("combobox", { name: "Specialty" })';
+  // Without the stem option, as on a write, the value is refused as missing.
+  expect(await call(page, `return await pickValue(${field}, "Dentist", fast);`)).toMatchObject({
+    result: { picked: false, reason: "option_missing" },
+  });
+  expect(await call(page, `return await pickValue(${field}, "Dentist", { ...fast, stem: true });`)).toEqual({
+    result: { picked: true, kind: "typeahead", label: "Dentistry", value: "2", rank: "stem", refills: 0 },
+  });
+  expect(await submitted(page)).toEqual({ person: "2" });
+});
+
 test("pickValue picks a native select's option by label, value or another spelling", async ({ page }) => {
   await serve(page, `<form><label>State <select name="state">
 <option value="">Choose a state</option><option value="CA">California</option><option value="NV">Nevada</option>
