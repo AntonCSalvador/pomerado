@@ -58,11 +58,13 @@ export const expectNotCarried = (calls: readonly HostCall[], value: string) => {
  * keeps every call, and fails the test, without changing what the call does, when a script holds a
  * value the host's keyboard already typed on the page (no value but a date of
  * birth enters a Kernel call's script). Configured origins the host sends (`configured`), which a
- * value may sit inside, do not count.
+ * value may sit inside, do not count. A Patchright page (`patchright`) evaluates locators in its
+ * isolated world itself, so its calls run on it as they are.
  */
 export const hostPage = async (
   page: Page,
   configured: readonly string[] = [],
+  { patchright = false } = {},
 ): Promise<AutofillPage & { readonly calls: readonly HostCall[] }> => {
   const session = await page.context().newCDPSession(page);
   const { targetInfo } = await session.send("Target.getTargetInfo");
@@ -93,7 +95,9 @@ export const hostPage = async (
           );
           if (typeof run !== "function")
             throw new Error("Call code unavailable");
-          const kernel = await isolatedLocatorPage(page);
+          const kernel = patchright
+            ? { page, close: () => Promise.resolve() }
+            : await isolatedLocatorPage(page);
           let value: unknown;
           try {
             value = await Reflect.apply(run, undefined, [

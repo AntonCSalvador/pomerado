@@ -6,6 +6,7 @@ import { clipCode, controlNamingCode } from "./control-naming-code.js";
 import { pageCode, primaryPageCode } from "../runtime/host-execute.js";
 import { hostOnSiteSource } from "../runtime/same-site.js";
 import { submissionGuardCode } from "./autofill-submission-guard.js";
+import { holdsFocusCode } from "./field-focus-code.js";
 import { pageControlsCode } from "./page-controls.js";
 
 /**
@@ -116,8 +117,9 @@ return {
  * One call of a step's fill, after its inspection. None carries a value but a date's: the host
  * types every other value itself over its own DevTools socket, into the field `focus` left focused. `check` names the field the host typed just before, which must now hold
  * something, so typing that went to another element never leads to a click.
- * - `focus`: empties the field when it holds something and focuses it, then reads that it holds
- *   the focus.
+ * - `focus`: empties the field when it holds something and focuses it, then reads that the field
+ *   itself holds the focus, inside a shadow root too (`holdsFocusCode`), and names the tag of the
+ *   element that holds it otherwise.
  * - `date`: fills a date of birth with the authoring library's `fillDate`, which needs the page's
  *   own options, so this call's code holds the date (`iso`).
  * - `submit`: first reads whether the page sent what was typed itself (`pageSentCode`). Otherwise
@@ -331,10 +333,15 @@ try {
     await field.fill("", { timeout: 5000 });
   await field.focus({ timeout: 5000 });
   // Keep this original-node binding in Patchright's isolated world, inaccessible to page code.
-  // The tag of the element that holds the focus instead, if another does.
+  // The tag of the element that holds the focus instead, if another does: the deepest one, read
+  // through open shadow roots; a closed root shows only its host.
   const activeTag = await field.evaluate((element, [key, questionRequired]) => {
-    const active = element.ownerDocument.activeElement;
-    if (active !== element) return active === null ? "none" : active.tagName.toLowerCase();
+    const holdsFocus = ${holdsFocusCode};
+    if (!holdsFocus(element)) {
+      let active = element.ownerDocument.activeElement;
+      while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+      return active === null ? "none" : active.tagName.toLowerCase();
+    }
     const binding = { document: element.ownerDocument, frame: element.ownerDocument.defaultView, questionRequired };
     Object.defineProperty(element, key, { value: binding, configurable: true });
     // Transfer the guard through this frame's isolated world; no value is involved.
