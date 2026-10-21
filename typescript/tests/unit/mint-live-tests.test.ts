@@ -573,6 +573,21 @@ it("keeps a failure in review when the case passes only on another entrypoint", 
   expect(failures).toEqual(["nothing:fail"]);
 });
 
+it("shows the failure on the current source when the same case also failed on another", async () => {
+  const edited = `${toolSource}// edited\n`;
+  const failures = await failuresSeenByExample(
+    [
+      // `nothing` fails on the original source, again on the edited one, then the agent reverts
+      // exactly and runs only the passing cases.
+      { entrypoint: "src/tool.ts", cases: allCases },
+      { entrypoint: "src/tool.ts", cases: ["nothing"], source: edited },
+      ...singles.map((batch, index) => (index === 0 ? { ...batch, source: toolSource } : batch)),
+    ],
+    () => resultsForNothing,
+  );
+  expect(failures).toEqual(["nothing:fail"]);
+});
+
 it("keeps a failure in review when the source goes back to the one it failed on", async () => {
   const edited = `${toolSource}// edited\n`;
   const onEdited = (ids: readonly string[]) => ({ entrypoint: "src/tool.ts", cases: ids, source: edited });

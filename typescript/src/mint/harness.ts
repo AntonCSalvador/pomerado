@@ -3759,29 +3759,37 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         readonly released: Set<string>;
       }[] = [];
       /**
-       * The failures a batch holds that still stand, each keyed by entrypoint, case and verdict:
-       * cases that did not pass in it and have not passed since in a batch on the same entrypoint
-       * and source. A pass elsewhere, or an inconclusive rerun, releases nothing.
+       * The failures a batch holds that still stand: cases that did not pass in it and have not
+       * passed since in a batch on the same entrypoint and source. A pass elsewhere, or an
+       * inconclusive rerun, releases nothing.
        */
       const standingFailures = ({ batch, released }: (typeof batchHistory)[number]) =>
-        batch.cases
-          .filter((ran) => ran.verdict !== "pass" && !released.has(ran.id))
-          .map((ran) => `${batch.entrypoint}\n${ran.id}\n${ran.verdict}`);
+        batch.cases.filter((ran) => ran.verdict !== "pass" && !released.has(ran.id));
       /**
-       * What a review reads: the latest `reviewedLiveTestBatches` batches, and the newest batch
-       * holding each failure that still stands, so passing reruns of some cases never push a
-       * failure of another out of view and a failure on a source the workspace returns to is
-       * still there. At most one older batch stays for each entrypoint, case and verdict.
+       * What a review reads, given each entrypoint's current digest: the latest
+       * `reviewedLiveTestBatches` batches, and for each entrypoint, case and verdict that still
+       * fails, the newest batch holding it on the entrypoint's current source, else the newest
+       * holding it. So passing reruns of some cases never push a failure of another out of view,
+       * and a failure on a source the workspace returns to is still there.
        */
-      const reviewedBatches = () => {
-        const latest = batchHistory.slice(-reviewedLiveTestBatches);
-        const newestHolders = new Map(
-          batchHistory.flatMap((entry) => standingFailures(entry).map((key) => [key, entry] as const)),
-        );
-        const shown = new Set([...latest, ...newestHolders.values()]);
+      const reviewedBatches = (current: ReadonlyMap<string, string | undefined>) => {
+        const onCurrent = ({ batch }: (typeof batchHistory)[number]) =>
+          batch.sourceDigest === current.get(batch.entrypoint);
+        const holders = new Map<string, (typeof batchHistory)[number]>();
+        for (const entry of batchHistory)
+          for (const ran of standingFailures(entry)) {
+            const key = `${entry.batch.entrypoint}\n${ran.id}\n${ran.verdict}`;
+            const held = holders.get(key);
+            if (held === undefined || onCurrent(entry) || !onCurrent(held)) holders.set(key, entry);
+          }
+        const shown = new Set([...batchHistory.slice(-reviewedLiveTestBatches), ...holders.values()]);
         return batchHistory.filter((entry) => shown.has(entry)).map((entry) => entry.batch);
       };
-      /** Records a judged batch, its passes releasing earlier failures on the same source. */
+      /**
+       * Records a judged batch, its passes releasing earlier failures on the same source. A batch
+       * outside the latest few is dropped once every failure it holds is released or held by a
+       * newer batch on the same source, which one pass would release with it.
+       */
       const recordBatch = (batch: (typeof batchHistory)[number]["batch"]) => {
         const passed = batch.cases.filter((ran) => ran.verdict === "pass").map((ran) => ran.id);
         for (const earlier of batchHistory)
@@ -3791,28 +3799,39 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           )
             for (const id of passed) earlier.released.add(id);
         batchHistory.push({ batch, released: new Set() });
-        // A batch outside the latest few with no standing failure can never be read again.
+        const sourceKeys = (entry: (typeof batchHistory)[number]) =>
+          standingFailures(entry).map(
+            (ran) =>
+              `${entry.batch.entrypoint}\n${entry.batch.sourceDigest}\n${ran.id}\n${ran.verdict}`,
+          );
         const latest = new Set(batchHistory.slice(-reviewedLiveTestBatches));
         for (let index = batchHistory.length - 1; index >= 0; index -= 1) {
           const entry = batchHistory[index];
-          if (entry !== undefined && !latest.has(entry) && standingFailures(entry).length === 0)
-            batchHistory.splice(index, 1);
+          if (entry === undefined || latest.has(entry)) continue;
+          const newer = new Set(batchHistory.slice(index + 1).flatMap(sourceKeys));
+          if (sourceKeys(entry).every((key) => newer.has(key))) batchHistory.splice(index, 1);
         }
       };
       let batchesJudged = 0;
       dependencies.liveTests?.bindBatches?.(
         Effect.suspend(() =>
-          Effect.forEach(reviewedBatches(), (batch) =>
-            stepDigest(batch.entrypoint).pipe(
-              Effect.map(
-                (digest): ReviewedLiveTestBatch => ({
-                  ...batch,
-                  entrypoint: `operation/${batch.entrypoint}`,
-                  sourceUnchanged: digest !== undefined && digest === batch.sourceDigest,
-                }),
-              ),
-            ),
+          Effect.forEach(
+            [...new Set(batchHistory.map(({ batch }) => batch.entrypoint))],
+            (entrypoint) => stepDigest(entrypoint).pipe(Effect.map((digest) => [entrypoint, digest] as const)),
           ),
+        ).pipe(
+          Effect.map((digests) => {
+            const current = new Map(digests);
+            return reviewedBatches(current).map(
+              (batch): ReviewedLiveTestBatch => ({
+                ...batch,
+                entrypoint: `operation/${batch.entrypoint}`,
+                sourceUnchanged:
+                  current.get(batch.entrypoint) !== undefined &&
+                  current.get(batch.entrypoint) === batch.sourceDigest,
+              }),
+            );
+          }),
         ),
       );
       /**
