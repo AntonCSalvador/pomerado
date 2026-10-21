@@ -176,7 +176,7 @@ const cases: readonly Case[] = [
   {
     name: "a Delete link styled as danger leaves the commit done",
     reply: saved,
-    after: `say('<a class="btn btn-danger" href="#delete">Delete quote</a>');`,
+    after: `say('<a class="btn btn-danger" href="#delete">Delete record</a>');`,
     expected: done,
   },
   {
@@ -200,7 +200,7 @@ const cases: readonly Case[] = [
   {
     name: "an alert that reports a save beside a requirement is unclear",
     reply: saved,
-    after: `say('<div role="alert">Quote saved. A signed application is required before binding.</div>');`,
+    after: `say('<div role="alert">Record saved. A signed form is required before it takes effect.</div>');`,
     expected: unclear,
   },
   {
@@ -213,24 +213,24 @@ const cases: readonly Case[] = [
     name: "a validation summary longer than 500 characters is still read",
     reply: saved,
     after: `say('<div class="validation-summary-errors"><ul>' +
-        Array.from({ length: 12 }, (_, i) => '<li>Driver ' + (i + 1) + ' date of birth is required for this policy</li>').join("") +
+        Array.from({ length: 12 }, (_, i) => '<li>Contact ' + (i + 1) + ' date of birth is required for this record</li>').join("") +
         '</ul></div>');`,
     expected: notDone,
   },
   // A body that says it failed in other words, or that can't be read as JSON, proves nothing.
   {
     name: "a body message saying it was unable to save is unclear",
-    reply: { status: 200, body: json({ message: "Unable to save the quote. Please try again." }) },
+    reply: { status: 200, body: json({ message: "Unable to save the record. Please try again." }) },
     expected: unclear,
   },
   {
     name: "a body message naming a required value is unclear",
-    reply: { status: 200, body: json({ message: "Policy number is required" }) },
+    reply: { status: 200, body: json({ message: "Account number is required" }) },
     expected: unclear,
   },
   {
     name: "a body message saying it could not be saved is unclear",
-    reply: { status: 200, body: json({ Message: "The quote could not be saved." }) },
+    reply: { status: 200, body: json({ Message: "The record could not be saved." }) },
     expected: unclear,
   },
   {
