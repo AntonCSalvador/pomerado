@@ -741,6 +741,16 @@ export interface LiveTestHost {
    */
   readonly signedInBatches?: true;
   /**
+   * The host asks the minter to fix or retire every failing case before publication review.
+   * `finish_build` of a read is then refused before review, as `PublicationUnavailable` with
+   * reason `live_test_cases_failing`, while any counted case of the version it publishes fails on
+   * that version's source (`failingLiveTestCases`), naming the cases; no Guardian call is made.
+   * It does not apply once no case can run again, under the same check that lifts the 70% bar
+   * (`liveTestsShortfall`). Absent, a read whose cases reach the bar goes to review with its
+   * failing cases, as before this field existed.
+   */
+  readonly holdReviewOnFailingCases?: true;
+  /**
    * How long one case may run on this host, in milliseconds; `defaultLiveTestCaseMs` when
    * absent. The harness refuses a batch as `no_time`, running nothing, when less than this is
    * left before the batch's deadline, since no case could finish.
