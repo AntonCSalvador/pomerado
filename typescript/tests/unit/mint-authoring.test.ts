@@ -294,6 +294,12 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "publication",
     "## Check before `finish_build` Before your first `finish_build`, prefer checking the tool against each rule the request states for its inputs, outputs and refusals.",
   ],
+  // Most extra publication rounds were defects the builder could find in its own source, so before
+  // every call, not only the first, it checks its fields, returns, caller values and live cases.
+  [
+    "publication",
+    "Before each `finish_build`, the first and every later one, prefer one pass over your own source with four questions: for each output field, which line fills it and whether its description says where that value comes from; for each branch that returns, whether it returns every required field with values read on this run; for each value the caller gave or answered through `ask`, whether the output labels it as caller input; and whether any live test case still ends failed or flaky on the source you publish. Fix what this finds before you call.",
+  ],
   [
     "publication",
     "- Published files are all of `src/`, the named entrypoints and any `explore/`, `test/` or `scratch/` module they import",
@@ -821,6 +827,25 @@ it("teaches every write to call verified() with no argument and declare a read-b
   expect(bookSeat.write).toEqual({ confirmation: "readback", commits: ["book-seat"] });
 });
 
+// A click that saved nothing but flagged a field no question may ask ends as the caller's refusal,
+// with the step unsent, never a second click.
+it("has a write refuse a field no site-field question may ask once its click saved nothing", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("writes")).toContain(
+    "When `blockingRequiredFields(form, before, { unaskable: true })` returns `{ unaskable: true }` after the step's first click, the click saved nothing but a field it flagged is one no site-field question may ask, such as a card or bank field: call `notCommitted` for the step, then throw `InvalidInput` that names the field by its label, and don't click again.",
+  );
+});
+
+// An access code is asked privately, as the site-field question's secret classification treats it.
+it("asks for an access code with a private secret question", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("caller-input")).toContain(
+    "Prefer a `secret` question of kind `private_text` for an access code, such as a gate, door, alarm or lockbox code.",
+  );
+});
+
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /*
@@ -847,10 +872,10 @@ it("renders the pinned standalone authoring", async () => {
     ["9583b30a0806d90eb06d1a1003e882c492bcfea011cc9da1e4597ece0ada3e3a", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["3970bbcd8632fa9b525d39a6680f0c744888a5d7dbb85f6b82ec1107e5137096", "forms"],
-    ["26a4bdf2c43624087a41022a59828d1782a528d46d9e11dc044de13aa7f6f14d", "writes"],
+    ["14bc762731cf3b3bec15b3e0561f26847f99a279f8123abf5379db8eacf2dfd2", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["396e9fd1cd28106c5616f6a9a5f77de736f30391df242d5b4c90939e7629ae13", "caller-input"],
-    ["af911dcfd7c16e3aa161cb09273d055589d080150a0c007f0a45a70db7ed2445", "publication"],
+    ["86a2e2d8ac5858727f60303f1c619754251a4d9da03f3f93f60bc6ab7cdce61c", "caller-input"],
+    ["37b4b151995d2a3573a8a6d322800914f21c474151a73ff508fecf5c1aa9192c", "publication"],
     ["ca25d414d25ba51222fbd7014de75173308bc46d6fc237cc527f47837b1992fc", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);

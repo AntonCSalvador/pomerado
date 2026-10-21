@@ -175,7 +175,8 @@ already asked for, or to solve a CAPTCHA.
      when your explore, test or `act` source runs live, and only where it is the whole
      string passed to `fill`, `type` or `pressSequentially` or a field of a request to this
      site (core skill); the published script never holds a handle and asks for the value
-     with `ask` instead.
+     with `ask` instead. Prefer a `secret` question of kind `private_text` for an access
+     code, such as a gate, door, alarm or lockbox code.
    - For a payment card the checkout requires, ask for every part its card form shows
      at once, in one request with one `secret` question for each part: `card_number`,
      `card_expiry`, `card_cvc` and `billing_postal_code`. Those handles go only into a
