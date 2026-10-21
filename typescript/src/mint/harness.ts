@@ -1698,6 +1698,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   review: {
                     ...evidence.review,
                     rationale: yield* screenRationale(evidence.review.rationale),
+                    ...(evidence.review.advice === undefined
+                      ? {}
+                      : { advice: yield* screenRationale(evidence.review.advice) }),
                   },
                 }),
             siteAccess,
@@ -4472,7 +4475,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         code: "ScopeDenied",
                       }),
               }),
-        execute: (input) =>
+        execute: (input, agentNote) =>
           serial.withPermits(1)(
             Effect.gen(function* () {
               if (questionOnly) return yield* new MintFailure({ code: "ScopeDenied" });
@@ -4587,16 +4590,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               let crossedDispatchBoundary = false;
               /** The allow the host's dispatch fence followed, with Guardian's action label. */
               let allowed: AllowedExecution | undefined;
-              const evidence = yield* reviewedExecution(submitted, (fenced) =>
-                Effect.sync(() => {
-                  crossedDispatchBoundary = true;
-                  allowed = fenced;
-                  // Guardian allowed it and it is going out: the input counts from now on.
-                  if (signedInTestInput !== undefined)
-                    signedInTestInputs.push(
-                      ...uncountedTestInputs(signedInTestInputs, [signedInTestInput]),
-                    );
-                }),
+              const evidence = yield* reviewedExecution(
+                agentNote === undefined ? submitted : { ...submitted, agentNote },
+                (fenced) =>
+                  Effect.sync(() => {
+                    crossedDispatchBoundary = true;
+                    allowed = fenced;
+                    // Guardian allowed it and it is going out: the input counts from now on.
+                    if (signedInTestInput !== undefined)
+                      signedInTestInputs.push(
+                        ...uncountedTestInputs(signedInTestInputs, [signedInTestInput]),
+                      );
+                  }),
               ).pipe(
                 Effect.onExit((result) =>
                   Effect.suspend(() => {

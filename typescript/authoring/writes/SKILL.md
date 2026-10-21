@@ -154,7 +154,7 @@ During the session:
   row. Prefer `saveAndReadBack` from `pomerado/runtime` for such a page's save: it does both
   and returns the values that still differ. When one still differs, or a page whose save adds
   an item kept a different value, stop before the final commit's mark and throw
-  `InputNotApplied` with its `field`, `requested` and `applied`.
+  `InputNotApplied` with its `field`, `requested` and `applied`.<!-- pomerado:section writes.several-saves -->
 - When the write changes state that already exists, such as a saved record or a cart
   (.agents/cart/SKILL.md), read that state before the committing step and again after it,
   in the session and in the composed script. Fail when a field the input sets did not change
@@ -283,7 +283,9 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   and the view's other rows only where the before-and-after check or another skill, such as
   the cart skill, compares them. Read another page, in that same step before `verified()`,
   only for a field the view did not show and the tool's output promises. A reference the site
-  saves as an ID follows "Check the read-back" below.
+  saves as an ID follows "Check the read-back" below. A message the site shows after the commit
+  about something else, such as a notification that failed to send, doesn't undo a read-back
+  that confirms the record: call `verified()` and return it as a warning in the output.
 - State from before the write never matches. Require something only the finished write can
   show: the number or reference it produced, or a value it changed from what you read before
   it, such as a status that now reads Sent or a row that was not there. A list still showing
