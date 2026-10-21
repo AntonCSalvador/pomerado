@@ -136,9 +136,9 @@ first:
     skill); with
     no results a sort has nothing to apply, so return the empty result ("Unapplied supplied
     input");
-  - a free-text place, name or venue that matches several of the site's options takes the first
-    in the site's order on a read and returns the one it used, and lists them for the caller
-    instead of picking one on a write (core skill, the input schema);
+  - a free-text place, name or venue that matches several of the site's options equally takes
+    the first in the site's order on a read and returns the one it used, and lists them for the
+    caller instead of picking one on a write (core skill, the input schema);
   - a check that refuses a past date compares with today in the site's time zone, or the
     place's, not with today in UTC (caller-input skill) ("Past date in UTC");
   - in a read signed out, each declared input is used, or changed from its default, by a passing

@@ -210,8 +210,8 @@ exception: it is optional unless the task can't run without it (below).
   with a word added or dropped. Prefer it for confirming the pick, so the read-back agrees with
   the choice, but not for choosing from a list, where a short label can match a longer name it
   isn't, such as UK for Ukraine.
-  When more than one option matches, a read takes the first in the site's order and returns
-  the one it used, and a write lists them for the caller instead of picking one.
+  When more than one option matches equally, a read takes the first in the site's order and
+  returns the one it used, and a write lists them for the caller instead of picking one.
 - On a write, every choice the session met is an input, costly choices included, and any
   other option, such as a seat, is an optional input, as the writes skill says ("Compose and
   publish").
