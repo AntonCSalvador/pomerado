@@ -2087,6 +2087,11 @@ const savingReviews = {
     afterSave: `const phone = form.querySelector("[name=phone]"); phone.value = ""; phone.setAttribute("aria-invalid", "true");
       phone.insertAdjacentHTML("afterend", '<span id="ph-e">is required</span>'); phone.setAttribute("aria-labelledby", "ph-l ph-e"); confirm(800);`,
   },
+  // A card field the save clears: no question may ask it, and it was there before the click.
+  "card field cleared": {
+    fields: `<label>Card number<input name="card_number" autocomplete="cc-number" required value="on file"></label>`,
+    afterSave: `const card = form.querySelector("[name=card_number]"); card.value = ""; card.setAttribute("aria-invalid", "true"); confirm(800);`,
+  },
 };
 
 for (const [variant, site] of Object.entries(savingReviews))
@@ -2378,6 +2383,88 @@ test("write-session example never clicks again when an answer shows a field no q
     ["Delivery method"],
   ]);
   // The step was never entered again, so it still reads possibly sent, as for an unanswered question.
+  expect(failure(stopped.result)).toMatchObject({ _tag: "OperationFailure", message: "not_confirmed" });
+  expect(stopped.commits).toEqual([{ name: "place-order", state: "sent" }]);
+  expect(orders).toEqual([]);
+});
+
+test("write-session example refuses with the step unsent when its click shows card fields no question can ask", async ({
+  page,
+}) => {
+  // Place order is refused until a card and its bank's routing number are given: the click shows
+  // both, new, empty and required, so it saved nothing, and no site-field question may ask them.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<label hidden>Card number<input name="card_number" autocomplete="cc-number"></label>
+      <label hidden>Routing number<input name="routing"></label>`,
+    refuseFirst: `for (const name of ["card_number", "routing"]) {
+        const field = form.querySelector("[name=" + name + "]");
+        field.parentElement.hidden = false;
+        field.required = true;
+        field.setAttribute("aria-invalid", "true");
+      }`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const refused = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "o1" };
+    },
+  });
+  // The caller's refusal names both fields, nothing is asked or clicked again, and the step reads
+  // unsent, so the run reports that the write changed nothing.
+  expect(failure(refused.result)).toMatchObject({ _tag: "InvalidInput" });
+  const { message } = failure(refused.result) as Error;
+  expect(message).toContain("Card number");
+  expect(message).toContain("Routing number");
+  expect(asked).toEqual([]);
+  expect(refused.commits).toEqual([{ name: "place-order", state: "not_sent" }]);
+  expect(unenteredWrite(refused.effect, refused.commits)).toBe(true);
+  expect(orders).toEqual([]);
+});
+
+test("write-session example keeps the step sent when its second click shows a field no question can ask", async ({
+  page,
+}) => {
+  // The first click asks for a phone. The second, with the phone filled, shows a card field and
+  // saves nothing, but the step already went back once, so it stays possibly sent.
+  const origin = "https://shop.example.invalid";
+  const orders: string[] = [];
+  await reviewSite(page, origin, orders, {
+    fields: `<label hidden>Delivery phone<input type="tel" name="phone"></label>
+      <label hidden>Card number<input name="card_number" autocomplete="cc-number"></label>
+      <script>
+        let clicks = 0;
+        document.forms[0].addEventListener("submit", (event) => {
+          clicks += 1;
+          if (clicks !== 2) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          const card = document.querySelector("[name=card_number]");
+          card.parentElement.hidden = false;
+          card.required = true;
+          card.setAttribute("aria-invalid", "true");
+        });
+      </script>`,
+    refuseFirst: `const phone = form.querySelector("[name=phone]"); phone.parentElement.hidden = false; phone.setAttribute("aria-invalid", "true");`,
+    afterSave: `confirm(200);`,
+  });
+  await page.goto("about:blank");
+  const asked: InputRequest[] = [];
+  const stopped = await runExample(page, placeOrder, { item: "lamp", quantity: 1, gift_wrap: false }, {
+    siteOrigin: origin,
+    answer: (request) => {
+      asked.push(request);
+      return { extra_field: "555-0100" };
+    },
+  });
+  expect(asked.map((request) => request.questions.map((question) => question.prompt))).toEqual([
+    ["Delivery phone"],
+  ]);
   expect(failure(stopped.result)).toMatchObject({ _tag: "OperationFailure", message: "not_confirmed" });
   expect(stopped.commits).toEqual([{ name: "place-order", state: "sent" }]);
   expect(orders).toEqual([]);
