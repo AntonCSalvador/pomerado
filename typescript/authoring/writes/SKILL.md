@@ -151,14 +151,18 @@ too. Run each step with `execute` purpose `act`, target `liveBrowser`.
   not a second write. The composed script runs the steps back to back, without the
   pauses you took between them. So prefer ending a step that redraws the page, such
   as a filter, a pick or a new table row, with `waitForOutcome` naming the element
-  the next step uses.
+  the next step uses. When a step waits for the site's answer, wait for every answer the
+  site can give, such as results, a no-results message or an out-of-area notice, and
+  return the site's refusal with the caller's options rather than waiting for results alone.
 - Report a confirm popup to `decideDialog` with a literal `step` name, and keep that
   literal in the helper the composed script imports. Runs accept a popup without
   asking only at the step the session accepted it at, so the host refuses to publish
   a composed script that drops one.
-- Mark only the step whose click saves or submits. Opening or filling an unsaved
-  form is not a commit step. Prefer placing the first commit mark at the first step that
-  saves on the site. Mark every such step other than a hold that expires on
+- Place a commit mark only on the step that sends the change to the site, such as a
+  submit, save or confirm control, or a control whose handler calls the site. Opening a
+  form and typing into its fields change only the page's own state, so leave them unmarked
+  unless the site's requests or handlers show they save something. Prefer placing the first
+  commit mark at the first step that saves on the site. Mark every such step other than a hold that expires on
   its own, including an autosave, a saved form step and a payment submission whose
   next screen is unknown. Call `enteringCommit("place-order")` right before the
   execute call that can send that change, and declare the names in order as
@@ -485,7 +489,7 @@ See `references/write-session.ts` for two steps and the composed script, and
 
 Perform the authorized task once through live `act` steps, preserving the shared effect journal and caller choices. Wait for actual confirmation, from the commit request's response or the page, and read back committed state only when neither confirms it. Declare `verified`, `unverifiable`, and their confirmation behavior accurately using the existing SDK; a missing result alone never proves the write absent.
 
-Keep steps small and read the actual state after each submission. A button named Continue, Next or Save may save a draft, persist that page, or finish the task immediately; its label does not establish that another review or final submit follows. Mark only the step whose click saves or submits. Opening or filling an unsaved form is not a commit step. Mark every such step, including autosaves, saved form steps and payment submissions whose next screen is unknown: call `enteringCommit("place-order")` right before the execute call that can send the change and declare the names in order as `write.commits`. Use the same marked helper in the session and the composed script. Finish every check that can refuse, such as a price limit, availability or the items, address and payment, before the mark of the commit it guards, and refuse there with `InvalidInput`; the marked call only re-reads what a change would make wrong, clicks once and confirms. If a call returns an unexpected page or fails while waiting for an assumed review, read back before another submission: the task may already be complete.
+Keep steps small and read the actual state after each submission. A button named Continue, Next or Save may save a draft, persist that page, or finish the task immediately; its label does not establish that another review or final submit follows. Place a commit mark only on the step that sends the change to the site, such as a submit, save or confirm control, or a control whose handler calls the site. Opening a form and typing into its fields change only the page's own state, so leave them unmarked unless the site's requests or handlers show they save something. Mark every such step, including autosaves, saved form steps and payment submissions whose next screen is unknown: call `enteringCommit("place-order")` right before the execute call that can send the change and declare the names in order as `write.commits`. Use the same marked helper in the session and the composed script. Finish every check that can refuse, such as a price limit, availability or the items, address and payment, before the mark of the commit it guards, and refuse there with `InvalidInput`; the marked call only re-reads what a change would make wrong, clicks once and confirms. If a call returns an unexpected page or fails while waiting for an assumed review, read back before another submission: the task may already be complete.
 
 Compose `src/tool.mjs` from the original reviewed steps and confirming observation. Design no tests for it beyond an offline check of its read-back and comparison over what the session read, and never run the composed write live again. Call `finish_build` with its confirming `executionId`, declared entrypoint and honest coverage. It returns integration files/schemas. When a write's outcome remains uncertain, report that uncertainty and preserve the no-replay rule.
 
