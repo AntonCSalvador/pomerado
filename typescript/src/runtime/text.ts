@@ -66,10 +66,12 @@ export const foldChoiceText = (text: unknown): string => {
  * either way, with the same first letter, its letters in order and the short form at most three
  * fifths as long, so Parkway matches PKWY, Suite matches STE and St matches Street, while Main
  * never matches Martin. A number keeps its groups, as above, and may only gain groups after its
- * last, so 46204 matches 46204-1234, while 12 never matches 123 and 3175551234 never matches
- * (317) 555-1234. Other punctuation is ignored. A dropped or changed word or number fails, so
- * 1420 Oak Road, Springfield never matches 1420 Oak Rd, Riverton. An email, domain or file name,
- * or a `wanted` with no letter or digit, compares as it does without the option.
+ * last, so 46204 matches 46204-1234 while 12 never matches 123. A number typed with no separator
+ * may also come back grouped, so 5551234567 matches (555) 123-4567, but a grouped one never comes
+ * back regrouped or bare, so 29-59 never matches 2959. Other punctuation is ignored. A dropped or
+ * changed word or number fails, so 1420 Oak Road, Springfield never matches 1420 Oak Rd,
+ * Riverton. An email, domain or file name, or a `wanted` with no letter or digit, compares as it
+ * does without the option.
  *
  * It is pure and self-contained, so page code can embed it.
  */
@@ -132,7 +134,8 @@ export const sameText = (
   };
   // The site's version keeps each of the caller's words and numbers, in order, and may add its
   // own. A number the caller gave starts one of the site's with the same groups, one by one, and
-  // the site's may go on with more.
+  // the site's may go on with more; a bare one may also be the site's whole number, grouped, as
+  // 5551234567 is (555) 123-4567.
   const kept = (site: readonly Part[], given: readonly Part[]) => {
     const items: Part[][] = [];
     for (const part of given) {
@@ -140,8 +143,16 @@ export const sameText = (
       if (part.joined && last !== undefined) last.push(part);
       else items.push([part]);
     }
-    const fits = (item: readonly Part[], start: number) =>
-      item.every((part, offset) => {
+    // How many of the site's parts from `start` the item takes, or 0 when it does not fit there.
+    const fits = (item: readonly Part[], start: number) => {
+      const first = item[0];
+      if (first?.number === true && item.length === 1 && site[start]?.joined === false) {
+        let end = start + 1;
+        while (site[end]?.joined === true) end++;
+        const whole = site.slice(start, end).map((there) => there.text);
+        if (end - start > 1 && whole.join("") === first.text) return end - start;
+      }
+      const all = item.every((part, offset) => {
         const there = site[start + offset];
         if (there === undefined || there.number !== part.number) return false;
         if (part.number) return there.joined === (offset > 0) && there.text === part.text;
@@ -151,12 +162,15 @@ export const sameText = (
           shortens(part.text, there.text, false)
         );
       });
+      return all ? item.length : 0;
+    };
     let at = 0;
     for (const item of items) {
       let start = at;
-      while (start < site.length && !fits(item, start)) start++;
-      if (start >= site.length) return false;
-      at = start + item.length;
+      let taken = 0;
+      while (start < site.length && (taken = fits(item, start)) === 0) start++;
+      if (taken === 0) return false;
+      at = start + taken;
     }
     return true;
   };
