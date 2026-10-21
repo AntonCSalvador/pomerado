@@ -164,10 +164,12 @@ attribute.
     into one-character boxes is one `code` field per box, every box from the first to the last, in
     order, as a split date is one field per part (below), even when the page moves the focus to
     the next box or takes a pasted code in the first. Count the boxes on the screen before you
-    send the step. The host asks once, types one character into each and submits only once each
-    box holds one. A step that names only some of the boxes, or names them out of order, comes
-    back refused as `code_boxes_incomplete`, typing nothing: its `codeBoxes` says how many boxes
-    the screen shows and which ones the step named; send the step again with all of them.
+    send the step. A step field never carries `codeBox` or any box number: the host reads each
+    box's place from the page, so send only `selector` and `slot` for each box. The host asks
+    once, types one character into each and submits only once each box holds one. A step that
+    names only some of the boxes, or names them out of order, comes back refused as
+    `code_boxes_incomplete`, typing nothing: its `codeBoxes` says how many boxes the screen shows
+    and which ones the step named; send the step again with all of them.
   - `slot: "date_of_birth"` for a date of birth, with `format`, how the field takes it, read from
     its placeholder, label, input mask or hint: `MM/DD/YYYY`, `DD/MM/YYYY`, `M/D/YYYY`,
     `D/M/YYYY`, `MM-DD-YYYY`, `DD-MM-YYYY`, `DD.MM.YYYY`, `YYYY-MM-DD`, `YYYY/MM/DD`, `MMDDYYYY`,
@@ -329,8 +331,9 @@ account chrome alone does not establish access to the caller's workflow. The sig
 send is a separate check, of presence only (`auth.sign-in-check`): for it, a site-wide account menu
 or sign-out control is the right choice once `check_signed_in_marker` shows the signed-out page
 lacks it. <!-- pomerado:section auth.signed-in-page:start
-Call `authenticate` with `signInStep: { signedIn: { selector } }`. The host checks it on the page
-the browser is already on, so choose a marker that page shows.
+Call `authenticate` with `signInStep: { signedIn: { selector } }`. When the landing page
+shows no such marker, add `openPath`, the observed path of an account page that does, and the host
+opens it and checks there; never guess a protected route.
 pomerado:section auth.signed-in-page:end --> The host checks that the submitted
 sign-in's recorded controls/form no longer show a password entry awaiting sign-in; unrelated
 password controls on the account page do not fail this check. It also checks that this sign-in
@@ -391,18 +394,19 @@ never appeared checks it there.
 - Test it with `check_signed_in_marker` and choose another until every check passes:
   <!-- pomerado:section auth.marker-checks:start
 `signedOutSnapshot` absent (the host saved the page it saw before the sign-in sent anything, and
-  your explores from before signing in count too), `signedInNow`, `freshLoad` and `secondPage`.
-  Your own tab stays as it was.
+  your explores from before signing in count too), `signedInNow`, `freshLoad` (the host opens
+  `openPath`, else `urlPath`, else the site's front page in a new tab) and `secondPage`. Your own
+  tab stays as it was.
 pomerado:section auth.marker-checks:end --> When it reports the signed-out page unchecked, as for a browser that
   started from a saved profile, compare the marker yourself against what a signed-out visitor
   sees.
 - The host repeats these checks when you send `signedIn`. It refuses a marker a signed-out page
   shows (`marker_matches_signed_out_page`) or a sign-in page's path alone
   (`marker_is_login_path`); the sign-in stays open and nothing is sent again, so send `signedIn`
-  with another marker. The marker must show on the signed-in page now. `freshLoad` never refuses
-  it: the result reports it, and when it is false a notice says why. A site that keeps its session
-  only in page memory or session storage is signed in automatically at each operation start; the
-  marker must still be site-wide.
+  with another marker. The marker must show on the signed-in page now. A fresh load never refuses
+  it: the result reports `freshLoad`, and when it is false a notice says why. When the new tab
+  showed the sign-in form, the site keeps its session only in page memory or session storage, and
+  the host signs in automatically at each operation start; the marker must still be site-wide.
 
 The published tool records the check with its screens.
 

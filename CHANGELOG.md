@@ -164,6 +164,8 @@
 
 ### Other changes
 
+- The auth skill says a recorded sign-in must also work when a run begins already signed in and its first screen never shows: it treats the session as signed in, goes to the site's regular app page and checks the signed-in marker there, rather than waiting for the missing screen or failing on it, so the marker must be one that page always shows. It also says a code box's step field never carries `codeBox` or any box number, since the host reads each box's place from the page: each box sends only `selector` and `slot`.
+  - A recorded minter response keyed on the exact auth skill text needs recording again.
 - The core skill tells a search step to wait for either the site's results or its own no-match state, and to return the site's no-match answer with its message, so a value the site does not recognise no longer runs into a timeout waiting on results that never appear.
   - A recorded minter response keyed on the exact core skill text needs recording again.
 - The caller-input skill says to apply each caller input the way the site applies it, and only that: no added constraints between inputs, no filtering of them and no value the caller didn't give, so a store and a delivery ZIP the site sets separately are both applied as given. The search skill says that a location given without a store uses what the site would show for that location, such as the nearest store, rather than what the site guessed from the browser's own location, and returns what was applied.
