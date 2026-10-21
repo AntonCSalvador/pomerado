@@ -12,6 +12,11 @@ bad value before the tool touches the site, and fail loudly whenever the run can
 the caller asked for. Never return results computed without a value the caller supplied, except
 an input that tailors the answer, which a read returns labeled with the value the site applied.
 
+Apply each caller input the way the site applies it, and only that. Don't add your own
+constraints between inputs, filter them, or swap in a value the caller didn't give. For example,
+a store and a delivery ZIP that the site sets separately are both applied as given, even when
+they're far apart.
+
 1. Express in the input schema everything it can hold, so the host refuses a bad value before
    the script runs: each field's type, an enum of the site's full set of options when the
    options are fixed, a minimum and maximum for numbers, counts and lengths, a format such as a
