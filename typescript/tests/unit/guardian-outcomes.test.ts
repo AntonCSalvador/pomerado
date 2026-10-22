@@ -191,6 +191,53 @@ it.each([
   },
 );
 
+/** The host's last message in a request: a follow-up after the review's first output. */
+const lastUserText = (request: ModelRequest | undefined) => {
+  const input = request?.input;
+  const items = typeof input === "string" ? [{ role: "user", content: input }] : (input ?? []);
+  const texts = items.flatMap((item) =>
+    "role" in item && item.role === "user" && typeof item.content === "string"
+      ? [item.content]
+      : [],
+  );
+  return texts.at(-1) ?? "";
+};
+
+// The correction said only which outcomes the kind returns, not which one it refused, and named
+// none for what the reviewer seemed to want, so a reviewer that meant the agent should change or
+// ask first answered with another kind's outcome again. Its failure named no outcome either.
+it.each([
+  [
+    "execution",
+    "reword",
+    "The host did not accept this decision: reword is not an outcome an execution review returns. It returns only allow, deny, escalate, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them. A step that should change before it runs, or that needs the caller first, is a deny.",
+    "The outcome reword is not one an execution review returns",
+  ],
+  [
+    "question",
+    "deny",
+    "The host did not accept this decision: deny is not an outcome a question review returns. It returns only allow_business, authentication, reword, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them. A request that should change before its caller sees it is a reword.",
+    "The outcome deny is not one a question review returns",
+  ],
+  [
+    "update",
+    "escalate",
+    "The host did not accept this decision: escalate is not an outcome an update review returns. It returns only allow, clarify, reword, new_mint, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them. An update its caller has not confirmed is a clarify, and one that is wrong as written is a reword.",
+    "The outcome escalate is not one an update review returns",
+  ],
+] as const)(
+  "names the refused outcome in a %s review's correction and failure",
+  async (kind, refused, correction, failure) => {
+    const requests = scripted([decision(refused), decision(refused)]);
+    const result = await Effect.runPromise(Effect.either(kinds[kind](guardianWith())));
+    expect(lastUserText(requests[1])).toBe(correction);
+    expect(result).toMatchObject({
+      _tag: "Left",
+      left: { code: "InvalidOutcome", failureDetail: { underlying: { message: failure } } },
+    });
+  },
+);
+
 // Outcomes that are only outcome names: `allow` is also a verb every policy uses, and
 // `authentication` is also an execution's action label.
 const outcomeNames = guardianOutcomes.filter(
