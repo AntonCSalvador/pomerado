@@ -62,8 +62,8 @@ export interface CommitConfirmation {
  *   on a form control) counts while it shows until it has held for `noProgressMs`. Determinate
  *   bars (ratings, steps, meters) never count, and signs showing before the action in the same
  *   number, or class hints already there at the first look, are the page's own decoration. One
- *   page call counts them at each look; a sign in content the browser skips rendering does not
- *   show, and a look whose count runs out of time takes the class hints as unchanged.
+ *   page call counts them at each look; a sign element in content the browser skips rendering
+ *   does not show, and a look whose count runs out of time takes the class hints as unchanged.
  *   `waitForRows` also counts a sign beside its rows (in their container or the element around
  *   it, never inside a row, and only when it is visible): one there before the action, in the
  *   same number, is the page's own; any other counts while it shows, until it and the rows have
@@ -120,11 +120,12 @@ const waitClassesBudgetMs = 250;
 // loading signs and class hints show in the document or the region's elements, through open
 // shadow roots, in one call, since a locator's count can cost a protocol call for each element it
 // matches. A sign shows as a visible locator match does: rendered, not hidden by visibility, with
-// a box, or for display: contents, a child element or text that shows. One in content the browser
-// skips rendering (content-visibility) does not show, and is never laid out to check: reading its
-// box would lay that content out, one element at a time. A closed shadow root is out of page code's
-// reach, so a sign inside one, which a Patchright locator could count, is not counted. Class hints
-// left uncounted after the budget are null.
+// a box, or for display: contents, a child element or text that shows. An element in content the
+// browser skips rendering (content-visibility) does not show, and its box is never read: reading
+// it would lay that content out, one element at a time. A display: contents sign is judged by its
+// children even there, its text by a range's box, as the visible check judges it. A closed shadow
+// root is out of page code's reach, so a sign inside one, which a Patchright locator could count,
+// is not counted. Class hints left uncounted after the budget are null.
 const waitSignsInPage = (first, second) => {
   const [roots, spec] = second === undefined ? [[document], first] : [first, second];
   const started = performance.now();
