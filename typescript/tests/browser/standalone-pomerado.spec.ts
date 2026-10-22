@@ -94,6 +94,19 @@ const objects = (value: unknown): readonly Record<string, unknown>[] => {
     ? []
     : [record.right, ...Object.values(record.right).flatMap(objects)];
 };
+/**
+ * The minter's instructions as the model receives them: the text of the developer message that
+ * leads every request's input, where they travel instead of the top-level instructions field.
+ */
+const minterInstructions = (request: ModelRequest | undefined) => {
+  const [leading] = Array.isArray(request?.input) ? request.input : [];
+  const message = leading?.type === "unknown" ? leading.providerData : undefined;
+  if (message?.["type"] !== "message" || message["role"] !== "developer") return "";
+  return objects(message["content"])
+    .map((part) => part["text"])
+    .filter((text) => typeof text === "string")
+    .join("\n\n");
+};
 /** The standalone host tells Guardian it runs natively. A hosted review gets the hosted policy. */
 const reviewedNative = (request: ModelRequest) =>
   objects(request.input).find((item) => "trusted_execution_environment" in item)?.[
@@ -2367,8 +2380,8 @@ test("a local mint sends Guardian the native policy and the minter the rendered 
     const guide = await Effect.runPromise(loadStandaloneAuthoring(getAuthoringDirectory()));
     expect(mintRequests.length).toBeGreaterThan(0);
     for (const request of mintRequests) {
-      expect(String(request.systemInstructions)).toContain(guide.instructions);
-      expect(String(request.systemInstructions)).not.toContain("pomerado:");
+      expect(minterInstructions(request)).toContain(guide.instructions);
+      expect(minterInstructions(request)).not.toContain("pomerado:");
     }
   } finally {
     await new Promise<void>((resolve, reject) =>
@@ -2967,10 +2980,10 @@ test("finish_build runs a contract review, then one publication review, and save
     // The builder's instructions send it to the publication skill before its first
     // finish_build. The skill it reads there is every host's shared text, and the list on top of
     // its instructions names the private fallback publication the local host lacks.
-    expect(String(requests[0]?.systemInstructions)).toContain(
+    expect(minterInstructions(requests[0])).toContain(
       "Read .agents/publication/SKILL.md before your first `finish_build`",
     );
-    expect(String(requests[0]?.systemInstructions)).toContain("- Private fallback publication");
+    expect(minterInstructions(requests[0])).toContain("- Private fallback publication");
     expect(String(skillRead?.["source"])).toContain("# Publishing a build");
     expect(String(skillRead?.["source"]).replace(/\s+/g, " ")).toContain(
       "After the last round the host publishes privately and flags it",
