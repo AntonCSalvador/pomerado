@@ -13,6 +13,7 @@ import { nativeExecutionEnvironment } from "../../src/guardian/execution-policy.
 import { ReviewFailure, makeGuardian } from "../../src/guardian/review.js";
 import type { PendingExecution } from "../../src/guardian/review.js";
 import { makeSourceInspector } from "../../src/guardian/source.js";
+import { instructionsOf } from "../support/guardian-requests.js";
 
 afterEach(() => setDefaultModelProvider(new OpenAIProvider()));
 
@@ -88,7 +89,7 @@ const reviewRequest = (request: ModelRequest | undefined) => {
     const content = "role" in item && item.role === "user" ? item.content : undefined;
     if (typeof content === "string" && content.startsWith("{"))
       return JSON.parse(content) as {
-        readonly trusted_review: { readonly policy: string };
+        readonly trusted_review: { readonly policy?: string };
         readonly submitted_call: Record<string, unknown>;
       } & Record<string, unknown>;
   }
@@ -126,7 +127,7 @@ it("keeps advice off a deny, whose rationale carries what to change", async () =
   expect(reviewed.decision).not.toHaveProperty("advice");
 });
 
-it("sends the capability rule only with a publication review", async () => {
+it("states the capability rule once, in the instructions every kind shares, as publication policy", async () => {
   const requests = scripted([
     decision({ outcome: "allow", rationale: "Reads the rows.", action: "read" }),
     decision({ outcome: "allow", rationale: "A new browser may help." }),
@@ -155,12 +156,14 @@ it("sends the capability rule only with a publication review", async () => {
       readSource: (path, offset) => reader(path, offset),
     }),
   );
-  const [execution, recovery, publication] = requests.map(
-    (request) => reviewRequest(request).trusted_review.policy,
-  );
-  expect(execution).not.toContain(capabilityCompletionPolicy);
-  expect(recovery).not.toContain(capabilityCompletionPolicy);
+  const [execution, ...others] = requests.map(instructionsOf);
+  for (const instructions of others) expect(instructions).toBe(execution);
+  expect(execution?.split(capabilityCompletionPolicy)).toHaveLength(2);
+  // Under the publication heading, after the outcome policy that execution reviews share.
+  const publication = execution?.split("\n\n## ").find((part) => part.startsWith("Publication"));
   expect(publication).toContain(capabilityCompletionPolicy);
+  for (const request of requests)
+    expect(reviewRequest(request).trusted_review).not.toHaveProperty("policy");
 });
 
 it("carries the agent's note on the step as untrusted call data, cut to its limit", async () => {

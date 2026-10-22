@@ -8,6 +8,7 @@ import { makeGuardian, ReviewFailure, type PendingExecution } from "../../src/gu
 import { GuardianSessionSnapshot } from "../../src/guardian/session.js";
 import { makeSourceInspector } from "../../src/guardian/source.js";
 import { publicationDeltaPolicy } from "../../src/guardian/publication-delta.js";
+import { instructionsOf } from "../support/guardian-requests.js";
 
 afterEach(() => {
   setDefaultModelProvider(new OpenAIProvider());
@@ -351,11 +352,10 @@ describe("a publication reviewed again in the same build", () => {
     expect(JSON.stringify(secondRequest.at(-1))).not.toContain("unique-helper-body");
     // The reviewer may still read any file it needs.
     expect(reviewRequest(requests[2])).toHaveProperty("trusted_publication.files");
-    // Only the later round is told to review it as a delta.
-    const policyOf = (request: ModelRequest | undefined) =>
-      String(Reflect.get(Object(reviewRequest(request)["trusted_review"]), "policy"));
-    expect(policyOf(requests[0])).not.toContain(publicationDeltaPolicy);
-    expect(policyOf(requests[2])).toContain(publicationDeltaPolicy);
+    // Both rounds share the instructions, which state the delta policy once; only the later
+    // round's request carries the delta it applies to.
+    expect(instructionsOf(requests[2])).toBe(instructionsOf(requests[0]));
+    expect(instructionsOf(requests[0]).split(publicationDeltaPolicy)).toHaveLength(2);
   });
 
   it("reaches a host that sends its own publication policy and index", async () => {
@@ -378,7 +378,7 @@ describe("a publication reviewed again in the same build", () => {
       Reflect.get(Object(reviewRequest(requests[1])["trusted_review"]), "policy"),
     );
     expect(policy).toContain("Synthetic host publication policy.");
-    expect(policy).toContain(publicationDeltaPolicy);
+    expect(instructionsOf(requests[1])).toContain(publicationDeltaPolicy);
   });
 
   it("still gets the prior findings after a compaction folded the earlier round away", async () => {

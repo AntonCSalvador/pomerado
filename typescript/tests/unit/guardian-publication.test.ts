@@ -25,6 +25,7 @@ import {
   type Reviewer,
 } from "../../src/guardian/review.js";
 import { makeSourceInspector } from "../../src/guardian/source.js";
+import { instructionsOf } from "../support/guardian-requests.js";
 
 afterEach(() => setDefaultModelProvider(new OpenAIProvider()));
 
@@ -901,8 +902,12 @@ const reviewRequest = (request: ModelRequest | undefined): Record<string, unknow
   }
   throw new Error("No review request");
 };
+/** Host policy the review request carries for itself alone, which the instructions lack. */
+const ownPolicyOf = (request: ModelRequest | undefined) =>
+  (reviewRequest(request)["trusted_review"] as { readonly policy?: string }).policy;
+/** Every policy the review is judged under: the shared instructions and its own. */
 const policyOf = (request: ModelRequest | undefined) =>
-  (reviewRequest(request)["trusted_review"] as { readonly policy: string }).policy;
+  [instructionsOf(request), ownPolicyOf(request) ?? ""].join("\n\n");
 
 describe("the OpenAI publication reviewer", () => {
   it.each([
@@ -924,9 +929,13 @@ describe("the OpenAI publication reviewer", () => {
           }),
         ).review(pending, sourcesOf(files)),
       );
-      const policy = policyOf(requests[0]);
-      expect(policy.startsWith("Return the structured outcome allow, deny or escalate")).toBe(true);
-      expect(policy.endsWith(`\n\n${guardianPublicationPolicy}`)).toBe(true);
+      const instructions = instructionsOf(requests[0]);
+      expect(instructions).toContain(
+        "Return the structured outcome allow, deny or escalate and a concise rationale.",
+      );
+      expect(instructions).toContain(guardianPublicationPolicy);
+      // The review's request repeats no policy the instructions hold.
+      expect(ownPolicyOf(requests[0])).toBeUndefined();
       const request = reviewRequest(requests[0]);
       const keys = Object.keys(request);
       const at = keys.indexOf("trusted_authority");
@@ -939,9 +948,47 @@ describe("the OpenAI publication reviewer", () => {
     },
   );
 
-  // A host that sends its own publication policy keeps exactly what it sends: no core policy,
-  // file index or turn limit is added to its review.
-  it("keeps a host's own publication policy, input and turn limit as it sends them", async () => {
+  // A host that registers its own publication policy keeps exactly what it sends: the policy
+  // replaces the core one in the shared instructions, and no file index or turn limit is added
+  // to its review, whose request carries no policy.
+  it("keeps a host's registered publication policy, input and turn limit as it sends them", async () => {
+    const requests = scripted((index) => [read(pending.entrypoint, 0, `read_${index}`)]);
+    const result = await Effect.runPromise(
+      Effect.either(
+        makeGuardian(
+          makeOpenAIReviewer("Synthetic policy {{ tenant_policy_config }}", false, {
+            ...native,
+            policies: { publication: "Synthetic host publication policy." },
+            specialize: (turn) =>
+              turn.pending.publication === undefined
+                ? {}
+                : { input: { trusted_host_record: { synthetic: true } } },
+          }),
+        ).review(pending, sourcesOf(files)),
+      ),
+    );
+    const instructions = instructionsOf(requests[0]);
+    expect(instructions).toContain("Synthetic host publication policy.");
+    expect(instructions).not.toContain(guardianPublicationPolicy);
+    expect(ownPolicyOf(requests[0])).toBeUndefined();
+    const request = reviewRequest(requests[0]);
+    const keys = Object.keys(request);
+    const at = keys.indexOf("trusted_authority");
+    expect(keys.slice(at, at + 3)).toEqual([
+      "trusted_authority",
+      "trusted_host_record",
+      "trusted_execution_environment",
+    ]);
+    expect(request).not.toHaveProperty("trusted_publication");
+    expect(result).toMatchObject({ _tag: "Left", left: { code: "TurnLimitExceeded" } });
+    // Its 12 turns, then the one final turn that must decide.
+    expect(requests).toHaveLength(13);
+  });
+
+  // A host that still sends its publication policy with each review, the deprecated way, keeps
+  // it: the review's request carries it as replacing the core policy, with no file index and
+  // the 12-turn default.
+  it("keeps a host's own per-review publication policy, input and turn limit as it sends them", async () => {
     const requests = scripted((index) => [read(pending.entrypoint, 0, `read_${index}`)]);
     const result = await Effect.runPromise(
       Effect.either(
@@ -959,10 +1006,9 @@ describe("the OpenAI publication reviewer", () => {
         ).review(pending, sourcesOf(files)),
       ),
     );
-    const policy = policyOf(requests[0]);
-    expect(policy.startsWith("Return the structured outcome allow, deny or escalate")).toBe(true);
-    expect(policy.split("\n\n").at(-1)).toBe("Synthetic host publication policy.");
-    expect(policy).not.toContain("This is the existing publication review");
+    const own = ownPolicyOf(requests[0]) ?? "";
+    expect(own.split("\n\n").at(-1)).toBe("Synthetic host publication policy.");
+    expect(own).toContain("replaces the core publication policy");
     const request = reviewRequest(requests[0]);
     const keys = Object.keys(request);
     const at = keys.indexOf("trusted_authority");
@@ -1072,9 +1118,7 @@ describe("the OpenAI publication reviewer", () => {
         makeOpenAIReviewer("Synthetic policy {{ tenant_policy_config }}", false, native),
       ).review({ ...pending, screenedIntent: intent, answeredQuestions }, sourcesOf(files)),
     );
-    expect(requests[0]?.systemInstructions).toContain(
-      `trusted_request: ${JSON.stringify({ intent })}`,
-    );
+    expect(instructionsOf(requests[0])).toContain(`trusted_request: ${JSON.stringify({ intent })}`);
     expect(reviewRequest(requests[0])["trusted_authority"]).toMatchObject({
       answeredQuestions: [{ id: "blank_fields", question: prompt, answer: "As an empty string" }],
     });
@@ -1093,7 +1137,7 @@ describe("the OpenAI publication reviewer", () => {
     expect(inputReview).toContain(publicationPaidChoiceLimit);
   });
 
-  it("gives an execution review no publication policy or index", async () => {
+  it("gives an execution review no publication index or policy of its own", async () => {
     const requests = scripted((index) =>
       index === 0
         ? [read(pending.entrypoint)]
@@ -1105,7 +1149,7 @@ describe("the OpenAI publication reviewer", () => {
         makeOpenAIReviewer("Synthetic policy {{ tenant_policy_config }}", false, native),
       ).review(execution, sourcesOf(files)),
     );
-    expect(policyOf(requests[0])).not.toContain("publication review");
+    expect(ownPolicyOf(requests[0])).toBeUndefined();
     expect(reviewRequest(requests[0])).not.toHaveProperty("trusted_publication");
   });
 

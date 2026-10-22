@@ -27,6 +27,7 @@ import type {
 } from "../../src/guardian/review.js";
 import type { PendingQuestion } from "../../src/guardian/question.js";
 import type { PendingTaskUpdate } from "../../src/guardian/task-update.js";
+import { instructionsOf } from "../support/guardian-requests.js";
 
 afterEach(() => setDefaultModelProvider(new OpenAIProvider()));
 
@@ -119,7 +120,7 @@ const reviewRequest = (request: ModelRequest | undefined) => {
     const content = "role" in item && item.role === "user" ? item.content : undefined;
     if (typeof content === "string" && content.startsWith("{"))
       return JSON.parse(content) as {
-        trusted_review: { kind: string; policy: string; outcomes?: readonly string[] };
+        trusted_review: { kind: string; policy?: string; outcomes?: readonly string[] };
       };
   }
   throw new Error("No review request");
@@ -203,7 +204,14 @@ it.each([
 ] as const)("asks a %s review only for the outcomes the host accepts from it", async (kind, any) => {
   const requests = scripted([decision(any)]);
   await Effect.runPromise(kinds[kind](guardianWith()));
-  const { outcomes: offered, policy } = reviewRequest(requests[0]).trusted_review;
+  const { outcomes: offered } = reviewRequest(requests[0]).trusted_review;
+  // The kind's own section of the policy every review shares.
+  const heading = { question: "Question reviews", update: "Task update reviews" }[kind as string];
+  const policy =
+    instructionsOf(requests[0])
+      .split("\n\n## ")
+      .find((section) => heading !== undefined && section.startsWith(heading)) ?? "";
+  if (kind !== "execution") expect(policy).not.toBe("");
   expect(offered?.length).toBeGreaterThan(0);
   for (const outcome of guardianOutcomes) {
     const answered = scripted([
@@ -237,13 +245,12 @@ it("tells a write build's task update review that its empty allowedEffects says 
   );
   expect(reviewed.decision).toMatchObject({ outcome: "allow" });
   const request = reviewRequest(requests[0]) as unknown as {
-    trusted_review: { policy: string };
     trusted_authority: { allowedEffects: readonly string[] };
     update_review: { effect: string };
   };
   expect(request.trusted_authority.allowedEffects).toEqual([]);
   expect(request.update_review.effect).toBe("write");
-  expect(request.trusted_review.policy).toContain(
+  expect(instructionsOf(requests[0])).toContain(
     "The host sets update_review.effect, not the agent. When it is write, the build is already a write build: no change needs to make it one, and the confirmation need not cover the write. In a task update review, trusted_authority.allowedEffects is empty on purpose, because an update performs no action on the site. That empty list, and the read-only allowedEffects of earlier exploration reviews, say nothing about the build's effect.",
   );
 });
@@ -256,7 +263,7 @@ it("lets a caller's confirmed answer overturn only a decision that held a step t
     "or overturns a Guardian decision, except that the caller's confirmed answer can overturn one that held a step to their own request, such as a time, a value or a search setting. A caller's answer never overturns a decision made for safety or for a Pomerado scope limit.";
   const requests = scripted([decision("allow")]);
   await Effect.runPromise(guardianWith().reviewTaskUpdate(pending, update, readSource));
-  expect(reviewRequest(requests[0]).trusted_review.policy).toContain(
+  expect(instructionsOf(requests[0])).toContain(
     `allows repeating a write that may have committed (trusted_execution_context.executions lists what already ran), ${exception}`,
   );
   expect(guardianExecutionPolicy(nativeExecutionEnvironment)).toContain(

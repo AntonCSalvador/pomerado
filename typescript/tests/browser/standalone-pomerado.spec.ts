@@ -45,6 +45,7 @@ import {
 import { mint as mintWith } from "./standalone-mint-fixture.js";
 import { loadStandaloneAuthoring } from "../../src/mint/skills.js";
 import { getAuthoringDirectory } from "../../src/assets.js";
+import { instructionsOf } from "../support/guardian-requests.js";
 import {
   guardianExecutionPolicy,
   nativeExecutionEnvironment,
@@ -2364,7 +2365,7 @@ test("a local mint sends Guardian the native policy and the minter the rendered 
     expect(executionReviews.length).toBeGreaterThan(0);
     for (const request of executionReviews) {
       expect(reviewedNative(request)).toBe(true);
-      const policy = String(request.systemInstructions);
+      const policy = instructionsOf(request);
       for (const native of [
         "Operations use Kernel-shaped browser execute calls supplied by native Playwright",
         "attempts to bypass the reviewed execution path",
