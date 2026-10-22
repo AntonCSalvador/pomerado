@@ -53,10 +53,11 @@ export const sessionSignInAllowance = (
     : "session_not_kept";
 
 /** A path without its trailing slash, the root `/` kept. */
-const pathOf = (path: string) => (path.length > 1 ? path.replace(/\/$/u, "") : path);
+export const pathOf = (path: string) => (path.length > 1 ? path.replace(/\/$/u, "") : path);
 
 /** A recorded screen's page, which a signed-out page lands back on. */
-const placeOf = (page: string) => {
+export const placeOf = (page: string | undefined) => {
+  if (page === undefined) return undefined;
   const url = URL.parse(page);
   return url === null ? undefined : `${url.origin}${pathOf(url.pathname)}`;
 };
