@@ -506,8 +506,9 @@ export type SignedInMarkerCheckRequest = typeof SignedInMarkerCheckRequest.Type;
  * appears once the identifier is filled) names no submit; a method choice names only a submit. A
  * screen whose form has no submit control and submits on Enter names `submitKey` instead, and the
  * host presses Enter in its last field. A screen a cookie, consent or similar notice covers names
- * that notice's own accept or close control as `dismiss`, which the host clicks first, when it
- * shows. `signedIn` names what shows the site signed in, which the host checks on the page itself.
+ * that notice's own close, reject or accept control as `dismiss`, in that order of preference,
+ * which the host clicks first, when it shows. `signedIn` names what shows the site signed in,
+ * which the host checks on the page itself.
  */
 export const SignInStep = Schema.Union(
   Schema.Struct({

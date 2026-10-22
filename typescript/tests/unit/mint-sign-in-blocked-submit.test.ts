@@ -292,7 +292,7 @@ it("the blocked screen sent again and again types nothing, so the host never ref
   expect(site.resubmits()).toBe(3);
 });
 
-it("a blocked screen whose password the dismiss emptied is filled again as a refill, so the password is still typed twice at most", async () => {
+it("a blocked screen whose password the dismiss emptied is filled again in the same step as a refill, so the password is still typed twice at most", async () => {
   const site = coveredSite({ reloads: true });
   const run = await fixture(
     (_request, index) =>
@@ -300,19 +300,17 @@ it("a blocked screen whose password the dismiss emptied is filled again as a ref
         authenticate("fill_1", passwordScreen),
         authenticate("again", { ...passwordScreen, dismiss: accept }),
         authenticate("fill_2", passwordScreen),
-        authenticate("fill_3", passwordScreen),
       ][index] ?? stop,
     site.dependencies,
     { effect: "read", siteOrigin: origin },
   );
   await run.run();
+  // The click again found the password empty and clicked nothing, so the host typed it once more.
+  expect(site.resubmits()).toBe(1);
   expect(stepAnswer(run.requests[2], "again")).toMatchObject({
-    step: { outcome: "filled", submit: "not_attempted" },
-  });
-  expect(stepAnswer(run.requests[3], "fill_2")).toMatchObject({
     step: { outcome: "filled", submit: "clicked" },
   });
-  expect(stepAnswer(run.requests[4], "fill_3")).toMatchObject({
+  expect(stepAnswer(run.requests[3], "fill_2")).toMatchObject({
     step: { outcome: "refused", reason: "credential_already_filled" },
   });
   expect(site.fills()).toBe(2);

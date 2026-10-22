@@ -154,7 +154,7 @@ export const lostTypingNotice =
 
 /** A step whose `dismiss` the host refused before it typed or clicked anything. */
 export const dismissRefusedNotice =
-  "The step's dismiss is not a covering notice's own accept or close control: it is or holds a control of the sign-in, sits in its form, submits a form, opens another page, or matches more than one visible element. The host typed and clicked nothing. Send the step again with the notice's own accept or close control as dismiss, or without dismiss.";
+  "The step's dismiss is not a covering notice's own control: it is or holds a control of the sign-in, sits in its form, submits a form, opens another page, or matches more than one visible element. The host typed and clicked nothing. Send the step again with the notice's own close or dismiss control as dismiss, else one that rejects or declines what is not essential, else its accept control, or without dismiss.";
 
 /** After a step whose submit key the host pressed. */
 const keyNotices = {

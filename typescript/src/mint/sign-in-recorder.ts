@@ -421,7 +421,8 @@ export const makeSignInRecorder = (input: {
    * The open sign-in's `blocked` screen sent again: inspected and reviewed as any screen, then its
    * submit clicked again after its `dismiss`, typing nothing (`resubmit`). The values its fill typed
    * were never sent, so the minter going on sent nothing, and no secret is filled again: the click
-   * that sends them counts them once, as the fill's own click would have.
+   * that sends them counts them once, as the fill's own click would have. A field the page emptied
+   * before the click, as when the dismiss loaded the page again, clicks nothing (`emptied`).
    */
   const resubmit = (
     request: Extract<SignInStep, { readonly fields: unknown }>,
@@ -452,6 +453,10 @@ export const makeSignInRecorder = (input: {
       return { report, result: { nextStep: notice(report, step) } } satisfies SignInStepResult;
     });
 
+  /** A click again that found a field the blocked fill typed empty, so it clicked nothing. */
+  const emptied = (report: AutofillStepReport | undefined) =>
+    report?.outcome === "filled" && report.submit === "not_attempted";
+
   const fill = (
     request: Extract<SignInStep, { readonly fields: unknown }>,
     beforeFill: Effect.Effect<void, Error>,
@@ -461,8 +466,12 @@ export const makeSignInRecorder = (input: {
     return Effect.gen(function* () {
       const before = h.autofillSignIn.current;
       const blocked = blockedScreen(before, request);
-      if (before !== undefined && blocked !== undefined && hooks.resubmit !== undefined)
-        return yield* resubmit(request, before, blocked, hooks.resubmit, beforeFill);
+      const dispatch = yield* Effect.once(beforeFill);
+      if (before !== undefined && blocked !== undefined && hooks.resubmit !== undefined) {
+        const again = yield* resubmit(request, before, blocked, hooks.resubmit, dispatch);
+        // A field the page emptied: the screen is filled again below, as a refill.
+        if (!emptied(again.report)) return again;
+      }
       // The minter went on: the screen before, which it submitted or which sent itself, is sent.
       settleMinter(h, before);
       const masked = maskedMethodRefusal(h, request);
@@ -503,7 +512,7 @@ export const makeSignInRecorder = (input: {
         !step.fields.some((field) => field.accepts !== undefined)
       )
         return shown(result(identifierUnobserved));
-      yield* beforeFill;
+      yield* dispatch;
       if (held === undefined && step.fields.length > 0) {
         held = yield* login.values;
         step = values.resolve(request, held);
