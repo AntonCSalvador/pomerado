@@ -8,9 +8,12 @@ import {
   probe,
   recordingGuardian,
   toolResult,
+  writePath,
 } from "./guardian-context-fixture.js";
 import { act, executions, mint, saveNote, saveSite } from "./standalone-mint-fixture.js";
 
+/** The save site's write path: its one save. */
+const savePath = writePath("save");
 /** A step that clicks Save, waits for the save to finish, then fails. */
 const saveThenFail = probe(
   "await page.locator('#save').click(); await page.waitForFunction(() => document.title === 'Saved'); throw new Error('Failed after the save');",
@@ -100,7 +103,7 @@ test("a failed act step that posted tells the minter to verify before any furthe
       guardian,
       turns: [
         () => patch({ "src/save.mjs": saveThenFail }),
-        () => [call("execute", act("src/save.mjs"), "save")],
+        () => [call("execute", act("src/save.mjs", undefined, savePath), "save")],
       ],
     });
     expect(fixture.writes()).toBe(1);
@@ -135,7 +138,7 @@ test("a failed act step Guardian labelled a write is refused as a repeat while i
       guardian,
       turns: [
         () => patch({ "src/read.mjs": readThenFail }),
-        () => [call("execute", act("src/read.mjs"), "first")],
+        () => [call("execute", act("src/read.mjs", undefined, savePath), "first")],
         () => [call("execute", act("src/read.mjs"), "again")],
       ],
     });
@@ -148,7 +151,7 @@ test("a failed act step Guardian labelled a write is refused as a repeat while i
   }
 });
 
-test("finish_build on a session that only read the page refuses the unentered commit mark after contract review", async () => {
+test("finish_build on a session that only read the page refuses the unrun steps of its write path before contract review", async () => {
   test.setTimeout(90_000);
   const fixture = saveSite();
   const site = await fixture.start();
@@ -161,21 +164,22 @@ test("finish_build on a session that only read the page refuses the unentered co
       turns: [
         () => patch({ "src/look.mjs": probe(), "src/tool.mjs": saveNote }),
         // The step fixes the session's input, so the composed contract decodes it.
-        () => [call("execute", act("src/look.mjs", { note: "kept" }), "look")],
+        () => [call("execute", act("src/look.mjs", { note: "kept" }, savePath), "look")],
         (request) => [finish("src/tool.mjs", executionIdOf(request, "look"), "publish")],
       ],
     });
     expect(toolResult(last, "look")).toMatchObject({ status: "completed" });
     // The step called the browser, so it may have sent the write: the session passes the sent
-    // check, and its contract's unentered commit mark is refused after contract review.
+    // check, but it never entered its recorded path's mark, which is refused before the contract
+    // is read or reviewed.
     expect(toolResult(last, "publish")).toMatchObject({
       status: "not_published",
-      reason: "commit_marks_unentered",
+      reason: "write_path_unfinished",
+      writePathMarks: ["save"],
     });
     expect(built.build).not.toBe("published");
     expect(executions(guardian.reviews).map((review) => currentOf(review)?.["purpose"])).toEqual([
       "act",
-      "contract",
     ]);
     expect(fixture.writes()).toBe(0);
   } finally {
@@ -195,7 +199,7 @@ test("finish_build on a session that never called the browser refuses the write 
       guardian,
       turns: [
         () => patch({ "src/idle.mjs": idle, "src/tool.mjs": saveNote }),
-        () => [call("execute", act("src/idle.mjs", { note: "kept" }), "idle")],
+        () => [call("execute", act("src/idle.mjs", { note: "kept" }, savePath), "idle")],
         (request) => [finish("src/tool.mjs", executionIdOf(request, "idle"), "publish")],
       ],
     });
@@ -233,7 +237,7 @@ test("a completed act step that posted carries no list of state-changing request
               "await page.locator('#save').click(); await page.waitForFunction(() => document.title === 'Saved'); return true;",
             ),
           }),
-        () => [call("execute", act("src/save.mjs"), "save")],
+        () => [call("execute", act("src/save.mjs", undefined, savePath), "save")],
       ],
     });
     expect(fixture.writes()).toBe(1);
@@ -256,7 +260,7 @@ test("a failed act step Guardian labelled a write asks for a read-back, though i
       guardian,
       turns: [
         () => patch({ "src/early.mjs": failEarly }),
-        () => [call("execute", act("src/early.mjs"), "early")],
+        () => [call("execute", act("src/early.mjs", undefined, savePath), "early")],
       ],
     });
     const receipt = toolResult(last, "early");
@@ -284,7 +288,7 @@ test("a failed act step whose marks show no commit step entered asks for a read-
       guardian,
       turns: [
         () => patch({ "src/click.mjs": clickThenFail }),
-        () => [call("execute", act("src/click.mjs"), "click")],
+        () => [call("execute", act("src/click.mjs", undefined, savePath), "click")],
       ],
     });
     expect(fixture.writes()).toBe(1);
@@ -313,7 +317,7 @@ test("a failed act step whose marks show no commit step entered carries no read-
       guardian,
       turns: [
         () => patch({ "src/declare.mjs": declareThenFail }),
-        () => [call("execute", act("src/declare.mjs"), "declare")],
+        () => [call("execute", act("src/declare.mjs", undefined, savePath), "declare")],
       ],
     });
     const receipt = toolResult(last, "declare");
@@ -337,7 +341,7 @@ test("an act step that returned no result tells the minter to verify, though it 
       guardian,
       turns: [
         () => patch({ "src/hang.mjs": hang }),
-        () => [call("execute", execution("act", "src/hang.mjs", { timeoutSeconds: 2 }), "hang")],
+        () => [call("execute", execution("act", "src/hang.mjs", { timeoutSeconds: 2, writePath: savePath }), "hang")],
       ],
     });
     const receipt = toolResult(last, "hang");
@@ -370,7 +374,7 @@ test("a step that lost its result after entering its mark publishes once a read-
             "src/check.mjs": readBack,
             "src/tool.mjs": readBack,
           }),
-        () => [call("execute", execution("act", "src/save.mjs", { timeoutSeconds: 12 }), "save")],
+        () => [call("execute", execution("act", "src/save.mjs", { timeoutSeconds: 12, writePath: savePath }), "save")],
         () => [call("execute", act("src/check.mjs"), "check")],
         (request) => [finish("src/tool.mjs", executionIdOf(request, "check"), "publish")],
       ],
@@ -407,7 +411,7 @@ test("a step that lost its result after entering its mark, with no read-back con
             "src/look.mjs": probe(),
             "src/tool.mjs": readBack,
           }),
-        () => [call("execute", execution("act", "src/save.mjs", { timeoutSeconds: 12 }), "save")],
+        () => [call("execute", execution("act", "src/save.mjs", { timeoutSeconds: 12, writePath: savePath }), "save")],
         () => [call("execute", act("src/look.mjs"), "look")],
         (request) => [finish("src/tool.mjs", executionIdOf(request, "look"), "publish")],
       ],
@@ -418,16 +422,17 @@ test("a step that lost its result after entering its mark, with no read-back con
     expect(observationsOf(lost)?.writeSession?.verifyFirst).toBe(true);
     expect(toolResult(last, "look")).toMatchObject({ status: "completed" });
     // The lost step may have sent the write, so the session passes the sent check. Its streamed
-    // mark counts only once a later step confirms the write, and none did.
+    // mark counts only once a later step confirms the write, and none did, so its recorded path's
+    // mark stays unentered, which is refused before the contract is read or reviewed.
     expect(toolResult(last, "publish")).toMatchObject({
       status: "not_published",
-      reason: "commit_marks_unentered",
+      reason: "write_path_unfinished",
+      writePathMarks: ["save"],
     });
     expect(built.build).not.toBe("published");
     expect(executions(guardian.reviews).map((review) => currentOf(review)?.["purpose"])).toEqual([
       "act",
       "act",
-      "contract",
     ]);
   } finally {
     await site.close();

@@ -18,6 +18,8 @@ import {
   guardianPublicationPolicy,
   publicationLiveTestsPolicy,
   publicationOutputPolicy,
+  publicationWriteOutcomePolicy,
+  publicationWritePathPolicy,
 } from "../../src/guardian/publication.js";
 import { inputFeedbackInstruction } from "../../src/mint/input-feedback.js";
 import {
@@ -130,9 +132,14 @@ const contents = (skills: readonly SkillDescriptor[]) =>
  * it gathers that evidence before its first publication instead of learning it from a denial. The
  * file is the text the review reads, so a policy change reaches the minter in the same release.
  */
-it("installs the publication review's test and output rules for the minter", async () => {
-  const rules = `${publicationLiveTestsPolicy}\n\n${publicationOutputPolicy}`;
-  for (const part of [publicationLiveTestsPolicy, publicationOutputPolicy])
+it("installs the publication review's test, output and write path rules for the minter", async () => {
+  const rules = `${publicationLiveTestsPolicy}\n\n${publicationOutputPolicy}\n\n${publicationWriteOutcomePolicy} ${publicationWritePathPolicy}`;
+  for (const part of [
+    publicationLiveTestsPolicy,
+    publicationOutputPolicy,
+    publicationWriteOutcomePolicy,
+    publicationWritePathPolicy,
+  ])
     expect(guardianPublicationPolicy).toContain(part);
   const root = await authoringCopy((_path, text) => composeHostText(text));
   try {
@@ -1103,11 +1110,11 @@ it("renders the pinned standalone authoring", async () => {
     ["d720cd4d66afaf411cf14dbce6a026f72e2830e203c284e87248dfaff920f44c", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["da972d9b65ff424210686366db36843a6aa966dce4dbb203fcfcfcaad9f84853", "forms"],
-    ["4dec1571c30dec8467834a57399769a0c6d63c5fefa617e0d9fbb47c3902d300", "writes"],
+    ["604244614c53a35c229d326d03608a8efeb21d50c0e7785df14ee4b707a8a1d2", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["4423c6fd332f1c3d3b17e3e5ea988aa564e3bb9d0d94838d85558cdecd987fb9", "caller-input"],
-    ["3855dfaddc3e2ef61282b67344e61f667723f120dd0cd33d70d394504aa274ab", "publication"],
-    ["cc8954534e8490523ff8e9e3299a5bce5609b1b6ebcd25a10cf1a008bc161862", "workspace/AGENTS.md"],
+    ["ffc457eb368fd563ee75ed845110bb611c2198994ac45ceb4e11047a3dff040b", "publication"],
+    ["7afa42f757e1cbafa0fbdda2ecb1d70a9ad7cc01ed11f1cf7d6400b7fb27be37", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
@@ -1228,7 +1235,7 @@ it("renders the search URL fast path only when a host turns it on", async () => 
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
     ["ea3c3bc8472c8c9db7aa9dd9b99b682f525f5ab55c091b944946dcf75f5ec83e", "search"],
-    ["c237d72fe99b05a963fd97cbaacfc591f82fe541289c57cb021f43f2a509a5b0", "workspace/AGENTS.md"],
+    ["2717309c2761b3e5984e09e9178e6dbd58395a447c97395f4f5abfead9b1e045", "workspace/AGENTS.md"],
   ]);
   expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(
     off.digests.filter(([, name]) => name !== "search"),
