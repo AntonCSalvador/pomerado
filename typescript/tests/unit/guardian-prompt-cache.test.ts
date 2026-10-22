@@ -367,7 +367,8 @@ it.each([
           .trusted_review,
     )
     .find((candidate) => candidate["kind"] === "recovery");
-  const policy = String(review?.["policy"]);
+  const policy = review?.["policy"];
+  if (typeof policy !== "string") throw new Error("the recovery review carries no policy");
   // The core policy comes first, then the host's, which appears exactly once.
   const core = host === undefined ? policy : policy.slice(0, policy.indexOf(host)).trimEnd();
   expect(core).not.toBe("");

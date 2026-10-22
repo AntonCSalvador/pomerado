@@ -346,7 +346,7 @@ it.each([
     } else {
       expect(result).toMatchObject({ _tag: "Left", left: { code: "InvalidOutcome" } });
       // The kind's own policy never names an outcome the host refuses from it.
-      expect(policy).not.toBe("");
+      expect(policy?.length).toBeGreaterThan(0);
       if (kind !== "execution" && outcomeNames.includes(outcome))
         expect(policy).not.toMatch(new RegExp(`\\b${outcome}\\b`));
     }
