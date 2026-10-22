@@ -72,6 +72,10 @@ query, fragment or path, since a host refuses such a link for a workspace site.
    submit, Next, Continue or send-code control during exploration: that is signing in, which only
    `authenticate` does (the one exception, after the host's own submit click failed, is below).
    Other controls on the page, such as a site search or a cookie banner, are not the sign-in.
+   When a cookie or consent notice covers the sign-in form or its submit, name the notice's own
+   accept or close control as the step's `dismiss` rather than clicking it in an `explore`: the
+   host clicks it before it types, and runs do the same on a fresh browser. Never name a submit,
+   a field or a control of the sign-in form as `dismiss`.
    Reopening the login route in an `explore` to read it again is fine, after a failed sign-in too.
    `references/auth-entry.ts` shows a bounded second probe that reads a login form's controls.
 
@@ -127,7 +131,7 @@ its text. The host rereads the question before privately filling the answer. No 
 you, Guardian, generated code or the recipe. One-time and recovery codes keep their own slots.
 
 Every selector a `signInStep` sends, in `fields`, `submit`, `methods`, `questionSelector`,
-`rejectedMarkers` and `signedIn`, is a Playwright selector string, not a locator call as probes and
+`dismiss`, `rejectedMarkers` and `signedIn`, is a Playwright selector string, not a locator call as probes and
 the examples write. Prefer a stable `#id`, `[name=...]` or `data-testid=` selector. A role selector
 writes its options as attributes:
 
@@ -253,6 +257,10 @@ Then read what the file lacks, such as a selector or form destination, with a re
 the host filled, not even to check it. If the host reports that its click of the submit failed after
 the fields filled, you may click that one submit yourself in an `explore`, and nothing else; the host
 counts a value as sent only once it sees the form go out carrying it, whoever clicked. If it reports `submit: refused`, never click it.
+If it reports `submit: blocked`, another element, such as a consent notice (`blockedBy`), caught the
+click and nothing was sent: never click the submit yourself. Send the same `signInStep` again with
+the notice's own accept or close control as `dismiss`; the host clicks it, then the submit, and types
+nothing again.
 If the site says a field was wrong, send `signInStep: { rejected: { slot: "password" } }`
 with the actual rejected slot at once. The host asks for corrections; never ask for substitute
 credentials yourself or send a rejected value again. A primary identifier or password rejection

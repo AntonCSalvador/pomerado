@@ -108,6 +108,8 @@ export interface AutofillStepRequest {
   /** A two-factor method choice: every method offered, and `submit` the one picked. */
   readonly methods?:
     readonly { readonly method: SignInMethodChoice; readonly selector: string }[] | undefined;
+  /** The own accept or close control of a notice that covers the screen (`AutofillStep`). */
+  readonly dismiss?: string | undefined;
 }
 
 /**
@@ -126,6 +128,13 @@ export interface AutofillStep<Slot extends FillSlot = AutofillSlot> {
   /** A two-factor method choice: every method offered, and `submit` the one picked. */
   readonly methods?:
     readonly { readonly method: SignInMethodChoice; readonly selector: string }[] | undefined;
+  /**
+   * The own accept or close control of a cookie, consent or similar notice that covers the screen,
+   * which the host clicks before it types, when the page shows it, and again before it clicks the
+   * submit once more when the notice caught that click. Never a submit or a control of the
+   * sign-in's own form (`dismiss_refused`).
+   */
+  readonly dismiss?: string | undefined;
 }
 
 /** Whether the host submits the step itself: it clicks its submit or presses its submit key. */
@@ -170,6 +179,17 @@ export const Targets = Schema.Struct({
 });
 
 const Text = Schema.NullOr(Schema.String);
+/**
+ * The element that sat over a submit and caught the host's click, by its tag, id, role, ARIA label
+ * and class names, each clipped: never its text, which may echo what the page was given.
+ */
+export const CoveringElement = Schema.Struct({
+  tag: Schema.String,
+  id: Text,
+  role: Text,
+  ariaLabel: Text,
+  className: Text,
+});
 /** A control as Guardian judges it: its markup's own words, never a value. */
 const Described = Schema.Struct({
   tag: Schema.String,
@@ -249,9 +269,10 @@ export type AutofillRefusal = {
     | "typing_unavailable"
     | "popup_missing"
     | "popup_ambiguous"
-    | "code_boxes_incomplete";
+    | "code_boxes_incomplete"
+    | "dismiss_refused";
   /** The field (by its index in the step) or the submit control the refusal is about. */
-  readonly target?: number | "submit" | "popup";
+  readonly target?: number | "submit" | "popup" | "dismiss";
   /**
    * `code_boxes_incomplete`: how many one-character code boxes the screen shows, and the place of
    * each box the step's code fields named, in the step's order. Counts only, never a value.
@@ -354,6 +375,9 @@ export type AutofillStepReport =
       }[];
       /**
        * `clicked`: the host clicked the submit, or pressed the step's submit key in its last field.
+       * `blocked`: another element sat over the submit and caught the host's click (`blockedBy`),
+       * so the click never reached the submit and nothing was sent; the fields still hold what
+       * was typed.
        * `refused`: after the fill the host refused a control where it then sat or submitted.
        * `stayed_disabled`: the submit stayed disabled after the fields were filled, through the
        * host's wait for the page to enable it, so the host never clicked it.
@@ -365,6 +389,7 @@ export type AutofillStepReport =
        */
       readonly submit:
         | "clicked"
+        | "blocked"
         | "failed"
         | "not_attempted"
         | "refused"
@@ -376,6 +401,8 @@ export type AutofillStepReport =
        * after the page's own handlers ran on the click, so what the step filled may have gone out.
        */
       readonly clicked?: true;
+      /** What caught a `blocked` click, by its markup's own names, never its text or a value. */
+      readonly blockedBy?: typeof CoveringElement.Type;
       /** The primary page after the submit settled, byte-exact like every URL. */
       readonly url: string;
       /** Host diagnostics only: why a field or the submit was refused once something was typed. */

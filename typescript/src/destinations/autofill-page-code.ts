@@ -122,6 +122,7 @@ return {
  *   element that holds it otherwise.
  * - `date`: fills a date of birth with the authoring library's `fillDate`, which needs the page's
  *   own options, so this call's code holds the date (`iso`).
+ * - `dismiss`: clicks a covering notice's own control (`dismissCode`).
  * - `submit`: first reads whether the page sent what was typed itself (`pageSentCode`). Otherwise
  *   it guards the submission as it fires (`submissionGuardCode`, under the host's
  *   `guardKey` and armed for `guardCall`, with every form action and link destination as the
@@ -135,6 +136,15 @@ return {
  *   enable it.
  */
 export type AutofillFillCall =
+  | {
+      /**
+       * Clicks the step's `dismiss`, a covering notice's own accept or close control, when it shows
+       * (`dismissCode`): never one of the step's controls, one that holds or shares a form with
+       * them, one that submits a form, or a link to another page.
+       */
+      readonly kind: "dismiss";
+      readonly selector: string;
+    }
   | {
       readonly kind: "focus";
       readonly index: number;
@@ -187,7 +197,9 @@ const alertsBeforeMs = 500;
  * under `judged`, or the page lost it, does nothing, keeps every control as found under `observed` and
  * hands them back, for the host to judge again by inspection's rule (page code may move a form off
  * the site once values are typed, so each call finds and judges every control again). Otherwise
- * checks the field the host just typed, then runs the call. A field that check cannot read counts
+ * checks that each field in `check` still holds something (the one the host just typed, or every
+ * field it typed before a submit it clicks again), then runs the call; the first that holds nothing
+ * fails the check, with its index. A field that check cannot read counts
  * as empty, except in the submit call of a step with fields and no submit (`readsOnly`), which only
  * reads the page: there a read that fails, as when the page takes the field away while the call
  * reads it, fails the call, a look the host takes again, and is never a typed field left empty.
@@ -197,7 +209,7 @@ const alertsBeforeMs = 500;
 const fillCallCode = (
   call: AutofillFillCall,
   judgedId: string | undefined,
-  check: number | null,
+  check: readonly number[],
   typedAt: string,
 ) => `const judgment = await kept(${JSON.stringify(judgedId ?? null)});
 const judged = judgment?.targets ?? null;
@@ -234,9 +246,8 @@ if (
 // submit call compares against it with no address in its code.
 const typedAt = ${JSON.stringify(typedAt)};
 const readsOnly = ${JSON.stringify(call.kind === "submit")} && fields.length > 0 && submit === null;
-${call.kind === "submit" ? pageSentCode : "await keep(typedAt, primary.url());"}
-const check = ${JSON.stringify(check)};
-if (check !== null) {
+${call.kind === "submit" ? pageSentCode : call.kind === "dismiss" ? "" : "await keep(typedAt, primary.url());"}
+for (const check of ${JSON.stringify(check)}) {
   // Its length only, never its value.
   const holding = fields[check].locator.evaluate(
     (element) => typeof element.value === "string" && element.value.length > 0,
@@ -246,7 +257,7 @@ if (check !== null) {
   const holds = await (readsOnly ? holding : holding.catch(() => false));
   if (!holds) {
     ${call.kind === "submit" ? "if (await allEmptied()) return { pageSent: true, url: primary.url() };" : ""}
-    return { checked: false, url: primary.url() };
+    return { checked: false, field: check, url: primary.url() };
   }
 }
 ${call.kind === "submit" && call.look !== true ? codeBoxesHoldCode(call.codeBoxes ?? []) : ""}
@@ -322,7 +333,92 @@ const allEmptied = async () => {
   return true;
 };`;
 
+/**
+ * Page code: the element at the centre of `element`, a submit whose click failed, when it is
+ * neither the submit, inside it nor around it: the outermost element over the submit that holds it,
+ * as a notice holds its own buttons, by tag, id, role, ARIA label and class names, each clipped,
+ * never its text. Null when the submit has no box or nothing else sits over it.
+ */
+const coveringCode = `(element) => {
+  const box = element.getBoundingClientRect();
+  if (box.width <= 0 || box.height <= 0) return null;
+  const x = box.left + box.width / 2;
+  const y = box.top + box.height / 2;
+  const root = element.getRootNode();
+  let hit = (typeof root.elementFromPoint === "function" ? root : element.ownerDocument).elementFromPoint(x, y);
+  while (hit?.shadowRoot) {
+    const inner = hit.shadowRoot.elementFromPoint(x, y);
+    if (inner === null || inner === hit) break;
+    hit = inner;
+  }
+  if (hit === null || hit === element || element.contains(hit) || hit.contains(element)) return null;
+  let cover = hit;
+  const page = [element.ownerDocument.body, element.ownerDocument.documentElement];
+  while (cover.parentElement !== null && !page.includes(cover.parentElement) && !cover.parentElement.contains(element))
+    cover = cover.parentElement;
+  const clipped = (text) => {
+    const words = (text ?? "").trim().replace(/\\s+/g, " ").slice(0, 200);
+    return words === "" ? null : words;
+  };
+  return {
+    tag: cover.tagName.toLowerCase(),
+    id: clipped(cover.getAttribute("id")),
+    role: clipped(cover.getAttribute("role")),
+    ariaLabel: clipped(cover.getAttribute("aria-label")),
+    className: clipped(cover.getAttribute("class")),
+  };
+}`;
+
+/**
+ * Page code for a `dismiss` call: finds the selector's one visible match across the primary tab's
+ * frames (`locate`); none, or several, is `not_shown` or `ambiguous`, and nothing is clicked. A
+ * match is refused (`part`) when it is one of the step's controls in its frame, holds one or sits in
+ * one (`sign_in_control`), sits in the form of one (`sign_in_form`), submits a form
+ * (`submits_form`), or is in a link to another page than this one (`opens_page`): a notice's own
+ * accept or close control is none of these. Otherwise it is clicked, and the call waits a moment
+ * for it to go, as a notice that fades does. Attributes only, never a value.
+ */
+const dismissCode = (selector: string) => `const notice = await locate(${JSON.stringify(selector)});
+if ("error" in notice)
+  return { dismiss: notice.error === "not_found" ? "not_shown" : "ambiguous", url: primary.url() };
+const noticeFrame = notice.handle ? await notice.handle.ownerFrame() : null;
+const own = [];
+for (const control of submit === null ? fields : [...fields, submit]) {
+  const handle = await control.locator.elementHandle({ timeout: ${elementReadMs} }).catch(() => null);
+  if (handle !== null && noticeFrame !== null && (await handle.ownerFrame()) === noticeFrame) own.push(handle);
+}
+const part = await notice.locator.evaluate((element, own) => {
+  const formOf = (control) =>
+    "form" in control && control.form instanceof HTMLFormElement ? control.form : control.closest("form");
+  if (own.some((control) => control === element || control.contains(element) || element.contains(control)))
+    return "sign_in_control";
+  const form = formOf(element);
+  if (form !== null && own.some((control) => formOf(control) === form)) return "sign_in_form";
+  const submitter =
+    (element instanceof HTMLButtonElement && element.type === "submit") ||
+    (element instanceof HTMLInputElement && ["submit", "image"].includes(element.type));
+  if (submitter && form !== null) return "submits_form";
+  const link = element.closest("a[href]");
+  if (link !== null) {
+    const to = new URL(link.href, element.ownerDocument.baseURI);
+    const here = new URL(element.ownerDocument.URL);
+    to.hash = "";
+    here.hash = "";
+    if (to.protocol !== "javascript:" && to.href !== here.href) return "opens_page";
+  }
+  return null;
+}, own, { timeout: ${elementReadMs} });
+if (part !== null) return { dismiss: "refused", part, url: primary.url() };
+try {
+  await notice.locator.click({ timeout: 5000 });
+} catch {
+  return { dismiss: "failed", url: primary.url() };
+}
+await notice.locator.waitFor({ state: "hidden", timeout: 2000 }).catch(() => undefined);
+return { dismiss: "clicked", url: primary.url() };`;
+
 const fillCallBody = (call: AutofillFillCall) => {
+  if (call.kind === "dismiss") return dismissCode(call.selector);
   if (call.kind === "focus")
     return `const field = fields[${call.index}].locator;
 const fieldLocated = located.fields[${call.index}];
@@ -439,8 +535,15 @@ try {
   // A submit key goes to the last field, which stands as the submit and submits its own form.
   if (submitKey === null) await submit.locator.click({ timeout: 5000 });
   else await submit.locator.press(submitKey, { timeout: 5000 });
-} catch {
-  return { submit: "failed", url: primary.url() };
+} catch (error) {
+  // Playwright names an element that intercepts pointer events when another sits over the submit,
+  // and never dispatches the click then: blocked, by the element at the submit's centre.
+  const intercepted =
+    submitKey === null && error instanceof Error && error.message.includes("intercepts pointer events");
+  const blockedBy = intercepted
+    ? await submit.locator.evaluate(${coveringCode}, undefined, { timeout: ${elementReadMs} }).catch(() => null)
+    : null;
+  return blockedBy === null ? { submit: "failed", url: primary.url() } : { submit: "blocked", blockedBy, url: primary.url() };
 }
 let submission = await refusedSubmission();
 if (submission === null && (await navigated))
@@ -556,7 +659,8 @@ export const autofillStepCode = (
     readonly popupTargetId?: string | undefined;
     readonly call: AutofillFillCall;
     readonly judged: string | undefined;
-    readonly check: number | null;
+    /** The fields the host typed that must still hold something before the call acts. */
+    readonly check: readonly number[];
     /** The fill's id for where the page was as each field was typed. */
     readonly typedAt: string;
   },

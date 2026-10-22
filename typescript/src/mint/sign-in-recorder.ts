@@ -27,6 +27,7 @@ import {
   armStep,
   type AutofillHooks,
   type AutofillSignInState,
+  blockedScreen,
   exhaustedSecret,
   isExtraSecret,
   isIdentifier,
@@ -34,6 +35,7 @@ import {
   noteRefill,
   passwordFillsSpent,
   reasksPassword,
+  recordResubmit,
   recordStep,
   registeredSecretIn,
   submitFilled,
@@ -155,6 +157,7 @@ const maskedSelector = (step: Extract<SignInStep, { readonly fields: unknown }>)
     ),
     ...(step.submit === undefined ? [] : [step.submit]),
     ...(step.methods ?? []).map((option) => option.selector),
+    ...(step.dismiss === undefined ? [] : [step.dismiss]),
   ].findIndex(holdsMask);
 
 /** A host call that failed, as the build's failure. */
@@ -253,6 +256,7 @@ export const makeSignInRecorder = (input: {
     // One-character code boxes take the code one character each, as the host types it.
     fill: (filling) =>
       browser.fill({ ...filling, values: typedValues(filling.step, filling.values) }),
+    ...(browser.resubmit === undefined ? {} : { resubmit: browser.resubmit }),
     check: (indicator, screens, challengeScreens) =>
       browser.confirm(indicator, screens, challengeScreens ?? screens),
     // The check that ends a sign-in waits for a marker the page draws late.
@@ -393,6 +397,61 @@ export const makeSignInRecorder = (input: {
       return filled;
     });
 
+  /**
+   * After a host click sent the open sign-in's values: a site's message can be gone before the
+   * minter reports it, so the recorded markers that show right after the submit count too, until
+   * the next screen.
+   */
+  const markersAfterSubmit = (state: AutofillSignInState) =>
+    Effect.gen(function* () {
+      if (
+        h.autofillSignIn.current !== state ||
+        !state.steps.some((recorded) => (recorded.rejectedMarkers ?? []).length > 0)
+      )
+        return;
+      const seen = yield* recordedRejections(
+        state.hooks,
+        state.steps.map(recipeStep),
+        h.reportCorrelation,
+      );
+      afterSubmit = { open: state, slots: seen === "unavailable" ? [] : seen };
+    });
+
+  /**
+   * The open sign-in's `blocked` screen sent again: inspected and reviewed as any screen, then its
+   * submit clicked again after its `dismiss`, typing nothing (`resubmit`). The values its fill typed
+   * were never sent, so the minter going on sent nothing, and no secret is filled again: the click
+   * that sends them counts them once, as the fill's own click would have.
+   */
+  const resubmit = (
+    request: Extract<SignInStep, { readonly fields: unknown }>,
+    state: AutofillSignInState,
+    step: AutofillStep,
+    again: NonNullable<AutofillHooks["resubmit"]>,
+    beforeFill: Effect.Effect<void, Error>,
+  ) =>
+    Effect.gen(function* () {
+      const holding = maskedSelector(request);
+      if (holding !== -1)
+        return shown(
+          yield* refusedStep(h, "selector_names_contact", holding, identityNotices.selectors),
+        );
+      const inspected = yield* browser.inspect(step);
+      if ("outcome" in inspected)
+        return { report: inspected, result: { nextStep: notice(inspected) } };
+      yield* input.review(step, inspected);
+      yield* beforeFill;
+      afterSubmit = undefined;
+      const report = yield* again({ step, inspection: inspected });
+      recordResubmit(state, step, report);
+      if (maySend(report)) {
+        state.mayHaveSent = true;
+        addFilledSecrets(h, submitFilled(state).filter(isSecret));
+        yield* markersAfterSubmit(state);
+      }
+      return { report, result: { nextStep: notice(report, step) } } satisfies SignInStepResult;
+    });
+
   const fill = (
     request: Extract<SignInStep, { readonly fields: unknown }>,
     beforeFill: Effect.Effect<void, Error>,
@@ -400,8 +459,12 @@ export const makeSignInRecorder = (input: {
     let filled: string[] = [];
     let step: AutofillStep = { ...request, fields: [] };
     return Effect.gen(function* () {
+      const before = h.autofillSignIn.current;
+      const blocked = blockedScreen(before, request);
+      if (before !== undefined && blocked !== undefined && hooks.resubmit !== undefined)
+        return yield* resubmit(request, before, blocked, hooks.resubmit, beforeFill);
       // The minter went on: the screen before, which it submitted or which sent itself, is sent.
-      settleMinter(h, h.autofillSignIn.current);
+      settleMinter(h, before);
       const masked = maskedMethodRefusal(h, request);
       if (masked !== undefined) return shown(yield* masked);
       const holding = maskedSelector(request);
@@ -486,19 +549,7 @@ export const makeSignInRecorder = (input: {
       if (maySend(report)) {
         state.mayHaveSent = true;
         addFilledSecrets(h, submitFilled(state).filter(isSecret));
-        // A site's message can be gone before the minter reports it, so the recorded markers
-        // that show right after the submit count too, until the next screen.
-        if (
-          h.autofillSignIn.current === state &&
-          state.steps.some((recorded) => (recorded.rejectedMarkers ?? []).length > 0)
-        ) {
-          const seen = yield* recordedRejections(
-            state.hooks,
-            state.steps.map(recipeStep),
-            h.reportCorrelation,
-          );
-          afterSubmit = { open: state, slots: seen === "unavailable" ? [] : seen };
-        }
+        yield* markersAfterSubmit(state);
       }
       const refusal = typingRefusal(step, report);
       if (refusal !== undefined)
