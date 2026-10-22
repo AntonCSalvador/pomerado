@@ -55,7 +55,11 @@ export const sessionSignInAllowance = (
 /** A path without its trailing slash, the root `/` kept. */
 export const pathOf = (path: string) => (path.length > 1 ? path.replace(/\/$/u, "") : path);
 
-/** A recorded screen's page, which a signed-out page lands back on. */
+/**
+ * A page's origin and path, the path as `pathOf` gives it, as recorded screens compare pages: a
+ * signed-out page lands back on its screen's. Undefined for no page or one that is not an absolute
+ * URL, such as a workspace screen's path.
+ */
 export const placeOf = (page: string | undefined) => {
   if (page === undefined) return undefined;
   const url = URL.parse(page);
