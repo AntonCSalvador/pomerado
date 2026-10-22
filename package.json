@@ -521,6 +521,11 @@
       "import": "./dist/typescript/src/models/models.js",
       "default": "./dist/typescript/src/models/models.js"
     },
+    "./core/models/prompt-cache": {
+      "types": "./dist/typescript/src/models/prompt-cache.d.ts",
+      "import": "./dist/typescript/src/models/prompt-cache.js",
+      "default": "./dist/typescript/src/models/prompt-cache.js"
+    },
     "./core/models/reasoning-settings": {
       "types": "./dist/typescript/src/models/reasoning-settings.d.ts",
       "import": "./dist/typescript/src/models/reasoning-settings.js",
