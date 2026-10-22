@@ -73,7 +73,7 @@ type Compact = (request: ModelRequest) => Promise<ModelResponse>;
  * request crosses the long-context boundary while a window is on its way. The SDK's history
  * keeps every item; only what is sent changes. A provider compaction (the 268K backstop)
  * starts the SDK's input at its own item, so a window for the old prefix no longer matches and
- * is dropped.
+ * is dropped, and the turn it compacted no longer counts toward the next request's estimate.
  *
  * `note`, when it gives an item, follows the compaction item in the window. It is taken when
  * the compaction starts, so it describes what came before the compacted request, and the
@@ -170,19 +170,24 @@ export const makeIdleCompaction = (options: {
     response: ModelResponse,
     compact: Compact,
   ) => {
-    if (typeof request.input !== "string")
-      last = {
-        request,
-        sent,
-        length: request.input.length,
-        tokens: response.usage.inputTokens + response.usage.outputTokens,
-        compact,
-      };
+    // The provider compacted this turn: the SDK's next input starts at its compaction item, so
+    // this turn's input neither prefixes it nor measures it, and compacting it would be wasted.
+    const providerCompacted = response.output.some((item) => item.type === "compaction");
+    last =
+      typeof request.input === "string" || providerCompacted
+        ? undefined
+        : {
+            request,
+            sent,
+            length: request.input.length,
+            tokens: response.usage.inputTokens + response.usage.outputTokens,
+            compact,
+          };
     // One compaction at a time, until its window has gone out: this turn may have been sent
     // before the last one landed, so its long input is already being compacted.
     if (disabled || running !== undefined || unapplied || controller.signal.aborted) return;
     if (response.usage.inputTokens < options.watermarkTokens) return;
-    if (response.output.some((item) => item.type === "compaction")) return;
+    if (providerCompacted) return;
     if (!response.output.some((item) => item.type !== undefined && toolCallTypes.has(item.type)))
       return;
     start(request, sent, compact, {

@@ -368,6 +368,25 @@ it("compacts the last request first when one turn alone would carry the next pas
   expect(items(second)[0]).toMatchObject(compactedItem);
 });
 
+// The provider's own backstop compaction starts the SDK's next input at its compaction item, so
+// the input the compacting turn reported no longer describes what the next request sends.
+it("starts no compaction of the old history after the provider compacted a turn", async () => {
+  const f = await fixture((_request, index) =>
+    index === 0
+      ? {
+          ...call("execute", example, mintCompactionLimitTokens + 8_500),
+          output: [compactedItem, ...call("execute", example).output],
+        }
+      : call("finish_build", finish, 30_000),
+  );
+  const outcome = await f.run();
+
+  expect(outcome.build).toBe("published");
+  expect(f.requests.some(isCompaction)).toBe(false);
+  expect(f.requests).toHaveLength(2);
+  expect(items(f.requests[1])[0]).toMatchObject(compactedItem);
+});
+
 it("leaves a short history to the provider and never compacts it", async () => {
   const f = await fixture((_request, index) =>
     index === 0 ? call("execute", example, 50_000) : call("finish_build", finish, 52_000),
