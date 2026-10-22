@@ -2,9 +2,10 @@
 // `/team/<team>/password`, publishes that segment, or a recipe that writes it as `*` matches no
 // live page; a recipe without such a segment changes version or bytes; a host that predates
 // version 7 replays one; a `*` that is not listed, a listed segment that is not `*` or is empty, a
-// list on the first screen or a `*` in a marker path the host opens decodes; a listed place takes
-// an empty segment, another origin, another segment count or another unlisted segment; a writer
-// puts the list anywhere but beside the page.
+// page with no literal segment left, a list on the first screen or a `*` in a marker path the host
+// opens, written with or without a leading slash, decodes; a listed place takes an empty segment,
+// another origin, another segment count or another unlisted segment; a writer puts the list
+// anywhere but beside the page, or writes an empty list as version 7.
 import { createHash } from "node:crypto";
 import { Either, Schema } from "effect";
 import { describe, expect, it } from "vitest";
@@ -53,6 +54,10 @@ describe("version 7", () => {
         signedIn,
       },
     ],
+    [
+      "a step whose first segment is listed beside a literal one",
+      { ...recipe, steps: [identifier, { ...password, page: `${site}/*/password`, anySegments: [0] }] },
+    ],
   ])("reads %s and writes it back byte for byte", (_name, value) => {
     const text = JSON.stringify(value, null, 2);
     const decoded = decodeSignInRecipe(text);
@@ -89,6 +94,14 @@ describe("version 7", () => {
     ],
     ["a * in the account page the host opens", { ...recipe, signedIn: { ...signedIn, openPath: "/team/*/home" } }],
     ["a * in the marker's path, which the host opens", { ...recipe, signedIn: { urlPath: "/team/*/home" } }],
+    ["a * first in an account page with no leading slash", { ...recipe, signedIn: { ...signedIn, openPath: "*/home" } }],
+    ["a * first in a marker path with no leading slash", { ...recipe, signedIn: { urlPath: "*/home" } }],
+    ["a page whose only segment is listed", { ...recipe, steps: [identifier, { ...password, page: `${site}/*`, anySegments: [0] }] }],
+    [
+      "a page whose every segment is listed",
+      { ...recipe, steps: [identifier, { ...password, page: `${site}/*/*`, anySegments: [0, 1] }] },
+    ],
+    ["a page whose other segment is empty", { ...recipe, steps: [identifier, { ...password, page: `${site}/*/`, anySegments: [0] }] }],
     ["a marker that lists segments", { ...recipe, signedIn: { urlPath: "/team/a/home", urlPathAnySegments: [1] } }],
   ])("refuses %s", (_name, value) => {
     expect(decodeSignInRecipe(JSON.stringify(value))).toBe("invalid");
@@ -119,6 +132,21 @@ describe("signInRecipe", () => {
     const text = signInRecipeText(signInRecipe([dismissed, listed], signedIn));
     expect(JSON.stringify(written, null, 2)).toBe(text);
     expect(decodeSignInRecipe(text)).toEqual(written);
+  });
+
+  it("writes an empty list as no list, in the version the recipe needs without it", () => {
+    const empty = { ...recordedPassword, anySegments: [] };
+    const written = autofillRecipe([recordedIdentifier, empty], signedIn, {});
+    expect(written.version).toBe(1);
+    expect(Object.keys(written.steps[1] ?? {})).toEqual(["page", "fields", "submit"]);
+    expect(decodeSignInRecipe(signInRecipeText(signInRecipe([recordedIdentifier, empty], signedIn)))).toEqual(
+      written,
+    );
+    const listed = { ...recordedPassword, page: `${site}/team/*/password`, anySegments: [1] };
+    const mixed = signInRecipe([recordedIdentifier, empty, listed], signedIn);
+    expect(mixed.version).toBe(7);
+    expect(Object.keys(mixed.steps[1] ?? {})).toEqual(["page", "fields", "submit"]);
+    expect(decodeSignInRecipe(signInRecipeText(mixed))).toEqual(mixed);
   });
 
   // sha256 of each recipe's text as version 6's host wrote it, before version 7.

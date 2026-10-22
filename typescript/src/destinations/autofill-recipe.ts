@@ -255,11 +255,25 @@ export const DismissAutofillRecipe = workspacePages(
 );
 /** A path's segments, counted from 0 after its first "/", as `anySegments` lists them. */
 const segmentsOf = (path: string) => path.split("/").slice(1);
-/** Whether `listed` names, in order and once each, exactly the segments of `path` written as `*`. */
+/**
+ * Whether `listed` names, in order and once each, exactly the segments of `path` written as `*`,
+ * and a path that writes one keeps a literal non-empty segment, so it never matches every page
+ * with as many segments.
+ */
 const starsListed = (path: string, listed: readonly number[] = []) => {
-  const stars = segmentsOf(path).flatMap((segment, at) => (segment === "*" ? [at] : []));
-  return stars.length === listed.length && stars.every((at, index) => listed[index] === at);
+  const segments = segmentsOf(path);
+  const stars = segments.flatMap((segment, at) => (segment === "*" ? [at] : []));
+  return (
+    stars.length === listed.length &&
+    stars.every((at, index) => listed[index] === at) &&
+    (stars.length === 0 || segments.some((segment) => segment !== "" && segment !== "*"))
+  );
 };
+/** Whether a path writes a segment as `*`, as written or as an origin resolves it. */
+const writesStar = (path: string) =>
+  [path, URL.parse(path, "https://h.invalid")?.pathname ?? ""].some((form) =>
+    form.split("/").includes("*"),
+  );
 const SegmentList = Schema.Array(Schema.Int.pipe(Schema.nonNegative())).pipe(
   Schema.minItems(1),
   Schema.maxItems(16),
@@ -278,16 +292,15 @@ const WildcardRecipeStep = Schema.extend(
   Schema.filter(
     (step) =>
       starsListed(URL.parse(step.page, "https://h.invalid")?.pathname ?? "", step.anySegments) ||
-      "a step's anySegments list, in order, exactly its page's segments written as *",
+      "a step's anySegments list, in order, exactly its page's * segments, beside a literal one",
   ),
 );
 /** Version 7's marker: a host opens its paths, so neither writes a segment as `*`. */
 const WildcardSignedIn = LegacyAutofillRecipe.fields.signedIn.pipe(
   Schema.filter(
     (marker) =>
-      [marker.urlPath, marker.openPath].every(
-        (path) => path === undefined || !segmentsOf(path).includes("*"),
-      ) || "no segment of the marker's urlPath or openPath is *",
+      [marker.urlPath, marker.openPath].every((path) => path === undefined || !writesStar(path)) ||
+      "no segment of the marker's urlPath or openPath is *",
   ),
 );
 /**
@@ -411,7 +424,7 @@ const isIdentifierKind = Schema.is(IdentifierKinds);
 export const recipeStep = (step: RecordedRecipeStep): AutofillRecipeStep => ({
   ...(step.origin === undefined ? {} : { origin: step.origin }),
   page: step.page,
-  ...(step.anySegments === undefined ? {} : { anySegments: step.anySegments }),
+  ...((step.anySegments ?? []).length === 0 ? {} : { anySegments: step.anySegments }),
   ...(step.approval === undefined ? {} : { approval: step.approval }),
   ...(step.popup === undefined ? {} : { popup: step.popup }),
   ...(step.rejectedMarkers === undefined ? {} : { rejectedMarkers: step.rejectedMarkers }),
@@ -439,18 +452,19 @@ export const recipeStep = (step: RecordedRecipeStep): AutofillRecipeStep => ({
 
 /**
  * A verified sign-in's recipe: version 7 only when a step lists segments written as `*`
- * (`anySegments`), else version 6 only when a step names `dismiss`, else version 5 only when a
- * step submits with a key or refills a secret (`refills`), else version 4 only when its sign-in
- * may move to a workspace host (`origins.workspace`, or a workspace step), else version 2 only
- * with a popup or an approval, else version 1. A security answer's question selector rides in any
- * of them. Versions 4 to 7 write `workspace` before `steps`.
+ * (`anySegments`; an empty list is none and is left out), else version 6 only when a step names
+ * `dismiss`, else version 5 only when a step submits with a key or refills a secret (`refills`),
+ * else version 4 only when its sign-in may move to a workspace host (`origins.workspace`, or a
+ * workspace step), else version 2 only with a popup or an approval, else version 1. A security
+ * answer's question selector rides in any of them. Versions 4 to 7 write `workspace` before
+ * `steps`.
  */
 export const autofillRecipe = <SignedIn>(
   steps: readonly RecordedRecipeStep[],
   signedIn: SignedIn,
   origins: AutofillRecipeOrigins = {},
 ) => {
-  const lists = steps.some((step) => step.anySegments !== undefined);
+  const lists = steps.some((step) => (step.anySegments ?? []).length > 0);
   if (lists || steps.some((step) => step.dismiss !== undefined))
     return {
       version: lists ? (7 as const) : (6 as const),
