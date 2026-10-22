@@ -1068,6 +1068,16 @@ it("has every unoffered-value rule name the task-asked substitute exception", as
   );
 });
 
+// A build whose request fixed the caller's own account number for every run wrote it into source,
+// which publication refuses as private data, once the question review turned down asking about an
+// input for it.
+it("has the minter take an account value the request fixes as a required input, without asking", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  expect((texts.get("core") ?? "").replace(/\s+/g, " ")).toContain(
+    "a declared `ask` with `accountSpecific` options (caller-input skill). When the request fixes such a value for every run, such as an agency or account number the tool must check, prefer a required input with no default, which `exampleInput` fills with the request's value, or reading it from the signed-in page at run time, over writing it into source. Don't ask whether to add that input. - The host's `businessInputTypes`",
+  );
+});
+
 // An access code is asked privately, as the site-field question's secret classification treats it.
 it("asks for an access code with a private secret question", async () => {
   const texts = await renderedTexts("typescript/authoring");
@@ -1097,7 +1107,7 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["a9dbd4ce6b6f06f18b31235b910ee5a82b55d1d750fc89cade0326aa95428939", "core"],
+    ["8486c5b9a60958f983d047ba0501f821ac2dc1e48e63fb1b263b647fd58aebe2", "core"],
     ["a896a59d7b924a2940a90437b8d4488cd515c4f4afc70da9fe14953b1583dd93", "search"],
     ["e1b24b29d645071fa265f37d0fae3bb5be2b38798a32ecdbd7d5a6826a1c9248", "auth"],
     ["d720cd4d66afaf411cf14dbce6a026f72e2830e203c284e87248dfaff920f44c", "testing"],

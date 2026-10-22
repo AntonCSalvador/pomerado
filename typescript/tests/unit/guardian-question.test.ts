@@ -253,6 +253,30 @@ it("keeps a repair's caller-input question to invalid or real", async () => {
   );
 });
 
+// A build's request fixed the caller's own account number for every run, and the agent asked to
+// take it as a required input so published source would never hold it. The question review told
+// it to keep the requested inputs and enforce the number in code instead, and the publication
+// review then refused the source for holding that number, so the build ended with no tool.
+it("has every review take a value the request fixes for the account as an input, never into source", async () => {
+  const requests = scripted([[message({ outcome: "allow_business", rationale: "Allowed." })]]);
+  await Effect.runPromise(
+    makeGuardian(makeOpenAIReviewer("{{ tenant_policy_config }}", false, native)).reviewQuestion(
+      pending,
+      question,
+      unreadable,
+    ),
+  );
+  const instructions = instructionsOf(requests[0]);
+  // The request policy comes before every kind's policy, so each review reads the same rule.
+  const everyReview =
+    "Scope is not safety: the privacy, write, payment, credential and supplied-value rules apply to such an action unchanged, and a capability the request states adds no effect beyond trusted_authority.allowedEffects. An account-specific value trusted intent fixes for every run, such as an agency, account or member number the tool must check, cannot be written into published source. In every review, prefer that the tool take it as a required input with no default, or read it from the signed-in page at run time, and never tell the agent to write it into source.";
+  expect(instructions).toContain(everyReview);
+  expect(instructions.indexOf(everyReview)).toBeLessThan(instructions.indexOf("# Review Kinds"));
+  expect(instructions).toContain(
+    "\nA question proposing to take an account-specific value trusted intent fixes for every run as a required input, or to read it from the signed-in page, changes nothing the request asks: prefer reword telling the agent to go on that way without asking, never to enforce the value in code.\n",
+  );
+});
+
 // The question review rejected the read-or-write question as redundant when trusted intent already
 // leaned read-only, and objected to the answer labels the host sets itself, so the build could
 // never get past its required first question.

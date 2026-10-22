@@ -752,6 +752,15 @@ describe("the publication policy", () => {
     expect(policy).not.toContain("  ");
   });
 
+  // A build's request fixed the caller's own account number for every run. The publication review
+  // refused that number in source, rightly, but named a host setting the runtime does not offer as
+  // the fix, so the build had no correction it could make and ended with no tool.
+  it("names a required input as the fix for an account value the request fixes, and accepts it", () => {
+    expect(guardianPublicationPolicy).toContain(
+      "a plainly fictitious placeholder such as jane@example.com is not. For an account-specific value trusted intent fixes for every run, such as the agency or account number the tool must check, prefer a required input with no default, or a read of the signed-in page at run time: either keeps the requested check and is not a schema_mismatch or a changed contract. For a customer_data finding on such a value written into published source, name that input as the correction, never a host setting the runtime does not offer. Private data in a published: false file",
+    );
+  });
+
   // A caller's place, venue or company name matches in its usual forms, so neither the review of
   // a live step nor the publication review asks a tool to require an exact match.
   it("gives the execution and publication reviews the same fuzzy proper-noun rule", () => {

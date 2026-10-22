@@ -228,7 +228,11 @@ exception: it is optional unless the task can't run without it (below).
   address, account or member ID) an enum member, example or default in a public
   schema. Take it as a free-form input when the caller can name it, such as a loyalty
   number; a choice among the account's saved items that the caller cannot name is a
-  declared `ask` with `accountSpecific` options (caller-input skill).
+  declared `ask` with `accountSpecific` options (caller-input skill). When the request fixes
+  such a value for every run, such as an agency or account number the tool must check, prefer
+  a required input with no default, which `exampleInput` fills with the request's value, or
+  reading it from the signed-in page at run time, over writing it into source. Don't ask
+  whether to add that input.
 - The host's `businessInputTypes` is a value-free tree of the JSON types in the caller's
   input. Use it to pick compatible types when a credential in the input is masked; a mask
   does not mean the value was a string. It says nothing about
