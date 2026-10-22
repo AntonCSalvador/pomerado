@@ -894,8 +894,20 @@ const noteMinter = (
   signIn: readonly unknown[] = [identitySignIn],
   stopAfterCheck = false,
 ) => {
+  // Each step carries the note's one-save write path; the first one that runs records it.
   const act = (entrypoint: string, callId: string) =>
-    execute("act", { entrypoint, intent: "Save the note to the account" }, callId);
+    execute(
+      "act",
+      {
+        entrypoint,
+        intent: "Save the note to the account",
+        writePath: {
+          steps: [{ commit: "save", does: "Saves the note" }],
+          ends: "The site's confirmation of the saved note",
+        },
+      },
+      callId,
+    );
   const save = act("src/tool.mjs", "save");
   const finish = (request: ModelRequest): Output => {
     if (resultOf(request, "save") === undefined) return [save];
@@ -2987,6 +2999,12 @@ test("a later build in the same session keeps no signed-in page as a signed-out 
   });
 });
 
+/** A shop write's path: one order, as a write build's first act step declares it. */
+const shopPath = {
+  steps: [{ commit: "place-order", does: "Places the order" }],
+  ends: "The shop's order confirmation",
+};
+
 test("the local minter's marker check loads no page once the write session started", async () => {
   test.info().annotations.push({
     type: "slow",
@@ -3010,7 +3028,7 @@ test("the local minter's marker check loads no page once the write session start
           [
             execute(
               "act",
-              { entrypoint: "src/search.mjs", intent: "Search the shop" },
+              { entrypoint: "src/search.mjs", intent: "Search the shop", writePath: shopPath },
               "act_search",
             ),
           ],
@@ -3066,7 +3084,7 @@ test("a sign-in screen the host fills while a write is unresolved reaches the ou
             [
               execute(
                 "act",
-                { entrypoint: "src/login.mjs", intent: "Open the sign-in page" },
+                { entrypoint: "src/login.mjs", intent: "Open the sign-in page", writePath: shopPath },
                 "act_login",
               ),
             ],
