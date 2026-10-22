@@ -346,6 +346,41 @@ it("sends a registered host policy once, in its own kind's review, before that r
   expect(otherText).not.toContain(execution);
 });
 
+it.each([
+  ["with a registered host policy", "Synthetic registered recovery policy."],
+  ["with no registered host policy", undefined],
+])("carries a recovery review's policy once, in its review message, %s", async (_name, host) => {
+  const bodies = wire();
+  const guardian = makeGuardian(
+    reviewer({ policies: host === undefined ? {} : { recovery: host } }),
+    undefined,
+    {},
+  );
+  await Effect.runPromise(guardian.reviewRecovery(pending, "Synthetic stalled browser", readCurrent));
+
+  const [request] = bodies;
+  const review = itemsOf(request)
+    .filter((item) => item.role === "user")
+    .map(
+      (item) =>
+        (JSON.parse(String(item.content)) as { trusted_review: Record<string, unknown> })
+          .trusted_review,
+    )
+    .find((candidate) => candidate["kind"] === "recovery");
+  const policy = String(review?.["policy"]);
+  // The core policy comes first, then the host's, which appears exactly once.
+  const core = host === undefined ? policy : policy.slice(0, policy.indexOf(host)).trimEnd();
+  expect(core).not.toBe("");
+  if (host !== undefined) {
+    expect(policy.split(host)).toHaveLength(2);
+    expect(policy.endsWith(host)).toBe(true);
+  }
+  // No developer message, shared or the build's own, carries it.
+  const developers = JSON.stringify(itemsOf(request).filter((item) => item.role === "developer"));
+  for (const text of [core, host].filter((part) => part !== undefined))
+    expect(developers).not.toContain(JSON.stringify(text).slice(1, -1));
+});
+
 it("sends the core publication policy with a publication review, outside the shared prefix", async () => {
   const bodies = wire();
   await build("Read the listed opening hours");
