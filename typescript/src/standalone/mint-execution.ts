@@ -312,7 +312,7 @@ interface ReceiptInput {
   readonly journal: Journal;
   /** A failed act step that may have committed its write: read back before writing again. */
   readonly writeSession?: { readonly verifyFirst: true; readonly notice: string };
-  /** An act step's marks of the session's recorded write path that no step entered yet. */
+  /** An act step's marks of the session's recorded write path not yet settled. */
   readonly writePathRemaining?: readonly string[];
   /** The step ran after the host sent a login no check verified; see `afterUnverifiedSignIn`. */
   readonly afterUnverifiedSignIn?: true;

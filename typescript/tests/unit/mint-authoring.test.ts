@@ -453,6 +453,23 @@ const renderedTexts = async (directory: string, render?: (text: string) => strin
   return texts;
 };
 
+/*
+ * A step that lost its result may have entered a mark of the recorded write path, so the
+ * publication skill's row for an unfinished path asks for the read-back first and never for that
+ * step again.
+ */
+it("never tells the minter to run a write path's step that may have committed again", async () => {
+  const publication = (await renderedTexts("typescript/authoring")).get("publication") ?? "";
+  const row = publication
+    .split("\n")
+    .find((line) => line.includes("`write_path_unfinished`"))
+    ?.replace(/\s+/g, " ");
+  expect(row).toContain(
+    "Read back first where a receipt says so; run only steps that never ran, or declare a revised path when the site skips one; never redo one that finished or may have.",
+  );
+  expect(row).not.toMatch(/Run the steps `writePathMarks` names/);
+});
+
 it("gives the local host and a composing host the same shared guidance", async () => {
   // A host that composes empty text into every section keeps only what is shared.
   const root = await authoringCopy((_path, text) => text.replace(sectionMarker, ""));
@@ -1110,10 +1127,10 @@ it("renders the pinned standalone authoring", async () => {
     ["d720cd4d66afaf411cf14dbce6a026f72e2830e203c284e87248dfaff920f44c", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["da972d9b65ff424210686366db36843a6aa966dce4dbb203fcfcfcaad9f84853", "forms"],
-    ["604244614c53a35c229d326d03608a8efeb21d50c0e7785df14ee4b707a8a1d2", "writes"],
+    ["dc3002bcc8fbab8c7956e16c7a7bf297b746e245f37c4e746f4ad280040b7c4d", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["4423c6fd332f1c3d3b17e3e5ea988aa564e3bb9d0d94838d85558cdecd987fb9", "caller-input"],
-    ["ffc457eb368fd563ee75ed845110bb611c2198994ac45ceb4e11047a3dff040b", "publication"],
+    ["10e51c95eac568cb83926ed8c9315b7118a1b97174e635736477786f704ff919", "publication"],
     ["7afa42f757e1cbafa0fbdda2ecb1d70a9ad7cc01ed11f1cf7d6400b7fb27be37", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);

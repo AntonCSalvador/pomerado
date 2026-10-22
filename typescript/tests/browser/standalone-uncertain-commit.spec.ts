@@ -74,6 +74,11 @@ const observationsOf = (receipt: Readonly<Record<string, unknown>> | undefined) 
     | { readonly writeSession?: { readonly verifyFirst: boolean; readonly notice: string } }
     | undefined;
 };
+/** The write path notice of an act step's receipt: the recorded path's marks not yet settled. */
+const pathNoticeOf = (receipt: Readonly<Record<string, unknown>> | undefined) =>
+  receipt?.["writePath"] as
+    | { readonly remaining: readonly string[]; readonly instruction: string }
+    | undefined;
 /** The start of the notice a failed act step carries when it may have committed. */
 const verifyFirst = (reason: string) =>
   `This act step did not complete after ${reason}, so the write may already be committed. Before any further write, verify:`;
@@ -424,11 +429,25 @@ test("a step that lost its result after entering its mark, with no read-back con
     // The lost step may have sent the write, so the session passes the sent check. Its streamed
     // mark counts only once a later step confirms the write, and none did, so its recorded path's
     // mark stays unentered, which is refused before the contract is read or reviewed.
-    expect(toolResult(last, "publish")).toMatchObject({
+    const refused = toolResult(last, "publish");
+    expect(refused).toMatchObject({
       status: "not_published",
       reason: "write_path_unfinished",
       writePathMarks: ["save"],
     });
+    // The save may have committed, so neither the receipts nor the refusal ask to run it again:
+    // they name its mark as not yet settled and ask for the read-back first.
+    for (const text of [
+      ...[lost, toolResult(last, "look")].map((receipt) => pathNoticeOf(receipt)?.instruction),
+      refused?.["instruction"],
+    ]) {
+      expect(text).toContain("not yet settled (a step that lost its result may have entered them)");
+      expect(text).toContain("Read back first where a receipt says so");
+      expect(text).toContain("run only steps that never ran");
+      expect(text).toMatch(/never redo (a step|one) that finished or may have/i);
+      expect(text).not.toMatch(/continue with the next act step|no step (has )?entered/i);
+    }
+    expect(pathNoticeOf(lost)?.remaining).toEqual(["save"]);
     expect(built.build).not.toBe("published");
     expect(executions(guardian.reviews).map((review) => currentOf(review)?.["purpose"])).toEqual([
       "act",

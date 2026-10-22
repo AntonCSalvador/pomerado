@@ -164,12 +164,13 @@ export const writePathRefusal = (
 };
 
 /**
- * The receipt note of an act step that left marks of the recorded write path unentered: the
- * session runs on through them, and a confirmation the step recorded does not end it.
+ * The receipt note of an act step after which marks of the recorded write path are not yet settled,
+ * as unentered or entered only by a step that lost its result: the session runs on until they are,
+ * and a confirmation the step recorded does not end it.
  */
 export const writePathNotice = (remaining: readonly string[], confirmed: boolean) => ({
   remaining,
-  instruction: `${confirmed ? "This step's confirmation does not end the write session. " : ""}The session's recorded write path still has commit marks no step has entered: ${remaining.join(", ")}. The session runs until every one is: continue with the next act step on the page as it stands. Never redo a step that finished or may have; when a receipt says to read back first, do that before any further write. When the page shows the path must change, such as a step the site skips for this input, declare the revised path in writePath on the next act step.`,
+  instruction: `${confirmed ? "This step's confirmation does not end the write session. " : ""}The session's recorded write path has commit marks not yet settled (a step that lost its result may have entered them): ${remaining.join(", ")}. The session runs until every one is settled. Read back first where a receipt says so: a read-back that confirms the write settles the marks a lost step entered. Then run only steps that never ran, on the page as it stands; never redo one that finished or may have. When the page shows the path must change, such as a step the site skips for this input, declare the revised path in writePath on the next act step.`,
 });
 
 /** Whether a step of the session recorded a confirmation. */
