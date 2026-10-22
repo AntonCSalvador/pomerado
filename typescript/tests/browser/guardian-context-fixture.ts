@@ -122,13 +122,16 @@ export const currentOf = (review: RecordedReview) =>
   contextOf(review)?.["currentExecution"] as Readonly<Record<string, unknown>> | undefined;
 export const authorityOf = (review: RecordedReview) =>
   review.input["trusted_authority"] as Readonly<Record<string, unknown>>;
-/** The build's request, which ends the instructions: the build's own developer message. */
+/**
+ * The build's request, one JSON line that ends the build's own developer message. A kind's policy
+ * may follow it, when the review is the conversation's first of that kind.
+ */
 export const intentOf = (review: RecordedReview) => {
   const marker = "\ntrusted_request: ";
   const at = review.instructions.lastIndexOf(marker);
-  return at < 0
-    ? undefined
-    : (JSON.parse(review.instructions.slice(at + marker.length)) as { intent?: unknown }).intent;
+  if (at < 0) return undefined;
+  const [line = ""] = review.instructions.slice(at + marker.length).split("\n");
+  return (JSON.parse(line) as { intent?: unknown }).intent;
 };
 
 /**
