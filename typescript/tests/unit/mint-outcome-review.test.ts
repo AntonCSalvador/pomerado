@@ -18,7 +18,6 @@ import type { MintAgentSnapshot, MintRecoveryFactory } from "../../src/mint/reco
 import type { MintHarnessSnapshot } from "../../src/mint/contracts.js";
 import { makeMintContinuationFixture } from "../support/mint-fixtures.js";
 import { portableJobSession } from "../support/portable-mint.js";
-import { instructionsOf } from "../support/guardian-requests.js";
 
 // The outcome reviewer through the mint harness: the real minter and the real reviewer, each on
 // a scripted model, with a scripted host standing in for Guardian review and execution.
@@ -555,7 +554,7 @@ it("settles a write done from its own commit request's status in the step's resu
   ]);
   // The step's listed status reached the reviewer through the minter's history.
   expect(review.recorded[0]?.evidence.length).toBeGreaterThan(0);
-  const instructions = instructionsOf(reviewer.requests[0]);
+  const instructions = String(reviewer.requests[0]?.systemInstructions);
   expect(instructions).toContain(
     "or the write's commit request: in the step that clicked the final commit control, a request to the site's own origin on the route the session's commit used, listed in that step's stateChangingRequests with a 2xx or 3xx status, and no error after it in its readable response or on the page.",
   );

@@ -40,8 +40,6 @@ import type { ModelDiagnosticTiming } from "../models/model-diagnostic-timing.js
 import type { WritePath } from "../mint/contracts.js";
 import type { RuntimeRecordInput } from "../models/model-runtime-record.js";
 import type { GuardianReasoningEffort } from "./model.js";
-import type { PromptCacheDiagnostic } from "../models/cached-instructions.js";
-export type { PromptCacheDiagnostic } from "../models/cached-instructions.js";
 import {
   cutToLimit,
   GuardianAction,
@@ -273,11 +271,7 @@ const withoutDetail = (failure: ReviewFailure): ReviewFailure =>
 export interface HostReview {
   /** The host's name for the kind, sent as trusted_review.kind. */
   readonly kind: string;
-  /**
-   * The host's policy for the kind, sent as trusted_review.policy, unless the reviewer's
-   * `GuardianHostPolicies.hostKinds` registers this same text for the kind, which its shared
-   * instructions then hold.
-   */
+  /** The host's policy for the kind, sent as trusted_review.policy. */
   readonly policy: string;
   /** What the kind judges, sent as host_review. Untrusted unless the policy says otherwise. */
   readonly evidence: unknown;
@@ -544,11 +538,6 @@ export interface GuardianUsage {
   readonly cacheWrite12hTokens?: number;
   readonly outputTokens: number;
   readonly reasoningTokens: number;
-  /**
-   * Each model call's prompt cache comparison with the conversation's previous response, in call
-   * order, for the calls whose response reported one: enums and counts only.
-   */
-  readonly promptCacheDiagnostics?: readonly PromptCacheDiagnostic[];
   /** The reasoning effort the review ran at; a host's own reviewer may leave it out. */
   readonly reasoningEffort?: GuardianReasoningEffort;
 }
