@@ -72,8 +72,8 @@ query, fragment or path, since a host refuses such a link for a workspace site.
    submit, Next, Continue or send-code control during exploration: that is signing in, which only
    `authenticate` does (the one exception, after the host's own submit click failed, is below).
    Other controls on the page, such as a site search or a cookie banner, are not the sign-in.
-   Whenever a cookie or consent banner shows on a sign-in screen, dismiss it as the core skill
-   says, and name the same control as that screen's `dismiss` in every `signInStep` for it: the
+   Whenever a cookie or tracking consent banner shows on a sign-in screen, dismiss it as the core
+   skill says, and name the same control as that screen's `dismiss` in every `signInStep` for it: the
    host clicks it before it types when it shows, and runs do the same on a fresh browser, where it
    shows again. Never name a submit, a field or a control of the sign-in form as `dismiss`.
    Reopening the login route in an `explore` to read it again is fine, after a failed sign-in too.
@@ -257,10 +257,10 @@ Then read what the file lacks, such as a selector or form destination, with a re
 the host filled, not even to check it. If the host reports that its click of the submit failed after
 the fields filled, you may click that one submit yourself in an `explore`, and nothing else; the host
 counts a value as sent only once it sees the form go out carrying it, whoever clicked. If it reports `submit: refused`, never click it.
-If it reports `submit: blocked`, another element, such as a consent banner (`blockedBy`), caught the
+If it reports `submit: blocked`, another element, such as a cookie banner (`blockedBy`), caught the
 click and nothing was sent: never click the submit yourself. Send the same `signInStep` again with
 the banner's own control, chosen as the core skill says, as `dismiss`; the host clicks it, then the
-submit, and types nothing again.
+submit, and types nothing again unless the dismiss emptied a field.
 If the site says a field was wrong, send `signInStep: { rejected: { slot: "password" } }`
 with the actual rejected slot at once. The host asks for corrections; never ask for substitute
 credentials yourself or send a rejected value again. A primary identifier or password rejection

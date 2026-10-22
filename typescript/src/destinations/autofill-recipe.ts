@@ -221,7 +221,7 @@ export const KeySubmitAutofillRecipe = workspacePages(
   }).annotations({ parseOptions: { onExcessProperty: "error" } }),
 );
 /**
- * A version 6 step: a version 5 step that may name `dismiss`, the own accept or close control of a
+ * A version 6 step: a version 5 step that may name `dismiss`, the own close, reject or accept control of a
  * cookie, consent or similar notice that covered the screen, which the host clicked there. A
  * replay clicks it before it types, when the page shows it, and again before it clicks the submit
  * once more when the notice caught that click; a page that does not show it skips it. It is never

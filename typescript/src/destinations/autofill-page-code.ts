@@ -138,7 +138,7 @@ return {
 export type AutofillFillCall =
   | {
       /**
-       * Clicks the step's `dismiss`, a covering notice's own accept or close control, when it shows
+       * Clicks the step's `dismiss`, a covering notice's own close, reject or accept control, when it shows
        * (`dismissCode`): never one of the step's controls, one that holds or shares a form with
        * them, one that submits a form, or a link to another page.
        */
@@ -336,8 +336,9 @@ const allEmptied = async () => {
 /**
  * Page code: the element at the centre of `element`, a submit whose click failed, when it is
  * neither the submit, inside it nor around it: the outermost element over the submit that holds it,
- * as a notice holds its own buttons, by tag, id, role, ARIA label and class names, each clipped,
- * never its text. Null when the submit has no box or nothing else sits over it.
+ * as a notice holds its own buttons, by its tag and role attribute, each cut short, never anything
+ * else of it (`coveringElement` keeps those on its lists). Null when the submit has no box or
+ * nothing else sits over it.
  */
 const coveringCode = `(element) => {
   const box = element.getBoundingClientRect();
@@ -356,26 +357,17 @@ const coveringCode = `(element) => {
   const page = [element.ownerDocument.body, element.ownerDocument.documentElement];
   while (cover.parentElement !== null && !page.includes(cover.parentElement) && !cover.parentElement.contains(element))
     cover = cover.parentElement;
-  const clipped = (text) => {
-    const words = (text ?? "").trim().replace(/\\s+/g, " ").slice(0, 200);
-    return words === "" ? null : words;
-  };
-  return {
-    tag: cover.tagName.toLowerCase(),
-    id: clipped(cover.getAttribute("id")),
-    role: clipped(cover.getAttribute("role")),
-    ariaLabel: clipped(cover.getAttribute("aria-label")),
-    className: clipped(cover.getAttribute("class")),
-  };
+  return { tag: String(cover.tagName).slice(0, 40), role: cover.getAttribute("role")?.slice(0, 40) ?? null };
 }`;
 
 /**
  * Page code for a `dismiss` call: finds the selector's one visible match across the primary tab's
  * frames (`locate`); none, or several, is `not_shown` or `ambiguous`, and nothing is clicked. A
  * match is refused (`part`) when it is one of the step's controls in its frame, holds one or sits in
- * one (`sign_in_control`), sits in the form of one (`sign_in_form`), submits a form
- * (`submits_form`), or is in a link to another page than this one (`opens_page`): a notice's own
- * accept or close control is none of these. Otherwise it is clicked, and the call waits a moment
+ * one (`sign_in_control`), sits in the form of one (`sign_in_form`), or is, sits in or holds a
+ * control that submits a form (`submits_form`) or a link to another page than this one
+ * (`opens_page`), open shadow roots included: a notice's own close, reject or accept control is
+ * none of these. Otherwise it is clicked, and the call waits a moment
  * for it to go, as a notice that fades does. Attributes only, never a value.
  */
 const dismissCode = (selector: string) => `const notice = await locate(${JSON.stringify(selector)});
@@ -388,24 +380,54 @@ for (const control of submit === null ? fields : [...fields, submit]) {
   if (handle !== null && noticeFrame !== null && (await handle.ownerFrame()) === noticeFrame) own.push(handle);
 }
 const part = await notice.locator.evaluate((element, own) => {
+  // Open shadow roots count as part of their host: a host holds what its root holds.
+  const parentOf = (node) => (node.parentNode instanceof ShadowRoot ? node.parentNode.host : node.parentNode);
+  const holds = (outer, inner) => {
+    for (let node = inner; node !== null; node = parentOf(node)) if (node === outer) return true;
+    return false;
+  };
+  const ancestry = (node) => {
+    const chain = [];
+    for (let at = node; at instanceof Element; at = parentOf(at)) chain.push(at);
+    return chain;
+  };
+  const within = (root) => {
+    const found = [];
+    const walk = (scope) => {
+      for (const child of scope.children) {
+        found.push(child);
+        if (child.shadowRoot !== null) walk(child.shadowRoot);
+        walk(child);
+      }
+    };
+    if (root.shadowRoot !== null) walk(root.shadowRoot);
+    walk(root);
+    return found;
+  };
   const formOf = (control) =>
-    "form" in control && control.form instanceof HTMLFormElement ? control.form : control.closest("form");
-  if (own.some((control) => control === element || control.contains(element) || element.contains(control)))
-    return "sign_in_control";
+    "form" in control && control.form instanceof HTMLFormElement
+      ? control.form
+      : (ancestry(control).find((node) => node instanceof HTMLFormElement) ?? null);
+  if (own.some((control) => holds(control, element) || holds(element, control))) return "sign_in_control";
   const form = formOf(element);
   if (form !== null && own.some((control) => formOf(control) === form)) return "sign_in_form";
-  const submitter =
-    (element instanceof HTMLButtonElement && element.type === "submit") ||
-    (element instanceof HTMLInputElement && ["submit", "image"].includes(element.type));
-  if (submitter && form !== null) return "submits_form";
-  const link = element.closest("a[href]");
-  if (link !== null) {
-    const to = new URL(link.href, element.ownerDocument.baseURI);
-    const here = new URL(element.ownerDocument.URL);
+  // What a click of it may reach: the element, what holds it and what it holds, since a click at
+  // its centre lands on whatever it holds there.
+  const reached = [...ancestry(element), ...within(element)];
+  const submits = (node) =>
+    ((node instanceof HTMLButtonElement && node.type === "submit") ||
+      (node instanceof HTMLInputElement && ["submit", "image"].includes(node.type))) &&
+    formOf(node) !== null;
+  if (reached.some(submits)) return "submits_form";
+  const here = new URL(element.ownerDocument.URL);
+  here.hash = "";
+  const opens = (node) => {
+    if (!node.matches("a[href], area[href]")) return false;
+    const to = new URL(node.href, element.ownerDocument.baseURI);
     to.hash = "";
-    here.hash = "";
-    if (to.protocol !== "javascript:" && to.href !== here.href) return "opens_page";
-  }
+    return to.protocol !== "javascript:" && to.href !== here.href;
+  };
+  if (reached.some(opens)) return "opens_page";
   return null;
 }, own, { timeout: ${elementReadMs} });
 if (part !== null) return { dismiss: "refused", part, url: primary.url() };

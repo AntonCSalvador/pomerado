@@ -110,7 +110,7 @@ test("a notice over the submit catches the host's click: blocked, by the notice,
       { slot: "password", status: "filled" },
     ],
     submit: "blocked",
-    blockedBy: { tag: "div", id: "consent", role: "dialog", ariaLabel: "Cookie notice" },
+    blockedBy: { tag: "div", role: "dialog" },
   });
   expect(received).toEqual([]);
 
@@ -143,11 +143,35 @@ test("on Patchright too, a notice over the submit catches the host's click: bloc
     const page = (await browser.newPage()) as unknown as Page;
     const received = await serve(page, notice);
     const report = await fill(await host(page, { patchright: true }), signInStep);
-    expect(report).toMatchObject({ submit: "blocked", blockedBy: { tag: "div", id: "consent" } });
+    expect(report).toMatchObject({ submit: "blocked", blockedBy: { tag: "div", role: "dialog" } });
     expect(received).toEqual([]);
   } finally {
     await browser.close();
   }
+});
+
+test("a notice whose page code copies what was typed into its label, class and tag reports only its tag and role from their fixed lists", async ({
+  page,
+}) => {
+  const received = await serve(
+    page,
+    "",
+    `document.getElementById("password").addEventListener("input", () => {
+  if (document.getElementById("consent")) return;
+  const typed = document.getElementById("username").value;
+  const cover = document.createElement(typed.toLowerCase().replace(/[^a-z]/g, "") + "-notice");
+  cover.id = "consent";
+  cover.setAttribute("role", typed);
+  cover.setAttribute("aria-label", "Continue as " + typed.toLowerCase());
+  cover.className = "x".repeat(190) + " " + typed;
+  cover.style.cssText = "position:fixed;inset:0;z-index:10;display:block";
+  document.body.append(cover);
+}, { once: true });`,
+  );
+  const report = await fill(await host(page), signInStep);
+  expect(report).toMatchObject({ submit: "blocked", blockedBy: { tag: "other", role: null } });
+  expect(JSON.stringify(report).toLowerCase()).not.toContain(username.slice(0, 8).toLowerCase());
+  expect(received).toEqual([]);
 });
 
 test("a step that names the notice's own control as dismiss clears it before typing and submits once", async ({
@@ -196,13 +220,20 @@ for (const [named, dismiss] of [
   ["a control of the sign-in form", "#forgot"],
   ["a control that submits a form", "#subscribe"],
   ["a link to another page", "#elsewhere"],
+  ["a shadow host whose root holds a control that submits a form", "#shadow-banner"],
+  ["a container whose centre is a link to another page", "#links"],
+  ["a label inside a control that submits a form", "#ok-label"],
 ] as const)
   test(`a dismiss that names ${named} is refused before anything is typed`, async ({ page }) => {
     const received = await serve(
       page,
       `<div id="banner"><form action="/newsletter" method="post"><button id="subscribe">OK</button></form>
-<a id="elsewhere" href="/privacy">Close</a></div>`,
-      `document.querySelector("form").insertAdjacentHTML("beforeend", '<button id="forgot" type="button">Forgot?</button>');`,
+<a id="elsewhere" href="/privacy">Close</a>
+<div id="shadow-banner"></div>
+<div id="links" style="width:200px;height:40px"><a href="/privacy" style="display:block;width:100%;height:100%">Privacy</a></div>
+<form action="/offers" method="post"><button><span id="ok-label">OK</span></button></form></div>`,
+      `document.querySelector("form").insertAdjacentHTML("beforeend", '<button id="forgot" type="button">Forgot?</button>');
+document.getElementById("shadow-banner").attachShadow({ mode: "open" }).innerHTML = '<form action="/partners" method="post"><button style="width:200px;height:40px">OK</button></form>';`,
     );
     const hosted = await host(page);
     const report = await fill(hosted, { ...signInStep, dismiss });

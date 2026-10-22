@@ -544,22 +544,27 @@ export const blockedScreen = (
  * the screen's recorded step, the open sign-in's last, takes the `dismiss` the host clicks there,
  * which a run's replay clicks too, and the report settles it as a fill's would (`recordStep`). A
  * refusal clicked nothing, so the screen stays blocked with what it holds. A field found empty
- * before the click clicked nothing either, but the screen is no longer blocked: what the blocked
- * fill typed stays held, so the minter going on counts it as sent (`settleMinterSubmit`) and the
- * screen filled again is a refill, as after any fill whose click never sent it.
+ * before the click clicked nothing either, and nothing of the screen was sent: its step leaves the
+ * recipe, so the screen filled again records it once, with its dismiss, and what the blocked fill
+ * typed is no longer held. Returns those slots, which the host counts as filled, so the screen
+ * filled again is a refill and a password or code is typed twice at most.
  */
 export const recordResubmit = (
   state: AutofillSignInState,
   step: AutofillStep,
   stepReport: AutofillStepReport,
-) => {
-  if (stepReport.outcome === "refused") return;
+): readonly AutofillSlot[] => {
+  if (stepReport.outcome === "refused") return [];
   if (stepReport.outcome === "filled" && stepReport.submit === "not_attempted") {
     state.blocked = undefined;
-    return;
+    state.steps.pop();
+    const typed = [...state.filled.keys()];
+    state.filled.clear();
+    return typed;
   }
   const last = state.steps.at(-1);
   if (last !== undefined && step.dismiss !== undefined)
     state.steps[state.steps.length - 1] = { ...last, dismiss: step.dismiss };
   recordStep(state, step, stepReport);
+  return [];
 };

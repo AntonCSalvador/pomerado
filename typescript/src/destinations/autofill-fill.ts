@@ -27,7 +27,8 @@ import {
   type AutofillStep,
   type FillSlot,
   type AutofillStepReport,
-  CoveringElement,
+  coveringElement,
+  ReadCoveringElement,
   hostSubmits,
   LocatedError,
   notingHostTrust,
@@ -81,7 +82,11 @@ const FillAnswer = Schema.Union(
     controls: Schema.optional(PageControls),
   }),
   /** Another element sat over the submit and caught the click, which never reached it. */
-  Schema.Struct({ submit: Schema.Literal("blocked"), blockedBy: CoveringElement, url: Schema.String }),
+  Schema.Struct({
+    submit: Schema.Literal("blocked"),
+    blockedBy: ReadCoveringElement,
+    url: Schema.String,
+  }),
   /** A `dismiss` call: what became of the covering notice's control. */
   Schema.Struct({
     dismiss: Schema.Literal("clicked", "not_shown", "ambiguous", "failed"),
@@ -893,7 +898,10 @@ const submitStep = (input: CallInput, progress: FillProgress, boxes: readonly nu
       );
     if (!("submit" in answer)) return refused("page_unavailable");
     if (answer.submit === "blocked")
-      return { ...filledReport(step, progress, "blocked", answer.url), blockedBy: answer.blockedBy };
+      return {
+        ...filledReport(step, progress, "blocked", answer.url),
+        blockedBy: coveringElement(answer.blockedBy),
+      };
     if (answer.submit === "disabled")
       return filledReport(
         step,

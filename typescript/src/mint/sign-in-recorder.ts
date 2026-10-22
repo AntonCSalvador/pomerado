@@ -444,7 +444,7 @@ export const makeSignInRecorder = (input: {
       yield* beforeFill;
       afterSubmit = undefined;
       const report = yield* again({ step, inspection: inspected });
-      recordResubmit(state, step, report);
+      addFilledSecrets(h, recordResubmit(state, step, report).filter(isSecret));
       if (maySend(report)) {
         state.mayHaveSent = true;
         addFilledSecrets(h, submitFilled(state).filter(isSecret));

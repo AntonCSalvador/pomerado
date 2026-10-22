@@ -64,8 +64,8 @@ const described = {
 /**
  * A synthetic site whose consent notice covers the sign-in submit until its own accept control is
  * clicked. `fills` counts the fills that typed, `resubmits` the clicks again that typed nothing.
- * With `reloads`, accepting the notice loads the page again, which empties the password field, and
- * the site never signs in.
+ * With `reloads`, the click again that accepts the notice loads the page again, which empties the
+ * password field, so that click sends nothing.
  */
 const coveredSite = ({ reloads = false } = {}) => {
   let fills = 0;
@@ -80,10 +80,10 @@ const coveredSite = ({ reloads = false } = {}) => {
         outcome: "filled",
         fields,
         submit: "blocked",
-        blockedBy: { tag: "div", id: "consent", role: "dialog", ariaLabel: null, className: null },
+        blockedBy: { tag: "div", role: "dialog" },
         url: `${origin}/login`,
       };
-    signedIn = !reloads;
+    signedIn = true;
     return { outcome: "filled", fields, submit: "clicked", url: `${origin}/account` };
   };
   const recorder = makeSignInRecorder({
@@ -251,7 +251,7 @@ it("a notice that catches the submit's click is reported blocked, and the screen
   );
   await run.run();
   expect(stepAnswer(run.requests[1], "fill")).toMatchObject({
-    step: { outcome: "filled", submit: "blocked", blockedBy: { id: "consent" } },
+    step: { outcome: "filled", submit: "blocked", blockedBy: { tag: "div", role: "dialog" } },
     nextStep: expect.stringContaining("dismiss"),
   });
   expect(stepAnswer(run.requests[2], "again")).toMatchObject({
@@ -314,4 +314,26 @@ it("a blocked screen whose password the dismiss emptied is filled again in the s
     step: { outcome: "refused", reason: "credential_already_filled" },
   });
   expect(site.fills()).toBe(2);
+});
+
+it("a blocked screen whose password the dismiss emptied publishes that screen once, with its dismiss, as the host's", async () => {
+  const site = coveredSite({ reloads: true });
+  const run = await fixture(
+    (_request, index) =>
+      [
+        authenticate("fill", passwordScreen),
+        authenticate("again", { ...passwordScreen, dismiss: accept }),
+        authenticate("check", { signedIn: { selector: "#account" } }),
+      ][index] ?? stop,
+    site.dependencies,
+    { effect: "read", siteOrigin: origin },
+  );
+  await run.run();
+  expect(stepAnswer(run.requests[3], "check")).toMatchObject({ signedIn: true });
+  expect(site.fills()).toBe(2);
+  const recipe = site.published()?.recipe;
+  expect(recipe).toMatchObject({ version: 6 });
+  expect(recipe?.steps).toEqual([
+    expect.objectContaining({ submit: "#sign-in", dismiss: accept, submittedBy: "host" }),
+  ]);
 });

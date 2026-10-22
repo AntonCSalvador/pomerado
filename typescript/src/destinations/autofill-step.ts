@@ -108,7 +108,7 @@ export interface AutofillStepRequest {
   /** A two-factor method choice: every method offered, and `submit` the one picked. */
   readonly methods?:
     readonly { readonly method: SignInMethodChoice; readonly selector: string }[] | undefined;
-  /** The own accept or close control of a notice that covers the screen (`AutofillStep`). */
+  /** The own close, reject or accept control of a notice that covers the screen (`AutofillStep`). */
   readonly dismiss?: string | undefined;
 }
 
@@ -129,7 +129,7 @@ export interface AutofillStep<Slot extends FillSlot = AutofillSlot> {
   readonly methods?:
     readonly { readonly method: SignInMethodChoice; readonly selector: string }[] | undefined;
   /**
-   * The own accept or close control of a cookie, consent or similar notice that covers the screen,
+   * The own close, reject or accept control of a cookie, consent or similar notice that covers the screen,
    * which the host clicks before it types, when the page shows it, and again before it clicks the
    * submit once more when the notice caught that click. Never a submit or a control of the
    * sign-in's own form (`dismiss_refused`).
@@ -179,17 +179,77 @@ export const Targets = Schema.Struct({
 });
 
 const Text = Schema.NullOr(Schema.String);
+/** The tags a covering element reports as its own: any other is `other`. */
+const coveringTags = [
+  "a",
+  "article",
+  "aside",
+  "button",
+  "dialog",
+  "div",
+  "figure",
+  "footer",
+  "form",
+  "header",
+  "iframe",
+  "img",
+  "label",
+  "li",
+  "main",
+  "nav",
+  "p",
+  "section",
+  "span",
+  "svg",
+  "table",
+  "ul",
+] as const;
+/** The ARIA roles a covering element reports as its own: any other is none. */
+const coveringRoles = [
+  "alert",
+  "alertdialog",
+  "banner",
+  "complementary",
+  "contentinfo",
+  "dialog",
+  "document",
+  "form",
+  "generic",
+  "group",
+  "main",
+  "navigation",
+  "none",
+  "note",
+  "presentation",
+  "region",
+  "status",
+  "toolbar",
+  "tooltip",
+] as const;
 /**
- * The element that sat over a submit and caught the host's click, by its tag, id, role, ARIA label
- * and class names, each clipped: never its text, which may echo what the page was given.
+ * The element that sat over a submit and caught the host's click, by its tag and ARIA role, each
+ * one of a fixed list: never its text, id, label or class names, which page code may write from
+ * what the host typed.
  */
 export const CoveringElement = Schema.Struct({
-  tag: Schema.String,
-  id: Text,
-  role: Text,
-  ariaLabel: Text,
-  className: Text,
+  tag: Schema.Literal(...coveringTags, "other"),
+  role: Schema.NullOr(Schema.Literal(...coveringRoles)),
 });
+/** What page code read of a covering element: its tag and role attribute, as the page has them. */
+export const ReadCoveringElement = Schema.Struct({ tag: Schema.String, role: Text });
+const isCoveringTag = Schema.is(Schema.Literal(...coveringTags));
+const isCoveringRole = Schema.is(Schema.Literal(...coveringRoles));
+/** A covering element as the host reports it: a tag or role off its list is none of the page's. */
+export const coveringElement = (
+  read: typeof ReadCoveringElement.Type,
+): typeof CoveringElement.Type => {
+  const tag = read.tag.toLowerCase();
+  const role = read.role?.trim().toLowerCase();
+  return {
+    tag: isCoveringTag(tag) ? tag : "other",
+    role: role !== undefined && isCoveringRole(role) ? role : null,
+  };
+};
 /** A control as Guardian judges it: its markup's own words, never a value. */
 const Described = Schema.Struct({
   tag: Schema.String,
