@@ -16,6 +16,7 @@ import {
 import type { GuardianExecutionEnvironment as PackagedEnvironment } from "../../src/guardian/openai.js";
 import { UpstreamPolicySlotInvalid, withTenantPolicy } from "../../src/guardian/upstream-policy.js";
 import { markedUpstreamPolicy } from "../support/tenant-policy.js";
+import { instructionsOf } from "../support/guardian-requests.js";
 
 const slot = "{{ tenant_policy_config }}";
 // sha256 of upstream-policy.md before the notice was added. A deliberate policy edit updates it.
@@ -228,7 +229,7 @@ describe("Guardian execution environment", () => {
       }),
     );
     expect(requests).toHaveLength(1);
-    const instructions = String(requests[0]?.systemInstructions);
+    const instructions = instructionsOf(requests[0]);
     expect(instructions).toContain(guardianExecutionPolicy(otherHost));
     // The review input is one JSON document inside the user message.
     expect(JSON.stringify(requests[0]?.input)).toContain(
