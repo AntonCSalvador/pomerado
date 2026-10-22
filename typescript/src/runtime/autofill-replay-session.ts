@@ -89,9 +89,10 @@ const workspaceScreens = <E extends YieldableError, V extends string, L extends 
         : step,
     );
   /**
-   * Whether a page (origin and path) is this recorded screen: its exact page, or for a workspace
+   * Whether a page (origin and path) is this recorded screen: its recorded page, or for a workspace
    * screen its path on the workspace origin this replay knows, or, while it knows none, on a host
-   * that passes the gates. Typing there still waits for the screen's admission.
+   * that passes the gates. Paths compare with any trailing slash but the root's dropped. Typing
+   * there still waits for the screen's admission.
    */
   const matchesRecorded = (page: string, recorded: SignInRecipeStep) => {
     if (recorded.origin !== "workspace") {

@@ -1,9 +1,13 @@
-import { cantTell, leftSignInScreens, offScreens } from "../../src/runtime/autofill-replay-pages.js";
-import { exactScreens } from "../../src/runtime/autofill-replay-screens.js";
 import { Data, Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import type { AutofillRecipe } from "../../src/destinations/autofill-recipe.js";
+import type { AutofillRecipe, AutofillRecipeStep } from "../../src/destinations/autofill-recipe.js";
 import type { AutofillStep } from "../../src/destinations/autofill-step.js";
+import {
+  cantTell,
+  leftSignInScreens,
+  offScreens,
+} from "../../src/runtime/autofill-replay-pages.js";
+import { exactScreens } from "../../src/runtime/autofill-replay-screens.js";
 import { replayAutofillRecipe } from "../../src/runtime/autofill-replay.js";
 import type { AutofillHooks } from "../../src/runtime/autofill-state.js";
 
@@ -118,24 +122,22 @@ it("signs a read in on a page that can't tell though the marker shows before its
   expect(confirms).toBe(0);
 }, 20_000);
 
+/** A one-screen sign-in whose check never passes, on the recorded page and then `landedUrl`. */
 const replayLanding = async (recordedPage: string, landedUrl: string) => {
   let page: "initial" | "landed" = "initial";
-  const confirmed: unknown[] = [];
   const isPassword = (step: AutofillStep) =>
     step.fields.some((field) => field.selector === "#password");
-
   const here = () =>
     page === "landed"
       ? ({ signedIn: false, failed: "indicator_not_visible", url: landedUrl } as const)
       : ({ signedIn: false, failed: "indicator_not_visible", url: recordedPage } as const);
-
   const hooks: AutofillHooks<TestFailure> = {
     open: () => Effect.void,
     check: () => Effect.sync(here),
     confirm: () => Effect.sync(here),
     inspect: (step) =>
-      Effect.sync(() => {
-        return page === "initial" && isPassword(step)
+      Effect.sync(() =>
+        page === "initial" && isPassword(step)
           ? {
               page: recordedPage,
               siteOrigin: origin,
@@ -146,8 +148,8 @@ const replayLanding = async (recordedPage: string, landedUrl: string) => {
               },
               screen: { origin, fields: [], submit: null, buttons: ["Sign in"] },
             }
-          : { outcome: "refused" as const, reason: "not_found" as const };
-      }),
+          : { outcome: "refused" as const, reason: "not_found" as const },
+      ),
     fill: ({ step }) =>
       Effect.sync(() => {
         page = "landed";
@@ -158,18 +160,15 @@ const replayLanding = async (recordedPage: string, landedUrl: string) => {
           url: recordedPage,
         };
       }),
-    confirmCantTell: (identifiers) =>
-      Effect.sync(() => {
-        confirmed.push(identifiers);
-      }),
+    confirmCantTell: () => Effect.void,
   };
-
   const recipe: AutofillRecipe = {
     version: 2,
-    steps: [{ page: recordedPage, fields: [{ selector: "#password", slot: "password" }], submit: "#go" }],
+    steps: [
+      { page: recordedPage, fields: [{ selector: "#password", slot: "password" }], submit: "#go" },
+    ],
     signedIn: { selector: "#identity", urlPath: "/account" },
   };
-
   return await Effect.runPromise(
     replayAutofillRecipe({
       recipe,
@@ -220,58 +219,70 @@ it("signs in when landing on a genuinely different route that cannot tell", asyn
 }, 20_000);
 
 describe("replay screen and landing trailing-slash helpers", () => {
+  const other = "https://other.test";
   const screens = exactScreens([
-    { page: "https://example.test/login", fields: [], submit: "#go" },
-    { page: "https://example.test/auth/", fields: [], submit: "#go" },
+    { page: `${origin}/login`, fields: [], submit: "#go" },
+    { page: `${origin}/auth/`, fields: [], submit: "#go" },
   ]);
 
   it("normalizes trailing slashes, root paths, origins, and query strings in offScreens", () => {
-    // Trailing slash added or omitted on recorded screen
-    expect(offScreens(screens.onScreens, "https://example.test/login/")).toBeUndefined();
-    expect(offScreens(screens.onScreens, "https://example.test/auth")).toBeUndefined();
-    // Query string and fragment preserved on recorded screen
-    expect(offScreens(screens.onScreens, "https://example.test/login?param=1#frag")).toBeUndefined();
-    // Genuinely different path
-    expect(offScreens(screens.onScreens, "https://example.test/choose-account")).toBe("https://example.test/choose-account");
-    // Different origin
-    expect(offScreens(screens.onScreens, "https://other.test/login")).toBe("https://other.test/login");
-    // Root path with root screen
-    const rootScreens = exactScreens([{ page: "https://example.test/", fields: [], submit: "#go" }]);
-    expect(offScreens(rootScreens.onScreens, "https://example.test/")).toBeUndefined();
-    expect(offScreens(rootScreens.onScreens, "https://example.test/login")).toBe("https://example.test/login");
+    // A trailing slash added to or dropped from a recorded screen.
+    expect(offScreens(screens.onScreens, `${origin}/login/`)).toBeUndefined();
+    expect(offScreens(screens.onScreens, `${origin}/auth`)).toBeUndefined();
+    // A query string and fragment on a recorded screen.
+    expect(offScreens(screens.onScreens, `${origin}/login?param=1#frag`)).toBeUndefined();
+    // Another path, and the same path on another origin.
+    expect(offScreens(screens.onScreens, `${origin}/choose-account`)).toBe(
+      `${origin}/choose-account`,
+    );
+    expect(offScreens(screens.onScreens, `${other}/login`)).toBe(`${other}/login`);
+    // The root path.
+    const root = exactScreens([{ page: `${origin}/`, fields: [], submit: "#go" }]);
+    expect(offScreens(root.onScreens, `${origin}/`)).toBeUndefined();
+    expect(offScreens(root.onScreens, `${origin}/login`)).toBe(`${origin}/login`);
   });
 
   it("normalizes trailing slashes in leftSignInScreens", () => {
-    expect(leftSignInScreens(screens.onScreens, "https://example.test/login", "https://example.test/login/")).toBe(false);
-    expect(leftSignInScreens(screens.onScreens, "https://example.test/login/", "https://example.test/login")).toBe(false);
-    expect(leftSignInScreens(screens.onScreens, "https://example.test/login", "https://example.test/choose-account")).toBe(true);
-    expect(leftSignInScreens(screens.onScreens, "https://example.test/login", "https://other.test/login")).toBe(true);
+    const left = (entryUrl: string, url: string) =>
+      leftSignInScreens(screens.onScreens, entryUrl, url);
+    expect(left(`${origin}/login`, `${origin}/login/`)).toBe(false);
+    expect(left(`${origin}/login/`, `${origin}/login`)).toBe(false);
+    expect(left(`${origin}/login`, `${origin}/choose-account`)).toBe(true);
+    expect(left(`${origin}/login`, `${other}/login`)).toBe(true);
   });
 
   it("normalizes trailing slashes in cantTell landing decisions", () => {
     const recipe = {
-      steps: [{ page: "https://example.test/login" }, { page: "https://example.test/auth/" }],
+      steps: [{ page: `${origin}/login` }, { page: `${origin}/auth/` }],
       signedIn: { urlPath: "/account" },
     };
-    const missing = (url: string) => ({ signedIn: false, failed: "indicator_not_visible" as const, url });
-    // Still on login screen despite trailing slash
-    expect(cantTell(missing("https://example.test/login/"), recipe, screens.onScreens)).toBe(false);
-    expect(cantTell(missing("https://example.test/auth"), recipe, screens.onScreens)).toBe(false);
-    // Off-screen page that cannot tell
-    expect(cantTell(missing("https://example.test/choose-account"), recipe, screens.onScreens)).toBe(true);
+    const missing = (url: string) =>
+      ({ signedIn: false, failed: "indicator_not_visible", url }) as const;
+    // Still on a recorded screen, a trailing slash aside.
+    expect(cantTell(missing(`${origin}/login/`), recipe, screens.onScreens)).toBe(false);
+    expect(cantTell(missing(`${origin}/auth`), recipe, screens.onScreens)).toBe(false);
+    // A page off the recorded screens that can't tell.
+    expect(cantTell(missing(`${origin}/choose-account`), recipe, screens.onScreens)).toBe(true);
   });
 
-  it("normalizes trailing slashes for workspace steps in exactScreens", () => {
-    const wsScreens = exactScreens([
-      { page: "/login", origin: "workspace", fields: [], submit: "#go" },
-      { page: "/auth/", origin: "workspace", fields: [], submit: "#go" },
-      { page: "/", origin: "workspace", fields: [], submit: "#go" },
-    ]);
-    expect(wsScreens.onScreens("https://sub.example.test/login/")).toBe(true);
-    expect(wsScreens.onScreens("https://sub.example.test/login")).toBe(true);
-    expect(wsScreens.onScreens("https://sub.example.test/auth")).toBe(true);
-    expect(wsScreens.onScreens("https://sub.example.test/auth/")).toBe(true);
-    expect(wsScreens.onScreens("https://sub.example.test/")).toBe(true);
-    expect(wsScreens.onScreens("https://sub.example.test/other")).toBe(false);
+  it("matches a screen only on its recorded origin, through a workspace screen's path too", () => {
+    const workspace: AutofillRecipeStep = {
+      page: "/login",
+      origin: "workspace",
+      fields: [],
+      submit: "#go",
+    };
+    const mixed = exactScreens([{ page: `${origin}/login`, fields: [], submit: "#go" }, workspace]);
+    // The screen recorded on this origin matches here, a trailing slash aside.
+    expect(mixed.onScreens(`${origin}/login/`)).toBe(true);
+    // The same path on another origin is no recorded screen.
+    expect(mixed.onScreens(`${other}/login`)).toBe(false);
+    expect(mixed.onScreens(`${other}/login/`)).toBe(false);
+    expect(mixed.matches(`${other}/login`, workspace)).toBe(false);
+    expect(offScreens(mixed.onScreens, `${other}/login`)).toBe(`${other}/login`);
+    expect(leftSignInScreens(mixed.onScreens, `${origin}/login`, `${other}/login`)).toBe(true);
+    // These screens know no workspace origin, so a workspace screen's path alone matches no page.
+    // A replay with a workspace relation matches its workspace screens on the origin it verified.
+    expect(mixed.matches(`${origin}/login`, workspace)).toBe(false);
   });
 });

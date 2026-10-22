@@ -223,7 +223,7 @@ it.each([
   [
     "update",
     "escalate",
-    "The host did not accept this decision: escalate is not an outcome an update review returns. It returns only allow, clarify, reword, new_mint, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them. An update that needs the caller's confirmation and lacks it is a clarify, and one that is wrong as written is a reword.",
+    "The host did not accept this decision: escalate is not an outcome an update review returns. It returns only allow, clarify, reword, new_mint, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them. An update that needs the caller's confirmation and lacks it or gives it ambiguously is a clarify, and one that is wrong as written is a reword.",
     "The outcome escalate is not one an update review returns",
   ],
 ] as const)(
