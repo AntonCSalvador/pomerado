@@ -642,8 +642,8 @@ const authoredExecution = (
             yield* acceptedConfirmsKept({ write: true, accepted, screen: secrets.assertAbsent }),
           );
         if (act !== undefined) writeSession.steps.push({ executionId: id, ...act.marks });
-        // The marks of the session's recorded path still to run: until none is, a confirmation
-        // does not close the session.
+        // The marks of the session's recorded path not yet settled: until none is left, a
+        // confirmation does not close the session.
         const pathLeft =
           act === undefined
             ? []
