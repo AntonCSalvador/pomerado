@@ -775,7 +775,7 @@ const refusedOutcomeHint: Record<Exclude<ReviewKind, "host">, string> = {
   publication: "A tool that should change before it publishes is a deny.",
   question: "A request that should change before its caller sees it is a reword.",
   update:
-    "An update that needs the caller's confirmation and lacks it is a clarify, and one that is wrong as written is a reword.",
+    "An update that needs the caller's confirmation and lacks it or gives it ambiguously is a clarify, and one that is wrong as written is a reword.",
 };
 
 /**
