@@ -441,6 +441,25 @@ describe("checkSignInVersion", () => {
     expect(checkSignInVersion(input(() => listed("https://login.example.com/team/*/password")))).toEqual([
       { rule: "wildcard_placement", part: "recipe.steps[1].anySegments" },
     ]);
+    // Another site's sign-in keeps its exact page, even for a host that drops `foreign_origin`.
+    expect(checkSignInVersion(input(() => listed("https://accounts.provider.example/team/*/password")))).toEqual([
+      { rule: "foreign_origin", part: "recipe.steps[1].page" },
+      { rule: "wildcard_placement", part: "recipe.steps[1].anySegments" },
+    ]);
+    // The first step's page is where a run starts: the recipe that lists it is refused as it decodes.
+    const first = listed("https://www.example.com/team/*/password");
+    const firstListed: SignInVersion = {
+      ...first,
+      recipe: {
+        ...first.recipe,
+        steps: first.recipe.steps.map((step, at) =>
+          at === 0 ? { ...step, page: "https://www.example.com/*/login", anySegments: [0] } : step,
+        ),
+      } as SignInVersion["recipe"],
+    };
+    expect(checkSignInVersion(input(() => firstListed))).toEqual([
+      { rule: "invalid_recipe", part: "recipe" },
+    ]);
     expect(
       checkSignInVersion(
         input(() =>

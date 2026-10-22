@@ -1,10 +1,10 @@
 // Failure modes covered: a later sign-in screen whose path holds a per-account segment, such as
 // `/team/<team>/password`, publishes that segment, or a recipe that writes it as `*` matches no
 // live page; a recipe without such a segment changes version or bytes; a host that predates
-// version 7 replays one; a `*` that is not listed, a listed segment that is not `*`, a list on the
-// first screen or a `*` in a marker path the host opens decodes; a listed place takes an empty
-// segment, another origin, another segment count or another unlisted segment; the rewrite writes a
-// place it may not.
+// version 7 replays one; a `*` that is not listed, a listed segment that is not `*` or is empty, a
+// list on the first screen or a `*` in a marker path the host opens decodes; a listed place takes
+// an empty segment, another origin, another segment count or another unlisted segment; a writer
+// puts the list anywhere but beside the page.
 import { createHash } from "node:crypto";
 import { Either, Schema } from "effect";
 import { describe, expect, it } from "vitest";
@@ -16,8 +16,7 @@ import {
   WorkspaceAutofillRecipe,
   pageMatches,
   pathMatches,
-  wildcardRecipe,
-  type WildcardSegment,
+  autofillRecipe,
 } from "../../src/destinations/autofill-recipe.js";
 import {
   decodeSignInRecipe,
@@ -78,6 +77,7 @@ describe("version 7", () => {
   it.each([
     ["a * segment it does not list", { ...recipe, steps: [identifier, { ...password, anySegments: undefined }] }],
     ["a listed segment that is no *", { ...recipe, steps: [identifier, { ...password, page: `${site}/team/a/password` }] }],
+    ["a listed segment that is empty", { ...recipe, steps: [identifier, { ...password, page: `${site}/team//password` }] }],
     [
       "a list out of order",
       { ...recipe, steps: [identifier, { ...password, page: `${site}/*/*/password`, anySegments: [1, 0] }] },
@@ -107,19 +107,18 @@ describe("signInRecipe", () => {
     submit: "#sign-in",
   };
 
-  it("writes version 7 only when a step lists a segment, the list beside its page", () => {
+  it("writes version 7 only when a step lists a segment, the list beside its page, in the bytes every host writes", () => {
     expect(signInRecipe([recordedIdentifier, recordedPassword], signedIn).version).toBe(1);
     const dismissed = { ...recordedIdentifier, dismiss: "#accept" };
     expect(signInRecipe([dismissed, recordedPassword], signedIn).version).toBe(6);
     const listed = { ...recordedPassword, page: `${site}/team/*/password`, anySegments: [1] };
-    const stepText = signInRecipeText(signInRecipe([dismissed, listed], signedIn));
-    expect(JSON.parse(stepText)).toMatchObject({ version: 7 });
-    expect(Object.keys((JSON.parse(stepText) as { steps: object[] }).steps[1] ?? {})).toEqual([
-      "page",
-      "anySegments",
-      "fields",
-      "submit",
-    ]);
+    // A host that writes the recipe as `autofillRecipe` returns it writes the same bytes.
+    const written = autofillRecipe([dismissed, listed], signedIn, {});
+    expect(written.version).toBe(7);
+    expect(Object.keys(written.steps[1] ?? {})).toEqual(["page", "anySegments", "fields", "submit"]);
+    const text = signInRecipeText(signInRecipe([dismissed, listed], signedIn));
+    expect(JSON.stringify(written, null, 2)).toBe(text);
+    expect(decodeSignInRecipe(text)).toEqual(written);
   });
 
   // sha256 of each recipe's text as version 6's host wrote it, before version 7.
@@ -203,57 +202,5 @@ describe("where a recorded screen's page meets the live page", () => {
     const noPath = { steps, signedIn: {} };
     expect(sessionOnPage({ ...off, url: `${site}/team/b/password` }, noPath)).toBe("signed_out");
     expect(sessionOnPage({ ...off, url: `${site}/team/b/account` }, noPath)).toBe("unknown");
-  });
-});
-
-describe("wildcardRecipe", () => {
-  const v1 = {
-    version: 1 as const,
-    steps: [
-      identifier,
-      { page: `${site}/team/a/password`, fields: password.fields, submit: password.submit },
-    ],
-    signedIn: { selector: "#account", urlPath: "/home" },
-  };
-
-  it("writes each given segment as * and lists it, as version 7", () => {
-    const written = wildcardRecipe(v1, site, [{ step: 1, segment: 1 }]);
-    expect(written).toEqual({ ...v1, version: 7, steps: [identifier, { ...password }] });
-    if (written === undefined) throw new Error("refused");
-    expect(Object.keys(written.steps[1] ?? {})).toEqual(["page", "anySegments", "fields", "submit"]);
-    expect(decodeSignInRecipe(signInRecipeText(written))).toEqual(written);
-  });
-
-  it("writes a workspace step's segment, keeping its relation", () => {
-    const workspace = {
-      version: 4 as const,
-      workspace: { parent: "example.test" },
-      steps: [
-        identifier,
-        { origin: "workspace" as const, page: "/team/a/password", fields: password.fields },
-      ],
-      signedIn,
-    };
-    expect(wildcardRecipe(workspace, site, [{ step: 1, segment: 1 }])).toEqual({
-      ...workspace,
-      version: 7,
-      steps: [identifier, { origin: "workspace", page: "/team/*/password", anySegments: [1], fields: password.fields }],
-    });
-  });
-
-  it.each<[string, WildcardSegment[], string?]>([
-    ["the first screen, the page a run starts from", [{ step: 0, segment: 0 }]],
-    ["a step on another origin, as a provider's", [{ step: 1, segment: 1 }], "https://login.example.test"],
-    ["a step the recipe does not have", [{ step: 2, segment: 0 }]],
-    ["a segment the path does not have", [{ step: 1, segment: 3 }]],
-  ])("refuses %s", (_name, segments, siteOrigin = site) => {
-    expect(wildcardRecipe(v1, siteOrigin, segments)).toBeUndefined();
-  });
-
-  it("refuses an empty segment, and a recipe whose marker path holds a *", () => {
-    const empty = { ...v1, steps: [identifier, { ...v1.steps[1]!, page: `${site}/team//password` }] };
-    expect(wildcardRecipe(empty, site, [{ step: 1, segment: 1 }])).toBeUndefined();
-    const starred = { ...v1, signedIn: { urlPath: "/team/*/home" } };
-    expect(wildcardRecipe(starred, site, [{ step: 1, segment: 1 }])).toBeUndefined();
   });
 });
