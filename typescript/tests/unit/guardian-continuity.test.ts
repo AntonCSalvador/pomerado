@@ -14,6 +14,7 @@ import type { ModelObserverFactory } from "../../src/models/model-observer.js";
 import { makeSourceInspector } from "../../src/guardian/source.js";
 import type { SourceProjection } from "../../src/guardian/source.js";
 import { makeRunSecrets } from "../../src/inputs/secrets.js";
+import { conversationOf } from "../support/guardian-requests.js";
 
 const native = { executionEnvironment: nativeExecutionEnvironment };
 
@@ -590,7 +591,7 @@ it("continues from provider compaction after takeover without replaying the olde
     initial: Schema.decodeUnknownSync(GuardianSessionSnapshot)(first.session?.snapshot()),
   });
   await Effect.runPromise(replacement.review({ ...pending, attemptId: "takeover" }, readCurrent));
-  expect(requests[3]?.input[0]).toMatchObject({
+  expect(conversationOf(requests[3])[0]).toMatchObject({
     type: "compaction",
     encrypted_content: "opaque-compacted-context",
   });
@@ -673,11 +674,11 @@ it("compacts a conversation at the threshold with the previous request plus a tr
   });
   // The review then continues from the compacted window, followed by the previous review's
   // output and the new request, without replaying what the window replaced.
-  expect(inputOf(continued)[0]).toMatchObject({ type: "compaction", id: "cmp_explicit" });
+  expect(conversationOf(continued)[0]).toMatchObject({ type: "compaction", id: "cmp_explicit" });
   expect(JSON.stringify(inputOf(continued))).toContain("opaque-first-review-reasoning");
   expect(JSON.stringify(inputOf(continued))).toContain("second-review-observation");
   expect(JSON.stringify(inputOf(continued))).not.toContain("first-review-observation");
-  expect(inputOf(afterRead)[0]).toMatchObject({ type: "compaction", id: "cmp_explicit" });
+  expect(conversationOf(afterRead)[0]).toMatchObject({ type: "compaction", id: "cmp_explicit" });
   expect(JSON.stringify(inputOf(afterRead))).not.toContain("first-review-observation");
   expect(guardian.session?.compactions()).toBe(1);
   expect(guardian.session?.snapshot().history[0]).toMatchObject({ type: "compaction" });
