@@ -13,6 +13,7 @@ import {
   LegacyAutofillRecipe,
   PopupAutofillRecipe,
   publishedAutofillRecipe,
+  WildcardAutofillRecipe,
   WorkspaceAutofillRecipe,
   type AutofillRecipeOrigins,
   type AutofillRecipeStep,
@@ -48,7 +49,7 @@ export const SignInRecipeV3 = Schema.Struct({
   ),
 );
 /**
- * A recipe this host reads: version 1, 2, 4, 5 or 6 as every host writes it, or this host's
+ * A recipe this host reads: version 1, 2, 4, 5, 6 or 7 as every host writes it, or this host's
  * version 3.
  */
 export const SignInRecipe = Schema.Union(
@@ -58,6 +59,7 @@ export const SignInRecipe = Schema.Union(
   WorkspaceAutofillRecipe,
   KeySubmitAutofillRecipe,
   DismissAutofillRecipe,
+  WildcardAutofillRecipe,
 );
 export type SignInRecipe = typeof SignInRecipe.Type;
 export type SignInRecipeStep = AutofillRecipeStep;
@@ -68,12 +70,12 @@ export const resolvedPage = (step: SignInRecipeStep, workspace: string | undefin
     ? undefined
     : recordedScreenPage(step, workspace);
 
-const knownVersions: readonly unknown[] = [1, 2, 3, 4, 5, 6];
+const knownVersions: readonly unknown[] = [1, 2, 3, 4, 5, 6, 7];
 
 /**
  * A published recipe file read back: the recipe, `unknown_version` for a version this host does
- * not know, else `invalid`. Version 1, 2, 4, 5 and 6 decode as every host reads them; version 3 is
- * read only here.
+ * not know, else `invalid`. Version 1, 2, 4, 5, 6 and 7 decode as every host reads them; version 3
+ * is read only here.
  */
 export const decodeSignInRecipe = (text: string): SignInRecipe | "invalid" | "unknown_version" => {
   const shared = publishedAutofillRecipe(new Map([[autofillRecipePath, text]]));
@@ -114,6 +116,8 @@ export interface RecordedSignInStep {
   readonly dismiss?: string | undefined;
   /** The page the step ran on, origin and path only. */
   readonly page: string;
+  /** The segments of `page`'s path written as `*`, which any one segment matches. */
+  readonly anySegments?: readonly number[] | undefined;
 }
 
 /**
@@ -139,6 +143,7 @@ export const signInRecipe = (
 const inStepOrder = (step: SignInRecipeStep): SignInRecipeStep => ({
   ...(step.origin === undefined ? {} : { origin: step.origin }),
   page: step.page,
+  ...(step.anySegments === undefined ? {} : { anySegments: step.anySegments }),
   ...(step.approval === undefined ? {} : { approval: step.approval }),
   ...(step.popup === undefined ? {} : { popup: step.popup }),
   ...(step.rejectedMarkers === undefined ? {} : { rejectedMarkers: step.rejectedMarkers }),
@@ -164,7 +169,7 @@ const inStepOrder = (step: SignInRecipeStep): SignInRecipeStep => ({
 });
 
 /**
- * A recipe as `auth-fill.json` holds it: `version`, then version 4's, 5's or 6's `workspace`, then each
+ * A recipe as `auth-fill.json` holds it: `version`, then version 4's to 7's `workspace`, then each
  * screen in `recipeStep`'s key order (a workspace screen's `origin` first), indented two spaces,
  * with no final newline. The same recipe is the same bytes from any
  * host that writes it this way.
@@ -173,7 +178,10 @@ export const signInRecipeText = (recipe: SignInRecipe) =>
   JSON.stringify(
     {
       version: recipe.version,
-      ...((recipe.version !== 4 && recipe.version !== 5 && recipe.version !== 6) ||
+      ...((recipe.version !== 4 &&
+        recipe.version !== 5 &&
+        recipe.version !== 6 &&
+        recipe.version !== 7) ||
       recipe.workspace === undefined
         ? {}
         : { workspace: { parent: recipe.workspace.parent } }),
