@@ -7,6 +7,7 @@ import {
   inputFindingCategories,
   publicationExplanationLimit,
   PublicationFinding,
+  publicationRefusalUnfixable,
   PublicationReason,
 } from "./review-contracts.js";
 import type { PublicationScope } from "./review-contracts.js";
@@ -281,11 +282,13 @@ const withoutSignInChoiceFindings = (
 };
 
 /**
- * A denial whose every finding is in a bundle file the host wrote, under `operation/` and marked
- * `owner: host`, such as its sign-in recipe, is `host_owned` whatever reason the review gave: no
- * edit of the minter's fixes it, so the host ends the build as its own failure. Input feedback,
- * which never blocks on its own, a denial with no finding and an escalation keep their reason, as
- * does every denial when the host marks no bundle file as its own.
+ * A denial no correction gets past (`publicationRefusalUnfixable`) whose every finding is in a
+ * bundle file the host wrote, under `operation/` and marked `owner: host`, such as its sign-in
+ * recipe, is `host_owned` whatever reason the review gave, so the host ends the build as its own
+ * failure rather than the minter as its `policy` block. Any other denial keeps its reason: much of
+ * the sign-in recipe records the minter's own choices, such as its selectors and signed-in marker,
+ * which it fixes by signing in again. So does a denial with no finding, input feedback, which is
+ * never unfixable, an escalation, and every denial when the host marks no bundle file as its own.
  */
 const withHostOwnedReason = <D extends Decision>(
   decision: D,
@@ -294,8 +297,8 @@ const withHostOwnedReason = <D extends Decision>(
   if (
     decision.outcome !== "deny" ||
     decision.reason === "host_owned" ||
-    decision.reason === "input_feedback" ||
     decision.findings.length === 0 ||
+    !publicationRefusalUnfixable(decision) ||
     !decision.findings.every(
       (finding) =>
         finding.path.startsWith("operation/") && files.get(finding.path)?.owner === "host",
@@ -306,7 +309,7 @@ const withHostOwnedReason = <D extends Decision>(
     ...decision,
     reason: "host_owned",
     rationale: cutToLimit(
-      `Set to host_owned by the host: every finding is in a bundle file the host wrote, which cannot be fixed from source. The review gave reason ${decision.reason}. ${decision.rationale}`,
+      `Set to host_owned by the host: no correction gets past this refusal, and every finding is in a bundle file the host wrote. The review gave reason ${decision.reason}. ${decision.rationale}`,
       4000,
     ),
   };
@@ -495,7 +498,7 @@ export const publicationSignInChoicePolicy =
  * site's first publication files the tool under that site; it is never a claim the tool uses it.
  */
 export const publicationDecisionPolicy =
-  `Return outcome, a concise rationale explaining the actual evidence and any correction needed, a reason enum and findings, each with its exact manifest path, quote, category and explanation. quote is a line or two copied from what read_source showed you; it need not be unique: the host places it at its first occurrence, or on the whole file, and the finding stands either way. Never compute byte offsets, and never read or query a file again only to pick or check a quote. Never include credential values in the rationale. Use reason privacy for privacy corrections, source_correction for code/schema/guard corrections, example_value findings included (a composed write that does not perform or return its declared confirmation or read-back is a confirmation finding), unsupported_claim with an in-manifest unsupported_claim finding at the overclaiming definition text when the name, description or a declared variant promises what the source does not do, input_feedback with outcome deny when every finding is account_specific_enum or input_option (the minter fixes them; they never block publication on their own), host_owned with outcome deny when every finding is in an owner: host file other than publication/definition.json or publication/tests.json that no source or metadata edit can fix, authority for missing authority, evidence for insufficient evidence, approved only with allow and no findings. The host itself sets reason host_owned on a deny, other than input_feedback, whose every finding is in an owner: host file under operation/, so when the minter's source causes the problem, also put a finding on that source. Site naming the host requires, such as a site name and summary in publication/definition.json, only identifies the site the tool is filed under and what that site is: it never claims that the tool loads, reads or acts on that site, so a tool that never opens the site, such as one that only transforms its input, is no unsupported_claim for its site naming alone. The tool's own name, description or a declared variant that promises site behavior the source lacks still is. Narrowing a claim is never the fix for an output: a needed value, or a fact the page shows, that the output does not return in full is source_correction, to read it. With any other finding, use that finding's reason and keep the input findings beside it. Return every finding the evidence supports in this one review, not one per round. With reason evidence, name each missing item in the rationale. With deny or escalate, also return publicReason: one short plain sentence, at most 200 characters, that the tool's caller may read about why it was not published, such as that the tool could not yet show it returns the prices the request asks for; it names no file, code, finding category, credential, personal data or website instruction, and it never repeats the rationale. With allow, publicReason is null. ${publicationSignInChoicePolicy}`;
+  `Return outcome, a concise rationale explaining the actual evidence and any correction needed, a reason enum and findings, each with its exact manifest path, quote, category and explanation. quote is a line or two copied from what read_source showed you; it need not be unique: the host places it at its first occurrence, or on the whole file, and the finding stands either way. Never compute byte offsets, and never read or query a file again only to pick or check a quote. Never include credential values in the rationale. Use reason privacy for privacy corrections, source_correction for code/schema/guard corrections, example_value findings included (a composed write that does not perform or return its declared confirmation or read-back is a confirmation finding), unsupported_claim with an in-manifest unsupported_claim finding at the overclaiming definition text when the name, description or a declared variant promises what the source does not do, input_feedback with outcome deny when every finding is account_specific_enum or input_option (the minter fixes them; they never block publication on their own), host_owned with outcome deny when every finding is in an owner: host file other than publication/definition.json or publication/tests.json that no source or metadata edit can fix, authority for missing authority, evidence for insufficient evidence, approved only with allow and no findings. The host itself sets reason host_owned on a deny it cannot send back for a fix, one for privacy or authority or with a private_literal, credential, customer_data, exfiltration, unsafe_logging or safety_default finding, whose every finding is in an owner: host file under operation/, so when the minter's source causes such a problem, also put a finding on that source. Site naming the host requires, such as a site name and summary in publication/definition.json, only identifies the site the tool is filed under and what that site is: it never claims that the tool loads, reads or acts on that site, so a tool that never opens the site, such as one that only transforms its input, is no unsupported_claim for its site naming alone. The tool's own name, description or a declared variant that promises site behavior the source lacks still is. Narrowing a claim is never the fix for an output: a needed value, or a fact the page shows, that the output does not return in full is source_correction, to read it. With any other finding, use that finding's reason and keep the input findings beside it. Return every finding the evidence supports in this one review, not one per round. With reason evidence, name each missing item in the rationale. With deny or escalate, also return publicReason: one short plain sentence, at most 200 characters, that the tool's caller may read about why it was not published, such as that the tool could not yet show it returns the prices the request asks for; it names no file, code, finding category, credential, personal data or website instruction, and it never repeats the rationale. With allow, publicReason is null. ${publicationSignInChoicePolicy}`;
 
 /**
  * That the review lists every finding, and what each finding's explanation tells the minter, so
