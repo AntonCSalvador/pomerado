@@ -40,6 +40,24 @@ export const developerMessage = ({ text, breakpoint }: InstructionsMessage): Age
   },
 });
 
+/** A developer message's text, as `developerMessage` makes it, or undefined for any other item. */
+export const developerMessageText = (item: AgentInputItem): string | undefined => {
+  if (item.type !== "unknown") return undefined;
+  const data: unknown = item.providerData;
+  if (typeof data !== "object" || data === null) return undefined;
+  if (Reflect.get(data, "type") !== "message" || Reflect.get(data, "role") !== "developer")
+    return undefined;
+  const content: unknown = Reflect.get(data, "content");
+  if (!Array.isArray(content)) return undefined;
+  return content
+    .map((part: unknown) => {
+      const text: unknown =
+        typeof part === "object" && part !== null ? Reflect.get(part, "text") : undefined;
+      return typeof text === "string" ? text : "";
+    })
+    .join("");
+};
+
 /**
  * A model provider that sends an agent's instructions as developer messages at the start of each
  * request's input instead of as top-level `instructions`, which cannot hold a cache breakpoint.

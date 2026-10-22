@@ -24,7 +24,7 @@ import type {
 import { makeSourceInspector } from "../../src/guardian/source.js";
 import type { ModelObserverFactory } from "../../src/models/model-observer.js";
 import type { ModelDiagnosticTiming } from "../../src/models/model-diagnostic-timing.js";
-import { conversationOf, instructionsOf } from "../support/guardian-requests.js";
+import { conversationOf } from "../support/guardian-requests.js";
 
 afterEach(() => setDefaultModelProvider(new OpenAIProvider()));
 
@@ -125,12 +125,15 @@ const reviewRequest = (request: ModelRequest | undefined): Record<string, unknow
   throw new Error("No review request");
 };
 
-/** What the provider caches as the request's fixed prefix, as one stable hash. */
+/**
+ * What the provider caches as the request's fixed prefix, as one stable hash: its two leading
+ * instructions, the shared ones and the build's own, before the conversation.
+ */
 const prefixHash = (request: ModelRequest) =>
   createHash("sha256")
     .update(
       JSON.stringify({
-        instructions: instructionsOf(request),
+        instructions: (Array.isArray(request.input) ? request.input : []).slice(0, 2),
         tools: request.tools,
         outputType: request.outputType,
         modelSettings: request.modelSettings,

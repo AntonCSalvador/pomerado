@@ -8,7 +8,7 @@ import { ownerNamedOrigins } from "./owner-named-origins.js";
 import { guardianModel } from "./model.js";
 import type { GuardianReasoningEffort } from "./model.js";
 import { guardianCompaction } from "./session.js";
-import { configurationUpdate } from "../models/cached-instructions.js";
+import { configurationUpdate, developerMessage } from "../models/cached-instructions.js";
 import { withReasoningContinuity } from "../models/reasoning-settings.js";
 import { reviewKindOf, reviewOutcomesOf } from "./review-layout.js";
 import { cutToLimit } from "./review-contracts.js";
@@ -20,10 +20,10 @@ export const agentNoteLimit = 500;
 const absentWhenEmpty = <T>(list: readonly T[]) => (list.length === 0 ? undefined : list);
 
 /**
- * The per-review user message: the review's kind and its own input. Every kind's policy is in the
- * instructions, which every review shares, so switching kinds keeps the conversation cached and
- * no review repeats a policy. `policy` is only host policy for this one review that the
- * instructions do not hold.
+ * The per-review user message: the review's kind and its own input. Each kind's policy joins the
+ * conversation once, before its first review of that kind (see `guardianReviewState`), so no
+ * review repeats a policy and switching kinds keeps the conversation cached. `policy` is only
+ * host policy for this one review that the conversation does not hold.
  */
 export const guardianReviewInput = (
   turn: ReviewTurn,
@@ -164,7 +164,10 @@ export const guardianReviewSettings = (session: boolean, promptCacheKey?: string
 
 /**
  * The review's starting state. `effort`, when the review runs at another reasoning effort than
- * the conversation does, adds a configuration update before the request.
+ * the conversation does, adds a configuration update before the request. `kindPolicy` gives the
+ * policy of the review's kind that the conversation does not hold yet, from the instructions it
+ * already holds, if any: it joins the conversation as a developer message before both, after
+ * everything sent before, so the conversation's cached prefix stays as it was.
  */
 export const guardianReviewState = <TContext, TOutput extends AgentOutputType>(
   turn: ReviewTurn,
@@ -172,15 +175,28 @@ export const guardianReviewState = <TContext, TOutput extends AgentOutputType>(
   agent: Agent<TContext, TOutput>,
   maxTurns = 12,
   effort?: GuardianReasoningEffort,
+  kindPolicy: (held: readonly string[]) => string | undefined = () => undefined,
 ) =>
   Effect.gen(function* () {
     const continuedInput: string | AgentInputItem[] = turn.session
-      ? yield* turn.session.input(input, false, effort)
-      : effort === undefined
-        ? input
-        : [configurationUpdate(effort), { role: "user", type: "message", content: input }];
+      ? yield* turn.session.input(input, false, effort, kindPolicy(turn.session.instructions()))
+      : sessionlessInput(input, effort, kindPolicy([]));
     return new RunState(new RunContext<TContext>(), continuedInput, agent, maxTurns);
   });
+
+/** A review without a session: its kind's policy, then its effort's update, then its request. */
+const sessionlessInput = (
+  input: string,
+  effort: GuardianReasoningEffort | undefined,
+  policy: string | undefined,
+): string | AgentInputItem[] =>
+  effort === undefined && policy === undefined
+    ? input
+    : [
+        ...(policy === undefined ? [] : [developerMessage({ text: policy })]),
+        ...(effort === undefined ? [] : [configurationUpdate(effort)]),
+        { role: "user", type: "message", content: input },
+      ];
 
 /** The same review continued with the host's follow-up after the reviewer's last output. */
 export const guardianFollowUpState = <TContext, TOutput extends AgentOutputType>(

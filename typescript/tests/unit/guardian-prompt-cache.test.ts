@@ -7,7 +7,9 @@
 // from the cache; a session that changed its effort left with no compaction at all when its own
 // compaction cannot run, after a failed compaction or a restore;
 // the provider's split of cache writes by lifetime dropped from usage; the outcome reviewer's
-// fixed instructions sent where no breakpoint can hold them.
+// fixed instructions sent where no breakpoint can hold them; a conversation sent the policy of
+// kinds it never reviews, or a kind's policy that changes what came before it when it joins,
+// repeats on a later review, or goes missing after a compaction or a restore.
 import OpenAI from "openai";
 import { OpenAIProvider, setDefaultModelProvider } from "@openai/agents";
 import { Effect } from "effect";
@@ -244,40 +246,212 @@ it("sends two builds the same prefix through the shared instructions' 12-hour br
   }
 });
 
-it("states each kind's and host's policy once, before every review, and only appends reviews", async () => {
-  const bodies = wire();
-  await build("Read the listed opening hours", {
-    policies: { ...hostPolicies, hostKinds: { catalog_listing: "Synthetic listing policy." } },
+/** A wire item's text when it is a developer message, else undefined. */
+const developerTextOf = (item: WireItem | undefined) =>
+  item?.role === "developer"
+    ? (item.content as readonly { readonly text: string }[]).map((part) => part.text).join("")
+    : undefined;
+
+/** The headings of the kind sections a Review Kinds message holds, in order. */
+const sectionsOf = (text: string) =>
+  text
+    .split("\n\n")
+    .filter((part) => part.startsWith("## "))
+    .map((part) => part.slice(3));
+
+/** A review request's `trusted_review`. */
+const trustedReviewOf = (item: WireItem) =>
+  (JSON.parse(String(item.content)) as { trusted_review: Record<string, unknown> }).trusted_review;
+
+/**
+ * The conversation after the two leading instructions, as what the model reads: each developer
+ * message as the kind sections it adds, and each review request as its kind.
+ */
+const kindsOf = (body: Body | undefined) =>
+  conversationOf(body).flatMap((item): (string | string[])[] => {
+    const text = developerTextOf(item);
+    if (text !== undefined) {
+      expect(text.startsWith("# Review Kinds\n\n")).toBe(true);
+      return [sectionsOf(text)];
+    }
+    return item.role === "user" ? [`review ${String(trustedReviewOf(item)["kind"])}`] : [];
   });
 
+/** The items a request adds to the conversation it continues, by role or type. */
+const addedBy = (body: Body | undefined, before: Body | undefined) =>
+  itemsOf(body)
+    .slice(itemsOf(before).length + 1)
+    .map((item) => item.role ?? item.type);
+
+const listingKind = (kind: string, policy: string) => ({
+  kind,
+  policy,
+  evidence: { listing: "Synthetic listing" },
+  outcomes: ["allow", "deny"] as const,
+});
+
+it("adds each kind's policy to the conversation on its first review of that kind, after everything before", async () => {
+  const bodies = wire();
+  const listing = "Synthetic listing policy.";
+  await build("Read the listed opening hours", {
+    policies: { ...hostPolicies, hostKinds: { catalog_listing: listing } },
+  });
+
+  expect(bodies).toHaveLength(4);
+  // Each request continues the one before it byte for byte, so registering a kind keeps the
+  // cached conversation.
   for (let index = 1; index < bodies.length; index++) {
     const before = itemsOf(bodies[index - 1]);
     expect(JSON.stringify(itemsOf(bodies[index]).slice(0, before.length))).toBe(
       JSON.stringify(before),
     );
   }
-  const last = bodies.at(-1);
-  const whole = JSON.stringify(last);
-  // Each host policy reaches the model exactly once, in the shared instructions.
-  for (const policy of [...Object.values(hostPolicies), "Synthetic listing policy."]) {
-    expect(whole.split(policy)).toHaveLength(2);
-    expect(JSON.stringify(itemsOf(last)[0])).toContain(policy);
-  }
-  // Each review's request names its kind and carries no policy.
-  const requests = itemsOf(last)
-    .filter((item) => item.role === "user")
-    .map(
-      (item) =>
-        (JSON.parse(String(item.content)) as { trusted_review: Record<string, unknown> })
-          .trusted_review,
-    );
-  expect(requests.map((review) => review["kind"])).toEqual([
-    "execution",
-    "question",
-    "update",
-    "publication",
+  // The instructions every build shares hold no kind's policy, core or host.
+  const shared = JSON.stringify(itemsOf(bodies[0]).slice(0, 2));
+  expect(shared).not.toContain("# Review Kinds");
+  for (const policy of [...Object.values(hostPolicies), listing])
+    expect(shared).not.toContain(policy);
+  // Each kind's sections come right before its first review, and only that kind's.
+  expect(kindsOf(bodies.at(-1))).toEqual([
+    ["Execution, recovery and publication reviews", "Execution reviews"],
+    "review execution",
+    ["Question reviews"],
+    "review question",
+    ["Task update reviews (kind update)"],
+    "review update",
+    ["Publication reviews", "Publication reviews whose request carries publication_delta"],
+    "review publication",
   ]);
-  for (const review of requests) expect(review).not.toHaveProperty("policy");
+  const whole = JSON.stringify(bodies.at(-1));
+  // Each host policy reaches the model exactly once, with its kind; an unreviewed kind's never.
+  for (const policy of Object.values(hostPolicies)) expect(whole.split(policy)).toHaveLength(2);
+  expect(whole).not.toContain(listing);
+  expect(
+    conversationOf(bodies.at(-1)).filter(
+      (item) => item.role === "user" && trustedReviewOf(item)["policy"] !== undefined,
+    ),
+  ).toEqual([]);
+  // The review history is the whole conversation: every request and decision, in order.
+  expect(
+    conversationOf(bodies.at(-1))
+      .filter((item) => item.role !== "developer")
+      .map((item) => item.role),
+  ).toEqual(["user", "assistant", "user", "assistant", "user", "assistant", "user"]);
+});
+
+it("adds nothing for a kind the conversation holds, and only the sections it lacks for another", async () => {
+  const bodies = wire();
+  const listing = "Synthetic listing policy.";
+  const unlisted = "Synthetic unregistered kind policy.";
+  const guardian = makeGuardian(
+    reviewer({ policies: { ...hostPolicies, hostKinds: { catalog_listing: listing } } }),
+    undefined,
+    {},
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* guardian.review(pending, readCurrent);
+      yield* guardian.review({ ...pending, screenedInput: '{"again":true}' }, readCurrent);
+      yield* guardian.reviewRecovery(pending, "Synthetic stalled browser", readCurrent);
+      yield* guardian.reviewHostKind(pending, listingKind("catalog_listing", listing));
+      yield* guardian.reviewHostKind(pending, listingKind("catalog_listing", listing));
+      yield* guardian.reviewHostKind(pending, listingKind("other_listing", unlisted));
+    }),
+  );
+
+  expect(bodies).toHaveLength(6);
+  const [first, again, recovery, hosted, hostedAgain, other] = bodies;
+  // The second execution review and the second review of the host kind add only their request.
+  expect(addedBy(again, first)).toEqual(["user"]);
+  expect(addedBy(hostedAgain, hosted)).toEqual(["user"]);
+  // A recovery review adds its own section, not the outcome section execution reviews share.
+  expect(addedBy(recovery, again)).toEqual(["developer", "user"]);
+  expect(sectionsOf(developerTextOf(itemsOf(recovery).at(-2)) ?? "")).toEqual(["Recovery reviews"]);
+  // A host kind's registered policy joins on its first review, and its request names no policy.
+  expect(addedBy(hosted, recovery)).toEqual(["developer", "user"]);
+  expect(developerTextOf(itemsOf(hosted).at(-2))).toBe(
+    `# Review Kinds\n\n## Reviews of kind catalog_listing\n\n${listing}`,
+  );
+  const hostedRequest = itemsOf(hosted).at(-1);
+  if (hostedRequest === undefined) throw new Error("No host kind request");
+  expect(trustedReviewOf(hostedRequest)).not.toHaveProperty("policy");
+  // A host kind with no registered policy adds none, and its request carries its policy.
+  expect(addedBy(other, hostedAgain)).toEqual(["user"]);
+  const otherRequest = itemsOf(other).at(-1);
+  if (otherRequest === undefined) throw new Error("No host kind request");
+  expect(trustedReviewOf(otherRequest)["policy"]).toBe(unlisted);
+  const whole = JSON.stringify(other);
+  for (const heading of ["## Execution, recovery and publication reviews", "## Execution reviews"])
+    expect(whole.split(heading)).toHaveLength(2);
+});
+
+it("keeps the kinds a restored conversation holds, adding only a new kind's", async () => {
+  const bodies = wire();
+  const options = { policies: hostPolicies };
+  let saved: Parameters<NonNullable<GuardianSessionOptions["save"]>>[0] | undefined;
+  const save = (snapshot: NonNullable<typeof saved>) =>
+    Effect.sync(() => {
+      saved = snapshot;
+    });
+  const original = makeGuardian(reviewer(options), undefined, { save });
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* original.review(pending, readCurrent);
+      yield* original.reviewQuestion(
+        pending,
+        {
+          questions: [{ id: "branch", type: "text", prompt: "Which branch?" }],
+          credentialsAvailable: false,
+        },
+        readCurrent,
+      );
+    }),
+  );
+  if (saved === undefined) throw new Error("The session saved no snapshot");
+  const snapshot = saved;
+  const before = bodies.at(-1);
+
+  const restored = makeGuardian(reviewer(options), undefined, { initial: snapshot, save });
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* restored.review(pending, readCurrent);
+      yield* restored.reviewTaskUpdate(
+        pending,
+        {
+          summary: "Read the north branch's hours instead.",
+          changes: [{ setting: "input", values: { branch: "north" } }],
+          recommend: "update",
+          confirmation: [],
+          effect: "read",
+        },
+        readCurrent,
+      );
+    }),
+  );
+
+  expect(bodies).toHaveLength(4);
+  const [, , execution, update] = bodies;
+  // The restored conversation continues the saved one byte for byte, with every kind it held.
+  expect(JSON.stringify(itemsOf(execution).slice(0, itemsOf(before).length + 1))).toBe(
+    JSON.stringify([...itemsOf(before), itemsOf(execution)[itemsOf(before).length]]),
+  );
+  // An execution review again adds only its request; a task update adds its own section.
+  expect(addedBy(execution, before)).toEqual(["user"]);
+  expect(addedBy(update, execution)).toEqual(["developer", "user"]);
+  expect(kindsOf(update)).toEqual([
+    ["Execution, recovery and publication reviews", "Execution reviews"],
+    "review execution",
+    ["Question reviews"],
+    "review question",
+    "review execution",
+    ["Task update reviews (kind update)"],
+    "review update",
+  ]);
+  // The snapshot holds each kind's policy once, so a second restore adds none again.
+  const history = JSON.stringify(restored.session?.snapshot().history);
+  for (const policy of [hostPolicies.execution, hostPolicies.question])
+    expect(history.split(policy)).toHaveLength(2);
+  expect(history).not.toContain(hostPolicies.publication);
 });
 
 it("re-adds the effort after a compaction, never next to another update or with automatic compaction", async () => {
@@ -360,6 +534,12 @@ it("re-adds the effort after a compaction, never next to another update or with 
   expect(after[2]).toMatchObject({ type: "compaction", id: "cmp_cache" });
   expect(after[3]).toEqual({ type: "configuration_update", reasoning: { effort: "low" } });
   expect(after.filter((item) => item.type === "configuration_update")).toHaveLength(1);
+  // The kind's policy the compaction cut follows them again, word for word, and only once.
+  const policy = itemsOf(first).find(
+    (item, index) => index >= 2 && developerTextOf(item) !== undefined,
+  );
+  expect(after[4]).toEqual(policy);
+  expect(after.filter((item) => developerTextOf(item) !== undefined)).toHaveLength(3);
   // The next review at medium appends its own update right before its request, and the
   // compacted conversation it continues is unchanged.
   const next = itemsOf(medium);
@@ -367,10 +547,13 @@ it("re-adds the effort after a compaction, never next to another update or with 
   const update = next.findLastIndex((item) => item.type === "configuration_update");
   expect(next[update]).toEqual({ type: "configuration_update", reasoning: { effort: "medium" } });
   expect(next[update + 1]?.role).toBe("user");
-  expect(guardian.session?.snapshot().history.slice(0, 2)).toMatchObject([
+  expect(guardian.session?.snapshot().history.slice(0, 3)).toMatchObject([
     { type: "compaction" },
     { type: "unknown", providerData: { type: "configuration_update" } },
+    { type: "unknown", providerData: { type: "message", role: "developer" } },
   ]);
+  // The next execution review holds the policy already, so it adds only its update and request.
+  expect(addedBy(medium, bodies[3])).toEqual(["configuration_update", "user"]);
 });
 
 it("keeps automatic compaction as the backstop for a session that never changes its effort", async () => {
@@ -392,12 +575,17 @@ it("reads the shared prefix in a review without a session, as every session writ
   expect(sessionFirst?.["prompt_cache_options"]).toEqual({ mode: "implicit" });
   // It reads the same shared prefix every session writes.
   expect(cachedPrefix(single)).toBe(cachedPrefix(sessionFirst));
-  // Its effort is an update before its request, as in a session.
+  // Its kind's policy, then its effort as an update, come before its request, as in a session.
   expect(itemsOf(single).map((item) => item.role ?? item.type)).toEqual([
+    "developer",
     "developer",
     "developer",
     "configuration_update",
     "user",
+  ]);
+  expect(kindsOf(single)).toEqual([
+    ["Execution, recovery and publication reviews", "Execution reviews"],
+    "review execution",
   ]);
 });
 
@@ -505,15 +693,20 @@ it("keeps the provider's compaction for a session at another effort when its own
   ]);
   expect(itemsOf(crossing).some((item) => item.type === "configuration_update")).toBe(false);
   expect(crossing?.["reasoning"]).toMatchObject({ effort: "low" });
-  // After the provider's compaction the effort goes on as an update after its item, and the
-  // request's own effort is the default again.
+  // After the provider's compaction the effort goes on as an update after its item, then the
+  // kind's policy the conversation held, and the request's own effort is the default again.
   expect(itemsOf(continued).map((item) => item.role ?? item.type)).toEqual([
     "developer",
     "developer",
     "compaction",
     "configuration_update",
+    "developer",
     "function_call",
     "function_call_output",
+  ]);
+  expect(sectionsOf(developerTextOf(itemsOf(continued)[4]) ?? "")).toEqual([
+    "Execution, recovery and publication reviews",
+    "Execution reviews",
   ]);
   expect(itemsOf(continued)[3]).toEqual({
     type: "configuration_update",
@@ -601,9 +794,10 @@ it("continues from the session's own compaction after the provider compacted ear
   // provider's earlier one.
   for (const body of [compacted, after])
     expect(conversationOf(body)[0]).toMatchObject({ type: "compaction", id: "cmp_session" });
-  expect(conversationOf(after).map((item) => item.type)).toEqual([
+  expect(conversationOf(after).map((item) => item.role ?? item.type)).toEqual([
     "compaction",
     "configuration_update",
+    "developer",
     "function_call",
     "function_call_output",
     "function_call",
@@ -736,8 +930,10 @@ it("prewarms the shared instructions with the same bytes every review sends firs
 
   const [prewarm, review] = bodies;
   expect(prewarm?.["prompt_cache_options"]).toEqual({ mode: "explicit", prewarm: true });
-  // Only the shared instructions, exactly as the review sends them first.
+  // Only the shared instructions, exactly as the review sends them first, with no kind's policy,
+  // which follows the build's own message.
   expect(itemsOf(prewarm)).toEqual(itemsOf(review).slice(0, 1));
+  expect(JSON.stringify(itemsOf(prewarm))).not.toContain("# Review Kinds");
   expect(cachedPrefix(prewarm)).toBe(cachedPrefix(review));
   // Every other part of the request is the review's own, the cache key included.
   expect(withoutInput(prewarm)).toBe(withoutInput(review));

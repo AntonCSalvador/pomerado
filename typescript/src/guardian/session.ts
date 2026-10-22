@@ -12,6 +12,8 @@ import { decodePublicationRound, PublicationRound } from "./publication-delta.js
 import {
   configurationUpdate,
   configurationUpdateEffort,
+  developerMessage,
+  developerMessageText,
   latestConfigurationEffort,
   withCacheComparison,
 } from "../models/cached-instructions.js";
@@ -117,6 +119,25 @@ const key = (items: readonly AgentInputItem[]) =>
   );
 
 type ItemsRequest = Omit<ModelRequest, "input"> & { readonly input: AgentInputItem[] };
+
+/**
+ * The conversation's own developer messages, such as a review kind's policy, are instructions it
+ * keeps for good, whatever a compaction cuts: each of `instructions` that `items`, starting at a
+ * compaction item, no longer holds goes back after that item and the effort that follows it, word
+ * for word, so every later request still holds it. Items that start at no compaction hold them
+ * all already.
+ */
+const withInstructionsKept = (
+  items: readonly AgentInputItem[],
+  instructions: readonly AgentInputItem[],
+): AgentInputItem[] => {
+  const [first, second] = items;
+  if (first?.type !== "compaction") return [...items];
+  const held = new Set(items.map((item) => key([item])));
+  const lost = instructions.filter((item) => !held.has(key([item])));
+  const at = second !== undefined && configurationUpdateEffort(second) !== undefined ? 2 : 1;
+  return [...items.slice(0, at), ...lost, ...items.slice(at)];
+};
 
 /**
  * The request without provider-side automatic compaction when its input holds a configuration
@@ -292,6 +313,14 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
   const history = (): AgentInputItem[] =>
     current.history.map((item) => protocol.ModelItem.parse(item));
   /**
+   * The developer messages the conversation was given, such as each review kind's policy, in
+   * order. A saved history holds every one, since a compaction keeps them (see `view`), so a
+   * restored session starts from the ones its history holds.
+   */
+  let instructions: readonly AgentInputItem[] = history().filter(
+    (item) => developerMessageText(item) !== undefined,
+  );
+  /**
    * The current review's compacted prefixes, as the SDK's input holds them, each replaced by its
    * compaction item and the configuration update in force where it was cut, if any. A new review
    * starts from the saved history, which already starts there.
@@ -352,12 +381,15 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
       (second === undefined || configurationUpdateEffort(second) === undefined)
     )
       kept = [first, configurationUpdate(providerCompacted.effort), ...kept.slice(1)];
+    // So do the conversation's instructions, before the windows are matched, for the same reason.
+    kept = withInstructionsKept(kept, instructions);
     for (const window of windows)
       if (kept.length >= window.length && key(kept.slice(0, window.length)) === window.key) {
         cut(window.length);
         kept = [...window.items, ...kept];
       }
     toLatestCompaction();
+    kept = withInstructionsKept(kept, instructions);
     return { kept, dropped };
   };
   const save = (items: readonly AgentInputItem[], incomplete: boolean) =>
@@ -388,7 +420,8 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
    * compaction item replaces the last request's input; the last response's output and every
    * later item follow it, so its reasoning and calls stay paired with their results. A compaction
    * ends every configuration update before it, so the one in force where it cut, if any, follows
-   * the compaction item again, and the effort holds.
+   * the compaction item again, and the effort holds; the conversation's own instructions follow
+   * after them (see `withInstructionsKept`).
    */
   const compactBefore = (
     model: Model,
@@ -443,11 +476,17 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
         next !== undefined && configurationUpdateEffort(next) !== undefined
           ? undefined
           : latestConfigurationEffort(input.slice(0, prefix));
-      const items = effort === undefined ? [item] : [item, configurationUpdate(effort)];
+      const rest = input.slice(prefix);
+      // The conversation's instructions follow too, so it keeps every one of them.
+      const compacted = withInstructionsKept(
+        [...(effort === undefined ? [item] : [item, configurationUpdate(effort)]), ...rest],
+        instructions,
+      );
+      const items = compacted.slice(0, compacted.length - rest.length);
       windows = [...windows, { length: prefix, key: key(input.slice(0, prefix)), items }];
       compactions++;
       return {
-        sent: { ...sent, input: [...items, ...input.slice(prefix)] },
+        sent: { ...sent, input: compacted },
         usage: outcome.right.usage,
       };
     });
@@ -550,6 +589,11 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
     leadingPrivate: () => current.leadingPrivate === true,
     /** The conversation since its last compaction, as the next request continues it. */
     history,
+    /**
+     * The text of each developer message the conversation holds, such as each review kind's
+     * policy it was given, in order. A compaction keeps them, so they are all it was given.
+     */
+    instructions: () => instructions.flatMap((item) => developerMessageText(item) ?? []),
     /** The mint's latest publication round, which the next one is reviewed against, if readable. */
     publicationRound: () => decodePublicationRound(current.publicationRound),
     /** Keeps a completed publication round and saves it with the conversation. */
@@ -585,9 +629,12 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
     /**
      * Adds a request; `continuing` marks the host's follow-up within the review in progress.
      * `effort`, when given, adds a configuration update to it before the request, so this and
-     * later responses reason at that effort without changing the request's own.
+     * later responses reason at that effort without changing the request's own. `instruction`,
+     * when given, adds a developer message before both, which the conversation keeps from then
+     * on, a compaction included: a review kind's policy, on the conversation's first review of
+     * that kind. Adding it here, after everything sent before, leaves the cached prefix as it was.
      */
-    input: (request: string, continuing = false, effort?: string) =>
+    input: (request: string, continuing = false, effort?: string, instruction?: string) =>
       Effect.gen(function* () {
         if (!continuing) windows = [];
         const items = history();
@@ -602,8 +649,13 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
           // Two updates never stand next to each other: the newer one replaces the older.
           const last = items.at(-1);
           if (last !== undefined && configurationUpdateEffort(last) !== undefined) items.pop();
-          items.push(configurationUpdate(effort));
         }
+        if (instruction !== undefined) {
+          const message = developerMessage({ text: instruction });
+          instructions = [...instructions, message];
+          items.push(message);
+        }
+        if (effort !== undefined) items.push(configurationUpdate(effort));
         items.push({ role: "user", type: "message", content: request });
         yield* save(items, true);
         return items;

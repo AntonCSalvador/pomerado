@@ -127,7 +127,7 @@ it("keeps advice off a deny, whose rationale carries what to change", async () =
   expect(reviewed.decision).not.toHaveProperty("advice");
 });
 
-it("states the capability rule once, in the instructions every kind shares, as publication policy", async () => {
+it("states the capability rule to a publication review only, once, as publication policy", async () => {
   const requests = scripted([
     decision({ outcome: "allow", rationale: "Reads the rows.", action: "read" }),
     decision({ outcome: "allow", rationale: "A new browser may help." }),
@@ -156,11 +156,14 @@ it("states the capability rule once, in the instructions every kind shares, as p
       readSource: (path, offset) => reader(path, offset),
     }),
   );
-  const [execution, ...others] = requests.map(instructionsOf);
-  for (const instructions of others) expect(instructions).toBe(execution);
-  expect(execution?.split(capabilityCompletionPolicy)).toHaveLength(2);
+  const [execution, recovery, publicationRequest] = requests.map(instructionsOf);
+  for (const instructions of [execution, recovery])
+    expect(instructions).not.toContain(capabilityCompletionPolicy);
+  expect(publicationRequest?.split(capabilityCompletionPolicy)).toHaveLength(2);
   // Under the publication heading, after the outcome policy that execution reviews share.
-  const publication = execution?.split("\n\n## ").find((part) => part.startsWith("Publication"));
+  const publication = publicationRequest
+    ?.split("\n\n## ")
+    .find((part) => part.startsWith("Publication"));
   expect(publication).toContain(capabilityCompletionPolicy);
   for (const request of requests)
     expect(reviewRequest(request).trusted_review).not.toHaveProperty("policy");
