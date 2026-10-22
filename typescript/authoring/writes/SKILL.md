@@ -108,13 +108,6 @@ During the session:
   marked step, such as a total that shows only once a saved address step has run, runs before
   the later step's mark; its refusal then reports a possible change, because the earlier step
   may have saved something, and that is honest. Still mark that earlier step.
-- On a write saved across several pages, when the site's own option lists for a later page can
-  be read before the first save, such as the form definitions or option data an earlier page
-  loads, prefer reading them and checking every caller value for those fields against them
-  before the first commit mark, in the session and on every run of the composed script. Match
-  each value by the site's option value as well as its label (forms skill), and refuse with
-  `InvalidInput` and `available` before anything is saved when a value matches neither. A
-  refusal after an earlier save leaves a half-made record and an outcome the caller can't know.
 - When one of those checks rules the task out, such as a total over the caller's limit, an
   item out of stock or a variant the page does not offer, the script refuses before the mark
   with `InvalidInput` (the caller-input skill, "Throw the error that matches what happened"),
@@ -144,6 +137,14 @@ During the session:
   after the step's first click, the click saved nothing but a field it flagged is one no
   site-field question may ask, such as a card or bank field: call `notCommitted` for the step,
   then throw `InvalidInput` that names the field by its label, and don't click again.
+- On a write saved across several pages, when the site's own option lists for a later page can
+  be read before the first save and do not depend on what an earlier page saves, such as the
+  form definitions or option data an earlier page loads, prefer reading them and checking every
+  caller value for those fields against them before the first commit mark, in the session and
+  on every run of the composed script. Match each value by the site's option value as well as
+  its label (forms skill), and refuse with `InvalidInput` and `available` before anything is
+  saved when a value matches neither. A refusal after an earlier save leaves a half-made record
+  and an outcome the caller can't know.
 - A pop-up, banner or interstitial on the path, such as an upsell, is conditional unless the
   page always opens it in answer to an action: handle it as the forms skill says, so the tool
   still works for a caller who never sees it.
