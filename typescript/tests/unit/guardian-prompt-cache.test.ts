@@ -298,6 +298,54 @@ it("carries each review's own kind policy in its review message, never another k
   }
 });
 
+it("sends a registered host policy once, in its own kind's review, before that review's own policy", async () => {
+  const bodies = wire();
+  const execution = "Synthetic registered execution policy.";
+  const listing = "Synthetic registered listing policy.";
+  const note = "Synthetic per-review listing note.";
+  const guardian = makeGuardian(
+    reviewer({
+      policies: { execution, hostKinds: { catalog_listing: listing } },
+      // The deprecated per-review policy, repeating the registered one for executions.
+      specialize: (turn) => (turn.pending.hostReview === undefined ? { policy: execution } : {}),
+    }),
+    undefined,
+    {},
+  );
+  const hostKind = (policy: string) => ({
+    kind: "catalog_listing",
+    policy,
+    evidence: { synthetic: true },
+    outcomes: ["allow", "deny"] as const,
+  });
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* guardian.review(pending, readCurrent);
+      yield* guardian.reviewHostKind(pending, hostKind(listing));
+      yield* guardian.reviewHostKind(pending, hostKind(note));
+    }),
+  );
+
+  const last = bodies.at(-1);
+  const leading = JSON.stringify(itemsOf(last).slice(0, 2));
+  for (const policy of [execution, listing, note]) expect(leading).not.toContain(policy);
+  const [ofExecution, sameText, otherText] = itemsOf(last)
+    .filter((item) => item.role === "user")
+    .map((item) =>
+      String(
+        (JSON.parse(String(item.content)) as { trusted_review: Record<string, unknown> })
+          .trusted_review["policy"],
+      ),
+    );
+  expect(ofExecution?.split(execution)).toHaveLength(2);
+  expect(ofExecution).not.toContain(listing);
+  expect(sameText?.split(listing)).toHaveLength(2);
+  expect(otherText?.split(listing)).toHaveLength(2);
+  expect(otherText?.split(note)).toHaveLength(2);
+  expect(otherText?.indexOf(listing)).toBeLessThan(otherText?.indexOf(note) ?? -1);
+  expect(otherText).not.toContain(execution);
+});
+
 it("sends the core publication policy with a publication review, outside the shared prefix", async () => {
   const bodies = wire();
   await build("Read the listed opening hours");
