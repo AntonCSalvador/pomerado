@@ -20,23 +20,24 @@ import {
   stillOff,
   type OffScreens,
 } from "./autofill-replay-pages.js";
-import { pathOf, placeOf } from "./session-sign-in.js";
+import { placeOf } from "./session-sign-in.js";
 
 /**
- * Which pages are the recorded screens: by default each screen's exact recorded page; a replay of a
- * tool with a workspace relation puts its workspace screens on the login's workspace origin.
+ * Which pages are the recorded screens: by default each screen's recorded page, its origin and its
+ * path with any trailing slash but the root's dropped; a replay of a tool with a workspace relation
+ * puts its workspace screens on the login's workspace origin.
  */
 export interface ReplayScreens {
   readonly onScreens: (page: string) => boolean;
   readonly matches: (page: string, recorded: AutofillRecipeStep) => boolean;
 }
 
+/**
+ * The default screens: a page is a screen on that screen's recorded origin and path, as `placeOf`
+ * reads both. A workspace screen records a path alone, so it matches no page here.
+ */
 export const exactScreens = (steps: readonly AutofillRecipeStep[]): ReplayScreens => {
   const matches = (page: string, recorded: AutofillRecipeStep) => {
-    if (recorded.origin === "workspace") {
-      const at = URL.parse(page);
-      return at !== null && pathOf(at.pathname) === pathOf(recorded.page);
-    }
     const here = placeOf(page);
     return here !== undefined && here === placeOf(recorded.page);
   };
