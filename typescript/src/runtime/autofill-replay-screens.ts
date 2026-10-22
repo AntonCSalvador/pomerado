@@ -20,6 +20,7 @@ import {
   stillOff,
   type OffScreens,
 } from "./autofill-replay-pages.js";
+import { pathOf, placeOf } from "./session-sign-in.js";
 
 /**
  * Which pages are the recorded screens: by default each screen's exact recorded page; a replay of a
@@ -30,11 +31,18 @@ export interface ReplayScreens {
   readonly matches: (page: string, recorded: AutofillRecipeStep) => boolean;
 }
 
-const exactScreens = (steps: readonly AutofillRecipeStep[]): ReplayScreens => {
-  const pages = new Set(steps.map((step) => step.page));
+export const exactScreens = (steps: readonly AutofillRecipeStep[]): ReplayScreens => {
+  const matches = (page: string, recorded: AutofillRecipeStep) => {
+    if (recorded.origin === "workspace") {
+      const at = URL.parse(page);
+      return at !== null && pathOf(at.pathname) === pathOf(recorded.page);
+    }
+    const here = placeOf(page);
+    return here !== undefined && here === placeOf(recorded.page);
+  };
   return {
-    onScreens: (page) => pages.has(page),
-    matches: (page, recorded) => page === recorded.page,
+    onScreens: (page) => steps.some((step) => matches(page, step)),
+    matches,
   };
 };
 
@@ -67,7 +75,7 @@ const inspectReplayProgression = <E>(
         if (
           !("outcome" in found) &&
           screens.matches(found.page, recorded) &&
-          (found.page !== currentPage ||
+          (placeOf(found.page) !== placeOf(currentPage) ||
             (current.fields.length > 0 &&
               probe.fields.some(
                 (field) => !current.fields.some((previous) => previous.selector === field.selector),

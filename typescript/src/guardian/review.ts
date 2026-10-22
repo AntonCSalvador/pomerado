@@ -781,12 +781,13 @@ const refusedOutcome = (raw: unknown): GuardianOutcome | undefined => {
  * policy says that itself.
  */
 const refusedOutcomeHint: Record<Exclude<ReviewKind, "host">, string> = {
-  execution: "A step that should change before it runs, or that needs the caller first, is a deny.",
+  execution:
+    "A step that should change before it runs, or that needs the caller first, is a deny or an escalate, as its policy says.",
   recovery: "A request for a new browser that should not be granted is a deny.",
   publication: "A tool that should change before it publishes is a deny.",
   question: "A request that should change before its caller sees it is a reword.",
   update:
-    "An update its caller has not confirmed is a clarify, and one that is wrong as written is a reword.",
+    "An update that needs the caller's confirmation and lacks it is a clarify, and one that is wrong as written is a reword.",
 };
 
 /**
