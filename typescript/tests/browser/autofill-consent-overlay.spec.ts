@@ -223,6 +223,7 @@ for (const [named, dismiss] of [
   ["a shadow host whose root holds a control that submits a form", "#shadow-banner"],
   ["a container whose centre is a link to another page", "#links"],
   ["a label inside a control that submits a form", "#ok-label"],
+  ["a label of a control that submits a form", "#offer-label"],
 ] as const)
   test(`a dismiss that names ${named} is refused before anything is typed`, async ({ page }) => {
     const received = await serve(
@@ -231,7 +232,8 @@ for (const [named, dismiss] of [
 <a id="elsewhere" href="/privacy">Close</a>
 <div id="shadow-banner"></div>
 <div id="links" style="width:200px;height:40px"><a href="/privacy" style="display:block;width:100%;height:100%">Privacy</a></div>
-<form action="/offers" method="post"><button><span id="ok-label">OK</span></button></form></div>`,
+<form action="/offers" method="post"><button><span id="ok-label">OK</span></button><button id="offer-ok">Yes</button></form>
+<label id="offer-label" for="offer-ok">Accept</label></div>`,
       `document.querySelector("form").insertAdjacentHTML("beforeend", '<button id="forgot" type="button">Forgot?</button>');
 document.getElementById("shadow-banner").attachShadow({ mode: "open" }).innerHTML = '<form action="/partners" method="post"><button style="width:200px;height:40px">OK</button></form>';`,
     );

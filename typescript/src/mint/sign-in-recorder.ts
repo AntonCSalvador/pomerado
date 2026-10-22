@@ -617,6 +617,8 @@ export const makeSignInRecorder = (input: {
       const answer = answered.right["approved"];
       if (answer?.type !== "confirm" || !answer.value.confirmed)
         return { result: { approved: false, failed: "approval_declined" } };
+      // The screen after a blocked one: sending that one again is a fill of its own.
+      open.blocked = undefined;
       open.steps.push({
         page: screen.page,
         fields: [],

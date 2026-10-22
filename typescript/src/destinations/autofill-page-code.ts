@@ -412,8 +412,13 @@ const part = await notice.locator.evaluate((element, own) => {
   const form = formOf(element);
   if (form !== null && own.some((control) => formOf(control) === form)) return "sign_in_form";
   // What a click of it may reach: the element, what holds it and what it holds, since a click at
-  // its centre lands on whatever it holds there.
-  const reached = [...ancestry(element), ...within(element)];
+  // its centre lands on whatever it holds there, and the control a label among them clicks.
+  const held = [...ancestry(element), ...within(element)];
+  const reached = [
+    ...held,
+    ...held.flatMap((node) => (node instanceof HTMLLabelElement && node.control !== null ? [node.control] : [])),
+  ];
+  if (own.some((control) => reached.includes(control))) return "sign_in_control";
   const submits = (node) =>
     ((node instanceof HTMLButtonElement && node.type === "submit") ||
       (node instanceof HTMLInputElement && ["submit", "image"].includes(node.type))) &&

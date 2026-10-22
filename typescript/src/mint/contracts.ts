@@ -505,8 +505,8 @@ export type SignedInMarkerCheckRequest = typeof SignedInMarkerCheckRequest.Type;
  * that submits them, which the host clicks. A screen without a button (a password field that
  * appears once the identifier is filled) names no submit; a method choice names only a submit. A
  * screen whose form has no submit control and submits on Enter names `submitKey` instead, and the
- * host presses Enter in its last field. A screen a cookie, consent or similar notice covers names
- * that notice's own close, reject or accept control as `dismiss`, in that order of preference,
+ * host presses Enter in its last field. A screen a cookie or tracking consent banner covers names
+ * that banner's own close, reject or accept control as `dismiss`, in that order of preference,
  * which the host clicks first, when it shows. `signedIn` names what shows the site signed in,
  * which the host checks on the page itself.
  */
@@ -562,12 +562,12 @@ export const SignInStep = Schema.Union(
       ),
     ),
     /**
-     * The own control of a cookie or consent banner that shows on this screen: its close or
-     * dismiss control, else one that rejects what is not essential, else accept when that is the
-     * only way out. The host clicks it before it types, when the page shows it, and runs do the same.
-     * After the host reports `submit: blocked`, send the same step again with it: the host clicks
-     * it, then clicks the submit once more without typing. Never a submit, a field or a control
-     * of the sign-in's own form.
+     * The own control of a cookie or tracking consent banner that shows on this screen: its close
+     * or dismiss control, else one that rejects what is not essential, else accept when that is
+     * the only way out. The host clicks it before it types, when the page shows it, and runs do the
+     * same. After the host reports `submit: blocked`, send the same step again with it: the host
+     * clicks it, then clicks the submit once more, typing nothing unless the dismiss emptied a
+     * field. Never a submit, a field or a control of the sign-in's own form.
      */
     dismiss: Schema.optional(SignInSelector),
   }).pipe(
