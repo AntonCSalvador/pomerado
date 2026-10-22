@@ -90,8 +90,8 @@ const guardianCompactionTokens = 240_000;
  * The provider-side compaction at the same threshold, with no additional tools or sandbox. It
  * is the backstop: the session compacts first (see `compactBefore`), since the provider's
  * compaction inside a request reads none of the conversation's cached prefix. The provider does
- * not combine it with a configuration update, so a request whose input holds one goes without
- * it (see `withoutAutomaticCompaction`).
+ * not combine it with a configuration update, so a request whose input holds one goes without it
+ * while the session's own compaction covers it (see `backstopped` in `makeGuardianSession`).
  */
 export const guardianCompaction = (): ReturnType<typeof compaction> =>
   compaction({ policy: new StaticCompactionPolicy(guardianCompactionTokens) });
@@ -120,8 +120,7 @@ type ItemsRequest = Omit<ModelRequest, "input"> & { readonly input: AgentInputIt
 
 /**
  * The request without provider-side automatic compaction when its input holds a configuration
- * update, which the provider refuses to combine with it. The session's own compaction still runs
- * before such a request (see `compactBefore`); only the backstop is left out.
+ * update, which the provider refuses to combine with it.
  */
 const withoutAutomaticCompaction = <R extends ModelRequest>(request: R): R => {
   const providerData = request.modelSettings.providerData;
@@ -148,9 +147,13 @@ interface SessionCompaction {
     model: Model,
     sent: ModelRequest,
   ) => Effect.Effect<{ readonly sent: ModelRequest; readonly usage?: Usage }, Error>;
+  /** The request as it goes to the provider, with or without its automatic compaction. */
+  readonly backstopped: (request: ModelRequest) => ModelRequest;
   /** Records the request sent and its response, which the next request continues. */
   readonly after: (sent: ModelRequest, response: ModelResponse) => void;
 }
+
+const reasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 const closeInterruptedReview = (
   items: AgentInputItem[],
@@ -224,7 +227,7 @@ const continuationProvider = ({
                   try: () =>
                     model.getResponse(
                       withCacheComparison(
-                        withoutAutomaticCompaction(prepared.sent),
+                        sessionCompaction.backstopped(prepared.sent),
                         comparison.latest(),
                       ),
                     ),
@@ -308,6 +311,13 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
     | undefined;
   /** Set once a compaction request returned no compaction: the provider-side backstop remains. */
   let triggerUnsupported = false;
+  /**
+   * The effort in force when a request went to the provider's compaction without its
+   * configuration updates (see `backstopped`), until its response arrives.
+   */
+  let backstopEffort: string | undefined;
+  /** The provider's compaction item that ended that effort, which follows it again. */
+  let providerCompacted: { readonly key: string; readonly effort: string } | undefined;
   /** Keeps the conversation's latest response, which the next request compares with. */
   const setLatestResponse = (id: string | undefined) => {
     const { latestResponseId: _previous, ...rest } = current;
@@ -338,6 +348,14 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
         kept = [...window.items, ...kept];
       }
     toLatestCompaction();
+    const [first, second] = kept;
+    if (
+      providerCompacted !== undefined &&
+      first?.type === "compaction" &&
+      key([first]) === providerCompacted.key &&
+      (second === undefined || configurationUpdateEffort(second) === undefined)
+    )
+      kept = [first, configurationUpdate(providerCompacted.effort), ...kept.slice(1)];
     return { kept, dropped };
   };
   const save = (items: readonly AgentInputItem[], incomplete: boolean) =>
@@ -403,8 +421,9 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
           catch: providerError,
         }),
       );
-      // A failed compaction leaves the request as it was, for the provider-side backstop, and
-      // stops further attempts, so a persistent failure is not retried on every request.
+      // A failed compaction leaves the request as it was, for the provider-side backstop (see
+      // `backstopped`), and stops further attempts, so a persistent failure is not retried on
+      // every request.
       if (outcome._tag === "Left") {
         if (sent.signal?.aborted === true) return yield* Effect.fail(outcome.left);
         triggerUnsupported = true;
@@ -430,13 +449,72 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
         usage: outcome.right.usage,
       };
     });
+  /**
+   * The request's tokens, overestimated: the last request's reported size and the items added
+   * since when it continues that request, or else an estimate of the whole request.
+   */
+  const requestTokens = (request: ItemsRequest) => {
+    const previous = last;
+    if (previous !== undefined) {
+      const prefix = previous.request.input.length;
+      const carried = prefix + previous.outputs;
+      if (
+        request.input.length >= carried &&
+        key(request.input.slice(0, prefix)) === key(previous.request.input)
+      )
+        return previous.tokens + estimatedTokens(request.input.slice(carried));
+    }
+    return (
+      estimatedTokens(request.input) + Math.ceil((request.systemInstructions?.length ?? 0) / 3)
+    );
+  };
+  /**
+   * The request as it goes to the provider. One whose input holds a configuration update goes
+   * without the provider's automatic compaction, which does not combine with one, while it stays
+   * below the threshold, so the session's own compaction covers it. One that would reach the
+   * threshold anyway, because the session could not compact first (its compaction failed, or a
+   * restored session knows no size yet), must not go without any compaction: it keeps the
+   * provider's, without its configuration updates, and carries the effort in force as its own.
+   * That request reads none of the cached prefix, and the effort follows the provider's
+   * compaction item again as an update (see `view`).
+   */
+  const backstopped = (request: ModelRequest): ModelRequest => {
+    backstopEffort = undefined;
+    const items = withArrayInput(request);
+    const providerData = request.modelSettings.providerData;
+    if (
+      items === undefined ||
+      providerData === undefined ||
+      !("context_management" in providerData)
+    )
+      return request;
+    const inForce = latestConfigurationEffort(items.input);
+    if (inForce === undefined) return request;
+    const effort = reasoningEfforts.find((known) => known === inForce);
+    if (effort === undefined || requestTokens(items) < guardianCompactionTokens)
+      return withoutAutomaticCompaction(request);
+    backstopEffort = effort;
+    return {
+      ...request,
+      input: items.input.filter((item) => configurationUpdateEffort(item) === undefined),
+      modelSettings: {
+        ...request.modelSettings,
+        reasoning: { ...request.modelSettings.reasoning, effort },
+      },
+    };
+  };
   const compaction: SessionCompaction = {
     view: (request) => {
       const input = withArrayInput(request)?.input;
       return input === undefined ? request : { ...request, input: view(input).kept };
     },
     before: compactBefore,
+    backstopped,
     after: (sent, response) => {
+      const compacted = response.output.findLast((item) => item.type === "compaction");
+      if (compacted !== undefined && backstopEffort !== undefined)
+        providerCompacted = { key: key([compacted]), effort: backstopEffort };
+      backstopEffort = undefined;
       const request = withArrayInput(sent);
       last =
         request === undefined || response.output.some((item) => item.type === "compaction")

@@ -134,12 +134,14 @@ export const guardianReviewInput = (
 
 /**
  * One review's model settings, the same for every review. The request's reasoning effort can
- * change the provider's hidden instructions, and with them the whole cached prefix, so it never
- * changes: a review at another effort says so with a configuration update in its input (see
- * `guardianReviewState`). A session caches implicitly, so each request reads the conversation the
- * last one wrote. A review without one is a single call whose conversation nothing reads again,
- * so it caches only through the instructions' own breakpoint. `promptCacheKey` is the host's key
- * for the provider's cache accounting, the same on every request.
+ * change the provider's hidden instructions, and with them the whole cached prefix, so it stays
+ * the same: a review at another effort says so with a configuration update in its input (see
+ * `guardianReviewState`). Only a session request that must leave its compaction to the provider
+ * carries the effort as its own instead (see `makeGuardianSession`). Every request caches
+ * implicitly after the instructions' own breakpoint, so each call reads the conversation the call
+ * before it wrote: the earlier reviews of a session, and a review's own earlier turns, with or
+ * without one. `promptCacheKey` is the host's key for the provider's cache accounting, the same
+ * on every request.
  */
 export const guardianReviewSettings = (session: boolean, promptCacheKey?: string) =>
   withReasoningContinuity({
@@ -148,7 +150,7 @@ export const guardianReviewSettings = (session: boolean, promptCacheKey?: string
       ...guardianModel.modelSettings.reasoning,
       ...(session ? { context: "all_turns" as const } : {}),
     },
-    promptCacheOptions: { mode: session ? "implicit" : "explicit" },
+    promptCacheOptions: { mode: "implicit" },
     parallelToolCalls: true,
     providerData: {
       ...(session ? guardianCompaction().samplingParams({ model: guardianModel.model }) : {}),

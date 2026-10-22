@@ -3,7 +3,9 @@
 // breakpoint; a review message that repeats a kind's or host's policy the instructions hold; a
 // per-review effort that changes the request's own effort and with it the whole cached prefix; a
 // configuration update next to another, combined with provider-side automatic compaction, or lost
-// at a compaction; a one-call review without a session writing its unique suffix to the cache;
+// at a compaction; a review without a session whose later calls cannot read its earlier ones
+// from the cache; a session that changed its effort left with no compaction at all when its own
+// compaction cannot run, after a failed compaction or a restore;
 // the provider's split of cache writes by lifetime dropped from usage; the outcome reviewer's
 // fixed instructions sent where no breakpoint can hold them.
 import OpenAI from "openai";
@@ -16,6 +18,7 @@ import type { GuardianModelOptions } from "../../src/guardian/openai.js";
 import { nativeExecutionEnvironment } from "../../src/guardian/execution-policy.js";
 import { makeGuardian } from "../../src/guardian/review.js";
 import type { GuardianDiagnostics, PendingExecution } from "../../src/guardian/review.js";
+import type { GuardianSessionOptions } from "../../src/guardian/session.js";
 import { makeOpenAIOutcomeReviewer } from "../../src/mint/outcome-review-openai.js";
 
 afterEach(() => setDefaultModelProvider(new OpenAIProvider()));
@@ -71,6 +74,8 @@ interface Reply {
   readonly usage?: Record<string, unknown>;
   /** More top-level response fields, such as `prompt_cache_diagnostics`. */
   readonly fields?: Record<string, unknown>;
+  /** An error status the provider refuses the request with instead. */
+  readonly status?: number;
 }
 
 /**
@@ -85,7 +90,14 @@ const wire = (reply: (body: Body, index: number) => Reply = () => ({})) => {
     fetch: async (_url, init) => {
       const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Body;
       bodies.push(body);
-      const { output, usage, fields } = reply(body, bodies.length - 1);
+      const { output, usage, fields, status } = reply(body, bodies.length - 1);
+      if (status !== undefined)
+        return new Response(
+          JSON.stringify({
+            error: { message: "Synthetic refusal", type: "invalid_request_error" },
+          }),
+          { status, headers: { "content-type": "application/json" } },
+        );
       const user = JSON.stringify(
         itemsOf(body)
           .filter((item) => item.role === "user")
@@ -366,14 +378,14 @@ it("keeps automatic compaction as the backstop for a session that never changes 
   expect(JSON.stringify(bodies)).not.toContain("configuration_update");
 });
 
-it("caches a review without a session only through the shared instructions", async () => {
+it("reads the shared prefix in a review without a session, as every session writes it", async () => {
   const bodies = wire();
   const sessionless = makeGuardian(reviewer({ specialize: () => ({ reasoningEffort: "low" }) }));
   await Effect.runPromise(sessionless.review(pending, readCurrent));
   await build("Read the rows of the named table");
 
   const [single, sessionFirst] = bodies;
-  expect(single?.["prompt_cache_options"]).toEqual({ mode: "explicit" });
+  expect(single?.["prompt_cache_options"]).toEqual({ mode: "implicit" });
   expect(sessionFirst?.["prompt_cache_options"]).toEqual({ mode: "implicit" });
   // It reads the same shared prefix every session writes.
   expect(cachedPrefix(single)).toBe(cachedPrefix(sessionFirst));
@@ -384,6 +396,161 @@ it("caches a review without a session only through the shared instructions", asy
     "configuration_update",
     "user",
   ]);
+});
+
+/** A `read_source` call for the entrypoint, as the model would send it. */
+const readEntrypoint = (id: string) => ({
+  type: "function_call",
+  id: `fc_${id}`,
+  call_id: id,
+  name: "read_source",
+  arguments: JSON.stringify({ path: pending.entrypoint, offset: 0, match: null, paths: null }),
+  status: "completed",
+});
+
+it("lets each call of a review without a session read the calls before it from the cache", async () => {
+  const bodies = wire((_body, index) => (index === 0 ? { output: [readEntrypoint("read")] } : {}));
+  await Effect.runPromise(makeGuardian(reviewer()).review(pending, readCurrent));
+
+  expect(bodies).toHaveLength(2);
+  // The second call continues the first, so it reads what the first cached, not just the
+  // shared instructions.
+  const [first, second] = bodies;
+  expect(JSON.stringify(itemsOf(second).slice(0, itemsOf(first).length))).toBe(
+    JSON.stringify(itemsOf(first)),
+  );
+  for (const body of bodies) expect(body["prompt_cache_options"]).toEqual({ mode: "implicit" });
+});
+
+const providerCompaction = {
+  type: "compaction",
+  id: "cmp_provider",
+  encrypted_content: "opaque-provider-compacted-context",
+};
+
+/** Whether a request may be compacted at all: by the provider, or by its own trigger. */
+const compactable = (body: Body | undefined) =>
+  body?.["context_management"] !== undefined ||
+  itemsOf(body).at(-1)?.type === "compaction_trigger";
+
+it("keeps the provider's compaction for a session at another effort when its own compaction fails", async () => {
+  let calls = 0;
+  const bodies = wire((body) => {
+    calls++;
+    // The session's own compaction request is refused.
+    if (itemsOf(body).at(-1)?.type === "compaction_trigger") return { status: 400 };
+    // The provider compacts the crossing request itself, mid-review.
+    if (calls === 3)
+      return {
+        output: [providerCompaction, readEntrypoint("read_after_compaction")],
+        usage: { input_tokens: 252_000, output_tokens: 1, total_tokens: 1 },
+      };
+    // The compaction took the review's request out of view, so the decision is scripted here.
+    if (calls === 4)
+      return {
+        output: [
+          {
+            type: "message",
+            id: "msg_after_compaction",
+            role: "assistant",
+            status: "completed",
+            content: [
+              {
+                type: "output_text",
+                text: JSON.stringify({
+                  outcome: "allow",
+                  rationale: "Synthetic decision",
+                  action: "read",
+                  reason: null,
+                  findings: null,
+                }),
+                annotations: [],
+              },
+            ],
+          },
+        ],
+      };
+    return {
+      usage: { input_tokens: calls === 1 ? 236_000 : 30_000, output_tokens: 1, total_tokens: 1 },
+    };
+  });
+  const quick = { ...pending, screenedInput: '{"quick":true}' };
+  const guardian = makeGuardian(
+    reviewer({
+      specialize: (turn) =>
+        turn.pending.screenedInput === quick.screenedInput ? { reasoningEffort: "low" } : {},
+    }),
+    undefined,
+    {},
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* guardian.review(quick, readCurrent);
+      // Its request would cross the threshold.
+      yield* guardian.review(
+        { ...quick, screenedObservations: `second ${"x".repeat(48_000)}` },
+        readCurrent,
+      );
+    }),
+  );
+
+  expect(bodies).toHaveLength(4);
+  const [, refused, crossing, continued] = bodies;
+  expect(itemsOf(refused).at(-1)?.type).toBe("compaction_trigger");
+  // The crossing request keeps the provider's compaction, so it holds no configuration update
+  // and carries the effort in force as its own.
+  expect(crossing?.["context_management"]).toEqual([
+    { type: "compaction", compact_threshold: 240000 },
+  ]);
+  expect(itemsOf(crossing).some((item) => item.type === "configuration_update")).toBe(false);
+  expect(crossing?.["reasoning"]).toMatchObject({ effort: "low" });
+  // After the provider's compaction the effort goes on as an update after its item, and the
+  // request's own effort is the default again.
+  expect(itemsOf(continued).map((item) => item.role ?? item.type)).toEqual([
+    "developer",
+    "developer",
+    "compaction",
+    "configuration_update",
+    "function_call",
+    "function_call_output",
+  ]);
+  expect(itemsOf(continued)[3]).toEqual({
+    type: "configuration_update",
+    reasoning: { effort: "low" },
+  });
+  expect(continued?.["reasoning"]).toMatchObject({ effort: "medium" });
+  expect(guardian.session?.snapshot().history.slice(0, 2)).toMatchObject([
+    { type: "compaction" },
+    { type: "unknown", providerData: { type: "configuration_update" } },
+  ]);
+});
+
+it("keeps a restored session at another effort compactable before it knows its size", async () => {
+  const bodies = wire();
+  const low = reviewer({ specialize: () => ({ reasoningEffort: "low" }) });
+  let saved: Parameters<NonNullable<GuardianSessionOptions["save"]>>[0] | undefined;
+  await Effect.runPromise(
+    makeGuardian(low, undefined, {
+      save: (snapshot) =>
+        Effect.sync(() => {
+          saved = snapshot;
+        }),
+    }).review(pending, readCurrent),
+  );
+  expect(JSON.stringify(saved?.history)).toContain("configuration_update");
+  if (saved === undefined) throw new Error("The session saved no snapshot");
+
+  // The restored session's first request is past the threshold, and nothing has reported its
+  // size yet.
+  const restored = makeGuardian(low, undefined, { initial: saved });
+  await Effect.runPromise(
+    restored.review({ ...pending, screenedObservations: "y".repeat(800_000) }, readCurrent),
+  );
+  const crossing = bodies.at(-1);
+  expect(bodies).toHaveLength(2);
+  expect(compactable(crossing)).toBe(true);
+  expect(itemsOf(crossing).some((item) => item.type === "configuration_update")).toBe(false);
+  expect(crossing?.["reasoning"]).toMatchObject({ effort: "low" });
 });
 
 it("reports cache writes by lifetime in the review's usage", async () => {
@@ -572,7 +739,7 @@ it("compares each session request's prompt cache with the conversation's previou
     comparison_response_id: "resp_1",
   });
   // A review without a session has no conversation to compare with.
-  expect(bodies[4]?.["prompt_cache_options"]).toEqual({ mode: "explicit" });
+  expect(bodies[4]?.["prompt_cache_options"]).toEqual({ mode: "implicit" });
 });
 
 it("reports each call's prompt cache comparison with its review's usage, enums and counts only", async () => {

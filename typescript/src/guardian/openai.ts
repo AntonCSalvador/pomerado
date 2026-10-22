@@ -107,7 +107,7 @@ export interface GuardianModelOptions {
      * @deprecated Register the host's policy once in `policies`. Still sent in this review's user
      * message when given, unless it is the policy `policies` already holds for the kind: it
      * follows the core policy for the kind, and for a publication review replaces the core
-     * publication policy as `policies.publication` does.
+     * publication policy, or, when `policies.publication` is registered, follows that policy.
      */
     readonly policy?: string;
     readonly input?: Readonly<Record<string, unknown>>;
