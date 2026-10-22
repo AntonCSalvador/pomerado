@@ -264,8 +264,8 @@ export const checkSignInVersion = (
     return findings;
   }
   if (
-    [version.entryUrl, ...steps.map((step) => step.page)].some(
-      (page) => loginPathRefusal(marker, page) !== undefined,
+    [{ page: version.entryUrl, anySegments: undefined }, ...steps].some(
+      (step) => loginPathRefusal(marker, step.page, step.anySegments) !== undefined,
     )
   )
     refuse("marker_is_login_path", "recipe.signedIn.urlPath");
