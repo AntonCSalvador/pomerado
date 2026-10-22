@@ -276,6 +276,46 @@ it("resumes a suspended build with the owner's answer, then the host's message, 
   expect(inputOf(suspended.model.requests[2]).filter(isResumeMessage)).toHaveLength(1);
 });
 
+// A takeover's new process skips the skill install, and its workspace session starts with a
+// manifest that lists no skill files, so the instructions' filesystem section used to lose them and
+// the first request after the takeover missed the whole cached prefix.
+it("sends a resumed build the same static prefix and tools as before the takeover", async () => {
+  const suspended = await suspendedBuild();
+  const checkpoint = suspended.store.checkpoints.at(-1);
+  if (checkpoint === undefined) throw new Error("No checkpoint");
+  const request = suspended.asked[0] as AgentInputRequest;
+  const resumed = await fixture(() => prose(), {
+    model: makeOpenAIMinter(
+      suspended.model.provider,
+      "medium",
+      {},
+      { recoveryFactory: suspended.store.factory(checkpoint.agent) },
+    ),
+    agentRecovery: {
+      save: suspended.store.save,
+      initial: checkpoint,
+      recoverTool: (call) =>
+        Effect.succeed(
+          call.callId === "ask"
+            ? { input: { request, answers: { report: { type: "text", value: "Annual" } } } }
+            : undefined,
+        ),
+    },
+    websiteCredentialsAvailable: true,
+  });
+
+  expect(await resumed.run()).toMatchObject({ build: "published" });
+  const [fresh, ...afterTakeover] = suspended.model.requests;
+  expect(afterTakeover.length).toBeGreaterThan(0);
+  const prefix = (sent: ModelRequest | undefined) => JSON.stringify(inputOf(sent)[0]);
+  expect(prefix(fresh)).toContain(".agents/core");
+  for (const sent of afterTakeover) {
+    expect(prefix(sent)).toBe(prefix(fresh));
+    expect(sent.systemInstructions).toBe(fresh?.systemInstructions);
+    expect(JSON.stringify(sent.tools)).toBe(JSON.stringify(fresh?.tools));
+  }
+});
+
 // Fails when the replay limit assumes the saved turn is in progress: the message would then come
 // before the replayed response instead of after its results.
 it("puts the host's message after a replayed response whose turn was not in progress", async () => {
@@ -357,9 +397,9 @@ it("sends a restored minter no message when the host gives none", async () => {
   });
 
   expect(await resumed.run()).toMatchObject({ build: "published" });
-  // Each request holds the build's own input as its one user message.
+  // Each request holds only the build's own user messages: its request and its tools message.
   for (const sent of model.requests)
-    expect(inputOf(sent).filter((item) => "role" in item && item.role === "user")).toHaveLength(1);
+    expect(inputOf(sent).filter((item) => "role" in item && item.role === "user")).toHaveLength(2);
 });
 
 it.each<{

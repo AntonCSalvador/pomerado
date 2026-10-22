@@ -3,7 +3,10 @@ import type { AgentInputItem, ModelRequest, ModelResponse } from "@openai/agents
 import { Effect } from "effect";
 import { afterEach, expect, it } from "vitest";
 import type { MintDiagnostics } from "../../src/mint/diagnostics.js";
-import { mintIdleCompactionTokens } from "../../src/mint/idle-compaction.js";
+import {
+  mintCompactionLimitTokens,
+  mintIdleCompactionTokens,
+} from "../../src/mint/idle-compaction.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
 import { makeMintContinuationFixture, readAllow } from "../support/mint-fixtures.js";
 import { portableJobSession } from "../support/portable-mint.js";
@@ -80,8 +83,16 @@ const isCompaction = (request: ModelRequest) => {
   const last = Array.isArray(input) ? input.at(-1) : undefined;
   return last?.type === "unknown" && last.providerData?.type === "compaction_trigger";
 };
-const items = (request: ModelRequest | undefined): AgentInputItem[] =>
-  Array.isArray(request?.input) ? request.input : [];
+/** The static prefix every request starts with: the cached developer message. */
+const isStaticPrefix = (item: AgentInputItem | undefined) =>
+  item?.type === "unknown" &&
+  item.providerData?.["type"] === "message" &&
+  item.providerData["role"] === "developer";
+/** A request's conversation: its input after the static prefix. */
+const items = (request: ModelRequest | undefined): AgentInputItem[] => {
+  const input = Array.isArray(request?.input) ? request.input : [];
+  return isStaticPrefix(input[0]) ? input.slice(1) : input;
+};
 const turns = (requests: readonly ModelRequest[]) => requests.filter((r) => !isCompaction(r));
 
 const deferred = <A = void>() => {
@@ -167,7 +178,7 @@ it("compacts a long history while the minter waits on an execution, without bloc
       }
       order.push(`turn_${index}`);
       return index === 0
-        ? call("execute", example, mintIdleCompactionTokens + 10_000)
+        ? call("execute", example, mintIdleCompactionTokens + 1_000)
         : call("finish_build", finish, 30_000);
     },
     {
@@ -203,6 +214,13 @@ it("compacts a long history while the minter waits on an execution, without bloc
   // turn's cached prefix.
   expect(items(compaction).slice(0, -1)).toEqual(items(first));
   expect(compaction?.modelSettings).toEqual(first?.modelSettings);
+  // Every request, the compaction's included, leads with the same static prefix, ahead of the
+  // compaction item once there is one.
+  const prefixes = f.requests.map((request) =>
+    Array.isArray(request.input) ? JSON.stringify(request.input[0]) : "",
+  );
+  expect(isStaticPrefix(Array.isArray(next?.input) ? next.input[0] : undefined)).toBe(true);
+  expect(new Set(prefixes).size).toBe(1);
   // The next turn sends the compacted window, then everything after the compacted prefix.
   const sent = items(next);
   expect(sent[0]).toMatchObject(compactedItem);
@@ -224,9 +242,9 @@ it("sends the next turn uncompacted while a compaction is still running, then ap
       const turn = turns(f.requests).length - 1;
       if (turn === 1) release.resolve();
       return turn === 0
-        ? call("execute", example, mintIdleCompactionTokens + 10_000, "execute_1")
+        ? call("execute", example, mintIdleCompactionTokens + 1_000, "execute_1")
         : turn === 1
-          ? call("execute", example, mintIdleCompactionTokens + 20_000, "execute_2")
+          ? call("execute", example, mintIdleCompactionTokens + 2_000, "execute_2")
           : call("finish_build", finish, 40_000);
     },
     {
@@ -261,6 +279,112 @@ it("sends the next turn uncompacted while a compaction is still running, then ap
   expect(
     sent.flatMap((item) => (item.type === "function_call_result" ? [item.callId] : [])),
   ).toEqual(["execute_1", "execute_2"]);
+});
+
+// A compaction that lands while a turn is out is applied to the next request. Before then, that
+// turn still reports the long input it was sent with, which used to start a second compaction of
+// the same old context, whose result the first one's window then made useless.
+it("starts no second compaction while a landed one waits for the next request", async () => {
+  const release = deferred();
+  const f = await fixture(async (request) => {
+    if (isCompaction(request)) {
+      await release.promise;
+      return compacted();
+    }
+    const turn = turns(f.requests).length - 1;
+    if (turn === 1) {
+      // The first compaction lands while this turn is out.
+      release.resolve();
+      await settle();
+      await settle();
+    }
+    return turn === 0
+      ? call("execute", example, mintIdleCompactionTokens + 1_000, "execute_1")
+      : turn === 1
+        ? call("execute", example, mintIdleCompactionTokens + 2_000, "execute_2")
+        : call("finish_build", finish, 30_000);
+  });
+  const outcome = await f.run();
+
+  expect(outcome.build).toBe("published");
+  expect(f.requests.filter(isCompaction)).toHaveLength(1);
+  const [, , third] = turns(f.requests);
+  expect(items(third)[0]).toMatchObject(compactedItem);
+});
+
+// A turn that goes out while a compaction runs sends the whole history, so without a bound a few
+// such turns could carry a request past the model's long-context price boundary.
+it("holds a request near the long-context boundary until the running compaction lands", async () => {
+  const order: string[] = [];
+  const turnOneReturned = deferred();
+  const f = await fixture(async (request) => {
+    if (isCompaction(request)) {
+      await turnOneReturned.promise;
+      await new Promise((done) => setTimeout(done, 20));
+      order.push("compaction_returned");
+      return compacted();
+    }
+    const turn = turns(f.requests).length - 1;
+    order.push(`turn_${turn}`);
+    if (turn === 1) turnOneReturned.resolve();
+    return turn === 0
+      ? call("execute", example, mintIdleCompactionTokens + 1_000, "execute_1")
+      : turn === 1
+        ? call("execute", example, mintCompactionLimitTokens - 10, "execute_2")
+        : call("finish_build", finish, 30_000);
+  });
+  const outcome = await f.run();
+
+  expect(outcome.build).toBe("published");
+  expect(order).toEqual(["turn_0", "turn_1", "compaction_returned", "turn_2"]);
+  const [, , third] = turns(f.requests);
+  expect(items(third)[0]).toMatchObject(compactedItem);
+});
+
+it("compacts the last request first when one turn alone would carry the next past the limit", async () => {
+  const f = await fixture((request) => {
+    if (isCompaction(request)) return compacted();
+    return turns(f.requests).length === 1
+      ? {
+          ...call("execute", example, 200_000),
+          usage: new Usage({
+            requests: 1,
+            inputTokens: 200_000,
+            outputTokens: mintCompactionLimitTokens - 200_000,
+            totalTokens: mintCompactionLimitTokens,
+          }),
+        }
+      : call("finish_build", finish, 30_000);
+  });
+  const outcome = await f.run();
+
+  expect(outcome.build).toBe("published");
+  const [first, second] = turns(f.requests);
+  const compaction = f.requests.find(isCompaction);
+  expect(items(compaction).slice(0, -1)).toEqual(items(first));
+  expect(f.requests.indexOf(compaction as ModelRequest)).toBeLessThan(
+    f.requests.indexOf(second as ModelRequest),
+  );
+  expect(items(second)[0]).toMatchObject(compactedItem);
+});
+
+// The provider's own backstop compaction starts the SDK's next input at its compaction item, so
+// the input the compacting turn reported no longer describes what the next request sends.
+it("starts no compaction of the old history after the provider compacted a turn", async () => {
+  const f = await fixture((_request, index) =>
+    index === 0
+      ? {
+          ...call("execute", example, mintCompactionLimitTokens + 8_500),
+          output: [compactedItem, ...call("execute", example).output],
+        }
+      : call("finish_build", finish, 30_000),
+  );
+  const outcome = await f.run();
+
+  expect(outcome.build).toBe("published");
+  expect(f.requests.some(isCompaction)).toBe(false);
+  expect(f.requests).toHaveLength(2);
+  expect(items(f.requests[1])[0]).toMatchObject(compactedItem);
 });
 
 it("leaves a short history to the provider and never compacts it", async () => {
@@ -349,7 +473,7 @@ it("tells the model after an idle compaction which skills it read, with the same
         () => refusedRead(skillPage("publication"), "read_publication"),
         // A path that is not a skill of the catalog is no skill read, even when it parses as one.
         () => readSource(skillPage("unlisted"), "read_unlisted"),
-        () => call("execute", example, mintIdleCompactionTokens + 10_000),
+        () => call("execute", example, mintIdleCompactionTokens + 1_000),
         // Read after the compacted prefix: still in view, so not listed.
         () => readSource(skillPage("search"), "read_search", 30_000),
         () => call("finish_build", finish, 32_000),
@@ -405,7 +529,7 @@ it("names the skills read in the minter's own note when the host gives none", as
       return [
         () => readSource(skillPage("search"), "read_search"),
         () => readSource(`/workspace/${skillPage("core")}`, "read_core"),
-        () => call("execute", example, mintIdleCompactionTokens + 10_000),
+        () => call("execute", example, mintIdleCompactionTokens + 1_000),
         () => call("finish_build", finish, 30_000),
       ][turn]!();
     },

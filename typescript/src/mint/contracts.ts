@@ -1576,6 +1576,10 @@ export interface MintTurn {
   readonly session: SandboxSession;
   /** The workspace AGENTS.md: the always-on context the model receives as its instructions. */
   readonly instructions: string;
+  /** `MintDependencies.staticContext`: host text sent right after the instructions. */
+  readonly staticContext?: readonly string[];
+  /** `MintDependencies.promptCacheKey`: sent as `prompt_cache_key` on every request. */
+  readonly promptCacheKey?: string;
   readonly skills: readonly SkillDescriptor[];
   readonly actions: MintActions;
   readonly hostToolDescriptions?: HostToolDescriptions;
@@ -2530,6 +2534,21 @@ export interface MintDependencies {
   readonly projection: MintProjection;
   /** The workspace AGENTS.md, installed at the workspace root and given as the instructions. */
   readonly instructions: string;
+  /**
+   * The host's static reference text, each entry sent in order right after the instructions,
+   * with the instructions' authority, and inside the prefix every job of the release shares in
+   * the provider's prompt cache for 12 hours. Each entry must be the same in every byte for every
+   * job of a release: host-authored orientation or reference that no job, caller, site or answer
+   * changes. Anything per job goes in the job's own messages instead; it would also split the
+   * shared prefix.
+   */
+  readonly staticContext?: readonly string[];
+  /**
+   * Sent as `prompt_cache_key` on every minter request, so the provider keeps the cache
+   * accounting of requests with one key apart from others, such as one key per environment. A
+   * prewarm of the minter's prefix (`prewarmMinterPrefix`) must send the same key. Absent, no key.
+   */
+  readonly promptCacheKey?: string;
   readonly skills: readonly SkillDescriptor[];
   readonly model: MintModel;
   /** Validate available host facilities before reserving the one-use example claim. No execution. */

@@ -6770,6 +6770,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           ...(dependencies.deadline ? { deadline: dependencies.deadline } : {}),
           session,
           instructions: dependencies.instructions,
+          ...(dependencies.staticContext === undefined
+            ? {}
+            : { staticContext: dependencies.staticContext }),
+          ...(dependencies.promptCacheKey === undefined
+            ? {}
+            : { promptCacheKey: dependencies.promptCacheKey }),
           skills: dependencies.skills,
           ...(dependencies.hostToolDescriptions === undefined
             ? {}
