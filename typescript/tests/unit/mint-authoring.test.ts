@@ -907,6 +907,32 @@ it("has a write mark only the steps that send and wait for every answer the site
 });
 
 /*
+ * A write saved over several pages refused the site's own code for an option on a later page,
+ * which showed only labels, after earlier pages had saved, so a value problem became an outcome
+ * the caller could not know. The site's option values and labels could be read before the first
+ * save, from the form definitions an earlier page loaded.
+ */
+it("has a write check caller values against the site's own option lists before its first save", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("writes")).toContain(
+    "- On a write saved across several pages, when the site's own option lists for a later page can be read before the first save and do not depend on what an earlier page saves, such as the form definitions or option data an earlier page loads, prefer reading them and checking every caller value for those fields against them before the first commit mark, in the session and on every run of the composed script. Match each value by the site's option value as well as its label (forms skill), and refuse with `InvalidInput` and `available` before anything is saved when a value matches neither. A refusal after an earlier save leaves a half-made record and an outcome the caller can't know.",
+  );
+  // A check that can only run after an earlier save keeps its honest possible change.
+  expect(text("writes")).toContain(
+    "A check that can only run after an earlier marked step, such as a total that shows only once a saved address step has run, runs before the later step's mark;",
+  );
+  // It sits after the refusal rule and its exceptions, so that rule's "those checks" still names
+  // the checks before it.
+  expect(text("writes")).toContain(
+    "then throw `InvalidInput` that names the field by its label, and don't click again. - On a write saved across several pages,",
+  );
+  expect(text("forms")).toContain(
+    "Choose the option that matches the input value, by the option's value or its observed label pattern, and read back that the field took it. When the control shows only labels, prefer matching against the site's own table of option values and labels, such as the form definitions or option data the page or an earlier page loads, over the visible words alone, so an input holding the site's code for an option picks that option.",
+  );
+});
+
+/*
  * A write whose own commit request came back 2xx or 3xx, with no error in its body or on the page
  * after it, went through, so the minter confirms it in the commit call instead of opening another
  * page to prove it. It reads the site back only when that request cannot settle the write.
@@ -1126,8 +1152,8 @@ it("renders the pinned standalone authoring", async () => {
     ["4685c83739eac20c5ee28d64c8dace6df03d12e4e6ced6c93e08479fd7b855fd", "auth"],
     ["ea6e7780a9a9028d806436de84488f20687fd292bb0d39ea01652b521c705772", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
-    ["1e5ba533a9a77f6ebeda8ab82979f82d085b84540bb0b0ce7f37722e32366de3", "forms"],
-    ["dc3002bcc8fbab8c7956e16c7a7bf297b746e245f37c4e746f4ad280040b7c4d", "writes"],
+    ["a34d8f0e21e946e62f88819faf422eabcc7a6f75e766d0186ce5f19f367ac055", "forms"],
+    ["4d69b06e79cb8e375207cebf96585c6ce8f91071f69da5483705271cb82a9918", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["4423c6fd332f1c3d3b17e3e5ea988aa564e3bb9d0d94838d85558cdecd987fb9", "caller-input"],
     ["6a6c8e632adfa6d7a95640498fc006fe904b5b569010c836c21b37f38fbf290a", "publication"],
