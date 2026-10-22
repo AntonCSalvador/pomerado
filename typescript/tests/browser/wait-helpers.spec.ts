@@ -900,9 +900,9 @@ test("on Patchright, a skeleton that comes with the action holds the wait beside
 });
 
 // The look's one page call counts what a visible locator match counts: rendered, not hidden, with a
-// box, or with display: contents a child that shows, through open shadow roots. A sign in content
-// the browser skips rendering does not show, and its box is never read: reading it would lay that
-// content out, one element at a time, which took seconds on a page with thousands of them.
+// box, or with display: contents a child element or text that shows, through open shadow roots. A
+// sign in content the browser skips rendering does not show, and its box is never read: reading it
+// would lay that content out, one element at a time, which took seconds with thousands of them.
 test("a look counts the generic signs as visible matches, never in content the browser skips rendering", async ({
   page,
 }) => {
@@ -911,6 +911,7 @@ test("a look counts the generic signs as visible matches, never in content the b
     <div class="results-skeleton" style="height: 10px; visibility: hidden"></div>
     <div class="loader" style="display: none"></div>
     <div class="loader-row" style="display: contents"><span style="display: inline-block; width: 10px; height: 10px"></span></div>
+    <div class="loading-spinner" style="display: contents">Loading</div>
     <div class="spinner" style="height: 0"></div>
     <x-card></x-card>
     <div aria-busy="true" style="height: 10px"></div>
@@ -923,7 +924,7 @@ test("a look counts the generic signs as visible matches, never in content the b
       });
     </script>`);
   expect(await call(page, `return await page.evaluate(waitSignsInPage, waitSignsSpec);`)).toEqual({
-    result: { signs: 1, classes: 3 },
+    result: { signs: 1, classes: 4 },
   });
   // Within a region, only what its elements hold, their own shadow roots included.
   expect(await call(page, `return await page.locator("x-card").evaluateAll(waitSignsInPage, waitSignsSpec);`)).toEqual({

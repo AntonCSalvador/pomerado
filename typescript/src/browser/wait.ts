@@ -120,9 +120,11 @@ const waitClassesBudgetMs = 250;
 // loading signs and class hints show in the document or the region's elements, through open
 // shadow roots, in one call, since a locator's count can cost a protocol call for each element it
 // matches. A sign shows as a visible locator match does: rendered, not hidden by visibility, with
-// a box, or for display: contents, a child that shows. One in content the browser skips rendering
-// (content-visibility) does not show, and is never laid out to check: reading its box would lay
-// that content out, one element at a time. Class hints left uncounted after the budget are null.
+// a box, or for display: contents, a child element or text that shows. One in content the browser
+// skips rendering (content-visibility) does not show, and is never laid out to check: reading its
+// box would lay that content out, one element at a time. A closed shadow root is out of page code's
+// reach, so a sign inside one, which a Patchright locator could count, is not counted. Class hints
+// left uncounted after the budget are null.
 const waitSignsInPage = (first, second) => {
   const [roots, spec] = second === undefined ? [[document], first] : [first, second];
   const started = performance.now();
@@ -131,15 +133,22 @@ const waitSignsInPage = (first, second) => {
     if (scope.shadowRoot) scopes.add(scope.shadowRoot);
     for (const node of scope.querySelectorAll("*")) if (node.shadowRoot) scopes.add(node.shadowRoot);
   }
+  const boxed = (box) => box.width > 0 && box.height > 0;
+  const textShows = (text) => {
+    const range = text.ownerDocument.createRange();
+    range.selectNode(text);
+    return boxed(range.getBoundingClientRect());
+  };
   const shows = (element) => {
     const rendered = typeof element.checkVisibility !== "function" ||
       element.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true });
-    // Without a box: display: contents shows when a child does; hidden or skipped content does not.
+    // Without a box: display: contents shows when a child element or text does; hidden or skipped
+    // content does not.
     if (!rendered)
       return !element.checkVisibility() && getComputedStyle(element).display === "contents" &&
-        [...element.children].some(shows);
-    const box = element.getBoundingClientRect();
-    return box.width > 0 && box.height > 0;
+        [...element.childNodes].some((child) =>
+          child.nodeType === Node.ELEMENT_NODE ? shows(child) : child.nodeType === Node.TEXT_NODE && textShows(child));
+    return boxed(element.getBoundingClientRect());
   };
   const count = (selector, budgetMs) => {
     const seen = new Set();
