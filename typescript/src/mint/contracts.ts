@@ -362,8 +362,9 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
     /** The composed script declares a commit step no act step of the session ever entered. */
     | "commit_marks_unentered"
     /**
-     * The session has not entered every commit mark of its recorded write path;
-     * `writePathMarks` names the ones still to run.
+     * The session has not settled every commit mark of its recorded write path;
+     * `writePathMarks` names the ones not yet settled (a step that lost its result may have
+     * entered them).
      */
     | "write_path_unfinished"
     /**
@@ -929,7 +930,7 @@ export interface ExecutionEvidence {
   readonly effect: "not_sent" | "possible" | "verified";
   /**
    * The confirmation a write session step recorded; it closes the session, unless
-   * `writePathRemaining` names marks of the recorded write path still to run.
+   * `writePathRemaining` names marks of the recorded write path not yet settled.
    */
   readonly confirmation?: "message" | "readback";
   /**
@@ -944,10 +945,10 @@ export interface ExecutionEvidence {
   readonly withheldConfirmation?: "message" | "readback";
   /**
    * Trusted host marker on a write build's act step: the commit marks of the session's recorded
-   * write path that no step of the session has entered yet, in path order. While it names any, a
-   * confirmation the step recorded does not close the session, which runs on through them. The
-   * host treats the commit marks a confirming step entered as settled for every later act step,
-   * as for a withheld confirmation.
+   * write path not yet settled, in path order (a step that lost its result may have entered
+   * them). While it names any, a confirmation the step recorded does not close the session, which
+   * runs on through them. The host treats the commit marks a confirming step entered as settled
+   * for every later act step, as for a withheld confirmation.
    */
   readonly writePathRemaining?: readonly string[];
   /** Screened, finite supporting observation; never a replacement execution failure. */
