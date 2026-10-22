@@ -24,8 +24,8 @@ import { placeOf } from "./session-sign-in.js";
 
 /**
  * Which pages are the recorded screens: by default each screen's recorded page, its origin and its
- * path with any trailing slash but the root's dropped; a replay of a tool with a workspace relation
- * puts its workspace screens on the login's workspace origin.
+ * path with any trailing slash but the root's dropped. Every replay session passes its own, which
+ * put a workspace screen on the login's workspace origin.
  */
 export interface ReplayScreens {
   readonly onScreens: (page: string) => boolean;
