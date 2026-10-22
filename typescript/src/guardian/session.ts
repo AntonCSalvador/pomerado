@@ -477,16 +477,15 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
           ? undefined
           : latestConfigurationEffort(input.slice(0, prefix));
       const rest = input.slice(prefix);
-      // The conversation's instructions follow too, so it keeps every one of them.
-      const compacted = withInstructionsKept(
-        [...(effort === undefined ? [item] : [item, configurationUpdate(effort)]), ...rest],
-        instructions,
-      );
-      const items = compacted.slice(0, compacted.length - rest.length);
+      const head = effort === undefined ? [item] : [item, configurationUpdate(effort)];
+      // The conversation's instructions follow too, so it keeps every one of them: each one the
+      // items after the cut do not hold goes right after the head, never among those items.
+      const held = new Set(rest.map((entry) => key([entry])));
+      const items = [...head, ...instructions.filter((entry) => !held.has(key([entry])))];
       windows = [...windows, { length: prefix, key: key(input.slice(0, prefix)), items }];
       compactions++;
       return {
-        sent: { ...sent, input: compacted },
+        sent: { ...sent, input: [...items, ...rest] },
         usage: outcome.right.usage,
       };
     });

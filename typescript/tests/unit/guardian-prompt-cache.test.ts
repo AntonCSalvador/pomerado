@@ -454,6 +454,50 @@ it("keeps the kinds a restored conversation holds, adding only a new kind's", as
   expect(history).not.toContain(hostPolicies.publication);
 });
 
+it("adds a kind's changed policy once to a restored conversation, after the one it holds", async () => {
+  const bodies = wire();
+  let saved: Parameters<NonNullable<GuardianSessionOptions["save"]>>[0] | undefined;
+  const save = (snapshot: NonNullable<typeof saved>) =>
+    Effect.sync(() => {
+      saved = snapshot;
+    });
+  await Effect.runPromise(
+    makeGuardian(reviewer({ policies: hostPolicies }), undefined, { save }).review(
+      pending,
+      readCurrent,
+    ),
+  );
+  if (saved === undefined) throw new Error("The session saved no snapshot");
+  const before = bodies.at(-1);
+
+  // The host's execution policy changed before the conversation was restored.
+  const changed = "Synthetic revised host execution policy.";
+  const restored = makeGuardian(
+    reviewer({ policies: { ...hostPolicies, execution: changed } }),
+    undefined,
+    { initial: saved, save },
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* restored.review(pending, readCurrent);
+      yield* restored.review({ ...pending, screenedInput: '{"again":true}' }, readCurrent);
+    }),
+  );
+
+  expect(bodies).toHaveLength(3);
+  const [, revised, again] = bodies;
+  // Only the changed section is added, after the conversation it continues; the shared outcome
+  // section it already holds is not.
+  expect(addedBy(revised, before)).toEqual(["developer", "user"]);
+  const added = developerTextOf(itemsOf(revised).at(-2)) ?? "";
+  expect(sectionsOf(added)).toEqual(["Execution reviews"]);
+  expect(added).toContain(changed);
+  expect(addedBy(again, revised)).toEqual(["user"]);
+  const whole = JSON.stringify(again);
+  expect(whole.split(changed)).toHaveLength(2);
+  expect(whole.split(hostPolicies.execution)).toHaveLength(2);
+});
+
 it("re-adds the effort after a compaction, never next to another update or with automatic compaction", async () => {
   const compaction = {
     type: "compaction",
