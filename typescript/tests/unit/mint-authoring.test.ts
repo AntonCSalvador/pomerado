@@ -1124,7 +1124,7 @@ it("renders the pinned standalone authoring", async () => {
     ["a9dbd4ce6b6f06f18b31235b910ee5a82b55d1d750fc89cade0326aa95428939", "core"],
     ["a896a59d7b924a2940a90437b8d4488cd515c4f4afc70da9fe14953b1583dd93", "search"],
     ["e1b24b29d645071fa265f37d0fae3bb5be2b38798a32ecdbd7d5a6826a1c9248", "auth"],
-    ["6c94541384e6a8133606bc1f86f7a3ba428943bf28be1108134a4763575c16bc", "testing"],
+    ["ea6e7780a9a9028d806436de84488f20687fd292bb0d39ea01652b521c705772", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["da972d9b65ff424210686366db36843a6aa966dce4dbb203fcfcfcaad9f84853", "forms"],
     ["dc3002bcc8fbab8c7956e16c7a7bf297b746e245f37c4e746f4ad280040b7c4d", "writes"],
