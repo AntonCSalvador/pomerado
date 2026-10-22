@@ -417,4 +417,36 @@ describe("checkSignInVersion", () => {
       { rule: "foreign_origin", part: "recipe.steps[0].popup.origin" },
     ]);
   });
+
+  it("passes a segment written as * on the site's own origin or a workspace step, and refuses one on another origin or on the page the entry URL opens", () => {
+    const listed = (page: string, entryUrl = version.entryUrl): SignInVersion => ({
+      entryUrl,
+      recipe: {
+        version: 7,
+        workspace: { parent: "example.com" },
+        steps: [
+          version.recipe.steps[0]!,
+          { ...version.recipe.steps[1]!, page, anySegments: [1] },
+          {
+            origin: "workspace",
+            page: "/team/*/code",
+            anySegments: [1],
+            fields: [{ selector: "#code", slot: "code" }],
+          },
+        ],
+        signedIn: version.recipe.signedIn,
+      },
+    });
+    expect(checkSignInVersion(input(() => listed("https://www.example.com/team/*/password")))).toEqual([]);
+    expect(checkSignInVersion(input(() => listed("https://login.example.com/team/*/password")))).toEqual([
+      { rule: "wildcard_placement", part: "recipe.steps[1].anySegments" },
+    ]);
+    expect(
+      checkSignInVersion(
+        input(() =>
+          listed("https://www.example.com/team/*/password", "https://www.example.com/team/a/password"),
+        ),
+      ),
+    ).toEqual([{ rule: "wildcard_placement", part: "recipe.steps[1].anySegments" }]);
+  });
 });

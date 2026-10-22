@@ -253,15 +253,112 @@ export const DismissAutofillRecipe = workspacePages(
     steps: Schema.Array(DismissRecipeStep).pipe(Schema.minItems(1), Schema.maxItems(12)),
   }).annotations({ parseOptions: { onExcessProperty: "error" } }),
 );
+/** A path's segments, counted from 0 after its first "/", as `anySegments` lists them. */
+const segmentsOf = (path: string) => path.split("/").slice(1);
+/** Whether `listed` names, in order and once each, exactly the segments of `path` written as `*`. */
+const starsListed = (path: string, listed: readonly number[] = []) => {
+  const stars = segmentsOf(path).flatMap((segment, at) => (segment === "*" ? [at] : []));
+  return stars.length === listed.length && stars.every((at, index) => listed[index] === at);
+};
+const SegmentList = Schema.Array(Schema.Int.pipe(Schema.nonNegative())).pipe(
+  Schema.minItems(1),
+  Schema.maxItems(16),
+);
+/**
+ * A version 7 step: a version 6 step that may list `anySegments`, the segments of its page's path,
+ * counted from 0 after its first "/", that it writes as `*`, such as a later screen at
+ * `/team/<team>/password` where each account's team differs. Runs never open a recorded page, so a
+ * replay reads such a screen on the same origin, with as many segments, any one non-empty segment
+ * at each listed place and every other the same (`pageMatches`).
+ */
+const WildcardRecipeStep = Schema.extend(
+  DismissRecipeStep,
+  Schema.Struct({ anySegments: Schema.optional(SegmentList) }),
+).pipe(
+  Schema.filter(
+    (step) =>
+      starsListed(URL.parse(step.page, "https://h.invalid")?.pathname ?? "", step.anySegments) ||
+      "a step's anySegments list, in order, exactly its page's segments written as *",
+  ),
+);
+/** Version 7's marker: a host opens its paths, so neither writes a segment as `*`. */
+const WildcardSignedIn = LegacyAutofillRecipe.fields.signedIn.pipe(
+  Schema.filter(
+    (marker) =>
+      [marker.urlPath, marker.openPath].every(
+        (path) => path === undefined || !segmentsOf(path).includes("*"),
+      ) || "no segment of the marker's urlPath or openPath is *",
+  ),
+);
+/**
+ * Version 7: version 6 whose steps may write path segments as `*`, never the first step, whose
+ * page is where a run starts when the build gave no login URL. A host that does not know version 7
+ * refuses it, so it never reads a `*` as a literal segment. A recipe that lists no segment is
+ * written as before, in the lowest version it needs.
+ */
+export const WildcardAutofillRecipe = workspacePages(
+  Schema.Struct({
+    ...LegacyAutofillRecipe.fields,
+    version: Schema.Literal(7),
+    workspace: Schema.optional(Schema.Struct({ parent: HostName })),
+    steps: Schema.Array(WildcardRecipeStep).pipe(Schema.minItems(1), Schema.maxItems(12)),
+    signedIn: WildcardSignedIn,
+  }).annotations({ parseOptions: { onExcessProperty: "error" } }),
+).pipe(
+  Schema.filter(
+    (recipe) =>
+      recipe.steps[0]?.anySegments === undefined || "the first step lists no anySegments",
+  ),
+);
 export const AutofillRecipe = Schema.Union(
   LegacyAutofillRecipe,
   PopupAutofillRecipe,
   WorkspaceAutofillRecipe,
   KeySubmitAutofillRecipe,
   DismissAutofillRecipe,
+  WildcardAutofillRecipe,
 );
 export type AutofillRecipe = typeof AutofillRecipe.Type;
-export type AutofillRecipeStep = typeof DismissRecipeStep.Type;
+export type AutofillRecipeStep = typeof WildcardRecipeStep.Type;
+
+/**
+ * Whether a live path is a recorded screen's: as many segments, each the same, except that each
+ * listed place (`anySegments`, counted from 0 after the first "/") takes any one non-empty
+ * segment. A trailing slash but the root's is dropped from both.
+ */
+export const pathMatches = (
+  live: string,
+  recorded: string,
+  anySegments: readonly number[] = [],
+) => {
+  const parts = (path: string) => (path.length <= 1 ? path : path.replace(/\/$/u, "")).split("/");
+  const here = parts(live);
+  const there = parts(recorded);
+  return (
+    here.length === there.length &&
+    there.every((part, at) => (anySegments.includes(at - 1) ? here[at] !== "" : here[at] === part))
+  );
+};
+
+/**
+ * Whether a live page is a recorded screen's page: the same origin, and a path that
+ * `pathMatches` the screen's. A page that is no absolute URL, such as a workspace screen's path
+ * while the replay knows no workspace origin, matches none.
+ */
+export const pageMatches = (
+  live: string,
+  recorded: { readonly page: string; readonly anySegments?: readonly number[] | undefined },
+) => {
+  const here = URL.parse(live);
+  const there = URL.parse(recorded.page);
+  return (
+    here !== null &&
+    there !== null &&
+    here.origin === there.origin &&
+    pathMatches(here.pathname, there.pathname, recorded.anySegments)
+  );
+};
+
 /** Where a version 4 recipe's sign-in may go besides the site's own host. */
 export interface AutofillRecipeOrigins {
   readonly workspace?: { readonly parent: string } | undefined;
@@ -301,6 +398,8 @@ interface RecordedRecipeStep {
   readonly dismiss?: string | undefined;
   /** The page the step ran on, origin and path only. */
   readonly page: string;
+  /** The segments of `page`'s path written as `*`, which any one segment matches. */
+  readonly anySegments?: readonly number[] | undefined;
 }
 
 const isIdentifierKind = Schema.is(IdentifierKinds);
@@ -312,6 +411,7 @@ const isIdentifierKind = Schema.is(IdentifierKinds);
 export const recipeStep = (step: RecordedRecipeStep): AutofillRecipeStep => ({
   ...(step.origin === undefined ? {} : { origin: step.origin }),
   page: step.page,
+  ...(step.anySegments === undefined ? {} : { anySegments: step.anySegments }),
   ...(step.approval === undefined ? {} : { approval: step.approval }),
   ...(step.popup === undefined ? {} : { popup: step.popup }),
   ...(step.rejectedMarkers === undefined ? {} : { rejectedMarkers: step.rejectedMarkers }),
@@ -338,20 +438,22 @@ export const recipeStep = (step: RecordedRecipeStep): AutofillRecipeStep => ({
 });
 
 /**
- * A verified sign-in's recipe: version 6 only when a step names `dismiss`, else version 5 only when a step submits with a key or refills a secret
- * (`refills`), else version 4 only when its sign-in may move to a workspace host
- * (`origins.workspace`, or a workspace step), else version 2 only with a popup or an approval,
- * else version 1. A security answer's question selector rides in any of them. Versions 4, 5 and 6
- * write `workspace` before `steps`.
+ * A verified sign-in's recipe: version 7 only when a step lists segments written as `*`
+ * (`anySegments`), else version 6 only when a step names `dismiss`, else version 5 only when a
+ * step submits with a key or refills a secret (`refills`), else version 4 only when its sign-in
+ * may move to a workspace host (`origins.workspace`, or a workspace step), else version 2 only
+ * with a popup or an approval, else version 1. A security answer's question selector rides in any
+ * of them. Versions 4 to 7 write `workspace` before `steps`.
  */
 export const autofillRecipe = <SignedIn>(
   steps: readonly RecordedRecipeStep[],
   signedIn: SignedIn,
   origins: AutofillRecipeOrigins = {},
 ) => {
-  if (steps.some((step) => step.dismiss !== undefined))
+  const lists = steps.some((step) => step.anySegments !== undefined);
+  if (lists || steps.some((step) => step.dismiss !== undefined))
     return {
-      version: 6 as const,
+      version: lists ? (7 as const) : (6 as const),
       ...(origins.workspace === undefined
         ? {}
         : { workspace: { parent: origins.workspace.parent } }),
@@ -381,4 +483,57 @@ export const autofillRecipe = <SignedIn>(
     steps: steps.map(recipeStep),
     signedIn,
   };
+};
+
+/** A path segment to write as `*`: of step `step`'s page, counted from 0 after its first "/". */
+export interface WildcardSegment {
+  readonly step: number;
+  readonly segment: number;
+}
+
+/**
+ * The recipe as version 7 with each given segment written as `*` and listed, as a host writes it
+ * once its publication review found a per-account value there, such as a team in
+ * `/team/<team>/password`; undefined when a segment is not one a recipe may write so: an empty
+ * one, one its path does not have, or one of a step the recipe does not have, of the first step,
+ * whose page is where a run starts, or of a step neither on `siteOrigin`, the tool's site origin,
+ * nor on the login's workspace host. A screen on another site, such as an identity provider's,
+ * keeps its exact page.
+ */
+export const wildcardRecipe = (
+  recipe: AutofillRecipe,
+  siteOrigin: string,
+  segments: readonly WildcardSegment[],
+): typeof WildcardAutofillRecipe.Type | undefined => {
+  if (segments.some(({ step }) => recipe.steps[step] === undefined)) return undefined;
+  const recorded: readonly AutofillRecipeStep[] = recipe.steps;
+  const steps = recorded.map((step, index) => {
+    const given = segments.flatMap((segment) => (segment.step === index ? [segment.segment] : []));
+    if (given.length === 0) return step;
+    const url = step.origin === "workspace" ? undefined : URL.parse(step.page);
+    if (url !== undefined && url?.origin !== siteOrigin) return undefined;
+    const parts = (url?.pathname ?? step.page).split("/");
+    if (given.some((segment) => (parts[segment + 1] ?? "") === "")) return undefined;
+    const listed = [...new Set([...(step.anySegments ?? []), ...given])].sort((a, b) => a - b);
+    const path = parts.map((part, at) => (listed.includes(at - 1) ? "*" : part)).join("/");
+    const { origin, page: _page, anySegments: _listed, ...rest } = step;
+    return {
+      ...(origin === undefined ? {} : { origin }),
+      page: `${url?.origin ?? ""}${path}`,
+      anySegments: listed,
+      ...rest,
+    };
+  });
+  if (!steps.every((step) => step !== undefined)) return undefined;
+  const written: typeof WildcardAutofillRecipe.Type = {
+    version: 7,
+    ...("workspace" in recipe && recipe.workspace !== undefined
+      ? { workspace: { parent: recipe.workspace.parent } }
+      : {}),
+    steps,
+    signedIn: recipe.signedIn,
+  };
+  return Option.isSome(Schema.decodeUnknownOption(WildcardAutofillRecipe)(written))
+    ? written
+    : undefined;
 };
