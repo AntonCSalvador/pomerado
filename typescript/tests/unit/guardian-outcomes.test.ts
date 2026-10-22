@@ -22,6 +22,7 @@ import type {
   GuardianDiagnostics,
   HostReview,
   PendingExecution,
+  Reviewer,
   ReviewFailure,
   ReviewRetry,
 } from "../../src/guardian/review.js";
@@ -210,7 +211,7 @@ it.each([
   [
     "execution",
     "reword",
-    "The host did not accept this decision: reword is not an outcome an execution review returns. It returns only allow, deny, escalate, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them. A step that should change before it runs, or that needs the caller first, is a deny.",
+    "The host did not accept this decision: reword is not an outcome an execution review returns. It returns only allow, deny, escalate, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them. A step that should change before it runs, or that needs the caller first, is a deny or an escalate, as its policy says.",
     "The outcome reword is not one an execution review returns",
   ],
   [
@@ -222,7 +223,7 @@ it.each([
   [
     "update",
     "escalate",
-    "The host did not accept this decision: escalate is not an outcome an update review returns. It returns only allow, clarify, reword, new_mint, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them. An update its caller has not confirmed is a clarify, and one that is wrong as written is a reword.",
+    "The host did not accept this decision: escalate is not an outcome an update review returns. It returns only allow, clarify, reword, new_mint, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them. An update that needs the caller's confirmation and lacks it is a clarify, and one that is wrong as written is a reword.",
     "The outcome escalate is not one an update review returns",
   ],
 ] as const)(
@@ -237,6 +238,87 @@ it.each([
     });
   },
 );
+
+/**
+ * A reviewer that answers every review, and the follow-up the host sends after it, with one
+ * outcome, keeping each follow-up the host sends.
+ */
+const answering = (outcome: string) => {
+  const followUps: string[] = [];
+  const reviewer: Reviewer = {
+    run: (turn) =>
+      Effect.sync(() => {
+        const raw = { outcome, rationale: `Synthetic ${outcome}.` };
+        const followUp = turn.followUp?.(raw);
+        if (followUp !== undefined) followUps.push(followUp);
+        return raw;
+      }),
+  };
+  return { followUps, guardian: makeGuardian(reviewer) };
+};
+
+const publicationScope = {
+  files: [
+    {
+      path: pending.entrypoint,
+      byteLength: 22,
+      published: true,
+      current: true,
+      owner: "minter" as const,
+    },
+  ],
+};
+
+// A recovery or publication review's correction named no outcome that holds a change first, and
+// a host-defined kind's could have named one its own policy never gives.
+it.each([
+  [
+    "recovery",
+    (guardian: Guardian) => guardian.reviewRecovery(pending, "The browser froze.", readSource),
+    "The host did not accept this decision: reword is not an outcome a recovery review returns. It returns only allow, deny, escalate, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them. A request for a new browser that should not be granted is a deny.",
+    "The outcome reword is not one a recovery review returns",
+  ],
+  [
+    "publication",
+    (guardian: Guardian) =>
+      guardian.review({ ...pending, publication: publicationScope }, readSource),
+    "The host did not accept this decision: reword is not an outcome a publication review returns. It returns only allow, deny, escalate, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them. A tool that should change before it publishes is a deny.",
+    "The outcome reword is not one a publication review returns",
+  ],
+  [
+    "host-defined",
+    (guardian: Guardian) => guardian.reviewHostKind(pending, tiered),
+    "The host did not accept this decision: reword is not an outcome a synthetic_tier review returns. It returns only allow, deny, as trusted_review.outcomes lists. Decide this review again under its policy and return one of them.",
+    "The outcome reword is not one a host review returns",
+  ],
+] as const)("corrects a %s review's refused outcome once, naming it", async (_kind, run, correction, failure) => {
+  const { followUps, guardian } = answering("reword");
+  const result = await Effect.runPromise(
+    Effect.either(run(guardian) as Effect.Effect<unknown, ReviewFailure>),
+  );
+  expect(followUps).toEqual([correction]);
+  expect(result).toMatchObject({
+    _tag: "Left",
+    left: { code: "InvalidOutcome", failureDetail: { underlying: { message: failure } } },
+  });
+});
+
+// A private kind's readable records keep nothing of its exchange: no correction, and a failure
+// that names no outcome.
+it("fails a private host kind's refused outcome at once, naming no outcome", async () => {
+  const { followUps, guardian } = answering("reword");
+  const result = await Effect.runPromise(
+    Effect.either(guardian.reviewHostKind(pending, { ...tiered, private: true })),
+  );
+  expect(followUps).toEqual([]);
+  expect(result).toMatchObject({
+    _tag: "Left",
+    left: {
+      code: "InvalidOutcome",
+      failureDetail: { underlying: { message: "The outcome is not one a host review returns" } },
+    },
+  });
+});
 
 // Outcomes that are only outcome names: `allow` is also a verb every policy uses, and
 // `authentication` is also an execution's action label.
