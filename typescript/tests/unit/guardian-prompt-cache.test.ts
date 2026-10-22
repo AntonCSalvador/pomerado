@@ -173,6 +173,9 @@ const cachedPrefix = (body: Body | undefined) =>
     input: itemsOf(body).slice(0, 1),
   });
 
+/** A request's items after its two leading developer messages. */
+const conversationOf = (body: Body | undefined) => itemsOf(body).slice(2);
+
 const breakpointOf = (item: WireItem | undefined) =>
   (item?.content as readonly { readonly prompt_cache_breakpoint?: unknown }[] | undefined)?.[0]
     ?.prompt_cache_breakpoint;
@@ -428,6 +431,27 @@ const providerCompaction = {
   encrypted_content: "opaque-provider-compacted-context",
 };
 
+/** An execution review's decision, for a reply after a compaction took its request out of view. */
+const executionDecision = {
+  type: "message",
+  id: "msg_after_compaction",
+  role: "assistant",
+  status: "completed",
+  content: [
+    {
+      type: "output_text",
+      text: JSON.stringify({
+        outcome: "allow",
+        rationale: "Synthetic decision",
+        action: "read",
+        reason: null,
+        findings: null,
+      }),
+      annotations: [],
+    },
+  ],
+};
+
 /** Whether a request may be compacted at all: by the provider, or by its own trigger. */
 const compactable = (body: Body | undefined) =>
   body?.["context_management"] !== undefined ||
@@ -446,30 +470,7 @@ it("keeps the provider's compaction for a session at another effort when its own
         usage: { input_tokens: 252_000, output_tokens: 1, total_tokens: 1 },
       };
     // The compaction took the review's request out of view, so the decision is scripted here.
-    if (calls === 4)
-      return {
-        output: [
-          {
-            type: "message",
-            id: "msg_after_compaction",
-            role: "assistant",
-            status: "completed",
-            content: [
-              {
-                type: "output_text",
-                text: JSON.stringify({
-                  outcome: "allow",
-                  rationale: "Synthetic decision",
-                  action: "read",
-                  reason: null,
-                  findings: null,
-                }),
-                annotations: [],
-              },
-            ],
-          },
-        ],
-      };
+    if (calls === 4) return { output: [executionDecision] };
     return {
       usage: { input_tokens: calls === 1 ? 236_000 : 30_000, output_tokens: 1, total_tokens: 1 },
     };
@@ -551,6 +552,63 @@ it("keeps a restored session at another effort compactable before it knows its s
   expect(compactable(crossing)).toBe(true);
   expect(itemsOf(crossing).some((item) => item.type === "configuration_update")).toBe(false);
   expect(crossing?.["reasoning"]).toMatchObject({ effort: "low" });
+});
+
+it("continues from the session's own compaction after the provider compacted earlier in the review", async () => {
+  const sessionCompaction = {
+    type: "compaction",
+    id: "cmp_session",
+    encrypted_content: "opaque-session-compacted-context",
+  };
+  let restoring = true;
+  let calls = 0;
+  const bodies = wire((body) => {
+    if (restoring) return {};
+    calls++;
+    if (itemsOf(body).at(-1)?.type === "compaction_trigger") return { output: [sessionCompaction] };
+    const usage = (input_tokens: number) => ({ input_tokens, output_tokens: 1, total_tokens: 1 });
+    // The provider compacts the restored session's first request, then the review reads on
+    // until its next request would cross the threshold again.
+    if (calls === 1)
+      return { output: [providerCompaction, readEntrypoint("first")], usage: usage(30_000) };
+    if (calls === 2) return { output: [readEntrypoint("second")], usage: usage(239_990) };
+    if (calls === 4) return { output: [readEntrypoint("third")], usage: usage(30_000) };
+    return { output: [executionDecision], usage: usage(30_000) };
+  });
+  const low = reviewer({ specialize: () => ({ reasoningEffort: "low" }) });
+  let saved: Parameters<NonNullable<GuardianSessionOptions["save"]>>[0] | undefined;
+  await Effect.runPromise(
+    makeGuardian(low, undefined, {
+      save: (snapshot) =>
+        Effect.sync(() => {
+          saved = snapshot;
+        }),
+    }).review(pending, readCurrent),
+  );
+  if (saved === undefined) throw new Error("The session saved no snapshot");
+  restoring = false;
+  bodies.splice(0);
+
+  const restored = makeGuardian(low, undefined, { initial: saved });
+  await Effect.runPromise(
+    restored.review({ ...pending, screenedObservations: "y".repeat(800_000) }, readCurrent),
+  );
+
+  expect(bodies).toHaveLength(5);
+  const [, , compacting, compacted, after] = bodies;
+  expect(itemsOf(compacting).at(-1)?.type).toBe("compaction_trigger");
+  // Every request after the session's own compaction continues from its item, not from the
+  // provider's earlier one.
+  for (const body of [compacted, after])
+    expect(conversationOf(body)[0]).toMatchObject({ type: "compaction", id: "cmp_session" });
+  expect(conversationOf(after).map((item) => item.type)).toEqual([
+    "compaction",
+    "configuration_update",
+    "function_call",
+    "function_call_output",
+    "function_call",
+    "function_call_output",
+  ]);
 });
 
 it("reports cache writes by lifetime in the review's usage", async () => {

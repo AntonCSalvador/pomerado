@@ -342,12 +342,8 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
         ),
       );
     toLatestCompaction();
-    for (const window of windows)
-      if (kept.length >= window.length && key(kept.slice(0, window.length)) === window.key) {
-        cut(window.length);
-        kept = [...window.items, ...kept];
-      }
-    toLatestCompaction();
+    // The effort a provider's compaction ended follows its item again, before the windows are
+    // matched, since a later compaction of this review keyed its window on the items with it.
     const [first, second] = kept;
     if (
       providerCompacted !== undefined &&
@@ -356,6 +352,12 @@ export const makeGuardianSession = (options: GuardianSessionOptions) => {
       (second === undefined || configurationUpdateEffort(second) === undefined)
     )
       kept = [first, configurationUpdate(providerCompacted.effort), ...kept.slice(1)];
+    for (const window of windows)
+      if (kept.length >= window.length && key(kept.slice(0, window.length)) === window.key) {
+        cut(window.length);
+        kept = [...window.items, ...kept];
+      }
+    toLatestCompaction();
     return { kept, dropped };
   };
   const save = (items: readonly AgentInputItem[], incomplete: boolean) =>
