@@ -168,7 +168,7 @@ first:
   password, codes or answers off the site: Guardian refuses that.<!-- pomerado:section publication.recorded-requests -->
 - **Consent and privacy.** Turn safety defaults off (core skill, "Safety defaults"): an
   option that shares the caller's data with another company, opts into tracking or signs up for
-  marketing ends off. Dismiss a covering consent banner as the forms skill says.
+  marketing ends off. Dismiss a cookie banner as the core skill says.
 - **Imports.** Import `effect`, the workspace's `runtime/` and `browser/` modules and your own
   files; do not rely on any other package, such as an HTML parser, being installed.
 - **Host-owned files.** <!-- pomerado:section publication.host-owned:start
