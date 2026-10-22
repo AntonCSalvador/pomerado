@@ -561,8 +561,9 @@ export const SignInStep = Schema.Union(
       ),
     ),
     /**
-     * The own accept or close control of a cookie, consent or similar notice that covers this
-     * screen. The host clicks it before it types, when the page shows it, and runs do the same.
+     * The own control of a cookie or consent banner that shows on this screen: its close or
+     * dismiss control, else one that rejects what is not essential, else accept when that is the
+     * only way out. The host clicks it before it types, when the page shows it, and runs do the same.
      * After the host reports `submit: blocked`, send the same step again with it: the host clicks
      * it, then clicks the submit once more without typing. Never a submit, a field or a control
      * of the sign-in's own form.
