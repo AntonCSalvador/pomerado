@@ -4342,6 +4342,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               purpose: testCase.purpose,
               expect: testCase.expect,
               ...(testCase.next_page === true ? { nextPage: true } : {}),
+              ...(testCase.noMatch === true ? { noMatch: true } : {}),
               ...(signedInBatch ? { signedIn: true as const } : {}),
             });
           }
