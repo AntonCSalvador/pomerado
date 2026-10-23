@@ -126,6 +126,7 @@ const properties = [
   "editable",
   "control",
   "actions",
+  "scriptAction",
   "methods",
   "explicitGet",
   "submitMethod",

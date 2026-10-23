@@ -175,8 +175,9 @@ export type AutofillFillCall =
       /** Whether each field's own form was judged to submit by GET. */
       readonly fieldGet: readonly boolean[];
       /**
-       * A sign-in step's submit: its guard lets a submission to page script (`javascript:`) fire
-       * by GET, since navigating there puts no entry in an address.
+       * A sign-in step's submit: its guard lets a submission to a script that does nothing
+       * (`javascript:`, `javascript:void(0)`, `javascript:;`) fire by GET, since navigating there
+       * puts no entry in an address and runs nothing.
        */
       readonly scriptSubmit?: true;
       /** Only look: a call that finds the step's fields clicks nothing and answers `none`. */
@@ -231,6 +232,7 @@ const same = (found, expected, editable = true) =>
     : found.ownerUrl === expected.ownerUrl &&
       JSON.stringify(found.ancestors ?? []) === JSON.stringify(expected.ancestors ?? []) &&
       (found.explicitGet ?? false) === (expected.explicitGet ?? false) &&
+      (found.scriptAction ?? false) === (expected.scriptAction ?? false) &&
       found.documentOrigin === expected.documentOrigin &&
       (!editable || found.editable === expected.editable) &&
       found.control === expected.control &&

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Schema } from "effect";
 import type { AutofillFillCall } from "./autofill-page-code.js";
 import { foundEvidence, namedOrigin, refused, withCheck } from "./autofill-refusal.js";
+import { noOpScriptCode } from "./autofill-locate-code.js";
 import type { FillSlot, Targets } from "./autofill-step.js";
 import { isCardSlot } from "./payment-frames.js";
 
@@ -24,10 +25,11 @@ import { isCardSlot } from "./payment-frames.js";
  *   each hold one character are one code, their values joined in field order, so a code split into
  *   one-character boxes is found whole and never one character at a time; a longer code field is a
  *   code of its own. Both ignore case, since a URL's host is lowercased as it is parsed.
- * - On a sign-in step's submit (`scriptSubmit`), a submission by GET whose action is page script
- *   (`javascript:`) is not refused for its method: navigating to such an action puts no entry in an
- *   address. Its action may still not carry a filled secret. A card-fill step's submit has no such
- *   exception.
+ * - On a sign-in step's submit (`scriptSubmit`), a submission by GET whose action is a script that
+ *   does nothing (`noOpScriptCode`) is not refused for its method: navigating to such an action
+ *   puts no entry in an address and runs nothing. Any other script action is refused by GET as
+ *   before, its action may still not carry a filled secret, and a card-fill step's submit has no
+ *   such exception.
  * - A refused submit event is canceled. `form.submit()` fires no submit event, but its entry
  *   list's `formdata` event comes once the browser fixed the method and action; it cannot be
  *   canceled, so the guard stops the event, empties the entry list and takes the form out of the
@@ -114,16 +116,11 @@ export const submissionGuardCode = `(field, { key, call, actions, match, submit,
       method: submitter?.hasAttribute("formmethod") ? submitter.formMethod : formMethod.call(form),
       action: submitter?.hasAttribute("formaction") ? submitter.formAction : formAction.call(form),
     });
-    // A sign-in's submission to page script navigates to the script alone, with no entry in it.
-    const script = (url) => {
-      try {
-        return new URL(url).protocol === "javascript:";
-      } catch {
-        return false;
-      }
-    };
+    // A sign-in's submission to a script that does nothing navigates to the script alone, with no
+    // entry in it.
+    const noOpScript = ${noOpScriptCode};
     const refused = ({ method, action }, held) =>
-      method === "get" && held && !(guard.scriptSubmit && script(action))
+      method === "get" && held && !(guard.scriptSubmit && noOpScript(action))
         ? "method"
         : method !== "dialog" && inUrl(action)
           ? "action"
@@ -226,7 +223,7 @@ const secretMatch: Partial<Record<FillSlot, "within" | "token">> = {
  * A step's submit call, whose guard judges the submission by the methods as judged (`judged`) and
  * the destinations the page kept under `inspection`, or with `exempt` only those origins, whose
  * scheme and host no page chose. A sign-in step's, with no part of a payment card, lets a
- * submission to page script fire by GET (`scriptSubmit`).
+ * submission to a script that does nothing fire by GET (`scriptSubmit`).
  */
 export const guardedSubmit = (
   step: { readonly fields: readonly { readonly slot: FillSlot }[] },
