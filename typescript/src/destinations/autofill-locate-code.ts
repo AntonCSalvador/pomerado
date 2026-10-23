@@ -114,8 +114,11 @@ const controlShapeCode = String.raw`(element) => {
 /**
  * Page code: whether an address is a script that does nothing, the only script action a sign-in
  * form may have: `javascript:`, `javascript:;`, `javascript:void(0)` or `javascript:void 0`, with
- * or without a closing semicolon, in any case and with any whitespace, read as the browser runs it
- * (the address as parsed, its body percent-decoded). Any other body runs what it says, so it is
+ * or without a closing semicolon, read as the browser runs it (the address as parsed, its body
+ * percent-decoded). The scheme may be in any case, and whitespace may stand only between the
+ * body's words and signs, where script reads it as whitespace: one inside `void` could split it into
+ * two statements, the second a call of the page's own function. `void` is lowercase, as script
+ * reads it; `Void(0)` calls a function of the page's. Any other body runs what it says, so it is
  * judged as any action off the site; one that does not decode, too. The step call and the
  * submission guard both judge by it.
  */
@@ -133,7 +136,7 @@ export const noOpScriptCode = String.raw`(address) => {
   } catch {
     return false;
   }
-  return /^(?:void(?:\(0\)|0))?;?$/.test(body.replace(/\s/g, "").toLowerCase());
+  return /^\s*(?:void\s*\(\s*0\s*\)|void\s+0)?\s*;?\s*$/.test(body);
 }`;
 
 /**

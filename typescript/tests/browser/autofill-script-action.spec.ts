@@ -179,6 +179,18 @@ for (const [name, pages, step, evidence] of [
     { part: "form_action", actionOrigins: "javascript:" },
   ],
   [
+    "a sign-in form whose script action calls a page function named like void",
+    { [site]: scriptForm('action="javascript:Void(0)"') },
+    signInStep,
+    { part: "form_action", actionOrigins: "javascript:" },
+  ],
+  [
+    "a sign-in form whose script action splits void with a line break",
+    { [site]: scriptForm('action="javascript:vo%0Aid(0)"') },
+    signInStep,
+    { part: "form_action", actionOrigins: "javascript:" },
+  ],
+  [
     "a sign-in form whose script action does something inside void",
     { [site]: scriptForm('action="javascript:void(send())"') },
     signInStep,
