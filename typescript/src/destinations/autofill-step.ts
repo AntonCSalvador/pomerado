@@ -421,8 +421,14 @@ export interface AutofillInspection {
   };
 }
 
-/** Kernel's fill vocabulary: a field after the first failed one is never attempted. */
-export type AutofillFieldStatus = "filled" | "failed" | "not_attempted";
+/**
+ * Kernel's fill vocabulary: a field after the first failed one is never attempted. `changed`: a
+ * phone field the host typed into kept other digits than the number's once the page reformatted
+ * it, as under a country picker set to another country (`InsertionOptions.phone`), so the host
+ * typed nothing after it and never clicked the submit. A keyboard that does not read back never
+ * reports it.
+ */
+export type AutofillFieldStatus = "filled" | "failed" | "not_attempted" | "changed";
 
 /**
  * What one host fill did, with no value in it. `filled` typed the fields in order and says what

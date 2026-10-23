@@ -542,7 +542,8 @@ export const SignInStep = Schema.Union(
             }),
           ),
         }),
-        // A date of birth names how the field takes it, or the one part a dropdown takes.
+        // A date of birth names how the field takes it, or the one part a dropdown takes. A
+        // private answer names its question, and a code the screen's own instruction for it.
         Schema.Struct({
           selector: SignInSelector,
           slot: SecretSlots,
@@ -550,8 +551,11 @@ export const SignInStep = Schema.Union(
           questionSelector: Schema.optional(SignInSelector),
         }).pipe(
           Schema.filter(
-            (field) => field.questionSelector === undefined || field.slot === "private_answer",
-            { message: () => "only a private answer names a question selector" },
+            (field) =>
+              field.questionSelector === undefined ||
+              field.slot === "private_answer" ||
+              field.slot === "code",
+            { message: () => "only a private answer or a code names a question selector" },
           ),
         ),
       ),
