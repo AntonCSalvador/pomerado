@@ -671,6 +671,9 @@ page size. A slot that is present but empty, a skeleton, `aria-busy` or reading 
 still loading, never absent; a slot with no identifier is not a result. A value still loading
 when the page stops progressing fails the run, optional or not: null is only for a field this
 record's markup lacks altogether, as the build saw on records without it, never for a slow one.
+When a list row shows the site's own plain "unavailable" state for a value, such as a price,
+prefer treating that row as settled in the readiness wait and returning that state in an output
+that can carry it, over waiting for a value the site will not show.
 Use observed conditions: never add a fixed sleep, since a ready page passes immediately, and
 never wait for rows you won't return, for the whole list to stop changing, for whole-page
 network idle or for the page's `load` event. Read image links from attributes (`src`, `srcset`) without scrolling. A page with
