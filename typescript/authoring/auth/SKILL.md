@@ -242,7 +242,9 @@ Guardian checks each step against the screen: that every field takes the kinds i
 submit is the right sign-in action, including a fieldless continuation or verification-method
 choice, and that a step without one advances by itself. The host checks that each control is unique
 and visible and that its frame, form actions and link destination are on the site or a configured
-sign-in origin. A refused step typed and sent nothing and spends no sign-in: fix it from the evidence.
+sign-in origin. A sign-in form whose own action is a script that does nothing (`javascript:`,
+`javascript:void(0)`, `javascript:;`) is the page's own submit, so the host judges it by where its
+fields sit. A refused step typed and sent nothing and spends no sign-in: fix it from the evidence.
 
 Sign-in pages are often slow, and the next screen can take a while to show. Wait for its field with
 a bounded readiness wait (such as `locator.waitFor` with a timeout of about 30 seconds) before you

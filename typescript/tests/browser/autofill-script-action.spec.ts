@@ -10,9 +10,10 @@ import {
 import { fillAutofillStep } from "../../src/destinations/autofill-fill.js";
 import { expectOriginsOnly, hostKeyboard, hostPage } from "./autofill-host-page.js";
 
-// A sign-in form whose own action is page script (`javascript:`) sends nothing by itself: the
-// page's own code posts what the form holds. The host judges such a form by where its controls
-// sit and by its other destinations, on a sign-in step only.
+// A sign-in form whose own action is a script that does nothing (`javascript:`,
+// `javascript:void(0)`, `javascript:;`) sends nothing by itself: the page's own code posts what the
+// form holds. The host judges such a form by where its controls sit and by its other destinations,
+// on a sign-in step only. A script action that does anything else is refused as before.
 const site = "https://member.example.test";
 const otherSite = "https://login.other.test";
 const username = "synthetic-script-user";
@@ -117,28 +118,35 @@ const passed = (inspection: Awaited<ReturnType<typeof inspect>>) => {
 const carrying = (requested: readonly string[]) =>
   requested.filter((url) => url.includes(password) || decodeURIComponent(url).includes(password));
 
-test("a sign-in form the page's own script posts is filled, clicked and posted once to the site", async ({
-  page,
-}) => {
-  const { posts, requested } = await serve(page, { [site]: scriptForm() });
-  const inspection = passed(await inspect(page));
-  const report = await fill(page, inspection);
-  expect(report).toMatchObject({
-    outcome: "filled",
-    fields: [
-      { slot: "username", status: "filled" },
-      { slot: "password", status: "filled" },
-    ],
-    submit: "clicked",
+for (const action of [
+  "javascript:void(0)",
+  "javascript:",
+  "javascript:;",
+  " JavaScript: void ( 0 ) ; ",
+  "javascript:%20void%200",
+])
+  test(`a sign-in form the page's own script posts, with the action ${JSON.stringify(action)}, is filled, clicked and posted once to the site`, async ({
+    page,
+  }) => {
+    const { posts, requested } = await serve(page, { [site]: scriptForm(`action="${action}"`) });
+    const inspection = passed(await inspect(page));
+    const report = await fill(page, inspection);
+    expect(report).toMatchObject({
+      outcome: "filled",
+      fields: [
+        { slot: "username", status: "filled" },
+        { slot: "password", status: "filled" },
+      ],
+      submit: "clicked",
+    });
+    // The guard let the submission fire.
+    expect(report).not.toHaveProperty("clicked");
+    await expect.poll(() => posts.length).toBe(1);
+    expect(posts.map(({ origin, form }) => [origin, form.get("username"), form.get("password")])).toEqual([
+      [site, username, password],
+    ]);
+    expect(carrying(requested)).toEqual([]);
   });
-  // The guard let the submission fire.
-  expect(report).not.toHaveProperty("clicked");
-  await expect.poll(() => posts.length).toBe(1);
-  expect(posts.map(({ origin, form }) => [origin, form.get("username"), form.get("password")])).toEqual([
-    [site, username, password],
-  ]);
-  expect(carrying(requested)).toEqual([]);
-});
 
 for (const [name, pages, step, evidence] of [
   [
@@ -163,6 +171,18 @@ for (const [name, pages, step, evidence] of [
     { [site]: `<iframe src="${otherSite}/login"></iframe>`, [otherSite]: scriptForm() },
     signInStep,
     { part: "frame", frameOrigin: otherSite, actionOrigins: "javascript:" },
+  ],
+  [
+    "a sign-in form whose script action does something",
+    { [site]: scriptForm('action="javascript:send()"') },
+    signInStep,
+    { part: "form_action", actionOrigins: "javascript:" },
+  ],
+  [
+    "a sign-in form whose script action does something inside void",
+    { [site]: scriptForm('action="javascript:void(send())"') },
+    signInStep,
+    { part: "form_action", actionOrigins: "javascript:" },
   ],
   [
     "a card form with a script action",
@@ -207,6 +227,54 @@ test("a sign-in form the page's own script posts, turned to GET as the host clic
   await expect.poll(() => posts.length).toBe(1);
   expect(posts.map(({ origin, form }) => [origin, form.get("password")])).toEqual([[site, password]]);
   expect(carrying(requested)).toEqual([]);
+});
+
+test("a sign-in form with a script action that the click turns to GET with a script that does something is refused as it fires", async ({
+  page,
+}) => {
+  const { posts, requested } = await serve(page, {
+    [site]: scriptForm(
+      'method="post" action="javascript:void(0)"',
+      `<button id="continue" type="submit" onclick="this.form.method = 'get'; this.form.action = 'javascript:void(window.sent = 1)'">Log in</button>`,
+    ),
+  });
+  const inspection = passed(await inspect(page));
+  const report = await fill(page, inspection);
+  expect(report).toMatchObject({
+    outcome: "filled",
+    submit: "refused",
+    clicked: true,
+    failureDetail: {
+      context: { check: "change", changed: "submission.method", submissionActionOrigin: "other" },
+    },
+  });
+  expectOriginsOnly(report);
+  expect(await page.evaluate(() => Reflect.get(window, "sent"))).toBeUndefined();
+  expect(carrying(requested)).toEqual([]);
+  expect(posts.filter(({ form }) => form.get("password") !== null)).toEqual([]);
+});
+
+test("a sign-in form whose typing turns its script action into one that does something is refused before the password is typed", async ({
+  page,
+}) => {
+  const { posts } = await serve(page, {
+    [site]: `${scriptForm()}
+<script>document.getElementById('username').addEventListener('input', ({ target }) => { target.form.action = 'javascript:void(send())'; });</script>`,
+  });
+  const inspection = passed(await inspect(page));
+  const report = await fill(page, inspection);
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: [
+      { slot: "username", status: "filled" },
+      { slot: "password", status: "failed" },
+    ],
+    submit: "not_attempted",
+    failureDetail: { context: { check: "destination", part: "form_action" } },
+  });
+  expectOriginsOnly(report);
+  expect(await page.locator("#password").inputValue()).toBe("");
+  expect(posts).toEqual([]);
 });
 
 test("a sign-in form with a script action that the click turns to GET on the site's own path is refused as it fires", async ({
