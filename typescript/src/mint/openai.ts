@@ -7,7 +7,7 @@ import {
   effectiveReasoningContext,
   withReasoningContinuity,
 } from "../models/reasoning-settings.js";
-import { modelUsageCounts } from "../models/model-usage.js";
+import { flatUsage, modelUsageCounts } from "../models/model-usage.js";
 import {
   promptCacheDiagnostics,
   withAllowedTools,
@@ -1504,7 +1504,10 @@ const openAIMinter = (
                       modelCalls++;
                       return turn.runTool(respond);
                     };
-                    const noteCalls = (response: ModelResponse) => {
+                    const noteCalls = (returned: ModelResponse) => {
+                      // The run state the SDK keeps this usage in saves only numeric token
+                      // details; `reportUsage` already read the provider's nested split.
+                      const response = { ...returned, usage: flatUsage(returned.usage) };
                       const calls: ResponseCalls = {
                         output: response.output,
                         edits: response.output.flatMap((item, index) =>
