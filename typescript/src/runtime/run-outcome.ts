@@ -276,6 +276,36 @@ export const declaredRefusalReasons = (outputSchema: unknown): ReadonlySet<strin
   return new Set(refusals.flatMap((reasons) => reasons ?? []));
 };
 
+/** Whether a schema, or a branch of its unions or `allOf`, lists `refused` as its `status`. */
+const listsRefusedStatus = (schema: unknown, depth: number): boolean => {
+  if (!isJsonRecord(schema) || depth > nestedUnionDepth * 2) return false;
+  const properties = schema["properties"];
+  const status = isJsonRecord(properties) ? properties["status"] : undefined;
+  if (listedStrings(status)?.includes(refusedStatus) === true) return true;
+  return ["anyOf", "oneOf", "allOf"].some((key) => {
+    const branches = schema[key];
+    return (
+      Array.isArray(branches) && branches.some((branch) => listsRefusedStatus(branch, depth + 1))
+    );
+  });
+};
+
+/**
+ * Whether a write's output schema has a refusal the host cannot read: some branch lists
+ * `refused` as its `status`, so the write means to return refusals, and `declaredRefusalReasons`
+ * finds none. A run that returns one is not a declared refusal, so it ends as an unknown outcome,
+ * like any other unconfirmed write. A schema whose references do not resolve has none.
+ */
+export const unreadableRefusal = (outputSchema: unknown): boolean => {
+  if (!isJsonRecord(outputSchema) || declaredRefusalReasons(outputSchema).size > 0) return false;
+  try {
+    return listsRefusedStatus(inlineLocalRefs({ ...outputSchema }), 0);
+  } catch (error) {
+    if (error instanceof UnresolvedSchemaReference) return false;
+    throw error;
+  }
+};
+
 /** A refusal a write returned as its output: the reason code its output schema declares. */
 export interface DeclaredRefusal {
   readonly reason: string;
