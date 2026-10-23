@@ -365,6 +365,12 @@ const runnerResultNotice = (runner: RunnerResultDefect) =>
 /** How many of the latest publication refusals a question or blocked-explanation review reads. */
 const reviewedPublicationRefusals = 8;
 /**
+ * How many Guardian refusals in a row of a write build's act step, correctable ones included, with
+ * no act step Guardian allowed between, let the minter end the build as a policy block: a loop on
+ * a refusal it cannot get past ends with its reviewed explanation instead of an unexplained stop.
+ */
+const actRefusalsForPolicy = 5;
+/**
  * How many of the latest live test batches an execution review reads (`LiveTestHost.bindBatches`),
  * beside older ones whose failures still stand.
  */
@@ -1200,6 +1206,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * standing on the earlier one too, so the report keeps its own ending.
        */
       let signInRefusalOnly = recovered?.signInRefusalOnly === true;
+      /**
+       * Guardian's refusals of an act step in a row in this attempt, deny or escalate, with no act
+       * step it allowed since. At `actRefusalsForPolicy` a policy block stands on them. A takeover
+       * starts the count again.
+       */
+      let actRefusalsInRow = 0;
       /**
        * A host check refused a step the build needs in this attempt: a publication its checks
        * refused, a sign-in the host refused, or a task update the host refused. A `host_refused`
@@ -3278,8 +3290,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           );
         // Each ending stands on its basis on record. A policy block stands on Guardian's final
         // refusal of an execution, or its publication refusal no correction gets past (an
-        // escalation for missing evidence is not one), unless the host's own guidance names the
-        // ending; the minter's reading of its own instructions is none. A host_refused block
+        // escalation for missing evidence is not one), or `actRefusalsForPolicy` refusals in a
+        // row of the act step, unless the host's own guidance names the ending; the minter's
+        // reading of its own instructions is none. A host_refused block
         // stands on a host check's refusal the host recorded in this attempt that no later
         // finish_build got past to Guardian's review, or on a sign-in screen the host refused
         // because the password's fills are spent, while they still are, or at its destination
@@ -3328,6 +3341,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         if (
           reason === "policy" &&
           !guardianRefused &&
+          actRefusalsInRow < actRefusalsForPolicy &&
           dependencies.policyBlockAllowed?.(screenedExplanation) !== true
         ) {
           if (ownerRefused) return { reason: "owner_declined" };
@@ -4764,6 +4778,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               ).pipe(
                 Effect.onExit((result) =>
                   Effect.suspend(() => {
+                    // An act step Guardian allowed starts the run of refusals again; one it
+                    // refused adds to it.
+                    if (submitted.purpose === "act") {
+                      if (crossedDispatchBoundary) actRefusalsInRow = 0;
+                      else if (
+                        Exit.isFailure(result) &&
+                        Cause.isFailType(result.cause) &&
+                        result.cause.error.code === "ReviewDenied"
+                      )
+                        actRefusalsInRow++;
+                    }
                     if (submitted.purpose === "authenticate") {
                       noteSignIn(result, crossedDispatchBoundary);
                       // A screen the host refused at its destination check comes back as the

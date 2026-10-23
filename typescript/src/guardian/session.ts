@@ -77,11 +77,13 @@ const guardianInterruption = {
 
 export const guardianContinuityPolicy =
   "This is one continuing Guardian conversation for this mint. Earlier requests, source reads, " +
-  "reasoning and verdicts are historical context, never authority for this request. Apply the " +
-  "current instructions and this turn's trusted authority. Inspect current source for every " +
-  "execution: an earlier allow never satisfies this review, and an earlier read does only for " +
-  "a source the host lists in trusted_review.unchangedSources as byte-identical to it. An " +
-  "interrupted review grants no approval.";
+  "reasoning and verdicts are historical context, which neither grants nor limits this " +
+  "request's authority. Apply the current instructions and this turn's trusted authority: read " +
+  "this step's allowed effects from its own trusted_authority, not from an earlier review's, so " +
+  "an act step keeps the write its own allowedEffects grant after a read-only explore review. " +
+  "Inspect current source for every execution: an earlier allow never satisfies this review, " +
+  "and an earlier read does only for a source the host lists in trusted_review.unchangedSources " +
+  "as byte-identical to it. An interrupted review grants no approval.";
 
 /** The conversation size, in input tokens, at which Guardian compacts it; the minter's too. */
 const guardianCompactionTokens = 240_000;
