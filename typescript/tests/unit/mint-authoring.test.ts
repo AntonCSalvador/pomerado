@@ -1145,7 +1145,7 @@ it("has every unoffered-value rule name the task-asked substitute exception", as
     `Don't add your own constraints between inputs, filter them, or swap in a value the caller didn't give; ${only} For example,`,
   );
   expect(text("caller-input")).toContain(
-    `as selectable, exactly as shown, whenever the page lists them. The caller corrects the input and runs again. ${instead} - \`InputNotApplied\`:`,
+    `The caller corrects the input and runs again. ${instead} - \`InputNotApplied\`:`,
   );
   expect(text("caller-input")).toContain(
     `it follows .agents/core/SKILL.md ("Configure, then read"), which never substitutes another value; ${only} Asking the owner`,
@@ -1230,7 +1230,7 @@ it("renders the pinned standalone authoring", async () => {
     ["a34d8f0e21e946e62f88819faf422eabcc7a6f75e766d0186ce5f19f367ac055", "forms"],
     ["11efdc07ee3753ee140610c140a1daeb903ce69a63d7ad82c96bbde52367f771", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["43dab7f4261a0ff7196a4b91c5eafbc87cd35408dbad3a66b681b8a20a050fcd", "caller-input"],
+    ["5a641c24c1fa61aad32872fcd49ee8bd9e5a529f28361f75d5ba326be01076aa", "caller-input"],
     ["6a6c8e632adfa6d7a95640498fc006fe904b5b569010c836c21b37f38fbf290a", "publication"],
     ["e80841525cfc668f952e39b896056afc66283feb2564dbcb910ea7db38c72122", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
