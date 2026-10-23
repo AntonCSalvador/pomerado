@@ -168,14 +168,15 @@ export const callingCode = (number: string) => {
 /**
  * A step the host stopped before its submit because a phone field kept other digits than the
  * number it typed (field status `changed`), with the number's calling code when it is written in
- * international form (`callingCode`). Nothing was submitted and nobody was asked.
+ * international form (`callingCode`), else the site's own country, as a number written without its
+ * calling code most likely belongs to it. Nothing was submitted and nobody was asked.
  */
 export const changedPhoneNotice = (number: string | undefined) => {
   const code = number === undefined ? undefined : callingCode(number);
   const lead =
     "The phone field kept different digits than the number the host typed, as when the site's country picker is set to another country. Nothing was submitted and nobody was asked.";
   return code === undefined
-    ? `${lead} If the screen has a country picker, prefer setting it to the number's country with an explore step, then send this signInStep again.`
+    ? `${lead} If the screen has a country picker, prefer setting it to the site's own country with an explore step, then send this signInStep again.`
     : `${lead} The number's country calling code is +${code}. If the screen has a country picker, prefer setting it to that country with an explore step, then send this signInStep again.`;
 };
 

@@ -82,8 +82,11 @@ export const phoneReadBackMs = 250;
  * kept its digits. A field may drop up to three leading digits of the number, its country calling
  * code or trunk prefix, and may show up to three of its own before them, such as the picker's
  * calling code: what follows must be the rest of the number, every digit to the last. A number
- * shifted into another country's digits or cut short is `changed`. A field gone from its document,
- * one with no text value, or a number with no digits is `unread`. Only digits 0 to 9 count.
+ * dialed with an international prefix (`00`, or `011`) may also drop the prefix with them. A
+ * number shifted into another country's digits or cut short is `changed`. A field gone from its
+ * document, one with no text value or no digits, or a number with no digits is `unread`, so a
+ * field the page emptied stays the empty-field failure the next call finds. Only digits 0 to 9
+ * count.
  */
 export const phoneDigitsCode = `function(text) {
   const field = this;
@@ -91,12 +94,16 @@ export const phoneDigitsCode = `function(text) {
   const digits = (value) => value.replace(/[^0-9]/g, "");
   const typed = digits(text);
   const kept = digits(field.value);
-  if (typed.length === 0) return "unread";
-  for (let dropped = 0; dropped <= 3; dropped++)
-    for (let shown = 0; shown <= 3; shown++) {
-      const rest = typed.slice(dropped);
-      if (rest.length > 0 && rest === kept.slice(shown)) return "kept";
-    }
+  if (typed.length === 0 || kept.length === 0) return "unread";
+  const numbers = [typed];
+  if (typed.startsWith("00")) numbers.push(typed.slice(2));
+  if (typed.startsWith("011")) numbers.push(typed.slice(3));
+  for (const number of numbers)
+    for (let dropped = 0; dropped <= 3; dropped++)
+      for (let shown = 0; shown <= 3; shown++) {
+        const rest = number.slice(dropped);
+        if (rest.length > 0 && rest === kept.slice(shown)) return "kept";
+      }
   return "changed";
 }`;
 
