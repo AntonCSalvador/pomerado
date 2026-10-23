@@ -567,6 +567,42 @@ it("names the local host's own status for a run's uncertain write", async () => 
   }
 });
 
+/*
+ * When a write's declared refusal completes a run is the host's own rule, so the writes skill's
+ * declared-refusal sentences and the publication review's refusal check are host sections. Their
+ * standalone text is the local host's rule, unchanged, and a composing host replaces each one.
+ */
+it("lets a host replace when a write's declared refusal completes the run", async () => {
+  const text = (texts: Map<string, string>, name: string) =>
+    (texts.get(name) ?? "").replace(/\s+/g, " ");
+  const local = await renderedTexts("typescript/authoring");
+  expect(text(local, "writes")).toContain(
+    'with those choices. Before any commit mark is entered, the run reports that it changed nothing, so throw a refusal before the mark. A write may instead declare its refusals in its output schema: a branch that requires `status` `"refused"` and a `reason` from a listed set of stable lowercase codes, such as `over_price_limit`, beside the values the caller needs, such as the total and the limit, with no other branch whose `status` could be `"refused"`. Returned before the first commit mark, a declared refusal completes the run with that output and reports the write not applied. A refusal returned in a shape the schema does not declare, or returned or thrown after a mark, reports a possible change. See `references/write-session.ts`',
+  );
+  expect(text(local, "publication")).toContain(
+    "never a login; - a write runs every check that can refuse, such as a limit on its total, before the mark of the commit it guards, and refuses with `InvalidInput`, or returns a refusal its output schema declares before its first mark, never in an undeclared output shape; - a composed write",
+  );
+  const replaced = new Set(["writes.declared-refusal", "publication.declared-refusal"]);
+  const root = await authoringCopy((_path, file) =>
+    file.replace(sectionMarker, (marker: string, id: string) =>
+      replaced.has(id) ? `HOST TEXT FOR ${id}` : marker,
+    ),
+  );
+  try {
+    const composed = await renderedTexts(root);
+    expect(text(composed, "writes")).toContain(
+      "with those choices. HOST TEXT FOR writes.declared-refusal See `references/write-session.ts`",
+    );
+    expect(text(composed, "writes")).not.toContain("Returned before the first commit mark");
+    expect(text(composed, "publication")).toContain(
+      "never a login; HOST TEXT FOR publication.declared-refusal - a composed write",
+    );
+    expect(text(composed, "publication")).not.toContain("never in an undeclared output shape");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 // A read build becomes a write through `mint_update`; `request_input` takes no write upgrade.
 it("asks for no write upgrade through request_input anywhere in the shared text", async () => {
   const texts = await renderedTexts("typescript/authoring");
@@ -892,9 +928,10 @@ it("has a write mark only the steps that send and wait for every answer the site
   expect(writes).toContain(
     "- Mark the commit at the step that submits the booking or order; a hold that expires on its own, such as a reserved table or a cart timer, is not the commit.",
   );
-  // The wait is its own rule, and a refusal it reads ends as the caller's input before any mark.
+  // The wait is its own rule, and a field error it reads on the caller's value is the caller's
+  // input error.
   expect(writes).toContain(
-    "the next step uses. - When a step waits for the site's answer, wait for every answer the site can give, such as results, a no-results message or an out-of-area notice, and throw `InvalidInput` naming the field the site refused, with the options the site offers as `available` when it lists them, before the mark of the commit it guards, rather than waiting for results alone.",
+    "the next step uses. - When a step waits for the site's answer, wait for every answer the site can give, such as results, a no-results message or an out-of-area notice, rather than waiting for results alone. A message about a value the caller gave, such as a field error, is the caller's input error: throw `InvalidInput` naming the field, with the options the site offers as `available` when it lists them.",
   );
   // The narrower click-only rule it replaces is gone, so the two never disagree.
   expect(writes).not.toContain("Mark only the step whose click saves or submits.");
@@ -1114,7 +1151,45 @@ it("has every unoffered-value rule name the task-asked substitute exception", as
     `it follows .agents/core/SKILL.md ("Configure, then read"), which never substitutes another value; ${only} Asking the owner`,
   );
   expect(text("caller-input")).toContain(
-    `- An option the page lists but greys out, such as a booked date or a sold-out size: not an error on a read, \`InvalidInput\` with \`available\` on a write (core skill, "Configure, then read"); ${only} - A write that declines`,
+    `- An option the page lists but greys out, such as a booked date or a sold-out size: not an error on a read, \`InvalidInput\` with \`available\` on a write (core skill, "Configure, then read"); ${only} - A read whose site says no`,
+  );
+});
+
+/*
+ * The site's own no to a valid request, such as sold out or not offered for these facts, is the
+ * task's answer, not a broken tool and not the caller's input error. A tool prefers returning it
+ * as a refusal its output schema declares, quoting the site's words in `site_message`, from what
+ * the site shows in that run only. A field error on the caller's value stays the caller's input
+ * error, and a challenge, block or error page stays a failure. After a commit mark the tool
+ * returns the refusal only where the declared-refusal rule says it completes the run there, which
+ * the standalone rule never does, so the standalone text never contradicts itself.
+ */
+it("has a tool return the site's no to a valid request as a declared refusal quoting the site", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("writes")).toContain(
+    "when it lists them. - When the site says no to a valid request, such as sold out, no availability, not eligible, not offered for these facts or not served in this area, that no is the task's answer. Prefer returning it as a refusal the output schema declares (below), with a `reason` code of the tool's own, listed in the tool's description, `site_message`, the site's own words exactly as the page shows them, and any alternatives the site offers, exactly as shown. Return it only from what the site shows in this run, never from a rule copied into the tool's own checks, and never from a challenge, block, access-denied, error or maintenance page, which is a failure (`OperationFailure`). After a commit mark, return it only where the declared-refusal rule below says one returned there completes the run; otherwise prefer throwing `InvalidInput` with the site's words. - When the site swaps the request for something the caller didn't ask for, such as another product, a later date or a higher amount, stop before the step that would confirm it and return the refusal as above, with the site's words and its offer, unless the caller's own task asks for whatever the site ends up with. - Report a confirm popup",
+  );
+  expect(text("writes")).not.toContain("naming the field the site refused");
+  // The standalone rule completes no refusal returned after a mark.
+  expect(text("writes")).toContain(
+    "A refusal returned in a shape the schema does not declare, or returned or thrown after a mark, reports a possible change.",
+  );
+  expect(text("caller-input")).toContain(
+    "- A write that declines the task because the caller's own limit or the page's state rules it out, such as a total over the caller's price limit or a product number whose page names another item than the caller's: `InvalidInput`, thrown before the mark of the commit it guards (writes skill). Pass `field`, the input the caller would change, `kind`, the reason as a stable lowercase token such as `over_price_limit` or `item_mismatch`, and `available` where the page lists choices,",
+  );
+  expect(text("caller-input")).toContain(
+    "A write returns a refusal as its output only when its output schema declares that refusal, and only where the writes skill says one completes the run, such as before its first mark: any other output a write returns without `verified()` reports a possible change. - When the site itself says no to a valid request, such as an item out of stock or a variant it does not offer, prefer the writes skill's refusal quoting the site. - A write whose steps",
+  );
+  expect(text("caller-input")).toContain(
+    "(writes skill). - A read whose site says no to the whole request, such as a product it no longer sells, prefers returning that no as a declared refusal with `site_message` over throwing (writes skill). - A write that declines",
+  );
+  expect(text("caller-input")).toContain(
+    "The cases above that return results with what applied, and a declared refusal, are the only exceptions.",
+  );
+  expect(text("caller-input")).not.toContain("`out_of_stock`");
+  expect(text("core")).toContain(
+    "A write throws `InputNotApplied` (above) before its first commit step instead; for a location the site says it does not serve, it prefers the writes skill's refusal quoting the site.",
   );
 });
 
