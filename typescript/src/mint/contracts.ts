@@ -1195,8 +1195,9 @@ export type PublicationRequest = typeof PublicationRequest.Type;
  *   such as an applicant it will not quote; the explanation names the reason the site gave.
  * - `site_unavailable`: the site is temporarily down for the failing input: its own pages show a
  *   maintenance or outage page, or fail with a 5xx answer from its own service, while the tool's
- *   code and the caller's input are unchanged. Nothing is wrong with the task, so a host may offer
- *   a retry later.
+ *   code and the caller's input are unchanged, never a 5xx answer only to the request the tool
+ *   made, since that request can be wrong. Nothing is wrong with the task, so a host may offer a
+ *   retry later.
  * - `policy`: Guardian refused an execution with refusal `final`, or refused a publication for a
  *   reason no correction gets past (`publicationRefusalUnfixable`), in this attempt, and nothing
  *   within authority gets past it. An execution refusal Guardian marked `correctable` is never one.

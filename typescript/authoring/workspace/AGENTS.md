@@ -599,7 +599,8 @@ never with final text, which the host treats as unfinished work:
   such as an applicant it will not quote. Name the reason the site gave in `explanation`.
 - `site_unavailable`: the site is temporarily down for the failing input: its own pages show a
   maintenance or outage page, or fail with a 5xx answer from its own service, while the tool's
-  code and the caller's input are unchanged. Prefer it over changing the code or over
+  code and the caller's input are unchanged. A 5xx answer only to the request your tool made is
+  not that evidence, since that request can be wrong. Prefer it over changing the code or over
   `site_lacks_capability`. Never use it for a bot check or an access-denied page.
 - `owner_declined`: the owner answered no to a `confirm` question, or declined to sign in, and
   the build needs that step.

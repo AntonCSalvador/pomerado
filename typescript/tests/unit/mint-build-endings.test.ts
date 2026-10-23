@@ -175,6 +175,7 @@ it("ends a build whose site is temporarily down as site_unavailable", async () =
     f.requests[0]?.tools.find((tool) => "name" in tool && tool.name === "report_blocked"),
   );
   expect(offered).toContain("site_unavailable when the site is temporarily down for the failing input");
+  expect(offered).toContain("never a 5xx answer only to the request the tool made");
   expect(f.requests).toHaveLength(1);
 });
 
