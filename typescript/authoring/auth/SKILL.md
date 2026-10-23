@@ -167,7 +167,9 @@ attribute.
     once, types one character into each and submits only once each box holds one. A step that
     names only some of the boxes, or names them out of order, comes back refused as
     `code_boxes_incomplete`, typing nothing: its `codeBoxes` says how many boxes the screen shows
-    and which ones the step named; send the step again with all of them.
+    and which ones the step named; send the step again with all of them. When a code screen asks
+    the person to do something, such as call a number or approve in an app, prefer naming the
+    element with that instruction as the code field's `questionSelector`.
   - `slot: "date_of_birth"` for a date of birth, with `format`, how the field takes it, read from
     its placeholder, label, input mask or hint: `MM/DD/YYYY`, `DD/MM/YYYY`, `M/D/YYYY`,
     `D/M/YYYY`, `MM-DD-YYYY`, `DD-MM-YYYY`, `DD.MM.YYYY`, `YYYY-MM-DD`, `YYYY/MM/DD`, `MMDDYYYY`,
