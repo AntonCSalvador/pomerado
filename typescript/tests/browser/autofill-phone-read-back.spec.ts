@@ -37,15 +37,25 @@ phone.addEventListener("input", () => {
 });
 </script>`;
 
+/** A phone sign-in whose page code empties the field whenever anything is typed into it. */
+const emptyingScreen = `<form action="/session" method="post">
+<label>Phone <input name="phone" type="tel" autocomplete="tel"></label>
+<button>Sign in</button>
+</form>
+<script>
+const phone = document.querySelector("input[name=phone]");
+phone.addEventListener("input", () => { phone.value = ""; });
+</script>`;
+
 /** Serves the screen and keeps each form the site receives. */
-const serve = async (page: Page) => {
+const serve = async (page: Page, body = screen) => {
   const received: Record<string, string>[] = [];
   await page.route(`${site}/**`, async (route) => {
     const request = route.request();
     if (request.method() === "POST") {
       received.push(Object.fromEntries(new URLSearchParams(request.postData() ?? "")));
       await route.fulfill({ contentType: "text/html", body: "<p>Code sent</p>" });
-    } else await route.fulfill({ contentType: "text/html", body: screen });
+    } else await route.fulfill({ contentType: "text/html", body });
   });
   await page.goto(`${site}/login`);
   return received;
@@ -111,4 +121,18 @@ test("submits a number the field keeps whole, its calling code dropped, as befor
     submit: "clicked",
   });
   expect(received).toEqual([{ country: "1", phone: "(415) 555-0134" }]);
+});
+
+test("leaves a phone field the page emptied to the empty-field check, as before", async ({
+  page,
+}) => {
+  const received = await serve(page, emptyingScreen);
+  const report = await signIn(page, sameCountry);
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: [{ slot: "phone", status: "failed" }],
+    submit: "not_attempted",
+  });
+  await page.waitForTimeout(500);
+  expect(received).toEqual([]);
 });
