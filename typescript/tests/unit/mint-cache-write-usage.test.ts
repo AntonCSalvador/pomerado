@@ -1,7 +1,8 @@
-import { Usage } from "@openai/agents";
+import { Usage, protocol } from "@openai/agents";
 import type { ModelProvider, ModelRequest, ModelResponse, UsageInput } from "@openai/agents";
 import { Effect } from "effect";
 import { afterEach, expect, it } from "vitest";
+import type { AgentInputRequest, MintHarnessSnapshot } from "../../src/mint/contracts.js";
 import type { MintDiagnostics } from "../../src/mint/diagnostics.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
 import type { MintAgentSnapshot, MintRecoveryFactory } from "../../src/mint/recovery-contracts.js";
@@ -136,4 +137,133 @@ it("saves the run state after a reply that splits its cache writes by lifetime, 
     }),
     expect.objectContaining({ call: 2, cacheWrite30mTokens: 128, cacheWrite12hTokens: 512 }),
   ]);
+});
+
+/**
+ * A host's recovery store: it saves the run state before each model call and the response after
+ * it, as JSON, and a resumed attempt replays that response decoded by the SDK's own usage schema.
+ */
+const decodingStore = () => {
+  const checkpoints: { agent: MintAgentSnapshot; harness: MintHarnessSnapshot }[] = [];
+  const factory =
+    (initial?: MintAgentSnapshot): MintRecoveryFactory =>
+    (store) =>
+      Effect.sync(() => {
+        let replay = initial?.response as { usage: unknown } | undefined;
+        let current: MintAgentSnapshot | undefined = initial;
+        const persist = (next: MintAgentSnapshot) =>
+          Effect.suspend(() => {
+            current = next;
+            return store.save(next);
+          });
+        const tools = () => current?.tools ?? [];
+        return {
+          model: (state, counters, invoke) =>
+            Effect.gen(function* () {
+              if (replay !== undefined) {
+                const saved = replay;
+                replay = undefined;
+                const usage = new Usage(protocol.UsageData.parse(saved.usage) as UsageInput);
+                return { ...(saved as ModelResponse), usage };
+              }
+              const agent: MintAgentSnapshot = {
+                version: 1,
+                sdkVersion: "0.18.0",
+                sdkState: state(),
+                ...counters,
+                tools: [],
+              };
+              yield* persist(agent);
+              const response = yield* invoke;
+              yield* persist({ ...agent, response: JSON.parse(JSON.stringify(response)) });
+              return response;
+            }),
+          tool: (call, invoke) =>
+            Effect.gen(function* () {
+              const prior = tools().find((entry) => entry.callId === call.callId);
+              if (prior?.state === "returned") return prior.result;
+              if (prior?.state === "started") {
+                const recovered = yield* store.recoverTool?.(call) ?? Effect.succeed(undefined);
+                if (recovered !== undefined) return recovered.result;
+              }
+              yield* persist({
+                ...(current as MintAgentSnapshot),
+                tools: [...tools(), { ...call, state: "started" }],
+              });
+              const result = yield* invoke;
+              yield* persist({
+                ...(current as MintAgentSnapshot),
+                tools: [
+                  ...tools().filter((entry) => entry.callId !== call.callId),
+                  { ...call, state: "returned", result },
+                ],
+              });
+              return result;
+            }),
+        };
+      });
+  return {
+    checkpoints,
+    factory,
+    save: (agent: MintAgentSnapshot, harness: MintHarnessSnapshot) =>
+      Effect.sync(() => {
+        checkpoints.push({ agent, harness });
+      }),
+  };
+};
+
+it("resumes a build whose saved reply split its cache writes by lifetime, and publishes", async () => {
+  const question = { questions: [{ id: "report", type: "text", prompt: "Which public report?" }] };
+  const script = [
+    call("request_input", question),
+    call("execute", example),
+    call("finish_build", finish),
+  ];
+  const requests: ModelRequest[] = [];
+  const provider: ModelProvider = {
+    getModel: () => ({
+      getResponse: async (request) => {
+        requests.push(request);
+        return script[requests.length - 1] ?? call("finish_build", finish);
+      },
+      getStreamedResponse: () => {
+        throw new Error("Unused stream");
+      },
+    }),
+  };
+  const store = decodingStore();
+  const first = await fixture(() => call("finish_build", finish), {
+    model: makeOpenAIMinter(provider, "medium", {}, { recoveryFactory: store.factory() }),
+    agentRecovery: { save: store.save },
+    websiteCredentialsAvailable: true,
+    suspendUnanswered: () => Effect.succeed("suspended" as const),
+  });
+  await first.run().catch(() => undefined);
+  const checkpoint = store.checkpoints.at(-1);
+  if (checkpoint === undefined) throw new Error("No checkpoint");
+  const request = first.asked[0] as AgentInputRequest;
+
+  const resumed = await fixture(() => call("finish_build", finish), {
+    model: makeOpenAIMinter(
+      provider,
+      "medium",
+      {},
+      {
+        recoveryFactory: store.factory(checkpoint.agent),
+      },
+    ),
+    agentRecovery: {
+      save: store.save,
+      initial: checkpoint,
+      recoverTool: (asked) =>
+        Effect.succeed(
+          asked.callId === "request_input"
+            ? { input: { request, answers: { report: { type: "text", value: "Annual" } } } }
+            : undefined,
+        ),
+    },
+    websiteCredentialsAvailable: true,
+  });
+
+  expect(await resumed.run()).toMatchObject({ build: "published" });
 });

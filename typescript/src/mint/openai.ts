@@ -1471,7 +1471,9 @@ const openAIMinter = (
                               },
                             ),
                           );
-                          return response;
+                          // What the call returns is what a host's recovery boundary saves and
+                          // replays, so it carries the numeric-only usage the SDK's schemas take.
+                          return { ...response, usage: flatUsage(response.usage) };
                         }
                         const error = outcome.left;
                         const now = yield* Clock.currentTimeMillis;
