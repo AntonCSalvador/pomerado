@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { confirmActionUnmatched } from "../browser/dialogs/expected.js";
-import type { CommitEvidence } from "../runtime/run-outcome.js";
+import { unreadableRefusal, type CommitEvidence } from "../runtime/run-outcome.js";
 import { MintFailure, type ExecutionRequest, type WritePath } from "./contracts.js";
 import { entrypointImportClosure } from "./operation-source.js";
 import { writeContractRefusal } from "./write-contract.js";
@@ -206,8 +206,10 @@ const sessionRefusal = (
  * write and, given `writePath`, entered every mark of its recorded write path; then the script's
  * contract, which `extract` reads offline only after that, declares a confirmation and the commit
  * marks the session entered, decodes the session's input and matches the confirmation the named
- * step recorded, and declares every mark of the recorded path. Last, given `confirms`, the script
- * names each step its session accepted a confirm popup at. The composed script is never run.
+ * step recorded, and declares every mark of the recorded path. Then, given the script's
+ * `outputSchema`, every refusal it lists is one the host reads as declared. Last, given
+ * `confirms`, the script names each step its session accepted a confirm popup at. The composed
+ * script is never run.
  */
 export const checkWriteSession = <
   Extracted extends {
@@ -215,6 +217,12 @@ export const checkWriteSession = <
     readonly inputDecodes: boolean;
     /** The composed script's files, which the confirm popup check reads. */
     readonly files?: ReadonlyMap<string, string>;
+    /**
+     * The composed script's output JSON Schema, as it publishes it. Given it, the check refuses
+     * an output schema that lists a `refused` status the host cannot read as a declared refusal
+     * (`unreadableRefusal`), as `refusal_unreadable`. A host that leaves it out skips that check.
+     */
+    readonly outputSchema?: unknown;
   },
   E,
   R,
@@ -234,6 +242,12 @@ export const checkWriteSession = <
    * host that kept none, as for a session started before hosts kept paths, leaves it unset.
    */
   readonly writePath?: WritePath;
+  /**
+   * For a publication that replaces a published revision, such as a repair or a change, that
+   * revision's output JSON Schema. A refusal the host cannot read in it too is not refused here,
+   * so a tool published before the refusal check is never refused for the shape it has.
+   */
+  readonly registeredOutputSchema?: unknown;
 }) =>
   Effect.gen(function* () {
     const { session, step } = check;
@@ -252,6 +266,14 @@ export const checkWriteSession = <
     const commits = extracted.contract.write?.commits ?? [];
     const undeclared = writePathRemaining(check.writePath, new Set(commits.map(String)));
     if (undeclared.length > 0) return yield* sessionRefusal("write_path_undeclared", undeclared);
+    // A refusal the host cannot read ends its run as an unknown outcome, so it is fixed now.
+    if (
+      extracted.outputSchema !== undefined &&
+      unreadableRefusal(extracted.outputSchema) &&
+      (check.registeredOutputSchema === undefined ||
+        !unreadableRefusal(check.registeredOutputSchema))
+    )
+      return yield* sessionRefusal("refusal_unreadable");
     // A run accepts a confirm popup without asking only at the action the build accepted it at,
     // so the composed script must run each such action under the session's action id.
     if (check.confirms !== undefined) {

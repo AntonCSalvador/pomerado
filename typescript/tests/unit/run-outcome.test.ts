@@ -16,6 +16,7 @@ import {
   runnerVerified,
   unconfirmedWrite,
   unenteredWrite,
+  unreadableRefusal,
   validatedWriteNeeds,
   writeStatusOf,
   type RunEvidence,
@@ -671,6 +672,46 @@ describe("a refusal a write declares in its output", () => {
     },
   ])("declares none with $case", ({ schema }) => {
     expect(declaredRefusalReasons(schema).size).toBe(0);
+  });
+
+  it.each([
+    {
+      case: "a nested union beside a branch whose status is free text",
+      schema: schemaOf(Schema.Union(rated(Schema.String), Schema.Union(notEligible, overLimit))),
+      unreadable: true,
+    },
+    {
+      case: "a refusal with a free-text reason",
+      schema: schemaOf(Schema.Union(Placed, refused(Schema.String))),
+      unreadable: true,
+    },
+    {
+      case: "a status that admits more than refused",
+      schema: schemaOf(
+        Schema.Struct({ status: Schema.Literal("placed", "refused"), reason: Schema.String }),
+      ),
+      unreadable: true,
+    },
+    {
+      case: "refusals in a nested union beside listed statuses",
+      schema: schemaOf(Schema.Union(Placed, Schema.Union(notEligible, overLimit))),
+      unreadable: false,
+    },
+    {
+      case: "a refusal beside a status pattern that cannot match refused",
+      schema: schemaOf(Schema.Union(rated(patterned(/^(?!refused$).+$/)), notEligible)),
+      unreadable: false,
+    },
+    // A schema that never lists a refused status means no refusal, whatever else it admits.
+    { case: "no refused status", schema: schemaOf(rated(Schema.String)), unreadable: false },
+    {
+      case: "a reference that does not resolve",
+      schema: { $ref: "#/$defs/Missing" },
+      unreadable: false,
+    },
+    { case: "no schema", schema: undefined, unreadable: false },
+  ])("finds an unreadable refusal in $case: $unreadable", ({ schema, unreadable }) => {
+    expect(unreadableRefusal(schema)).toBe(unreadable);
   });
 
   const schema = schemaOf(Schema.Union(Placed, overLimit));

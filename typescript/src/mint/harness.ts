@@ -5700,6 +5700,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     { writePathMarks: error.writePathMarks ?? [] },
                     "Not published: the composed script leaves out commit marks of the session's recorded write path from write.commits; writePathMarks names them. Run every step of the path in the composed script, marked by the same helper the session used, declare every mark in order, and call finish_build again with the same executionId. Never run the write again.",
                   );
+                if (error.reason === "refusal_unreadable")
+                  return notPublished(
+                    error.code,
+                    error.reason,
+                    {},
+                    "Not published: the output schema has a `status` of `refused` that the host can't read as a declared refusal, so this refusal would end as an unknown outcome. Put each refusal shape in the output's top-level union, and give every other branch a listed `status`. Each refusal shape requires `status` `\"refused\"` and a `reason` from a listed set of stable lowercase codes. Then call finish_build again with the same executionId. The host reads the schema offline; never run the write again for this.",
+                  );
                 if (
                   error.reason === "confirmation_undeclared" ||
                   error.reason === "commit_marks_undeclared" ||

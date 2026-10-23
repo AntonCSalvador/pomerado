@@ -322,6 +322,7 @@ export const mintPublication =
           signIn,
           result,
           contract: result,
+          outputSchema: result.schemas.output,
           inputDecodes: result.inputDecodes === true,
         };
       });
