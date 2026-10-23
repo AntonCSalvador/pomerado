@@ -174,6 +174,11 @@ export type AutofillFillCall =
       readonly submitGet: boolean;
       /** Whether each field's own form was judged to submit by GET. */
       readonly fieldGet: readonly boolean[];
+      /**
+       * A sign-in step's submit: its guard lets a submission to page script (`javascript:`) fire
+       * by GET, since navigating there puts no entry in an address.
+       */
+      readonly scriptSubmit?: true;
       /** Only look: a call that finds the step's fields clicks nothing and answers `none`. */
       readonly look?: true;
       /**
@@ -528,6 +533,7 @@ for (const [index, field] of fields.entries()) {
     submitInForm: ${JSON.stringify(call.submitInForm)},
     submitGet: ${JSON.stringify(call.submitGet)},
     fieldGet: fieldGet[index] === true,
+    scriptSubmit: ${JSON.stringify(call.scriptSubmit === true)},
   });
   if (guarding) guarded.push(handle);
 }

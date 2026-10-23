@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Effect, Schema } from "effect";
 import { recipeStep } from "../destinations/autofill-recipe.js";
 import { maySend, typingRefusal } from "../destinations/autofill-refusal.js";
+import { refusalEvidence } from "../destinations/autofill-refusal-evidence.js";
 import {
   codeBoxesRefusal,
   type AutofillInspection,
@@ -32,6 +33,7 @@ import {
   isExtraSecret,
   isIdentifier,
   isSecret,
+  provesLogin,
   noteRefill,
   passwordFillsSpent,
   reasksPassword,
@@ -302,6 +304,27 @@ export const makeSignInRecorder = (input: {
    * it unspent clears this.
    */
   let passwordRefillRefused = false;
+  /**
+   * The host refused a screen at its destination check, typing nothing because a field, its form
+   * or its submit would send the login somewhere credentials may not go, and no later screen that
+   * takes a password or code passed the check and no sign-in verified since.
+   */
+  let destinationRefused = false;
+  /**
+   * A screen's inspection: one refused at the destination check sets `destinationRefused`, and one
+   * that passed clears it when the screen takes a password or code. A screen with no such field,
+   * such as an identifier screen, says nothing of where the password would go.
+   */
+  const noteInspection = (step: AutofillStep, inspected: AutofillInspection | AutofillStepReport) => {
+    if (!("outcome" in inspected)) {
+      if (step.fields.some((field) => provesLogin(field.slot))) destinationRefused = false;
+    } else if (
+      inspected.outcome === "refused" &&
+      inspected.reason === "credential_target_refused" &&
+      refusalEvidence(inspected)["check"] === "destination"
+    )
+      destinationRefused = true;
+  };
   let afterSubmit:
     | { readonly open: AutofillSignInState; readonly slots: readonly CredentialRejectedField[] }
     | undefined;
@@ -450,6 +473,7 @@ export const makeSignInRecorder = (input: {
           yield* refusedStep(h, "selector_names_contact", holding, identityNotices.selectors),
         );
       const inspected = yield* browser.inspect(step);
+      noteInspection(step, inspected);
       if ("outcome" in inspected)
         return { report: inspected, result: { nextStep: notice(inspected) } };
       yield* input.review(step, inspected);
@@ -510,6 +534,7 @@ export const makeSignInRecorder = (input: {
       }
       const refills = filledBefore(h, step);
       const inspected = yield* browser.inspect(step);
+      noteInspection(step, inspected);
       if ("outcome" in inspected)
         return { report: inspected, result: { nextStep: notice(inspected) } };
       // A code split across one-character boxes goes out whole only when the step names every
@@ -821,6 +846,7 @@ export const makeSignInRecorder = (input: {
       h.autofillSecretsFilled.current = [];
       h.autofillSecretsRefilled.current = [];
       h.autofillCodeRejected.current = false;
+      destinationRefused = false;
       return { result: checked, verified: true as const };
     });
 
@@ -865,6 +891,11 @@ export const makeSignInRecorder = (input: {
      * password as often as it may, and the password is still spent.
      */
     passwordRefillRefused: () => passwordRefillRefused && passwordFillsSpent(h),
+    /**
+     * Whether the host refused a screen at its destination check, and no later screen that takes a
+     * password or code passed the check and no sign-in verified since.
+     */
+    destinationRefused: () => destinationRefused,
     /** The latest verified sign-in, while no later sign-in reached the site; else none. */
     published: (): PublishedSignIn | undefined => {
       if (verified === undefined || verified.signIn !== signIns) return undefined;
