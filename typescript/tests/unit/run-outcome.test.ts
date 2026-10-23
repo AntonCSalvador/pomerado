@@ -587,6 +587,92 @@ describe("a refusal a write declares in its output", () => {
     expect(declaredRefusalReasons(schema).size).toBe(0);
   });
 
+  // Effect writes a union inside a union as a nested `anyOf`, and a refined string `status` as
+  // its `pattern`, so a refusal is read from the shape a tool publishes.
+  const notEligible = refused(Schema.Literal("not_eligible"));
+  const rated = (status: Schema.Schema<string>) =>
+    Schema.Struct({ status, premium: Schema.String });
+  const patterned = (pattern: RegExp) => Schema.String.pipe(Schema.pattern(pattern));
+  /** `levels` unions, each inside the one before, the innermost holding the last refusal. */
+  const nestedRefusals = (levels: number) => {
+    let inner: Schema.Schema.AnyNoContext = refused(Schema.Literal(`level_${levels}`));
+    for (let level = levels; level > 0; level--)
+      inner = Schema.Union(refused(Schema.Literal(`level_${level - 1}`)), inner);
+    return inner;
+  };
+
+  it.each([
+    {
+      case: "refusals in a union inside the output's union",
+      schema: schemaOf(Schema.Union(Placed, Schema.Union(notEligible, overLimit))),
+      reasons: ["not_eligible", "out_of_stock", "over_price_limit"],
+    },
+    {
+      case: "a described union inside the output's union",
+      schema: schemaOf(
+        Schema.Union(
+          Placed,
+          Schema.Union(notEligible, overLimit).annotations({ description: "Why it stopped" }),
+        ),
+      ),
+      reasons: ["not_eligible", "out_of_stock", "over_price_limit"],
+    },
+    {
+      case: "a union inside the output's union behind a local reference",
+      schema: schemaOf(
+        Schema.Union(
+          Schema.Union(notEligible, overLimit).annotations({ identifier: "Refusal" }),
+          Placed,
+        ),
+      ),
+      reasons: ["not_eligible", "out_of_stock", "over_price_limit"],
+    },
+    {
+      case: "another branch whose status pattern cannot match refused",
+      schema: schemaOf(Schema.Union(rated(patterned(/^(?!refused$).+$/)), notEligible)),
+      reasons: ["not_eligible"],
+    },
+    {
+      case: "unions nested eight deep",
+      schema: schemaOf(Schema.Union(Placed, nestedRefusals(8))),
+      reasons: Array.from({ length: 9 }, (_, level) => `level_${level}`),
+    },
+  ])("reads the reasons of $case", ({ schema, reasons }) => {
+    expect([...declaredRefusalReasons(schema)].sort()).toEqual(reasons);
+  });
+
+  it.each([
+    {
+      case: "another branch whose status is free text",
+      schema: schemaOf(Schema.Union(rated(Schema.String), notEligible)),
+    },
+    {
+      case: "another branch whose status pattern matches refused",
+      schema: schemaOf(Schema.Union(rated(patterned(/.+/)), notEligible)),
+    },
+    {
+      case: "a nested union that holds a branch whose status is free text",
+      schema: schemaOf(Schema.Union(Placed, Schema.Union(rated(Schema.String), notEligible))),
+    },
+    {
+      // Valid without the `u` flag, which a host's schema check uses, and invalid with it.
+      case: "another branch whose status pattern is invalid",
+      schema: schemaOf(Schema.Union(rated(patterned(/^(?!refused$)\-?.+$/)), notEligible)),
+    },
+    {
+      case: "unions nested deeper than eight",
+      schema: schemaOf(Schema.Union(Placed, nestedRefusals(9))),
+    },
+    {
+      case: "a nested union beside a keyword that is not an annotation",
+      schema: {
+        anyOf: [schemaOf(Placed), { type: "object", anyOf: [schemaOf(notEligible)] }],
+      },
+    },
+  ])("declares none with $case", ({ schema }) => {
+    expect(declaredRefusalReasons(schema).size).toBe(0);
+  });
+
   const schema = schemaOf(Schema.Union(Placed, overLimit));
   it("finds a declared refusal only in an output that carries a declared reason", () => {
     expect(

@@ -168,9 +168,27 @@ const refusalBranchReasons = (branch: unknown): readonly string[] | undefined =>
 };
 
 /**
+ * Whether a `status` schema that lists no strings is a string with a `pattern` that `refused` does
+ * not match, as a schema check that reads patterns with the `u` flag tests it. False for an
+ * invalid pattern, and for a `status` with a `const`, an `enum` or a union.
+ */
+const patternExcludesRefused = (status: unknown): boolean => {
+  if (!isJsonRecord(status) || status["type"] !== "string") return false;
+  if (["const", "enum", "anyOf", "oneOf"].some((key) => key in status)) return false;
+  const pattern = status["pattern"];
+  if (typeof pattern !== "string") return false;
+  try {
+    return !new RegExp(pattern, "u").test(refusedStatus);
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Whether a branch that is not a refusal could still match an object whose `status` is `refused`:
- * any object branch, unless its `status` lists only other strings, or it has no `status` property,
- * no pattern properties, and admits no property it does not list.
+ * any object branch, unless its `status` lists only other strings or is a string whose pattern
+ * `refused` does not match, or it has no `status` property, no pattern properties, and admits no
+ * property it does not list.
  */
 const admitsRefused = (branch: unknown): boolean => {
   if (!isJsonRecord(branch)) return branch !== false;
@@ -180,8 +198,45 @@ const admitsRefused = (branch: unknown): boolean => {
   const status = isJsonRecord(properties) ? properties["status"] : undefined;
   if (status === undefined)
     return branch["additionalProperties"] !== false || branch["patternProperties"] !== undefined;
-  return listedStrings(status)?.includes(refusedStatus) ?? true;
+  const listed = listedStrings(status);
+  return listed === undefined ? !patternExcludesRefused(status) : listed.includes(refusedStatus);
 };
+
+/** Keywords that describe a schema without changing what it admits. */
+const annotationKeywords = new Set([
+  "$comment",
+  "deprecated",
+  "description",
+  "examples",
+  "readOnly",
+  "title",
+  "writeOnly",
+]);
+/** How many unions deep inside the output's own union its branches are read. */
+const nestedUnionDepth = 8;
+
+/**
+ * The branches of a schema that is only a union: one non-empty `anyOf` or `oneOf`, with nothing
+ * beside it but annotations. Undefined for any other schema.
+ */
+const unionOnlyBranches = (schema: unknown): readonly unknown[] | undefined => {
+  if (!isJsonRecord(schema)) return undefined;
+  const keys = Object.keys(schema).filter((key) => !annotationKeywords.has(key));
+  if (keys.length !== 1 || (keys[0] !== "anyOf" && keys[0] !== "oneOf")) return undefined;
+  const branches = schema[keys[0]];
+  return Array.isArray(branches) && branches.length > 0 ? branches : undefined;
+};
+
+/**
+ * The output's branches, each branch that is only a union replaced by its own branches, down to
+ * `nestedUnionDepth` unions deep. Effect writes `Schema.Union(Placed, Schema.Union(A, B))` as an
+ * `anyOf` inside an `anyOf`, and an output that matches it matches one of `Placed`, `A` and `B`.
+ */
+const outputBranches = (branches: readonly unknown[], depth: number): readonly unknown[] =>
+  branches.flatMap((branch) => {
+    const nested = depth < nestedUnionDepth ? unionOnlyBranches(branch) : undefined;
+    return nested === undefined ? [branch] : outputBranches(nested, depth + 1);
+  });
 
 /**
  * The refusal reasons a tool's output JSON Schema declares, as it publishes it. A write declares
@@ -193,10 +248,15 @@ const admitsRefused = (branch: unknown): boolean => {
  * `Schema.Union(Placed, Schema.Struct({ status: Schema.Literal("refused"), reason:
  * Schema.Literal("over_price_limit"), total: Schema.String, limit: Schema.String }))`
  *
+ * A branch that is only a union, with nothing beside its `anyOf` or `oneOf` but annotations,
+ * counts as its own branches, up to eight unions deep, so refusals grouped in a union of their
+ * own are read as well.
+ *
  * Empty when the schema declares no refusal, as every schema published before the convention
  * existed that has no such branch does, and when another branch could also match a `refused`
  * status, such as one whose `status` is free text, since a matching output would not show which
- * branch it is.
+ * branch it is. A `status` that lists other strings, or is a string whose `pattern` does not
+ * match `refused`, cannot.
  */
 export const declaredRefusalReasons = (outputSchema: unknown): ReadonlySet<string> => {
   if (!isJsonRecord(outputSchema)) return new Set();
@@ -208,7 +268,7 @@ export const declaredRefusalReasons = (outputSchema: unknown): ReadonlySet<strin
     throw error;
   }
   const union = root["anyOf"] ?? root["oneOf"];
-  const branches: readonly unknown[] = Array.isArray(union) ? union : [root];
+  const branches = Array.isArray(union) ? outputBranches(union, 0) : [root];
   const refusals = branches.map(refusalBranchReasons);
   // An output proves itself a refusal only when no other branch could have matched it.
   if (branches.some((branch, index) => refusals[index] === undefined && admitsRefused(branch)))
