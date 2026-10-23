@@ -374,6 +374,12 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
     | "write_path_undeclared"
     /** The session step named for publication did not record the confirmation the script declares. */
     | "confirmation_unrecorded"
+    /**
+     * The composed write's output schema lists a `refused` status the host cannot read as a
+     * declared refusal (`unreadableRefusal`), so a run that returns one would end as an unknown
+     * outcome.
+     */
+    | "refusal_unreadable"
     /** The composed script's input schema rejects the caller's own values. */
     | "contract_input_mismatch"
     /** A read's current output schema rejects the output its example returned. */

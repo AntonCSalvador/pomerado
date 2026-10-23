@@ -130,6 +130,59 @@ test("publication refuses a contract that rejects the session's input, and publi
   }
 });
 
+/**
+ * The note tool composed with refusals before its save, grouped in a union inside its output's,
+ * beside a saved branch whose `status` is `status`.
+ */
+const refusingSaveNote = (status: string) =>
+  saveNote
+    .replace(
+      "output:Schema.Struct({saved:Schema.Boolean})",
+      `output:Schema.Union(Schema.Struct({status:${status},saved:Schema.Boolean}),Schema.Union(...["note_empty","note_too_long"].map((reason) => Schema.Struct({status:Schema.Literal("refused"),reason:Schema.Literal(reason),site_message:Schema.String}))))`,
+    )
+    .replace(
+      'enteringCommit("save");',
+      'if(input.note === "") return {status:"refused",reason:"note_empty",site_message:"A note is required"};\n  enteringCommit("save");',
+    )
+    .replace("return {saved:true};", 'return {status:"saved",saved:true};');
+
+test("publication refuses a composed write whose listed refusals the host can't read, and publishes once it reads them", async () => {
+  test.setTimeout(90_000);
+  const fixture = noteSite();
+  const site = await fixture.start();
+  const guardian = recordingGuardian();
+  try {
+    const { built, last } = await mint({
+      effect: "write",
+      url: site.url,
+      guardian,
+      turns: [
+        () =>
+          patch({
+            "src/save.mjs": saveNote,
+            // A free-text status beside the refusals could be `refused` too.
+            "src/unreadable.mjs": refusingSaveNote("Schema.String"),
+            "src/tool.mjs": refusingSaveNote('Schema.Literal("saved")'),
+          }),
+        () => [call("execute", act("src/save.mjs", { note: "kept" }, savePath), "save")],
+        (request) => [finish("src/unreadable.mjs", executionIdOf(request, "save"), "unreadable")],
+        (request) => [finish("src/tool.mjs", executionIdOf(request, "save"), "publish")],
+      ],
+    });
+    expect(toolResult(last, "unreadable")).toMatchObject({
+      status: "not_published",
+      reason: "refusal_unreadable",
+      instruction: expect.stringContaining(
+        "the output schema has a `status` of `refused` that the host can't read as a declared refusal",
+      ),
+    });
+    expect(built.build, JSON.stringify(built)).toBe("published");
+    expect(fixture.saved).toEqual(["kept"]);
+  } finally {
+    await site.close();
+  }
+});
+
 test("the first act step that passes exampleInput fixes the session's input after steps on the caller's empty input", async () => {
   test.setTimeout(90_000);
   const fixture = noteSite();

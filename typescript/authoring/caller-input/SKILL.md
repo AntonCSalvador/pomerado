@@ -51,9 +51,14 @@ separately are both applied as given, even when they're far apart.
    - `InvalidInput`: the caller's value is wrong or the site does not offer it. It breaks a rule
      above, or is not among the options the page lists, such as a store missing from its
      picker. Pass `field`, and `available`, every option the page offers
-     as selectable, exactly as shown, whenever the page lists them. The caller corrects the
-     input and runs again. A write follows the site's preselected substitute instead when the
-     caller's own task asks for whatever the site ends up with (writes skill).
+     as selectable, exactly as shown, whenever the page lists them. When the page refuses the
+     value with an error of its own, prefer passing as `field` the input that error belongs to,
+     matched by where the page puts it, such as the field or label it sits under, or the field
+     whose `aria-describedby` points at it, even when its words don't name the field. An error
+     that covers several inputs or none, such as a notice for the whole form, leaves `field`
+     out. The caller corrects the input and runs again. A write follows the site's preselected
+     substitute instead when the caller's own task asks for whatever the site ends up with
+     (writes skill).
    - `InputNotApplied`: the value is valid and the site offers it, but the page did not apply
      it after the tool's bounded retries. It ignored, reset or replaced the value, such as a
      filter, sort or date (on a write, a location or store too), and the read-back shows its own

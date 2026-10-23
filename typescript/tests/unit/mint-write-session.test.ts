@@ -1,6 +1,7 @@
 import { Effect, Exit, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { ExecutionRequest, MintFailure, type WritePath } from "../../src/mint/contracts.js";
+import { contractJsonSchema } from "../../src/runtime/operation.js";
 import {
   checkWriteSession,
   commitEvidenceOf,
@@ -267,6 +268,58 @@ describe("a write session's publication check", () => {
           step: confirmed,
           extract: Effect.succeed({ ...contract(), files: new Map([["src/tool.mjs", ""]]) }),
           confirms: { steps: ["place-order"], entrypoint: "src/tool.mjs" },
+        }),
+      );
+      expect(reason(exit)).toBe("confirmation_undeclared");
+    });
+  });
+
+  describe("with the composed script's output schema", () => {
+    const placing = contract({ confirmation: "readback", commits: ["place-order"] });
+    const refused = (reason: string) =>
+      Schema.Struct({
+        status: Schema.Literal("refused"),
+        reason: Schema.Literal(reason),
+        site_message: Schema.String,
+      });
+    const refusals = Schema.Union(refused("not_eligible"), refused("sold_out"));
+    const placed = <Status extends Schema.Schema.AnyNoContext>(status: Status) =>
+      Schema.Struct({ status, orderNumber: Schema.String });
+    // A free-text status beside the refusals could be `refused` too, so none of them is declared.
+    const unreadable = contractJsonSchema(Schema.Union(placed(Schema.String), refusals));
+    const readable = contractJsonSchema(Schema.Union(placed(Schema.Literal("placed")), refusals));
+    const publish = (outputSchema: unknown, registeredOutputSchema?: unknown) =>
+      Effect.runSyncExit(
+        checkWriteSession({
+          session: { steps: [confirmed] },
+          step: confirmed,
+          extract: Effect.succeed({ ...placing, outputSchema }),
+          ...(registeredOutputSchema === undefined ? {} : { registeredOutputSchema }),
+        }),
+      );
+
+    it("refuses an output schema whose listed refusals the host cannot read", () => {
+      expect(reason(publish(unreadable))).toBe("refusal_unreadable");
+    });
+
+    it("publishes refusals the host reads, and a script with no refused status", () => {
+      expect(Exit.isSuccess(publish(readable))).toBe(true);
+      expect(Exit.isSuccess(publish(contractJsonSchema(placed(Schema.String))))).toBe(true);
+      // A host that passes no output schema skips the check.
+      expect(Exit.isSuccess(check([confirmed], placing).result)).toBe(true);
+    });
+
+    it("never refuses a republish for the unreadable refusal its published revision has", () => {
+      expect(Exit.isSuccess(publish(unreadable, unreadable))).toBe(true);
+      expect(reason(publish(unreadable, readable))).toBe("refusal_unreadable");
+    });
+
+    it("checks it only after the contract, as the contract's refusal comes first", () => {
+      const exit = Effect.runSyncExit(
+        checkWriteSession({
+          session: { steps: [confirmed] },
+          step: confirmed,
+          extract: Effect.succeed({ ...contract(), outputSchema: unreadable }),
         }),
       );
       expect(reason(exit)).toBe("confirmation_undeclared");

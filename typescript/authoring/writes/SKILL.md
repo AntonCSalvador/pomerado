@@ -574,10 +574,12 @@ mark is entered, the run reports that it changed nothing, so throw a refusal bef
 mark. A write may instead declare its refusals in its output schema: a branch that requires
 `status` `"refused"` and a `reason` from a listed set of stable lowercase codes, such as
 `over_price_limit`, beside the values the caller needs, such as the total and the limit, with
-no other branch whose `status` could be `"refused"`. Returned before the first commit mark, a
-declared refusal completes the run with that output and reports the write not applied. A
-refusal returned in a shape the schema does not declare, or returned or thrown after a mark,
-reports a possible change.
+no other branch whose `status` could be `"refused"`. Prefer declaring each refusal as its own
+branch of the output's top-level union, and prefer a listed `status` on every other branch, such
+as `Schema.Literal("rated")`, so the host can tell a refusal from any other output. Returned
+before the first commit mark, a declared refusal completes the run with that output and reports
+the write not applied. A refusal returned in a shape the schema does not declare, or returned or
+thrown after a mark, reports a possible change.
 pomerado:section writes.declared-refusal:end -->
 
 See `references/write-session.ts` for two steps and the composed script, and

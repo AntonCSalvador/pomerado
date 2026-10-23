@@ -577,7 +577,7 @@ it("lets a host replace when a write's declared refusal completes the run", asyn
     (texts.get(name) ?? "").replace(/\s+/g, " ");
   const local = await renderedTexts("typescript/authoring");
   expect(text(local, "writes")).toContain(
-    'with those choices. Before any commit mark is entered, the run reports that it changed nothing, so throw a refusal before the mark. A write may instead declare its refusals in its output schema: a branch that requires `status` `"refused"` and a `reason` from a listed set of stable lowercase codes, such as `over_price_limit`, beside the values the caller needs, such as the total and the limit, with no other branch whose `status` could be `"refused"`. Returned before the first commit mark, a declared refusal completes the run with that output and reports the write not applied. A refusal returned in a shape the schema does not declare, or returned or thrown after a mark, reports a possible change. See `references/write-session.ts`',
+    'with those choices. Before any commit mark is entered, the run reports that it changed nothing, so throw a refusal before the mark. A write may instead declare its refusals in its output schema: a branch that requires `status` `"refused"` and a `reason` from a listed set of stable lowercase codes, such as `over_price_limit`, beside the values the caller needs, such as the total and the limit, with no other branch whose `status` could be `"refused"`. Prefer declaring each refusal as its own branch of the output\'s top-level union, and prefer a listed `status` on every other branch, such as `Schema.Literal("rated")`, so the host can tell a refusal from any other output. Returned before the first commit mark, a declared refusal completes the run with that output and reports the write not applied. A refusal returned in a shape the schema does not declare, or returned or thrown after a mark, reports a possible change. See `references/write-session.ts`',
   );
   expect(text(local, "publication")).toContain(
     "never a login; - a write runs every check that can refuse, such as a limit on its total, before the mark of the commit it guards, and refuses with `InvalidInput`, or returns a refusal its output schema declares before its first mark, never in an undeclared output shape; - a composed write",
@@ -1145,7 +1145,7 @@ it("has every unoffered-value rule name the task-asked substitute exception", as
     `Don't add your own constraints between inputs, filter them, or swap in a value the caller didn't give; ${only} For example,`,
   );
   expect(text("caller-input")).toContain(
-    `as selectable, exactly as shown, whenever the page lists them. The caller corrects the input and runs again. ${instead} - \`InputNotApplied\`:`,
+    `The caller corrects the input and runs again. ${instead} - \`InputNotApplied\`:`,
   );
   expect(text("caller-input")).toContain(
     `it follows .agents/core/SKILL.md ("Configure, then read"), which never substitutes another value; ${only} Asking the owner`,
@@ -1228,9 +1228,9 @@ it("renders the pinned standalone authoring", async () => {
     ["ea6e7780a9a9028d806436de84488f20687fd292bb0d39ea01652b521c705772", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["a34d8f0e21e946e62f88819faf422eabcc7a6f75e766d0186ce5f19f367ac055", "forms"],
-    ["919a6de3e6b6c336e7acd8ebd478f823e25adab54b9a3f8b1e08e1d0f880c896", "writes"],
+    ["11efdc07ee3753ee140610c140a1daeb903ce69a63d7ad82c96bbde52367f771", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["43dab7f4261a0ff7196a4b91c5eafbc87cd35408dbad3a66b681b8a20a050fcd", "caller-input"],
+    ["5a641c24c1fa61aad32872fcd49ee8bd9e5a529f28361f75d5ba326be01076aa", "caller-input"],
     ["6a6c8e632adfa6d7a95640498fc006fe904b5b569010c836c21b37f38fbf290a", "publication"],
     ["e80841525cfc668f952e39b896056afc66283feb2564dbcb910ea7db38c72122", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
