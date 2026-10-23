@@ -113,8 +113,9 @@ const controlShapeCode = String.raw`(element) => {
 
 /**
  * Page code: what a step call reads of one control it found (`readControls`): every form action
- * and method it could submit with, its link destination, whether it is disabled, inert or editable,
- * whether it is empty, its shape and the words that label it, never its value.
+ * and method it could submit with, its form's own action first, whether that action is page script
+ * (`scriptAction`), its link destination, whether it is disabled, inert or editable, whether it is
+ * empty, its shape and the words that label it, never its value.
  */
 const controlReadCode = `(element) => {
   const associated =
@@ -123,8 +124,11 @@ const controlReadCode = `(element) => {
   // shadows the property of that name on the form itself.
   const formProperty = (name) =>
     Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, name).get.call(associated);
+  // The form's own action comes first.
   const actions = associated ? [formProperty("action")] : [];
   const methods = associated ? [formProperty("method")] : [];
+  // Whether the form's own action is page script, which sends nothing by itself.
+  const scriptAction = associated !== null && /^javascript:/i.test(actions[0]);
   // Whether the form or a control in it says GET itself: a bare form reads as GET too, but a
   // page that submits it with code sends nothing in an address.
   let explicitGet = associated ? (associated.getAttribute("method") ?? "").trim().toLowerCase() === "get" : false;
@@ -167,7 +171,7 @@ const controlReadCode = `(element) => {
     disabled,
     inert,
     shape: (${controlShapeCode})(element),
-    target: { documentOrigin: self.origin, actions, methods, explicitGet, submitMethod, editable, empty },
+    target: { documentOrigin: self.origin, actions, scriptAction, methods, explicitGet, submitMethod, editable, empty },
     described: {
       role: element.getAttribute("role"),
       formMethod: methods.join(",") || null,

@@ -542,7 +542,8 @@ export const SignInStep = Schema.Union(
             }),
           ),
         }),
-        // A date of birth names how the field takes it, or the one part a dropdown takes.
+        // A date of birth names how the field takes it, or the one part a dropdown takes. A
+        // private answer names its question, and a code the screen's own instruction for it.
         Schema.Struct({
           selector: SignInSelector,
           slot: SecretSlots,
@@ -550,8 +551,11 @@ export const SignInStep = Schema.Union(
           questionSelector: Schema.optional(SignInSelector),
         }).pipe(
           Schema.filter(
-            (field) => field.questionSelector === undefined || field.slot === "private_answer",
-            { message: () => "only a private answer names a question selector" },
+            (field) =>
+              field.questionSelector === undefined ||
+              field.slot === "private_answer" ||
+              field.slot === "code",
+            { message: () => "only a private answer or a code names a question selector" },
           ),
         ),
       ),
@@ -1193,6 +1197,11 @@ export type PublicationRequest = typeof PublicationRequest.Type;
  * - `site_lacks_capability`: the site does not offer what the task needs.
  * - `site_declined`: the site offers what the task needs but declines this example's own facts,
  *   such as an applicant it will not quote; the explanation names the reason the site gave.
+ * - `site_unavailable`: the site is temporarily down for the failing input: its own pages show a
+ *   maintenance or outage page, or fail with a 5xx answer from its own service, while the tool's
+ *   code and the caller's input are unchanged, never a 5xx answer only to the request the tool
+ *   made, since that request can be wrong. Nothing is wrong with the task, so a host may offer a
+ *   retry later.
  * - `policy`: Guardian refused an execution with refusal `final`, or refused a publication for a
  *   reason no correction gets past (`publicationRefusalUnfixable`), in this attempt, and nothing
  *   within authority gets past it. An execution refusal Guardian marked `correctable` is never one.
@@ -1214,6 +1223,7 @@ export const BuildBlocked = Schema.Struct({
   reason: Schema.Literal(
     "site_lacks_capability",
     "site_declined",
+    "site_unavailable",
     "policy",
     "owner_declined",
     "question_unanswered",
@@ -1236,6 +1246,7 @@ export const BlockedReport = Schema.Struct({
   reason: Schema.Literal(
     "site_lacks_capability",
     "site_declined",
+    "site_unavailable",
     "policy",
     "owner_declined",
     "question_unanswered",
@@ -1454,8 +1465,8 @@ export type PublicationDenial = typeof PublicationDenial.Type;
  * - `question_unanswered`: a question the build needed went unanswered.
  * - `owner_declined`: the owner said no to a step the build needs.
  * - `owner_ended`: the owner chose in an answer to end the build.
- * - `site_lacks_capability`, `site_declined`, `policy`, `host_refused`: the minter's blocked ending
- *   of the same name.
+ * - `site_lacks_capability`, `site_declined`, `site_unavailable`, `policy`, `host_refused`: the
+ *   minter's blocked ending of the same name.
  * - `host_unavailable`: the host, not the task, ended the build, such as when Guardian twice returned
  *   no outcome its review allows (`InvalidOutcome`).
  */
@@ -1470,6 +1481,7 @@ export const mintStopReasons = [
   "owner_ended",
   "site_lacks_capability",
   "site_declined",
+  "site_unavailable",
   "policy",
   "host_refused",
   "host_unavailable",
@@ -2092,7 +2104,7 @@ const HarnessTerminal = Schema.Struct({
   // Optional, and dropped as an excess field by an older worker's decode, so a rollout's old and
   // new workers each restore the other's checkpoint, except a terminal whose blocked reason is
   // one an older worker does not know (`owner_declined`, `question_unanswered`, `site_declined`,
-  // `host_refused`, `owner_ended`): that one does not decode there.
+  // `host_refused`, `owner_ended`, `site_unavailable`): that one does not decode there.
   blocked: Schema.optionalWith(BuildBlockedOutcome, { exact: true }),
   // Optional, and dropped by an older worker's decode.
   stopReason: Schema.optionalWith(MintStopReason, { exact: true }),
