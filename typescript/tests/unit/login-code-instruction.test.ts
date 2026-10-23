@@ -1,6 +1,10 @@
 import { Data, Effect, Either, Schema } from "effect";
 import { expect, it } from "vitest";
 import type { AutofillStep } from "../../src/destinations/autofill-step.js";
+import {
+  guardianExecutionPolicy,
+  nativeExecutionEnvironment,
+} from "../../src/guardian/execution-policy.js";
 import { SignInStep } from "../../src/mint/contracts.js";
 import { type AutofillLogin, makeAutofillValues } from "../../src/runtime/autofill-values.js";
 import type { InputAsker, InputRequest } from "../../src/runtime/input-request.js";
@@ -135,4 +139,10 @@ it("lets a code field name its screen's instruction, and no other field but a pr
     expect(
       Either.isLeft(Schema.decodeUnknownEither(SignInStep)({ fields: [{ ...code, slot }] })),
     ).toBe(true);
+});
+
+it("tells Guardian what a code field's question selector names", () => {
+  expect(guardianExecutionPolicy(nativeExecutionEnvironment)).toContain(
+    "A code field's questionSelector, when present, must be the screen's own instruction for that code, such as to call a number or approve in an app.",
+  );
 });

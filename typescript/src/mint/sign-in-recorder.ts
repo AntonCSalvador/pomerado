@@ -81,6 +81,8 @@ import {
 } from "./autofill-rejected.js";
 import {
   type AutofillHost,
+  changedField,
+  changedPhoneNotice,
   emit,
   refusedStep,
   result,
@@ -122,11 +124,21 @@ const shown = (answer: ReturnType<typeof result>): SignInStepResult => ({
   result: Schema.decodeUnknownSync(Shown)(new TextDecoder().decode(answer.result)).output.value,
 });
 
-/** What the minter does after a screen the host inspected and maybe filled. */
-const notice = (report: AutofillStepReport, step?: Pick<AutofillStep, "submitKey">) =>
-  report.outcome === "refused" && report.codeBoxes !== undefined
+/**
+ * What the minter does after a screen the host inspected and maybe filled, with the values the
+ * fill typed (`typed`), which name a changed phone's calling code.
+ */
+const notice = (
+  report: AutofillStepReport,
+  step?: Pick<AutofillStep, "submitKey">,
+  typed?: readonly string[],
+) => {
+  const changed = changedField(report);
+  if (changed !== -1) return changedPhoneNotice(typed?.[changed]);
+  return report.outcome === "refused" && report.codeBoxes !== undefined
     ? `This screen splits its code across ${report.codeBoxes.boxes} one-character boxes, and the step's code fields named only the boxes at places ${report.codeBoxes.named.join(", ")}, in that order (codeBoxes.named, counted from 1). The host typed and clicked nothing, so nothing reached the site, no code was asked for and no sign-in was spent. Send the step again with one code field per box, all ${report.codeBoxes.boxes} of them in order from the first box to the last; the host asks for the code once and types one character into each box.`
     : stepNotice(report, step);
+};
 
 /** A web address a run can open, without credentials or fragment; undefined for anything else. */
 const entryOf = (url: string | undefined) => {
@@ -565,7 +577,7 @@ export const makeSignInRecorder = (input: {
         return yield* autofillRefusalFailure(refusal, {
           nothingSubmitted: state.mayHaveSent !== true && state.submittedSlots.size === 0,
         });
-      return { report, result: { nextStep: notice(report, step) } };
+      return { report, result: { nextStep: notice(report, step, filled) } };
     }).pipe(
       Effect.ensuring(
         Effect.sync(() => {
