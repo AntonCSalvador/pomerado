@@ -1948,6 +1948,13 @@ export interface MintHarnessSnapshot {
    */
   readonly hostRefusalPassed?: true;
   /**
+   * The host's latest answer to `signInDestinationRefused`, read after the attempt's latest
+   * authenticate: it refused a sign-in screen at its destination check, and no sign-in verified
+   * and no later screen passed that check since. A `host_refused` block stands on it. Optional, so
+   * an older worker ignores it and a newer one restores an older checkpoint.
+   */
+  readonly signInDestinationRefused?: true;
+  /**
    * Unanswered questions handed back to the minter as no answer in this build, which a
    * `question_unanswered` block stands on. Optional so a rollout's old and new workers each restore the other's
    * checkpoint.
@@ -2135,6 +2142,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   guardianRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   hostRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   hostRefusalPassed: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  signInDestinationRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   noAnswerHandBacks: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),
   loginHeld: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   loginDeclined: Schema.optionalWith(LoginDecline, { exact: true }),
@@ -2620,6 +2628,17 @@ export interface MintDependencies {
    * knows only the refusals it was handed as failures.
    */
   readonly signInRefillRefused?: () => boolean;
+  /**
+   * Whether the host refused a sign-in screen at its destination check, typing nothing because a
+   * field, its form or its submit would send the login somewhere credentials may not go (an
+   * inspection's `credential_target_refused`, a step result, not a failure), and no sign-in
+   * verified and no later screen passed that check since. No change to the step's selectors gets
+   * past it, so a `host_refused` block stands on it as on any host refusal of a sign-in. The
+   * harness reads it after each authenticate and keeps the latest answer in its checkpoint
+   * (`signInDestinationRefused`), so a successor whose host kept no record of the refusal still
+   * has it. Absent, the harness knows only the refusals it was handed as failures.
+   */
+  readonly signInDestinationRefused?: () => boolean;
   /** The host's own descriptions of its optional tools, in place of the generic ones. */
   readonly hostToolDescriptions?: HostToolDescriptions;
   /**
