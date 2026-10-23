@@ -33,6 +33,10 @@ it.each([
   ["a national number with its trunk prefix", "+44 7911 123456", "07911 123456"],
   ["the number after the picker's own calling code", "912 345 6789", "+7 912 345 67 89"],
   ["a number without its trunk prefix", "8 912 345-67-89", "912 345 67 89"],
+  ["a number dialed with 00, without its calling code", "0044 7911 123456", "7911 123456"],
+  ["a number dialed with 00, as a national number", "0044 7911 123456", "07911 123456"],
+  ["a number dialed with 00 and a three-digit calling code", "00353 87 123 4567", "87 123 4567"],
+  ["a number dialed with 011, without its calling code", "011 44 7911 123456", "7911 123456"],
 ])("keeps %s", (_name, typed, shown) => {
   expect(readBack(typed, holding(shown))).toBe("kept");
 });
@@ -40,7 +44,7 @@ it.each([
 it.each([
   ["shifted under another country and cut", "+7 912 345-67-89", "(791) 234-5678"],
   ["cut short", "+1 415 555 0134", "(415) 555-013"],
-  ["emptied", "+1 415 555 0134", ""],
+  ["dialed with 00, shifted under another country", "0044 7911 123456", "(004) 479-1112"],
   ["with a digit lost inside", "+1 415 555 0134", "(415) 555-034"],
 ])("reads a number %s as changed", (_name, typed, shown) => {
   expect(readBack(typed, holding(shown))).toBe("changed");
@@ -50,6 +54,7 @@ it.each([
   ["a field gone from its document", "+1 415 555 0134", { isConnected: false, value: "x" }],
   ["a field with no text value", "+1 415 555 0134", { isConnected: true }],
   ["a number with no digits", "call me", holding("call me")],
+  ["a field the page emptied, which the next call finds empty", "+1 415 555 0134", holding("")],
 ])("can't tell for %s", (_name, typed, field) => {
   expect(readBack(typed, field)).toBe("unread");
 });
@@ -187,7 +192,7 @@ it.each(["912 345 6789", "8 912 345-67-89", "+0 123 4567", "+12"])(
   (number) => {
     expect(callingCode(number)).toBeUndefined();
     expect(changedPhoneNotice(number)).toBe(
-      "The phone field kept different digits than the number the host typed, as when the site's country picker is set to another country. Nothing was submitted and nobody was asked. If the screen has a country picker, prefer setting it to the number's country with an explore step, then send this signInStep again.",
+      "The phone field kept different digits than the number the host typed, as when the site's country picker is set to another country. Nothing was submitted and nobody was asked. If the screen has a country picker, prefer setting it to the site's own country with an explore step, then send this signInStep again.",
     );
   },
 );
