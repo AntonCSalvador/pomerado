@@ -319,6 +319,32 @@ it("refuses a host_refused report once a later screen passed the destination che
   expect(outcome).not.toMatchObject({ blocked: { reason: "host_refused" } });
 });
 
+// A screen that takes no password or code, such as the site's own identifier screen, says nothing
+// about where the login's password would go, so passing the check leaves the refused form standing.
+it("keeps a destination refusal through a later identifier screen that passed the check", async () => {
+  const site = signInSite();
+  const identifierScreen: SignInStep = {
+    fields: [{ selector: "#user", accepts: ["username"] }],
+    submit: "#continue",
+  };
+  const run = await fixture(
+    (_request, index) =>
+      [
+        authenticate("outside", outsideForm),
+        call("execute", "identifier", { ...authenticateStep, signInStep: identifierScreen }),
+        hostRefused("report"),
+      ][index] ?? stop,
+    site.dependencies,
+    { effect: "read", siteOrigin: origin },
+  );
+  const outcome = await run.run();
+  // The identifier screen passed and was sent; the report still stood on the refused form and
+  // ended the build at once, as sign-in unavailable since the identifier went out unconfirmed.
+  expect(site.fills()).toBe(1);
+  expect(run.requests).toHaveLength(3);
+  expect(outcome).toMatchObject({ build: "incomplete", recoveryReason: "sign_in_unavailable" });
+});
+
 const scripted = makeMintHarnessFixture(
   cleanups,
   { mode: "mint", intent: "Read the account page", businessInput: {}, observations: [] },

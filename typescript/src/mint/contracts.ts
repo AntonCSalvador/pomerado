@@ -1950,7 +1950,8 @@ export interface MintHarnessSnapshot {
   /**
    * The host's latest answer to `signInDestinationRefused`, read after the attempt's latest
    * authenticate: it refused a sign-in screen at its destination check, and no sign-in verified
-   * and no later screen passed that check since. A `host_refused` block stands on it. Optional, so
+   * and no later screen that takes a password or code passed that check since. A `host_refused`
+   * block stands on it. Optional, so
    * an older worker ignores it and a newer one restores an older checkpoint.
    */
   readonly signInDestinationRefused?: true;
@@ -2632,7 +2633,9 @@ export interface MintDependencies {
    * Whether the host refused a sign-in screen at its destination check, typing nothing because a
    * field, its form or its submit would send the login somewhere credentials may not go (an
    * inspection's `credential_target_refused`, a step result, not a failure), and no sign-in
-   * verified and no later screen passed that check since. No change to the step's selectors gets
+   * verified and no later screen that takes a password or code passed that check since. A screen
+   * with no such field, such as an identifier screen, says nothing of where the password would
+   * go, so it leaves the refusal standing. No change to the step's selectors gets
    * past it, so a `host_refused` block stands on it as on any host refusal of a sign-in. The
    * harness reads it after each authenticate and keeps the latest answer in its checkpoint
    * (`signInDestinationRefused`), so a successor whose host kept no record of the refusal still

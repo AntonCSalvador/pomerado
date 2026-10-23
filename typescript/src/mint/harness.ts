@@ -3283,7 +3283,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // stands on a host check's refusal the host recorded in this attempt that no later
         // finish_build got past to Guardian's review, or on a sign-in screen the host refused
         // because the password's fills are spent, while they still are, or at its destination
-        // check, until a later screen passed it or a sign-in verified. The owner's no to a
+        // check, until a later screen that takes a password or code passed it or a sign-in
+        // verified. Neither of those two answers is cleared by a finish_build. The owner's no to a
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on

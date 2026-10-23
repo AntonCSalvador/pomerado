@@ -33,6 +33,7 @@ import {
   isExtraSecret,
   isIdentifier,
   isSecret,
+  provesLogin,
   noteRefill,
   passwordFillsSpent,
   reasksPassword,
@@ -293,14 +294,19 @@ export const makeSignInRecorder = (input: {
   let passwordRefillRefused = false;
   /**
    * The host refused a screen at its destination check, typing nothing because a field, its form
-   * or its submit would send the login somewhere credentials may not go, and no later screen
-   * passed the check and no sign-in verified since.
+   * or its submit would send the login somewhere credentials may not go, and no later screen that
+   * takes a password or code passed the check and no sign-in verified since.
    */
   let destinationRefused = false;
-  /** A screen's inspection: one that passed clears a destination refusal, and one refused there sets it. */
-  const noteInspection = (inspected: AutofillInspection | AutofillStepReport) => {
-    if (!("outcome" in inspected)) destinationRefused = false;
-    else if (
+  /**
+   * A screen's inspection: one refused at the destination check sets `destinationRefused`, and one
+   * that passed clears it when the screen takes a password or code. A screen with no such field,
+   * such as an identifier screen, says nothing of where the password would go.
+   */
+  const noteInspection = (step: AutofillStep, inspected: AutofillInspection | AutofillStepReport) => {
+    if (!("outcome" in inspected)) {
+      if (step.fields.some((field) => provesLogin(field.slot))) destinationRefused = false;
+    } else if (
       inspected.outcome === "refused" &&
       inspected.reason === "credential_target_refused" &&
       refusalEvidence(inspected)["check"] === "destination"
@@ -455,7 +461,7 @@ export const makeSignInRecorder = (input: {
           yield* refusedStep(h, "selector_names_contact", holding, identityNotices.selectors),
         );
       const inspected = yield* browser.inspect(step);
-      noteInspection(inspected);
+      noteInspection(step, inspected);
       if ("outcome" in inspected)
         return { report: inspected, result: { nextStep: notice(inspected) } };
       yield* input.review(step, inspected);
@@ -516,7 +522,7 @@ export const makeSignInRecorder = (input: {
       }
       const refills = filledBefore(h, step);
       const inspected = yield* browser.inspect(step);
-      noteInspection(inspected);
+      noteInspection(step, inspected);
       if ("outcome" in inspected)
         return { report: inspected, result: { nextStep: notice(inspected) } };
       // A code split across one-character boxes goes out whole only when the step names every
@@ -874,8 +880,8 @@ export const makeSignInRecorder = (input: {
      */
     passwordRefillRefused: () => passwordRefillRefused && passwordFillsSpent(h),
     /**
-     * Whether the host refused a screen at its destination check, and no later screen passed the
-     * check and no sign-in verified since.
+     * Whether the host refused a screen at its destination check, and no later screen that takes a
+     * password or code passed the check and no sign-in verified since.
      */
     destinationRefused: () => destinationRefused,
     /** The latest verified sign-in, while no later sign-in reached the site; else none. */
