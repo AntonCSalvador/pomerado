@@ -174,7 +174,7 @@ it("ends a build whose site is temporarily down as site_unavailable", async () =
   const offered = JSON.stringify(
     f.requests[0]?.tools.find((tool) => "name" in tool && tool.name === "report_blocked"),
   );
-  expect(offered).toContain("site_unavailable when the site is temporarily down");
+  expect(offered).toContain("site_unavailable when the site is temporarily down for the failing input");
   expect(f.requests).toHaveLength(1);
 });
 

@@ -1193,9 +1193,10 @@ export type PublicationRequest = typeof PublicationRequest.Type;
  * - `site_lacks_capability`: the site does not offer what the task needs.
  * - `site_declined`: the site offers what the task needs but declines this example's own facts,
  *   such as an applicant it will not quote; the explanation names the reason the site gave.
- * - `site_unavailable`: the site is temporarily down for the failing input, such as its own
- *   maintenance or outage page or a 5xx answer from its own service, while the tool's code and the
- *   caller's input are unchanged. Nothing is wrong with the task, so a host may offer a retry later.
+ * - `site_unavailable`: the site is temporarily down for the failing input: its own pages show a
+ *   maintenance or outage page, or fail with a 5xx answer from its own service, while the tool's
+ *   code and the caller's input are unchanged. Nothing is wrong with the task, so a host may offer
+ *   a retry later.
  * - `policy`: Guardian refused an execution with refusal `final`, or refused a publication for a
  *   reason no correction gets past (`publicationRefusalUnfixable`), in this attempt, and nothing
  *   within authority gets past it. An execution refusal Guardian marked `correctable` is never one.

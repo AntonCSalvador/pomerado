@@ -597,10 +597,10 @@ never with final text, which the host treats as unfinished work:
   invent a value or substitute a different field.
 - `site_declined`: the site offers what the task needs but declines this example's own facts,
   such as an applicant it will not quote. Name the reason the site gave in `explanation`.
-- `site_unavailable`: the site is temporarily down for the failing input, such as its own
-  maintenance or outage page or a 5xx answer from its own service, while the tool's code and the
-  caller's input are unchanged. Prefer it over changing the code. Never use it for a bot check or
-  an access-denied page.
+- `site_unavailable`: the site is temporarily down for the failing input: its own pages show a
+  maintenance or outage page, or fail with a 5xx answer from its own service, while the tool's
+  code and the caller's input are unchanged. Prefer it over changing the code or over
+  `site_lacks_capability`. Never use it for a bot check or an access-denied page.
 - `owner_declined`: the owner answered no to a `confirm` question, or declined to sign in, and
   the build needs that step.
 - `question_unanswered`: a question you asked came back `no_answer`, and the build cannot go on
