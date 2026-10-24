@@ -872,9 +872,10 @@ const knownRefusal = (raw: unknown): unknown => {
 /**
  * The ground an execution deny or escalate rests on (`refusalGround`) when the host's own record
  * settles it the other way: retry permission when trusted_execution_context.repeatableRead is
- * true, since the host itself refuses before review any run it does not permit, or committing a
- * listed write again for a step the review labels a read, which changes nothing. Undefined for
- * any other decision.
+ * true, since the host itself refuses before review any run it does not permit, committing a
+ * listed write again for a step the review labels a read, which changes nothing, or missing write
+ * authority for a step whose own authority grants the write (`writeAuthority`), such as an act step
+ * reviewed right after a read-only explore. Undefined for any other decision.
  */
 const settledGroundOf = (
   pending: PendingExecution,
@@ -887,6 +888,7 @@ const settledGroundOf = (
   const ground: unknown = Reflect.get(raw, "refusalGround");
   if (ground === "retry_permission" && pending.mintContext?.repeatableRead === true) return ground;
   if (ground === "committed_write" && Reflect.get(raw, "action") === "read") return ground;
+  if (ground === "write_authority" && pending.writeAuthority === true) return ground;
   return undefined;
 };
 
@@ -896,6 +898,8 @@ const settledGroundCorrection: Record<GuardianRefusalGround, string> = {
     "The host did not accept this refusal: it rests on retry permission, and trusted_execution_context.repeatableRead is true. Whether a step may run again is the host's to decide: it refuses before review any run it does not permit, and it permits this one, a corrected example included. Judge this step's own source and effects under the policy and decide again, without retry permission as a ground.",
   committed_write:
     "The host did not accept this refusal as given: it rests on committing a listed write again, yet this review labels the step a read. If the submitted code changes the site, label it write and keep the refusal. If it changes nothing, it commits nothing again: reading back a write's result, the record it created or changed included, on any page of the authorized site, and the request's other remaining steps toward the same task stay allowed, so judge the step under the policy's other rules and decide again without the earlier write as a ground.",
+  write_authority:
+    "The host did not accept this refusal: it rests on this step having no write authority, and the host's record gives this step write authority, as its own trusted_authority.allowedEffects say. An earlier review's allowed effects are not this step's. Judge this step's own source and effects under the policy and decide again, without missing write authority as a ground.",
 };
 
 /**
