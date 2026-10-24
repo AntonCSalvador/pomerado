@@ -2584,7 +2584,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * A review that Guardian could not complete is not a deny. The host already retried it with
        * backoff; the agent may resubmit while reviews have been unavailable for less than the
        * outage budget, and any completed review starts the budget again. A review whose evidence
-       * could not be retained is such an outage too. Past the budget, `exhausted` ends the attempt.
+       * could not be retained is such an outage too. Past the budget, `exhausted` ends the attempt,
+       * as it does at once for a request over Guardian's model input limit (`InputTooLarge`), which
+       * fails the same way when resubmitted.
        */
       const reviewUnavailableRetry =
         (
@@ -2598,7 +2600,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             blockedReviewUnavailable = false;
             if (error.modelOutage === "quota_exhausted") return yield* spentQuotaReview(error);
             const retentionFailure = error.reviewPhase === "diagnostic_retention";
-            if (stopUnavailableHost() || (yield* reviewRetryExhausted()))
+            if (
+              stopUnavailableHost() ||
+              error.reviewFailure === "InputTooLarge" ||
+              (yield* reviewRetryExhausted())
+            )
               return yield* exhausted(error);
             // Live execution ended during this review: the execution cannot be resubmitted, but the
             // retained receipt can still be published and a question still asked.
@@ -3398,11 +3404,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                           rationale:
                             "Guardian returned no decision a question review allows, so it neither allowed nor reworded the explanation. Make it plain and consistent with the evidence.",
                         };
-                  // A spent quota or an outage past its budget still ends blocked: the caller
-                  // reads the reason alone.
+                  // A spent quota, a request over the model's input limit or an outage past its
+                  // budget still ends blocked: the caller reads the reason alone.
                   if (
                     error.code !== "ReviewUnavailable" ||
                     error.modelOutage === "quota_exhausted" ||
+                    error.reviewFailure === "InputTooLarge" ||
                     (yield* reviewRetryExhausted())
                   )
                     return { outcome: "unavailable" as const };
