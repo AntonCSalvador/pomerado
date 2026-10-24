@@ -256,11 +256,14 @@ const taskUpdateDigest = (request: TaskUpdateRequest) =>
 /**
  * Live tests the host refuses while Guardian's denial of the latest publication stands, as a
  * `host_refused` report reads them: the attempt ran out of live tests and no batch fits now.
- * `reservedFor` names the cases the host's reserve past its batch cap would still run; while it
- * names any, the tests are not spent.
+ * While the host's reserve past its batch cap is still open (`reserveOpen`), the tests are not
+ * spent: `reservedFor` names the cases it would run now, and `failedOnSource` those that failed on
+ * the current source, which it takes once the code changes.
  */
 interface LiveTestsRefusal {
+  readonly reserveOpen: boolean;
   readonly reservedFor: readonly string[];
+  readonly failedOnSource: readonly string[];
 }
 
 type AgentQuestion = (typeof AgentRequest.Type)["questions"][number];
@@ -3326,8 +3329,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // verified. Neither of those two answers is cleared by a finish_build. It also stands on
         // live tests the host refuses while Guardian's denial of the latest publication stands
         // (`liveTestsRefusal`): the attempt ran out of them, no batch fits, and the host's reserve
-        // would run no case, so nothing left in the attempt can clear a failure the denial rests
-        // on. While the reserve would still run a case, the report waits for it. The owner's no to a
+        // is closed, so nothing left in the attempt can clear a failure the denial rests on. While
+        // the reserve is open, the report waits for it, even when no case is pending until the code
+        // changes. The owner's no to a
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
@@ -3343,8 +3347,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         const unanswered = noAnswerHandBacks > 0;
         const hostCheckRefusing =
           hostRefused || dependencies.signInRefillRefused?.() === true || signInDestinationRefused;
-        const liveTestsSpent =
-          liveTestsRefusal !== undefined && liveTestsRefusal.reservedFor.length === 0;
+        const liveTestsSpent = liveTestsRefusal !== undefined && !liveTestsRefusal.reserveOpen;
         const hostRefusing = hostCheckRefusing || liveTestsSpent;
         if (reason === "owner_declined" && !ownerRefused)
           return refused(
@@ -3361,17 +3364,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "owner_not_ended",
             "The owner gave no answer since this build's last step that could end it, so the build has not ended. Use owner_ended only right after the owner chose in an answer to end the build.",
           );
-        if (
-          reason === "host_refused" &&
-          !hostRefusing &&
-          liveTestsRefusal !== undefined &&
-          liveTestsRefusal.reservedFor.length > 0
-        )
+        if (reason === "host_refused" && !hostRefusing && liveTestsRefusal?.reserveOpen === true) {
+          const { reservedFor, failedOnSource } = liveTestsRefusal;
           return refused(
             "live_tests_reserved",
-            `The host still keeps one reserved live test batch for the cases a failure is pending on: ${liveTestsRefusal.reservedFor.join(", ")}. host_refused stands on refused live tests only once no batch is left, so the build has not ended. Prefer to make your last edit, then run those cases together in that one batch, run the example last and call finish_build again.`,
-            { reservedFor: liveTestsRefusal.reservedFor },
+            `The host still keeps one reserved live test batch for the cases a failure is pending on, so the build has not ended.${reservedFor.length === 0 ? "" : ` It runs now: ${reservedFor.join(", ")}.`}${failedOnSource.length === 0 ? "" : ` It runs once you change the code after their failure: ${failedOnSource.join(", ")}.`}${reservedFor.length === 0 && failedOnSource.length === 0 ? ` A case is pending when its input, expectation and next page are a failing result's; ${liveTestsEvidencePath} names each failure that still counts.` : ""} Prefer to fix the code where a case fails, then run those cases together in that one batch, run the example last and call finish_build again. host_refused stands on refused live tests only once no batch is left.`,
+            { reservedFor, failedOnSource },
           );
+        }
         if (reason === "host_refused" && !hostRefusing && hostRefusalPassed)
           return refused(
             "host_refusal_passed",
@@ -4203,17 +4203,42 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         entrypoint: string,
         digest: string,
       ) =>
+        Effect.map(liveTestReserveOpen(host, deadlineAt), (open) =>
+          open
+            ? pendingFailureCases(file, recordsFor(entrypoint), replacedOn(entrypoint), digest)
+            : [],
+        );
+      /**
+       * Whether the host still keeps its reserve past its batch cap
+       * (`LiveTestHost.reservedCaseTimeoutMs`) with time for it before a batch's end at
+       * `deadlineAt`: it has not run, and a re-test of a failure can still run in it.
+       */
+      const liveTestReserveOpen = (host: LiveTestHost, deadlineAt: number) =>
         Effect.map(Clock.currentTimeMillis, (now) => {
           const reserved = host.reservedCaseTimeoutMs;
-          if (reserved === undefined || deadlineAt - now < reserved) return [];
-          const version = liveTestVersion(entrypoint);
-          return pendingFailureCases(
-            file,
-            recordsFor(entrypoint),
-            liveTestReplaced.filter((record) => liveTestVersion(record.entrypoint) === version),
-            digest,
-          );
+          return reserved !== undefined && deadlineAt - now >= reserved;
         });
+      /** The failing results the minter replaced on `entrypoint`'s version. */
+      const replacedOn = (entrypoint: string) => {
+        const version = liveTestVersion(entrypoint);
+        return liveTestReplaced.filter((record) => liveTestVersion(record.entrypoint) === version);
+      };
+      /**
+       * The cases in `file` with a failing result of `entrypoint`'s version on `digest`, its own
+       * latest or a retired one, as `pendingFailureCases` matches them: the ones the host's reserve
+       * leaves out until the source changes, since a pass on the source a case failed on excuses
+       * nothing.
+       */
+      const failedOnSourceCases = (file: LiveTestCasesFile, entrypoint: string, digest: string) => {
+        const failedHere = new Set(
+          [...recordsFor(entrypoint).values(), ...replacedOn(entrypoint)]
+            .filter((record) => record.verdict === "fail" && record.sourceDigest === digest)
+            .map((record) => record.caseDigest),
+        );
+        return file.cases
+          .filter((testCase) => failedHere.has(caseDigest(testCase)))
+          .map((testCase) => testCase.id);
+      };
       const runLiveTests = (request: LiveTestsRequest) =>
         Effect.gen(function* () {
           const host = dependencies.liveTests;
@@ -4301,17 +4326,26 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               const stopped = attemptBound
                 ? "Too little of this attempt is left to run a batch"
                 : "This attempt has run every live test batch its host allows";
-              // A denial that rests on a failure no batch left can clear ends the build honestly.
-              const thenBlocked =
-                "If publication review then denies for a failure only a new batch could clear, and no batch is left, prefer report_blocked with reason host_refused, naming the refused live tests and the finding.";
+              // A reserve the host still keeps can re-test a failure once the code changes, so only
+              // a closed one makes a denial that rests on a failure the end of the build.
+              const reserveOpen =
+                reserved.length > 0 || (yield* liveTestReserveOpen(host, deadlineAt));
+              const failedHere =
+                reserveOpen && reserved.length === 0
+                  ? failedOnSourceCases(file, request.entrypoint, digest)
+                  : [];
+              const publishNext =
+                "run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out.";
               return JSON.stringify({
                 kind: "host_live_tests",
                 status: "no_time",
                 ...(reserved.length === 0 ? {} : { reservedFor: reserved }),
                 instruction:
-                  reserved.length === 0
-                    ? `${stopped}. Run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out. ${thenBlocked} Nothing was executed.`
-                    : `${stopped}, except one reserved batch for only the cases a failure is still pending on: ${reserved.join(", ")}. Prefer to make your last edit, then run those cases together in that one batch, and no other case, named in cases, so publication review reads their results on the source you publish. Then run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out. ${thenBlocked} Nothing was executed.`,
+                  reserved.length > 0
+                    ? `${stopped}, except one reserved batch for only the cases a failure is still pending on: ${reserved.join(", ")}. Prefer to make your last edit, then run those cases together in that one batch, and no other case, named in cases, so publication review reads their results on the source you publish. Then ${publishNext} Nothing was executed.`
+                    : reserveOpen
+                      ? `${stopped}, except one reserved batch for the cases a failure is pending on.${failedHere.length === 0 ? "" : ` A case that failed on this source joins it once you change the code: ${failedHere.join(", ")}. Prefer to fix the code where it fails, then run those cases together in that one batch.`} Otherwise, ${publishNext} Nothing was executed.`
+                      : `${stopped}. Run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out. If publication review then denies for a failure only a new batch could clear, prefer report_blocked with reason host_refused, naming the refused live tests and the finding. Nothing was executed.`,
               });
             }
           }
@@ -4632,10 +4666,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       /**
        * Live tests the host refuses while Guardian's denial of the latest publication stands, for
        * a `host_refused` report: the attempt ran out of live tests (`liveTestsOutOfTime`), no
-       * batch fits now, and the latest publication review was a denial. `reservedFor` names the
-       * cases the host's reserve would still run on any version this attempt tested
-       * (`reservedBatchCases`), none once it ran, without one, or with no time left for it.
-       * Undefined while a batch fits, with no denial standing, or before the attempt ran out.
+       * batch fits now, and the latest publication review was a denial. Whether the host's reserve
+       * is still open decides it alone; the cases file is read only to name the cases the reserve
+       * would run now and those it takes once the code changes, on any version this attempt
+       * tested, so a file that cannot be read never makes the tests spent. Undefined while a batch
+       * fits, with no denial standing, or before the attempt ran out.
        */
       const liveTestsRefusedForDenial: Effect.Effect<LiveTestsRefusal | undefined> = Effect.gen(
         function* () {
@@ -4644,23 +4679,39 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             return undefined;
           const { deadlineAt } = yield* liveTestDeadline;
           if (yield* liveTestBatchFits(host, deadlineAt)) return undefined;
+          if (!(yield* liveTestReserveOpen(host, deadlineAt)))
+            return { reserveOpen: false, reservedFor: [], failedOnSource: [] };
           const read = yield* readCasesFile;
-          if (Either.isLeft(read)) return { reservedFor: [] };
           const entrypoints = new Set(
             currentLiveTests().flatMap((record) =>
               record.entrypoint === undefined ? [] : [record.entrypoint],
             ),
           );
-          const reserved = yield* Effect.forEach(entrypoints, (entrypoint) =>
-            stepDigest(entrypoint).pipe(
-              Effect.flatMap((digest) =>
-                digest === undefined
-                  ? Effect.succeed([])
-                  : reservedBatchCases(host, deadlineAt, read.right, entrypoint, digest),
-              ),
-            ),
-          );
-          return { reservedFor: [...new Set(reserved.flat())] };
+          const named = Either.isLeft(read)
+            ? []
+            : yield* Effect.forEach(entrypoints, (entrypoint) =>
+                stepDigest(entrypoint).pipe(
+                  Effect.flatMap((digest) =>
+                    digest === undefined
+                      ? Effect.succeed({ now: [], afterEdit: [] })
+                      : Effect.map(
+                          reservedBatchCases(host, deadlineAt, read.right, entrypoint, digest),
+                          (now) => ({
+                            now,
+                            afterEdit: failedOnSourceCases(read.right, entrypoint, digest),
+                          }),
+                        ),
+                  ),
+                ),
+              );
+          const reservedFor = [...new Set(named.flatMap(({ now }) => now))];
+          return {
+            reserveOpen: true,
+            reservedFor,
+            failedOnSource: [
+              ...new Set(named.flatMap(({ afterEdit }) => afterEdit)),
+            ].filter((id) => !reservedFor.includes(id)),
+          };
         },
       );
       const submissionKey = (proposed: PublicationRequest, paths: readonly string[]) =>
