@@ -753,7 +753,10 @@ const afterFieldCall = (
  * click another element caught, which never reached the submit, is `blocked`, with that element
  * (`blockedBy`): nothing was sent and the fields still hold what was typed. On a step that names
  * `dismiss`, a notice drawn only once the fields were typed is dismissed then, and the submit
- * clicked once more, with nothing typed again.
+ * clicked once more, with nothing typed again. A click that ran out of time while the next page
+ * loaded, as one through a slow chain of redirects does, is `clicked` once a request for the page's
+ * main frame went out, whatever the site answered, and the page gets the settle wait from there;
+ * with no such request it is `failed`.
  */
 export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepReport> =>
   Effect.gen(function* () {

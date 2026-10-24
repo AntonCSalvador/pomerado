@@ -726,22 +726,53 @@ const alertsBefore = ${
 const navigated = primary
   .waitForEvent("framenavigated", { predicate: (frame) => frame === primary.mainFrame(), timeout: ${call.settleMs} })
   .then(() => true, () => false);
+// Whether a request for a navigation of the main frame went out from the click on, as a form's
+// submission sends, and whether such a navigation committed since.
+let requested = false;
+let committed = false;
+const noteRequest = (request) => {
+  try {
+    if (request.isNavigationRequest() && request.frame() === primary.mainFrame()) requested = true;
+  } catch {}
+};
+const noteCommit = (frame) => {
+  if (frame === primary.mainFrame()) committed = true;
+};
+primary.on("request", noteRequest);
+primary.on("framenavigated", noteCommit);
+let late = false;
 try {
   // A submit key goes to the last field, which stands as the submit and submits its own form.
   if (submitKey === null) await submit.locator.click({ timeout: 5000 });
   else await submit.locator.press(submitKey, { timeout: 5000 });
 } catch (error) {
-  // Playwright names an element that intercepts pointer events when another sits over the submit,
-  // and never dispatches the click then: blocked, by the element at the submit's centre.
-  const intercepted =
-    submitKey === null && error instanceof Error && error.message.includes("intercepts pointer events");
-  const blockedBy = intercepted
-    ? await submit.locator.evaluate(${coveringCode}, undefined, { timeout: ${elementReadMs} }).catch(() => null)
-    : null;
-  return blockedBy === null ? { submit: "failed", url: primary.url() } : { submit: "blocked", blockedBy, url: primary.url() };
+  // Playwright's click waits, inside its own timeout, for the navigation it started to commit, which
+  // a slow chain of redirects can outlast. One whose request for the main frame went out reached
+  // the page, whatever the site answered: the host goes on as after any click, never to click again.
+  if (requested) late = true;
+  else {
+    // Playwright names an element that intercepts pointer events when another sits over the
+    // submit, and never dispatches the click then: blocked, by the element at the submit's centre.
+    const intercepted =
+      submitKey === null && error instanceof Error && error.message.includes("intercepts pointer events");
+    const blockedBy = intercepted
+      ? await submit.locator.evaluate(${coveringCode}, undefined, { timeout: ${elementReadMs} }).catch(() => null)
+      : null;
+    return blockedBy === null ? { submit: "failed", url: primary.url() } : { submit: "blocked", blockedBy, url: primary.url() };
+  }
+} finally {
+  primary.off("request", noteRequest);
+  primary.off("framenavigated", noteCommit);
 }
+// Such a click's navigation gets the settle wait from here to commit, as a click's own gets.
+const lateCommit = !late
+  ? false
+  : committed ||
+    primary
+      .waitForEvent("framenavigated", { predicate: (frame) => frame === primary.mainFrame(), timeout: ${call.settleMs} })
+      .then(() => true, () => false);
 let submission = await refusedSubmission();
-if (submission === null && (await navigated))
+if (submission === null && ((await navigated) || (await lateCommit)))
   await primary.waitForLoadState("domcontentloaded", { timeout: ${call.settleMs} }).catch(() => undefined);
 submission ??= await refusedSubmission();
 if (submission !== null) return { submission, url: primary.url() };

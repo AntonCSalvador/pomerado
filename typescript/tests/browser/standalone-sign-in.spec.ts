@@ -2229,6 +2229,51 @@ test("a run's second screen whose form posts to a URL holding the password is re
   });
 });
 
+test("a run's password screen whose post the site answers through redirects slower than the host's click signs in", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Chromium and a run through two recorded sign-in screens, the second's post answered through 6.4 s of redirects",
+  });
+  test.setTimeout(90_000);
+  await withShop(async (shop, endpoint) => {
+    // The site answers the password post at once and signs the browser in, then four redirects of
+    // 1.6 s each reach the account page, past the 5 s the host's click waits for its navigation.
+    shop.state.sessionHops = 4;
+    shop.state.sessionHopMs = 1_600;
+    const asked: InputRequest[] = [];
+    const result = await runInNewSession(
+      endpoint,
+      answers(asked),
+      accountReader({
+        recipe: {
+          version: 1,
+          steps: [
+            {
+              page: `${shop.origin}/sign-in`,
+              fields: [{ selector: "#username", accepts: ["email"] }],
+              submit: "#next",
+              submittedBy: "host",
+            },
+            {
+              page: `${shop.origin}/sign-in/password`,
+              fields: [{ selector: "#password", slot: "password" }],
+              submit: "#sign-in",
+              submittedBy: "host",
+            },
+          ],
+          signedIn: { selector: "#account" },
+        },
+        entryUrl: `${shop.origin}/sign-in`,
+      }),
+      `${shop.origin}/account`,
+    );
+    expect(result).toEqual(Either.right({ signedIn: true }));
+    expect(reasons(asked)).toEqual(["missing_credentials"]);
+    // The password went out once.
+    expect(shop.state.sessionPosts).toBe(1);
+  });
+});
+
 test("a login URL that holds the login's email is refused at publication, naming the login URL and never the email, and a new sign-in from a URL without it publishes", async () => {
   test.info().annotations.push({
     type: "slow",
