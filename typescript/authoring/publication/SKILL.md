@@ -124,8 +124,11 @@ first:
   your live test cases and gives the review that record (`publication/tests.json`): each case's
   purpose, input, expectation and result on the source you publish, and what you listed under
   `notTested` with why. Guardian judges the tool's claims no passing case tests, and failing and
-  stale cases, and checks every `notTested` reason against the captures and the request. A
-  signed-in read reports its example and its signed-in cases, and gets the same host record of the
+  stale cases, and checks every `notTested` reason against the captures and the request. When a
+  claimed part of the output only appears for some inputs and no case you can run shows it,
+  prefer listing it in `notTested` with the reason and leaving it out of the description. Prefer
+  that over asking the owner for evidence they may not have. A signed-in read reports its example
+  and its signed-in cases, and gets the same host record of the
   cases it ran signed in; the review judges a failing case but never a gap. A write reports its
   one run, the act session, and lists what that run did not exercise as untested without testing
   it; the review judges that run alone.

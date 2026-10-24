@@ -320,6 +320,14 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
     "Without a no-results answer, move on: it needs no `notTested` entry and no question;",
   ],
   ["publication", "and untested (such as a later page or another layout, live)."],
+  // A part of the output that only some inputs show, such as a date a record has only in one
+  // state, may have no case that shows it, and the owner may have no input that does either. A
+  // build that asked the owner for one and got none ended with no tool, so the publication skill
+  // prefers listing that part as not tested and leaving it out of the description.
+  [
+    "publication",
+    "When a claimed part of the output only appears for some inputs and no case you can run shows it, prefer listing it in `notTested` with the reason and leaving it out of the description. Prefer that over asking the owner for evidence they may not have.",
+  ],
   [
     "publication",
     "| `reason` | `input_feedback_unresolved` | The feedback rounds are spent | End the attempt; do not execute again |",
@@ -1231,7 +1239,7 @@ it("renders the pinned standalone authoring", async () => {
     ["7308f56f0ac66a427deac277366104e8e6e023aa83debdbd616d22b11ea3f95f", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["582b80d4f682d4c6af6d101515a3a12febb016e2e4c5d7f0fbf3f51b3aab4dbd", "caller-input"],
-    ["1d3e5138d0f3d1ba34f8a9ab28969f96da12f4dfa0755d3878f19e7dbd653847", "publication"],
+    ["c6bcadcf0be7d9dc94fe00a7bf884efb261b0d8e5748340639e90615207f4656", "publication"],
     ["e80841525cfc668f952e39b896056afc66283feb2564dbcb910ea7db38c72122", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
