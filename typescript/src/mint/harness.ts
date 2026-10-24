@@ -79,6 +79,7 @@ import { finiteCaptureGap, finiteRunnerFailure } from "./runner-failure.js";
 import { isSecretHandle } from "./secret-handles.js";
 import { fileReadbackRule } from "./file-readback.js";
 import { cardReadbackRule } from "./card-readback.js";
+import { citesCallerRequest } from "./caller-citation.js";
 import type {
   AcceptedTaskUpdate,
   AllowedExecution,
@@ -3291,6 +3292,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         screenedExplanation: string,
         now: number,
         liveTestsRefusal: LiveTestsRefusal | undefined,
+        intent: string | undefined,
       ):
         | {
             readonly reason: (typeof BuildBlocked.Type)["reason"];
@@ -3385,10 +3387,20 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const { reservedFor, failedOnSource } = liveTestsRefusal;
           return refused(
             "live_tests_reserved",
-            `The host still keeps one reserved live test batch for the cases a failure is pending on, so the build has not ended.${reservedFor.length === 0 ? "" : ` It runs now: ${reservedFor.join(", ")}.`}${failedOnSource.length === 0 ? "" : ` It runs once you change the code after their failure: ${failedOnSource.join(", ")}.`}${reservedFor.length === 0 && failedOnSource.length === 0 ? ` A case is pending when its input, expectation and next page are a failing result's; ${liveTestsEvidencePath} names each failure that still counts.` : ""} Prefer to fix the code where a case fails, then run those cases together in that one batch, run the example last and call finish_build again. host_refused stands on refused live tests only once no batch is left.`,
+            `The host still keeps one reserved live test batch for the cases a failure is pending on, so the build has not ended.${reservedFor.length === 0 ? "" : ` It runs now: ${reservedFor.join(", ")}.`}${failedOnSource.length === 0 ? "" : ` It runs once you change the code after their failure: ${failedOnSource.join(", ")}.`}${reservedFor.length === 0 && failedOnSource.length === 0 ? ` A case is pending when its input, expectation and next page are a failing result's; ${liveTestsEvidencePath} names each failure that still counts.` : ""} Prefer to fix the code where a case fails, then run those cases together in that one batch, run the example last and call finish_build again.${reservedFor.length === 0 && failedOnSource.length === 0 ? ` If ${liveTestsEvidencePath} names no failure that still counts, the denial rests on something else, so prefer to fix what the denial names, then call finish_build again.` : ""} host_refused stands on refused live tests only once no batch is left.`,
             { reservedFor, failedOnSource },
           );
         }
+        // A caller_input ending stands on its intent citing the caller's own request: a field the
+        // task's input holds, or words of the request's instruction.
+        if (
+          reason === "caller_input" &&
+          !citesCallerRequest(intent, request.intent, taskState.businessInput)
+        )
+          return refused(
+            "caller_input_not_cited",
+            "caller_input needs the caller's own request as its basis, so the build has not ended. In intent, name the request field that stops the build, or quote the words of the caller's instruction, then call report_blocked again. Prefer another reason when the site, the owner or a host check stopped it.",
+          );
         if (reason === "host_refused" && !hostRefusing && hostRefusalPassed)
           return refused(
             "host_refusal_passed",
@@ -6296,6 +6308,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       explanation,
                       yield* Clock.currentTimeMillis,
                       liveTestsRefusal,
+                      report.intent,
                     );
                     if ("refusal" in ending) return ending.refusal;
                     // An ending the checks above accepted, while the build's latest sign-in

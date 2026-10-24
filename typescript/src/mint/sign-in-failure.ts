@@ -147,7 +147,7 @@ const spentReason: Record<SpentSignIn, string> = {
   relogin_spent: "the attempt's one extra sign-in is spent",
   fresh_profile_sign_ins_spent:
     "the sign-ins the attempt allows on a recovery's new profile are spent",
-  sign_in_retry_spent: "the attempt's one retry of a sign-in whose outcome was unclear is spent",
+  sign_in_retry_spent: "the attempt's retries of a sign-in whose outcome was unclear are spent",
   host_refusals_repeated: `the host refused the same field of the same screen the same way ${maximumHostRefusals} times in a row, and no correction of the step got past it`,
   guardian_denials_repeated: `Guardian denied the same sign-in step ${maximumSignInDenials} times in a row, and the step did not change between them`,
   sign_in_origin_untrusted:
