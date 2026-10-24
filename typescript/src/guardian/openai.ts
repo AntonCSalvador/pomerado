@@ -397,6 +397,13 @@ const withheldFromObserver = (
   return through(observe(through(base, restore)), hide);
 };
 
+/**
+ * The provider refused the request as over the model's input limit, its context window, by its own
+ * code. That is no outage, and the same request fails the same way.
+ */
+const overContextWindow = (finite: ModelFailureMetadata) =>
+  finite.code === "context_length_exceeded" || finite.providerCode === "context_length_exceeded";
+
 /** One model call went without a response for the per-call bound, each time it was sent. */
 class ModelCallStalled extends Error {
   override readonly name = "ModelCallStalled";
@@ -857,13 +864,15 @@ const reviewerWithPolicy = (shared: string, options: GuardianModelOptions): Open
                 },
                 catch: (error) => {
                   diagnostics?.failed(privateKind ? error : withheldError(error, leadingPrivate));
+                  const finite = (options.failureMetadata ?? modelFailureMetadata)(error);
                   failureCode =
                     error instanceof MaxTurnsExceededError
                       ? "TurnLimitExceeded"
                       : callStalled
                         ? "ModelCallStalled"
-                        : "Unavailable";
-                  const finite = (options.failureMetadata ?? modelFailureMetadata)(error);
+                        : overContextWindow(finite)
+                          ? "InputTooLarge"
+                          : "Unavailable";
                   quotaExhausted =
                     providerQuotaExhausted(error) || finite.code === "insufficient_quota";
                   reviewComputationDetail =
