@@ -167,13 +167,30 @@ import {
 } from "./workspace.js";
 
 /**
- * Whether a maintenance update only adds or tightens output fields: callers keep everything the
- * registered contract gives them, so nobody needs to confirm it.
+ * The output fields this build's accepted updates added and none removed since. The registered
+ * contract never had them, so changing or removing one takes nothing its callers receive.
  */
-const keepsContract = (update: TaskUpdateRequest) =>
+const addedOutputFields = (updates: readonly { readonly changes: readonly TaskChange[] }[]) => {
+  const added = new Set<string>();
+  for (const { changes } of updates)
+    for (const change of changes) {
+      if (change.setting !== "output") continue;
+      if (change.change === "add") added.add(change.field);
+      else if (change.change === "remove") added.delete(change.field);
+    }
+  return added;
+};
+
+/**
+ * Whether a maintenance update only adds or tightens output fields, or changes one this build
+ * added (`addedOutputFields`): callers keep everything the registered contract gives them, so
+ * nobody needs to confirm it.
+ */
+const keepsContract = (update: TaskUpdateRequest, added: ReadonlySet<string>) =>
   update.changes.every(
     (change) =>
-      change.setting === "output" && (change.change === "add" || change.change === "tighten"),
+      change.setting === "output" &&
+      (change.change === "add" || change.change === "tighten" || added.has(change.field)),
   );
 
 /** Each loosened field and how, for the minter; a host refusal that names none reads as a sentence. */
@@ -6430,7 +6447,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     const refusal = taskUpdateRefusal(submitted);
                     if (refusal !== undefined) return taskUpdateAnswer("update_refused", refusal);
                     let askedConfirmer: TaskUpdateConfirmer | undefined;
-                    if (request.mode === "maintenance" && !keepsContract(submitted)) {
+                    if (request.mode === "maintenance" &&
+                      !keepsContract(submitted, addedOutputFields(taskState.updates))) {
                       // Only the tool's owner confirms a change that takes from the registered
                       // contract; adding or tightening an output field takes nothing away.
                       const confirmer = yield* maintenanceConfirmer;
@@ -6439,7 +6457,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         return taskUpdateAnswer("update_refused", {
                           reason: "owner_unavailable",
                           instruction:
-                            "No one who owns this tool can confirm a change that loosens or removes an output, or changes a requirement or the purpose, now, so nothing changed. Keep the registered contract: publish a repair that still returns every required output field (adding or tightening a field needs no confirmation), or end with report_blocked, reason site_lacks_capability, naming the field the site no longer shows.",
+                            "No one who owns this tool can confirm a change that loosens or removes an output, or changes a requirement or the purpose, now, so nothing changed. Keep the registered contract (adding or tightening a field needs no confirmation). Prefer leaving out the part of the request that needs this change: remove any code or output field you added only for it, publish the rest, and name the part you left out in coverage. End with report_blocked, reason site_lacks_capability, naming the field, only when no part of the request can be published.",
                         });
                       // The owner's own request may confirm what it names, which Guardian judges.
                       if (confirmer === "owner" && submitted.confirmedBy.length === 0)
