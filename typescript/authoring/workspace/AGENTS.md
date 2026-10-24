@@ -610,7 +610,10 @@ never with final text, which the host treats as unfinished work:
   fact it needs is unknown.
 - `host_refused`: a host check refused a step the build needs, such as `finish_build`, a sign-in
   form or a site change, and nothing left in this attempt can fix it. Name the check in
-  `explanation`.
+  `explanation`. It also stands once `live_tests` answered `no_time` and no batch is left, the
+  reserved one included, while Guardian's denial of the last publication stands: prefer it when
+  that denial rests on a failure only a new batch could clear, and name the refused live tests and
+  the finding in `explanation`.
 - `policy`: in this attempt Guardian refused an execution the task needs with refusal final,
   denied or escalated a publication with reason `privacy` or `authority`, or with a
   `private_literal`, `credential`, `customer_data`, `exfiltration`, `unsafe_logging` or
