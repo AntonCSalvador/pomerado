@@ -129,6 +129,20 @@ const named = [
     name: "Given name *",
   },
   {
+    // Generated text that holds a one-letter class name is still the label's own words.
+    id: "nickname",
+    html: '<label for="nickname">Nickname<span class="o"></span></label><input id="nickname">',
+    role: "textbox",
+    name: "Nickname (optional)",
+  },
+  {
+    // Generated text that holds the label's whole class name is still the label's own words.
+    id: "badge",
+    html: '<label for="badge" class="req">Badge number</label><input id="badge">',
+    role: "textbox",
+    name: "Badge number (required)",
+  },
+  {
     id: "street",
     html: '<label for="street"><div>Street</div><div>address</div></label><input id="street">',
     role: "textbox",
@@ -162,7 +176,7 @@ const named = [
   { id: "send", html: '<input id="send" type="submit">', role: "button", name: "Submit" },
 ] as const;
 
-const namesPage = `<!doctype html><style>.required::after { content: " \\2a"; }</style><form onsubmit="return false">${named
+const namesPage = `<!doctype html><style>.required::after { content: " \\2a"; } .o::after { content: " (optional)"; } .req::after { content: " (required)"; }</style><form onsubmit="return false">${named
   .map((control) => `<div>${control.html}</div>`)
   .join("")}</form>`;
 
@@ -216,6 +230,74 @@ test("a name never holds what was typed: not a field, an editable element or an 
   );
   expect(JSON.stringify(controls)).not.toContain("typed-");
   expect(controls).toContainEqual(expect.objectContaining({ role: "textbox", name: null, type: null }));
+});
+
+// An editable control is never named by its own text, though its author's label still names it.
+test("an editable control is never named by what was typed into it", async ({ page }) => {
+  await page.setContent(`<!doctype html>
+<style>[contenteditable] { display: inline-block; min-width: 4em; }</style>
+<div role="button" contenteditable="true" id="edit-button"></div>
+<div role="option" contenteditable="true" id="edit-option" aria-label="Choice"></div>
+<div role="option" contenteditable="true" id="edit-plain-option"></div>
+<div role="textbox" contenteditable="true" id="edit-message" aria-label="Message"></div>`);
+  await page.locator("#edit-button").fill("typed-button");
+  await page.locator("#edit-option").fill("typed-option");
+  await page.locator("#edit-plain-option").fill("typed-plain-option");
+  await page.locator("#edit-message").fill("typed-message");
+  const { controls } = await readControls(page);
+  expect(JSON.stringify(controls)).not.toContain("typed-");
+  expect(controls).toContainEqual(expect.objectContaining({ role: "button", name: null }));
+  expect(controls).toContainEqual(expect.objectContaining({ role: "option", name: "Choice" }));
+  expect(controls).toContainEqual(expect.objectContaining({ role: "option", name: null }));
+  expect(controls).toContainEqual(expect.objectContaining({ role: "textbox", name: "Message" }));
+});
+
+// However the page draws a typed value into a label's generated text, from the label's id or
+// class, a custom property or a rule its script adds, the value stays out of the name.
+test("a typed value the page draws into generated text never reaches a name", async ({ page }) => {
+  await page.setContent(`<!doctype html>
+<style>
+  #by-id::after { content: " " attr(id); }
+  .by-class::after { content: " " attr(class); }
+  .by-property::after { content: " " var(--typed); }
+</style>
+<form id="mirrors"></form>
+<label for="id-field">Identifier</label><input id="id-field">
+<label for="class-field">Class</label><input id="class-field">
+<label for="property-field" class="by-property">Property</label><input id="property-field">
+<label for="rule-field" id="rule-label">Rule</label><input id="rule-field">
+<label for="plain" class="required-mark">Plain</label><input id="plain">
+<label for="shadow-mirror" class="by-property" id="shadow-label">Shadow</label><input id="shadow-mirror"><x-field></x-field>
+<style>.required-mark::after { content: " *"; }</style>
+<script>
+  const label = (field) => field.labels[0];
+  document.querySelector("#id-field").addEventListener("input", (event) => { label(event.target).id = event.target.value; label(event.target).setAttribute("data-id", ""); document.styleSheets[0].insertRule("[data-id]::after { content: ' ' attr(id); }"); });
+  document.querySelector("#class-field").addEventListener("input", (event) => { label(event.target).className = event.target.value; document.styleSheets[0].insertRule("." + CSS.escape(event.target.value) + "::after { content: ' ' attr(class); }"); });
+  document.querySelector("#property-field").addEventListener("input", (event) => label(event.target).style.setProperty("--typed", JSON.stringify(event.target.value)));
+  customElements.define("x-field", class extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({ mode: "open" });
+      root.innerHTML = '<input id="shadow-field" aria-label="Shadow field">';
+      root.querySelector("input").addEventListener("input", (event) =>
+        document.querySelector("#shadow-label").style.setProperty("--typed", JSON.stringify(event.target.value)));
+    }
+  });
+  document.querySelector("#rule-field").addEventListener("input", (event) => document.styleSheets[0].insertRule("#rule-label::after { content: " + JSON.stringify(" " + event.target.value) + "; }"));
+</script>`);
+  await page.locator("#id-field").fill("typed-identifier");
+  await page.locator("#class-field").fill("typed-class");
+  await page.locator("#property-field").fill("typed-property");
+  await page.locator("#rule-field").fill("typed-rule");
+  await page.locator("#shadow-field").fill("typed-shadow");
+  const { controls } = await readControls(page);
+  expect(JSON.stringify(controls)).not.toContain("typed-");
+  expect(controls.map((control) => control.name)).toEqual(
+    expect.arrayContaining(["Identifier", "Class", "Property", "Rule", "Plain *", "Shadow"]),
+  );
+  // A field in an open shadow root, whose value the page draws into a label outside it, counts too.
+  expect(
+    await page.locator("#shadow-label").evaluate((label) => getComputedStyle(label, "::after").content),
+  ).toBe('" typed-shadow"');
 });
 
 // A page script can make reading a name throw, here for one field's styles: that name is null,
