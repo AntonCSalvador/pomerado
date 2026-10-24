@@ -132,7 +132,8 @@ export interface AutofillStep<Slot extends FillSlot = AutofillSlot> {
    * The own close, reject or accept control of a cookie, consent or similar notice that covers the screen,
    * which the host clicks before it types, when the page shows it, and again before it clicks the
    * submit once more when the notice caught that click. Never a submit or a control of the
-   * sign-in's own form (`dismiss_refused`).
+   * sign-in's own form (`dismiss_refused`), unless it sits in a notice that covers one of the step's
+   * controls: the host then cancels that click's submission, so it submits nothing.
    */
   readonly dismiss?: string | undefined;
 }

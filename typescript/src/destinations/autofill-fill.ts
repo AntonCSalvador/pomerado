@@ -87,9 +87,13 @@ const FillAnswer = Schema.Union(
     blockedBy: ReadCoveringElement,
     url: Schema.String,
   }),
-  /** A `dismiss` call: what became of the covering notice's control. */
+  /**
+   * A `dismiss` call: what became of the covering notice's control. `emptied`: the call emptied
+   * the step's fields before a click whose submission it cancelled.
+   */
   Schema.Struct({
     dismiss: Schema.Literal("clicked", "not_shown", "ambiguous", "failed"),
+    emptied: Schema.optional(Schema.Literal(true)),
     url: Schema.String,
   }),
   Schema.Struct({
@@ -779,6 +783,16 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
     const report = yield* submitStep(input, progress, boxes);
     if (!isBlocked(report) || step.dismiss === undefined) return report;
     const again = yield* dismissNotice(input, progress);
+    if (again.emptied) {
+      // The dismiss emptied the fields before its click: the host types them all again.
+      progress.statuses.length = 0;
+      progress.check = [];
+      for (let index = 0; index < step.fields.length; index++) {
+        const ended = yield* fillField(input, progress, index);
+        if (ended !== undefined) return ended;
+      }
+      return yield* submitStep(input, progress, boxes);
+    }
     if (!again.dismissed) return report;
     progress.check = typedFields(step, progress);
     return yield* submitStep(input, progress, boxes);
@@ -843,12 +857,18 @@ const typedFields = (step: AutofillStep<FillSlot>, progress: FillProgress) =>
  * refuses the step (`dismiss_refused` for the dismiss itself); once something was typed it refuses
  * the click again instead, which the caller reports as it stands. A dismiss the page does not show,
  * whose click failed or whose answer was lost clicks nothing that sends, so the fill goes on.
- * `dismissed` says whether the call clicked it.
+ * `dismissed` says whether the call clicked it, and `emptied` whether it emptied the step's fields
+ * first, as it does before a click whose submission it cancels, so what was typed must be typed
+ * again.
  */
 const dismissNotice = (
   input: CallInput,
   progress: FillProgress,
-): Effect.Effect<{ readonly dismissed: boolean; readonly refusal?: AutofillRefusal }> =>
+): Effect.Effect<{
+  readonly dismissed: boolean;
+  readonly emptied?: true;
+  readonly refusal?: AutofillRefusal;
+}> =>
   Effect.gen(function* () {
     const selector = input.step.dismiss;
     if (selector === undefined) return { dismissed: false };
@@ -865,7 +885,10 @@ const dismissNotice = (
           ...foundEvidence(answer.url, undefined, evidenceOrigins(input, progress)),
         }),
       };
-    return { dismissed: answer.dismiss === "clicked" };
+    return {
+      dismissed: answer.dismiss === "clicked",
+      ...("emptied" in answer && answer.emptied === true ? { emptied: true as const } : {}),
+    };
   });
 
 /**
