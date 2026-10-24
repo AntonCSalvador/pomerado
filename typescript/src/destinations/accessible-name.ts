@@ -1,3 +1,12 @@
+/*
+ * Source: Playwright 1.63.0, packages/injected/src/roleUtils.ts (the accessible name computation),
+ * https://github.com/microsoft/playwright
+ * Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0. See
+ * third-party/playwright/LICENSE and third-party/playwright/NOTICE.
+ * Modified by Pomerado. It is rewritten as one self-contained page function, and it never reads a
+ * field's value or placeholder, an editable element's text or a CSS attr() value.
+ */
+
 /**
  * Page code: `accessibleNames()` returns a reader of controls' accessible names, as Playwright's
  * `role=` selector computes the name it matches, so a selector written from a name finds its
@@ -6,11 +15,13 @@
  * person reads from its content, such as a button or link, else its `title`. Words the page hides
  * from assistive technology (`aria-hidden="true"`, `display: none`, `visibility: hidden`) add
  * nothing, unless the label or referenced element that holds them is hidden itself, and CSS
- * generated text adds its words. A control the page hides is named as the selector's
+ * generated text adds its quoted words. A control the page hides is named as the selector's
  * `include-hidden` names it: with its hidden words.
- * It never reads a field's value or placeholder: a field, or a control that holds a value such as
- * a text box, list box or slider, adds nothing to a name it sits in, where Playwright would add its
- * value. Names come back as the page has them, never trimmed or collapsed.
+ * It never reads what was typed: a field, an editable element or a control that holds a value,
+ * such as a text box, list box or slider, adds nothing to a name it sits in, where Playwright would
+ * add its value or text, and a placeholder never names a field. CSS generated text that holds one
+ * of its element's attribute values, as `attr()` reads them, adds nothing, since a page may copy a
+ * typed value there. Names come back as the page has them, never trimmed or collapsed.
  *
  * It is self-contained: `pageControlsCode` embeds this same function. The reader keeps computed
  * styles for the page as it is now, so read names with one reader at a time and drop it after.
@@ -156,8 +167,10 @@ export const accessibleNames = (): ((target: Element) => string) => {
   };
 
   // CSS generated text: a pseudo-element's content, or an element's own content's alternative
-  // after "/", when it is only strings and attr(); none for anything else, such as an image.
-  const generated = (element: Element, pseudo: "::before" | "::after" | null) => {
+  // after "/", when it is only quoted strings; none for anything else, such as an image, and none
+  // that holds one of the element's own attribute values, as attr() reads them: a page may copy a
+  // typed value there, and the browser gives attr() already resolved, as a quoted string.
+  const readGenerated = (element: Element, pseudo: "::before" | "::after" | null) => {
     const computed = pseudo === null ? style(element) : getComputedStyle(element, pseudo);
     const content = computed.content;
     if (content === "" || content === "none" || content === "normal") return undefined;
@@ -180,7 +193,7 @@ export const accessibleNames = (): ((target: Element) => string) => {
           const hex = /^[0-9a-f]{1,6}\s?/iu.exec(content.slice(index + 1));
           if (hex !== null) {
             const code = Number.parseInt(hex[0], 16);
-            text += code === 0 || code > 0x10ffff ? "�" : String.fromCodePoint(code);
+            text += code === 0 || code > 0x10ffff ? "\uFFFD" : String.fromCodePoint(code);
             index += 1 + hex[0].length;
           } else {
             if (content.charAt(index + 1) !== "\n") text += content.charAt(index + 1);
@@ -194,15 +207,10 @@ export const accessibleNames = (): ((target: Element) => string) => {
         tokens.push({ text: null, slash: true });
         index += 1;
       } else {
-        const attribute = /^attr\(\s*([^\s)]+)\s*\)/iu.exec(content.slice(index));
         const other = /^[^\s"'/(]*(?:\([^)]*\))?/u.exec(content.slice(index))?.[0] ?? "";
-        if (attribute !== null) {
-          tokens.push({ text: element.getAttribute(attribute[1] ?? "") ?? "" });
-          index += attribute[0].length;
-        } else if (other !== "") {
-          tokens.push({ text: null });
-          index += other.length;
-        } else return undefined;
+        if (other === "") return undefined;
+        tokens.push({ text: null });
+        index += other.length;
       }
     }
     const slash = tokens.findIndex((token) => token.slash === true);
@@ -210,7 +218,23 @@ export const accessibleNames = (): ((target: Element) => string) => {
     const kept = tokens.slice(slash + 1);
     if (kept.some((token) => token.text === null)) return undefined;
     const text = kept.map((token) => token.text ?? "").join("");
+    const copied = Array.from(element.attributes).some(
+      ({ name, value }) =>
+        !["class", "id", "style"].includes(name) && value.trim() !== "" && text.includes(value),
+    );
+    if (copied) return undefined;
     return pseudo !== null && (computed.display || "inline") !== "inline" ? " " + text + " " : text;
+  };
+  // Each pseudo-element's generated text, read once per reader: nested controls read it often.
+  const pseudoTexts = {
+    "::before": new Map<Element, string | undefined>(),
+    "::after": new Map<Element, string | undefined>(),
+  };
+  const generated = (element: Element, pseudo: "::before" | "::after" | null) => {
+    if (pseudo === null) return readGenerated(element, null);
+    const texts = pseudoTexts[pseudo];
+    if (!texts.has(element)) texts.set(element, readGenerated(element, pseudo));
+    return texts.get(element);
   };
 
   // An element's words: its generated text and each child's text alternative, a block apart.
@@ -284,8 +308,10 @@ export const accessibleNames = (): ((target: Element) => string) => {
     }
     const tag = element.localName;
     const role = roleOf(element);
-    // A field or a control that holds a value lends nothing: never what was typed or chosen.
-    if ((context.labelled || context.scope === "descendant") && (valueTags.has(tag) || valueRoles.has(role))) {
+    // A field, an editable element or a control that holds a value lends nothing: never what was
+    // typed or chosen.
+    const editable = element instanceof HTMLElement && element.isContentEditable;
+    if ((context.labelled || context.scope === "descendant") && (valueTags.has(tag) || valueRoles.has(role) || editable)) {
       visited.add(element);
       return "";
     }

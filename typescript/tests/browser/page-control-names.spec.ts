@@ -193,20 +193,50 @@ test("each control is saved under the accessible name its role selector matches 
   }
 });
 
-test("a name never holds what was typed: not a field inside a label, nor a text box's own text", async ({
+test("a name never holds what was typed: not a field, an editable element or an attribute the page copied it to", async ({
   page,
 }) => {
+  // The page copies the typed nickname into an attribute its label's generated text shows.
   await page.setContent(`<!doctype html>
+<style>.mirror::after { content: " " attr(data-value); } [contenteditable] { display: inline-block; min-width: 4em; }</style>
 <label for="amount">Amount in <input id="currency" aria-label="Currency"></label><input id="amount">
-<div role="textbox" contenteditable="true" id="note"></div>`);
+<div role="textbox" contenteditable="true" id="note"></div>
+<label for="nickname">Nickname <span contenteditable="true" id="nickname-text"></span></label><input id="nickname">
+<button type="button">Save <span contenteditable="true" id="button-text"></span></button>
+<label for="mirror" class="mirror">Mirror</label><input id="mirror"
+  oninput="this.labels[0].dataset.value = this.value">`);
   await page.locator("#currency").fill("typed-currency");
   await page.locator("#note").fill("typed-note");
+  await page.locator("#nickname-text").fill("typed-nickname");
+  await page.locator("#button-text").fill("typed-button");
+  await page.locator("#mirror").fill("typed-mirror");
   const { controls } = await readControls(page);
   expect(controls.map((control) => control.name)).toEqual(
-    expect.arrayContaining(["Amount in", "Currency"]),
+    expect.arrayContaining(["Amount in", "Currency", "Nickname", "Save", "Mirror"]),
   );
   expect(JSON.stringify(controls)).not.toContain("typed-");
   expect(controls).toContainEqual(expect.objectContaining({ role: "textbox", name: null, type: null }));
+});
+
+// A page script can make reading a name throw, here for one field's styles: that name is null,
+// and the frame's other controls and its alerts are saved as ever.
+test("a name that cannot be read is null, and the frame keeps its other controls and alerts", async ({
+  page,
+}) => {
+  await page.setContent(`<!doctype html>
+<script>
+const read = window.getComputedStyle;
+window.getComputedStyle = function (element, pseudo) {
+  if (element.id === "broken") throw new Error("unreadable");
+  return read.call(this, element, pseudo);
+};
+</script>
+<input id="broken" aria-label="Broken"><label for="email">Email</label><input id="email" type="email">
+<div role="alert">Try again</div>`);
+  const { controls, alerts } = await readControls(page);
+  expect(controls).toContainEqual(expect.objectContaining({ type: "text", name: null }));
+  expect(controls).toContainEqual(expect.objectContaining({ type: "email", name: "Email" }));
+  expect(alerts).toEqual(["Try again"]);
 });
 
 test("a hidden control is saved under the name its include-hidden role selector matches", async ({

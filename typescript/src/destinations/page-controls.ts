@@ -84,8 +84,15 @@ export const pageControlsCode = `const pageControls = async (alertsOnly = false)
       if (element instanceof HTMLAnchorElement) return "link";
       return element.tagName.toLowerCase();
     };
-    // The accessible name, or null when it has no words or is longer than the limit: never cut.
-    const nameOf = (element) => capped(raw(accessibleName(element)));
+    // The accessible name, or null when it has no words, is longer than the limit or cannot be
+    // read: never cut, and a name that cannot be read never costs the frame its other controls.
+    const nameOf = (element) => {
+      try {
+        return capped(raw(accessibleName(element)));
+      } catch {
+        return null;
+      }
+    };
     const selector = 'input:not([type="hidden"]), select, textarea, button, a[href], [role~="button"], [role~="link"], [role~="checkbox"], [role~="radio"], [role~="switch"], [role~="tab"], [role~="menuitem"], [role~="option"], [role~="textbox"], [role~="combobox"]';
     const found = alertsOnly ? [] : Array.from(document.querySelectorAll(selector));
     // Rank every control before keeping any: visible first, then enabled fields, required first.

@@ -214,4 +214,4 @@ Copyright (c) 2026 Pomerado AI, Inc. Licensed under the MIT License (`MIT`). See
 
 Versions 0.1.2 and earlier were published under the GNU Affero General Public License version 3 only (`AGPL-3.0-only`).
 
-Third-party code keeps its own license. The Guardian policy in `typescript/src/guardian/upstream-policy.md` is adapted from [OpenAI Codex](https://github.com/openai/codex) under the Apache License 2.0. Its license and notice are in [third-party/codex/](third-party/codex/) and ship with the npm package.
+Third-party code keeps its own license. The Guardian policy in `typescript/src/guardian/upstream-policy.md` is adapted from [OpenAI Codex](https://github.com/openai/codex) under the Apache License 2.0. Its license and notice are in [third-party/codex/](third-party/codex/) and ship with the npm package. The accessible name computation in `typescript/src/destinations/accessible-name.ts` is adapted from [Playwright](https://github.com/microsoft/playwright) under the Apache License 2.0. Its license and notice are in [third-party/playwright/](third-party/playwright/) and ship with the npm package.
