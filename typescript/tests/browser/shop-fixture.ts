@@ -150,6 +150,13 @@ interface ShopState extends StoreState {
   statementLoads: { readonly page: number; readonly signedIn: boolean }[];
   /** The team of each account the team sign-in signed in, in order. */
   teamSignIns: string[];
+  /**
+   * How many redirects the two-screen sign-in's session post goes through before the account page,
+   * each answered `sessionHopMs` after it arrives, as a slow network makes a sign-in's redirects
+   * after the site answered its post. 0 sends the post straight on to the account page.
+   */
+  sessionHops: number;
+  sessionHopMs: number;
 }
 
 export interface Shop {
@@ -518,9 +525,18 @@ ${next === null ? "" : `<a rel="next" href="${next}">Next</a>`}`,
     const form = new URLSearchParams(await readBody(request));
     if (form.get("user") !== shopAccount.username || form.get("password") !== shopAccount.password)
       return html(response, "<title>Password</title><p id='wrong-password'>Wrong password</p>");
-    response.writeHead(303, {
-      location: "/account",
+    response.writeHead(state.sessionHops > 0 ? 302 : 303, {
+      location: state.sessionHops > 0 ? `/sign-in/continue?hop=1` : "/account",
       "set-cookie": [`shop_session=${signedIn}; Path=/; Secure; HttpOnly; SameSite=Lax`],
+    });
+    response.end();
+  };
+  // Each redirect after the session post, while `sessionHops` asks for them.
+  const sessionHop: Route = async (request, response) => {
+    const hop = Number(queryOf(request).get("hop") ?? 0);
+    await new Promise((resolve) => setTimeout(resolve, state.sessionHopMs));
+    response.writeHead(302, {
+      location: hop < state.sessionHops ? `/sign-in/continue?hop=${hop + 1}` : "/account",
     });
     response.end();
   };
@@ -692,6 +708,7 @@ ${next === null ? "" : `<a rel="next" href="${next}">Next</a>`}`,
     ["/sign-in", identifierScreen],
     ["/sign-in/password", passwordScreen],
     ["/sign-in/session", postOnly(passwordSession)],
+    ["/sign-in/continue", sessionHop],
     ["/team-sign-in", teamSignIn],
     ["/team/*/password", teamPassword],
     ["/search", search],
@@ -772,6 +789,8 @@ export const startShop = async (directory: string): Promise<Shop> => {
     statements: Array.from({ length: 45 }, (_, index) => `S${index + 1}`),
     statementLoads: [],
     teamSignIns: [],
+    sessionHops: 0,
+    sessionHopMs: 0,
     ...initialStoreState(),
   };
   const sessionValue = `sess-${randomBytes(12).toString("hex")}`;
