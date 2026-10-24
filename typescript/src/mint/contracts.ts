@@ -1231,6 +1231,11 @@ export type PublicationRequest = typeof PublicationRequest.Type;
  * - `host_refused`: a host check, not Guardian and not the site, refused a step the build needs in
  *   this attempt, such as a publication, a sign-in form or a site change, and nothing left in the
  *   attempt can fix it. The host records those refusals itself.
+ * - `caller_input`: the caller's own request stops the build: its facts conflict with each other or
+ *   with their cited sources, a fact or file it needs is missing, or a stop condition the caller
+ *   set cannot be met. Its basis is the report's `intent` citing the request: a field its input
+ *   holds or words of its instruction (`citesCallerRequest`). The explanation says what the caller
+ *   should supply or change. Optional: no host has to handle it until its core reports it.
  * The host refuses each ending without its basis on record. A `policy` report whose only basis is
  * the owner's no or an unanswered question ends as `owner_declined` or `question_unanswered`. A
  * target on another registrable domain is never a reason by itself: Guardian reviews such work.
@@ -1246,6 +1251,7 @@ export const BuildBlocked = Schema.Struct({
     "question_unanswered",
     "owner_ended",
     "host_refused",
+    "caller_input",
   ),
   explanation: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(blockedExplanationLimit)),
 });
@@ -1269,9 +1275,15 @@ export const BlockedReport = Schema.Struct({
     "question_unanswered",
     "owner_ended",
     "host_refused",
+    "caller_input",
     "host_unavailable",
   ),
   explanation: BuildBlocked.fields.explanation,
+  /**
+   * The `report_blocked` call's own intent: its evidence, which a `caller_input` ending needs to
+   * cite the caller's request. Carried in the report, so a host that wraps the action keeps it.
+   */
+  intent: Schema.optional(Schema.String),
 });
 /**
  * A blocked build as recorded and shown: its reason, and its screened explanation only when
@@ -1482,8 +1494,8 @@ export type PublicationDenial = typeof PublicationDenial.Type;
  * - `question_unanswered`: a question the build needed went unanswered.
  * - `owner_declined`: the owner said no to a step the build needs.
  * - `owner_ended`: the owner chose in an answer to end the build.
- * - `site_lacks_capability`, `site_declined`, `site_unavailable`, `policy`, `host_refused`: the
- *   minter's blocked ending of the same name.
+ * - `site_lacks_capability`, `site_declined`, `site_unavailable`, `policy`, `host_refused`,
+ *   `caller_input`: the minter's blocked ending of the same name.
  * - `host_unavailable`: the host, not the task, ended the build, such as when Guardian twice returned
  *   no outcome its review allows (`InvalidOutcome`).
  */
@@ -1501,6 +1513,7 @@ export const mintStopReasons = [
   "site_unavailable",
   "policy",
   "host_refused",
+  "caller_input",
   "host_unavailable",
 ] as const;
 export const MintStopReason = Schema.Literal(...mintStopReasons);
@@ -2121,7 +2134,8 @@ const HarnessTerminal = Schema.Struct({
   // Optional, and dropped as an excess field by an older worker's decode, so a rollout's old and
   // new workers each restore the other's checkpoint, except a terminal whose blocked reason is
   // one an older worker does not know (`owner_declined`, `question_unanswered`, `site_declined`,
-  // `host_refused`, `owner_ended`, `site_unavailable`): that one does not decode there.
+  // `host_refused`, `owner_ended`, `site_unavailable`, `caller_input`): that one does not decode
+  // there.
   blocked: Schema.optionalWith(BuildBlockedOutcome, { exact: true }),
   // Optional, and dropped by an older worker's decode.
   stopReason: Schema.optionalWith(MintStopReason, { exact: true }),

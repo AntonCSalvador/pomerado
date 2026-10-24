@@ -79,6 +79,7 @@ import { finiteCaptureGap, finiteRunnerFailure } from "./runner-failure.js";
 import { isSecretHandle } from "./secret-handles.js";
 import { fileReadbackRule } from "./file-readback.js";
 import { cardReadbackRule } from "./card-readback.js";
+import { citesCallerRequest } from "./caller-citation.js";
 import type {
   AcceptedTaskUpdate,
   AllowedExecution,
@@ -3260,6 +3261,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         reason: (typeof BuildBlocked.Type)["reason"],
         screenedExplanation: string,
         now: number,
+        intent: string | undefined,
       ):
         | { readonly reason: (typeof BuildBlocked.Type)["reason"] }
         | { readonly refusal: string } => {
@@ -3334,6 +3336,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           return refused(
             "owner_not_ended",
             "The owner gave no answer since this build's last step that could end it, so the build has not ended. Use owner_ended only right after the owner chose in an answer to end the build.",
+          );
+        // A caller_input ending stands on its intent citing the caller's own request: a field the
+        // task's input holds, or words of the request's instruction.
+        if (
+          reason === "caller_input" &&
+          !citesCallerRequest(intent, request.intent, taskState.businessInput)
+        )
+          return refused(
+            "caller_input_not_cited",
+            "caller_input needs the caller's own request as its basis, so the build has not ended. In intent, name the request field that stops the build, or quote the words of the caller's instruction, then call report_blocked again. Prefer another reason when the site, the owner or a host check stopped it.",
           );
         if (reason === "host_refused" && !hostRefusing && hostRefusalPassed)
           return refused(
@@ -6145,6 +6157,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       report.reason,
                       explanation,
                       yield* Clock.currentTimeMillis,
+                      report.intent,
                     );
                     if ("refusal" in ending) return ending.refusal;
                     // An ending the checks above accepted, while the build's latest sign-in
