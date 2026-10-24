@@ -3322,6 +3322,7 @@ it("refuses host_refused while the reserve is open with its case failing on the 
     reservedFor: [],
     failedOnSource: ["page-30"],
   });
+  expect(String(resultOf(f.requests[5], "early")["instruction"])).not.toContain("rests on something else");
   expect(resultOf(f.requests[6], "reserved")).toMatchObject({ status: "ran" });
   expect(batches).toHaveLength(2);
   expect(capped.reservedCaseTimeoutMs).toBeUndefined();
@@ -3372,6 +3373,48 @@ it("refuses host_refused while the reserve is open and the cases file cannot be 
   });
   expect(batches).toHaveLength(1);
   expect(capped.reservedCaseTimeoutMs).toBe(60_000);
+  expect(outcome.blocked?.reason).not.toBe("host_refused");
+});
+
+// With the reserve open and no case failing, the refusal names no case to fix. A denial that still
+// stands then rests on something other than a live test, so the minter fixes what it names.
+it("refuses host_refused while the reserve is open with no case failing, and points at the denial", async () => {
+  const { host, batches } = liveTestHost(() => ({}));
+  const guardian = deniedForRetiredFailure();
+  const steps = [
+    call("live_tests", runAll, "first"),
+    call("live_tests", runAll, "all"),
+    call("execute", example, "example"),
+    call("finish_build", finish, "finish"),
+    reportSpent("early"),
+  ];
+  const f = await fixture(
+    (_request, index) => steps[index] ?? prose(),
+    {
+      liveTests: cappedWithReserve(host, batches, { regular: 1 }),
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: guardian.publish,
+      reviewQuestion: allowExplanation,
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": pageCases("page-30") });
+  const outcome = await f.run();
+  expect(resultOf(f.requests[2], "all")).toMatchObject({ status: "no_time" });
+  expect(guardian.reviews()).toBe(1);
+  const early = resultOf(f.requests[5], "early");
+  expect(early).toMatchObject({
+    status: "blocked_refused",
+    reason: "live_tests_reserved",
+    reservedFor: [],
+    failedOnSource: [],
+  });
+  expect(String(early["instruction"])).toContain(
+    "If publication/tests.json names no failure that still counts, the denial rests on something else, so prefer to fix what the denial names, then call finish_build again.",
+  );
+  expect(batches).toHaveLength(1);
   expect(outcome.blocked?.reason).not.toBe("host_refused");
 });
 
