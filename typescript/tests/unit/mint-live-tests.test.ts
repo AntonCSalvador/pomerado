@@ -3016,6 +3016,55 @@ it("keeps a failure counting when its case still fails in the reserved batch", a
   expect(record.retired[0]).not.toHaveProperty("excusedBy");
 });
 
+// A run on the source a case failed on clears nothing: a pass there is flaky, and the failure keeps
+// counting. So the reserve waits for an edit after the failure.
+it("keeps the reserve while a case's failure is on the current source, and runs it after an edit", async () => {
+  const { host, batches } = liveTestHost((batch) => (batch === 0 ? { "page-30": pageTimeout } : {}));
+  const published = publications();
+  let root = "";
+  const steps = [
+    call("live_tests", runAll, "first"),
+    call("live_tests", runCases(["page-30"]), "unchanged"),
+    call("live_tests", runCases(["page-30"]), "edited"),
+    call("execute", example, "example"),
+    call("finish_build", finish, "finish"),
+  ];
+  const f = await fixture(
+    async (_request, index) => {
+      if (index === 2) await writeWorkspace(root, { "src/tool.ts": `${toolSource}// pages fixed\n` });
+      return steps[index] ?? prose();
+    },
+    {
+      liveTests: cappedWithReserve(host, batches, { regular: 1 }),
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: published.publish,
+    },
+    read,
+  );
+  root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": pageCases("page-30") });
+  await f.run();
+  const unchanged = resultOf(f.requests[2], "unchanged");
+  expect(unchanged).toMatchObject({ status: "no_time" });
+  expect(unchanged).not.toHaveProperty("reservedFor");
+  expect(resultOf(f.requests[3], "edited")).toMatchObject({ status: "ran" });
+  expect(batches.map((batch) => batch.cases.map((testCase) => testCase.id))).toEqual([
+    ["repeat-1", "page-30"],
+    ["page-30"],
+  ]);
+});
+
+// No regular batch fits once the reserve runs, so the record says time ran out even when no batch
+// was refused first, and the review notes the untested gaps in its rationale only.
+it("records that time ran out when the reserved batch runs before any refusal", async () => {
+  const { answer, record } = await pastTheCap(failsFirst, [
+    call("live_tests", runCases(["page-30"]), "reserved"),
+  ]);
+  expect(answer("reserved")).toMatchObject({ status: "ran" });
+  expect(record.outOfTime).toBe(true);
+});
+
 it("refuses a reserved batch that names a case no failure is pending on, or that the attempt has no time for", async () => {
   const mixed = await pastTheCap(failsFirst, [
     call("live_tests", runCases(["repeat-1"]), "passing"),

@@ -750,6 +750,8 @@ export const caseStatus = (
  * (`LiveTestHost.reservedCaseTimeoutMs`): each case whose input, expectation and next page are a
  * failing result's of this version, its own latest or a retired one, as `excusedBy` matches a
  * retired failure, and that has not passed since on `sourceDigest`, the version's current source.
+ * A case with such a failure on `sourceDigest` itself is left out until the source changes: a pass
+ * on the source it failed on is flaky, and excuses nothing.
  */
 export const pendingFailureCases = (
   file: LiveTestCasesFile,
@@ -757,10 +759,12 @@ export const pendingFailureCases = (
   replaced: readonly LiveTestRecord[],
   sourceDigest: string,
 ): readonly string[] => {
+  const failing = [...records.values(), ...replaced].filter((record) => record.verdict === "fail");
+  const failedHere = new Set(
+    failing.filter((record) => record.sourceDigest === sourceDigest).map((record) => record.caseDigest),
+  );
   const failed = new Set(
-    [...records.values(), ...replaced]
-      .filter((record) => record.verdict === "fail")
-      .map((record) => record.caseDigest),
+    failing.map((record) => record.caseDigest).filter((digest) => !failedHere.has(digest)),
   );
   return file.cases
     .filter(

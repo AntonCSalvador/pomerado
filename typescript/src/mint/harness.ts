@@ -4247,6 +4247,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           // inconclusive, so it runs nothing. A host's reserve past its batch cap still runs the
           // cases a failure is pending on, so the review sees them on the source it judges.
           if (!(yield* liveTestBatchFits(host, deadlineAt))) {
+            // No regular batch fits from here on, whether or not the reserve runs this one.
+            liveTestsOutOfTime = true;
             const reserved = yield* reservedBatchCases(
               host,
               deadlineAt,
@@ -4255,15 +4257,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               digest,
             );
             if (!selected.every((testCase) => reserved.includes(testCase.id))) {
-              liveTestsOutOfTime = true;
+              // With time left past the batch's ten minutes, the host's own batch cap stopped it.
+              const stopped = attemptBound
+                ? "Too little of this attempt is left to run a batch"
+                : "This attempt has run every live test batch its host allows";
               return JSON.stringify({
                 kind: "host_live_tests",
                 status: "no_time",
                 ...(reserved.length === 0 ? {} : { reservedFor: reserved }),
                 instruction:
                   reserved.length === 0
-                    ? "Too little of this attempt is left to run a batch. Run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out. Nothing was executed."
-                    : `Too little of this attempt is left to run a batch, except one reserved batch for only the cases a failure is still pending on: ${reserved.join(", ")}. Prefer to make your last edit, then run those cases alone, named in cases, so publication review reads their results on the source you publish. Then run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out. Nothing was executed.`,
+                    ? `${stopped}. Run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out. Nothing was executed.`
+                    : `${stopped}, except one reserved batch for only the cases a failure is still pending on: ${reserved.join(", ")}. Prefer to make your last edit, then run those cases together in that one batch, and no other case, named in cases, so publication review reads their results on the source you publish. Then run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out. Nothing was executed.`,
               });
             }
           }
