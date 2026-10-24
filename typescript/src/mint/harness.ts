@@ -6444,7 +6444,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         return taskUpdateAnswer("update_refused", {
                           reason: "owner_unavailable",
                           instruction:
-                            "No one who owns this tool can confirm a change that loosens or removes an output, or changes a requirement or the purpose, now, so nothing changed. Keep the registered contract (adding or tightening a field needs no confirmation). Prefer leaving out the part of the request that needs this change: remove any code or output field you added only for it, publish the rest, and name the part you left out in coverage. End with report_blocked, reason site_lacks_capability, naming the field the site no longer shows, only when no part of the request can be published.",
+                            "No one who owns this tool can confirm a change that loosens or removes an output, or changes a requirement or the purpose, now, so nothing changed. Keep the registered contract (adding or tightening a field needs no confirmation). Prefer leaving out the part of the request that needs this change: remove any code or output field you added only for it, publish the rest, and name the part you left out in coverage. End with report_blocked, reason site_lacks_capability, naming the field, only when no part of the request can be published.",
                         });
                       // The owner's own request may confirm what it names, which Guardian judges.
                       if (confirmer === "owner" && submitted.confirmedBy.length === 0)
