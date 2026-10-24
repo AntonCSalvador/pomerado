@@ -448,7 +448,10 @@ export type AutofillStepReport =
         readonly status: AutofillFieldStatus;
       }[];
       /**
-       * `clicked`: the host clicked the submit, or pressed the step's submit key in its last field.
+       * `clicked`: the host clicked the submit, or pressed the step's submit key in its last field,
+       * counting a click or press that ran out of time while the next page loaded once a request
+       * for the page's main frame went out, as a form's submission sends.
+       * `failed`: the click or press threw before any such request went out.
        * `blocked`: another element sat over the submit and caught the host's click (`blockedBy`),
        * so the click never reached the submit and nothing was sent; the fields still hold what
        * was typed.
