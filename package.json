@@ -1013,7 +1013,9 @@
     "LICENSE",
     "README.md",
     "third-party/codex/LICENSE",
-    "third-party/codex/NOTICE"
+    "third-party/codex/NOTICE",
+    "third-party/playwright/LICENSE",
+    "third-party/playwright/NOTICE"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json && node tools/copy-assets.ts",
