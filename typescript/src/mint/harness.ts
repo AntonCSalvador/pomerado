@@ -1021,8 +1021,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         }
       };
       // The trusted host notice about its entry page. It lives in the request
-      // context, never the agent instructions, and is repeated only when it changes.
-      // The host supplies it only for a fresh entry, never for a resumed page.
+      // context, never the agent instructions, and is repeated only when it changes,
+      // the host's own instruction included. The host supplies it only for a fresh
+      // entry, never for a resumed page.
       let shownEntryState: string | undefined;
       const entryNotice = () => {
         const current = dependencies.entryNavigation?.();
@@ -1086,7 +1087,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         const state =
           current === undefined
             ? undefined
-            : `${current.state}:${"outcome" in current ? current.outcome : ""}:${"reason" in current ? current.reason : ""}:${"page" in current ? (current.page ?? "") : ""}`;
+            : `${current.state}:${"outcome" in current ? current.outcome : ""}:${"reason" in current ? current.reason : ""}:${"page" in current ? (current.page ?? "") : ""}:${"instruction" in current ? (current.instruction ?? "") : ""}`;
         if (state === undefined || state === shownEntryState) return {};
         const notice = entryNotice();
         shownEntryState = state;

@@ -15,6 +15,7 @@ import type {
   AgentInputRequest,
   ExecutionEvidence,
   MintDependencies,
+  MintEntryNavigation,
   MintTurn,
   PublicationDecision,
   PublicationRequest,
@@ -6404,6 +6405,35 @@ describe("host entry page notice", () => {
       requestedUrl: entry,
       instruction: expect.any(String) as unknown,
     });
+  });
+  // A host may explain a replaced browser in its own words, such as a replacement that kept its
+  // session, and change that explanation on the same page. The minter hears each change once.
+  it("shows the notice again when only the host's own instruction changed", async () => {
+    const hostInstruction = "The host kept the previous browser's session for this one.";
+    let current: Extract<MintEntryNavigation, { readonly state: "replaced" }> = {
+      state: "replaced",
+      reason: "recovery",
+      page: "https://site.invalid/home",
+    };
+    const receipts: string[] = [];
+    const f = await fixture(
+      (turn) =>
+        Effect.gen(function* () {
+          receipts.push(yield* turn.actions.execute({ ...execution, purpose: "explore" }));
+          current = { ...current, instruction: hostInstruction };
+          receipts.push(yield* turn.actions.execute({ ...execution, purpose: "explore" }));
+          receipts.push(yield* turn.actions.execute({ ...execution, purpose: "explore" }));
+        }),
+      { entryNavigation: () => current },
+    );
+    await f.run();
+    const [unchanged, explained, repeated] = receipts.map((receipt) => modelInput(receipt));
+    expect(unchanged).not.toHaveProperty("hostEntryNavigation");
+    expect(explained?.hostEntryNavigation).toMatchObject({
+      state: "replaced",
+      instruction: hostInstruction,
+    });
+    expect(repeated).not.toHaveProperty("hostEntryNavigation");
   });
   it("adds no notice when the host supplies none", async () => {
     let input = "";
