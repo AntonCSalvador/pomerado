@@ -602,10 +602,11 @@ never with final text, which the host treats as unfinished work:
   code and the caller's input are unchanged. A 5xx answer only to the request your tool made is
   not that evidence, since that request can be wrong. Prefer it over changing the code or over
   `site_lacks_capability`. Never use it for a bot check or an access-denied page.
-- `caller_input`: the caller's own request stops the build: its facts conflict with each other or
-  their cited sources, a fact or file it needs is missing, or a stop condition the caller set
-  cannot be met. Cite the field or instruction in `intent`, and say in `explanation` what the
-  caller should supply or change.
+- `caller_input`: the caller's own request stops the build: what it states conflicts with itself
+  or its cited sources, a file it needs is missing, or it rules out going on, such as a stop
+  condition it set that cannot be met. Prefer asking with `request_input` for a missing fact the
+  caller could supply. Cite the field or instruction in `intent`, and say in `explanation` what
+  the caller should supply or change.
 - `owner_declined`: the owner answered no to a `confirm` question, or declined to sign in, and
   the build needs that step.
 - `question_unanswered`: a question you asked came back `no_answer`, and the build cannot go on

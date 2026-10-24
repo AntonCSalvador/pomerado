@@ -1231,9 +1231,9 @@ export type PublicationRequest = typeof PublicationRequest.Type;
  * - `host_refused`: a host check, not Guardian and not the site, refused a step the build needs in
  *   this attempt, such as a publication, a sign-in form or a site change, and nothing left in the
  *   attempt can fix it. The host records those refusals itself.
- * - `caller_input`: the caller's own request stops the build: its facts conflict with each other or
- *   with their cited sources, a fact or file it needs is missing, or a stop condition the caller
- *   set cannot be met. Its basis is the report's `intent` citing the request: a field its input
+ * - `caller_input`: the caller's own request stops the build: what it states conflicts with itself
+ *   or its cited sources, a file it needs is missing, or it rules out going on, such as a stop
+ *   condition it set that cannot be met. A missing fact the caller could supply is asked instead. Its basis is the report's `intent` citing the request: a field its input
  *   holds or words of its instruction (`citesCallerRequest`). The explanation says what the caller
  *   should supply or change. Optional: no host has to handle it until its core reports it.
  * The host refuses each ending without its basis on record. A `policy` report whose only basis is
