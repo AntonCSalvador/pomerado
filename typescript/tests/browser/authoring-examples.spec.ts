@@ -928,7 +928,7 @@ test("native select example selects a canonical value and reads it back", async 
   await expect(page.locator("output")).toHaveText("1");
 });
 
-test("picker example picks a suggested person and refuses one the site does not suggest", async ({
+test("picker example picks a suggested person, refuses one the site does not suggest and lets the caller choose among a shared name", async ({
   page,
 }) => {
   await page.setContent(`
@@ -938,7 +938,7 @@ test("picker example picks a suggested person and refuses one the site does not 
       const input = document.getElementById("owner"), list = document.getElementById("people");
       input.oninput = () => setTimeout(() => {
         list.hidden = false;
-        list.innerHTML = ["Jordan Reyes", "Quinn Avery", "Casey Lund"].filter((name) => name.toLowerCase().includes(input.value.toLowerCase()))
+        list.innerHTML = ["Jordan Reyes", "Quinn Avery", "Casey Lund", "Jordan Lee"].filter((name) => name.toLowerCase().includes(input.value.toLowerCase()))
           .map((name) => '<li role="option">' + name + "</li>").join("");
       }, 80);
       list.onmousedown = (event) => event.preventDefault();
@@ -953,6 +953,12 @@ test("picker example picks a suggested person and refuses one the site does not 
     field: "owner",
     available: ["Casey Lund"],
     kind: "option_missing",
+  });
+  expect(failure((await runExample(page, assignOwner, { owner: "Jordan" })).result)).toMatchObject({
+    _tag: "InvalidInput",
+    field: "owner",
+    available: ["Jordan Reyes", "Jordan Lee"],
+    kind: "option_ambiguous",
   });
 });
 

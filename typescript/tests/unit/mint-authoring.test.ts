@@ -217,7 +217,7 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   ["core", "- The code works for every value the schema accepts."],
   [
     "core",
-    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime` matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one with a word added or dropped. Prefer it for confirming the pick, so the read-back agrees with the choice, but not for choosing from a list, where a short label can match a longer name it isn't, such as UK for Ukraine. When more than one option matches equally, decide per tool: take the first in the site's order, and a read returns the one it used, or ask the caller which one, with those options, each selecting exactly one.",
+    "- Match the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name, such as a name with or without its accents (Abaca for Abacá), a city alone or with its state and country, or a company with or without Ltd. or Inc. Never require an exact match. `sameText` from `pomerado/runtime` matches a name that differs only in case, accents, spacing, apostrophes, periods, commas or hyphens, or in a word the site writes short, such as St-Jean for Saint-Jean, but not one with a word added or dropped. Prefer it for confirming the pick, so the read-back agrees with the choice, but not for choosing from a list, where a short label can match a longer name it isn't, such as UK for Ukraine. When more than one option matches equally, decide per tool: take the first in the site's order, and a read returns the one it used, or list them for the caller to choose one, each selecting exactly one.",
   ],
   ["core", "Take the site origin from the context's `siteOrigin`."],
   ["core", "The tools and the files you may edit are in `AGENTS.md`."],
@@ -1222,13 +1222,13 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["0dfdaca375c519f1b4fd7033fd6fcd56aebe179499b272fe8eae269f74c9485e", "core"],
+    ["f82fd8c6a8a3a0e6e7950f184dc3bc3c78a10f445830bc7fc16aff0241f46f2e", "core"],
     ["a896a59d7b924a2940a90437b8d4488cd515c4f4afc70da9fe14953b1583dd93", "search"],
     ["c159f24ef544d14892cb66027ff52ebaed2a08f1345a6e46c5b5466e515d15f1", "auth"],
     ["ea6e7780a9a9028d806436de84488f20687fd292bb0d39ea01652b521c705772", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
-    ["1ca634363c33d3163cd3f00ec91ee008045cdb0114c6084238ee019be9e0efbc", "forms"],
-    ["d9c30d592347efb618bb8470732da29f2248a840fd841dfbb4ea7718a85d12b2", "writes"],
+    ["d1b4aae40cc72bfb870d12568f6a59fd1efa33d47b98d345ec313dbb1218bfe5", "forms"],
+    ["7165cf3cc6d2c5831cba963ead004a9538cc2b9d5990745d1b494292c6875668", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["7997634bc7c4f91048ed41547de3c8aa5f43c506de5611253d8bb0b7b63b31a7", "caller-input"],
     ["88e46740272be0be1891c16ca35ec8869f6ea8179b2912545357a97c478c2894", "publication"],

@@ -956,7 +956,7 @@ describe("the publication policy", () => {
   // a live step nor the publication review asks a tool to require an exact match.
   it("gives the execution and publication reviews the same fuzzy proper-noun rule", () => {
     const rule =
-      "A tool matches the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name. Never ask a tool to require an exact match. When more than one option matches equally, the tool either takes the first in the site's order, and a read returns the one it used, or asks the caller which one, with options that each select exactly one of them. Which of the two is the tool's own choice, never a finding or a reason to deny.";
+      "A tool matches the caller's proper nouns, such as places, venues and company names, with a fuzzy match that accepts the usual forms of the same name. Never ask a tool to require an exact match. When more than one option matches a caller's value equally, the tool either takes the first in the site's order, and a read returns the one it used, or lists them for the caller to choose one, in a question or a refusal whose options each select exactly one of them. Which of the two is the tool's own choice, never a finding or a reason to deny.";
     expect(guardianPublicationPolicy.split(rule)).toHaveLength(2);
     expect(guardianExecutionPolicy(nativeExecutionEnvironment)).toContain(`\n${rule}\n`);
   });
