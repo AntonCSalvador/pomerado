@@ -75,9 +75,10 @@ query, fragment or path, since a host refuses such a link for a workspace site.
    Whenever a cookie or tracking consent banner shows on a sign-in screen, dismiss it as the core
    skill says, and name the same control as that screen's `dismiss` in every `signInStep` for it: the
    host clicks it before it types when it shows, and runs do the same on a fresh browser, where it
-   shows again. Never name the step's submit, a field, a link or a control outside the banner as
-   `dismiss`. The banner's own control counts even when it sits in the sign-in form or has no
-   type, as on a page wrapped in one form: the host cancels that click's submission.
+   shows again. Never name a submit or a field as `dismiss`, and prefer the banner's own control
+   over a link to another page. The banner's own control counts even when it sits in the sign-in
+   form or has no type, as on a page wrapped in one form: the host cancels that click's own
+   submission.
    Reopening the login route in an `explore` to read it again is fine, after a failed sign-in too.
    `references/auth-entry.ts` shows a bounded second probe that reads a login form's controls.
 
