@@ -140,7 +140,9 @@ export type AutofillFillCall =
       /**
        * Clicks the step's `dismiss`, a covering notice's own close, reject or accept control, when it shows
        * (`dismissCode`): never one of the step's controls, one that holds or shares a form with
-       * them, one that submits a form, or a link to another page.
+       * them, one that submits a form, or a link to another page. A control of a notice that
+       * covers one of the step's controls may share their form or submit one: its click's
+       * submission is cancelled.
        */
       readonly kind: "dismiss";
       readonly selector: string;
@@ -368,6 +370,52 @@ const coveringCode = `(element) => {
 }`;
 
 /**
+ * Page code: the covering notice that holds `element`, else null. For each of the step's controls
+ * (`own`) with a box, scrolled into view when its centre lies outside it, the element at that
+ * centre when it is neither the control, inside it nor around it, and the outermost element over
+ * the control that holds it, as `coveringCode` reads a notice that caught a click. That element is
+ * the covering notice when it holds `element` and none of the step's controls. Open shadow roots
+ * count as part of their host.
+ */
+const noticeCoverCode = `(element, own) => {
+  const parentOf = (node) => (node.parentNode instanceof ShadowRoot ? node.parentNode.host : node.parentNode);
+  const holds = (outer, inner) => {
+    for (let node = inner; node !== null; node = parentOf(node)) if (node === outer) return true;
+    return false;
+  };
+  const page = [element.ownerDocument.body, element.ownerDocument.documentElement];
+  for (const control of own) {
+    const view = control.ownerDocument.defaultView;
+    const centre = () => {
+      const box = control.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) return null;
+      const x = box.left + box.width / 2;
+      const y = box.top + box.height / 2;
+      return x >= 0 && y >= 0 && x < view.innerWidth && y < view.innerHeight ? { x, y } : undefined;
+    };
+    let at = centre();
+    if (at === undefined) {
+      control.scrollIntoView({ block: "nearest", inline: "nearest" });
+      at = centre();
+    }
+    if (at === null || at === undefined) continue;
+    const root = control.getRootNode();
+    let hit = (typeof root.elementFromPoint === "function" ? root : control.ownerDocument).elementFromPoint(at.x, at.y);
+    while (hit?.shadowRoot) {
+      const inner = hit.shadowRoot.elementFromPoint(at.x, at.y);
+      if (inner === null || inner === hit) break;
+      hit = inner;
+    }
+    if (hit === null || holds(control, hit) || holds(hit, control)) continue;
+    let cover = hit;
+    for (let up = parentOf(cover); up instanceof Element && !page.includes(up) && !holds(up, control); up = parentOf(cover))
+      cover = up;
+    if (holds(cover, element) && !own.some((other) => holds(cover, other))) return cover;
+  }
+  return null;
+}`;
+
+/**
  * Page code for a `dismiss` call: finds the selector's one visible match across the primary tab's
  * frames (`locate`); none, or several, is `not_shown` or `ambiguous`, and nothing is clicked. A
  * match is refused (`part`) when it is one of the step's controls in its frame, holds one or sits in
@@ -376,6 +424,15 @@ const coveringCode = `(element) => {
  * (`opens_page`), open shadow roots included: a notice's own close, reject or accept control is
  * none of these. Otherwise it is clicked, and the call waits a moment
  * for it to go, as a notice that fades does. Attributes only, never a value.
+ *
+ * One that sits in the sign-in's form, or would submit a form, is still clicked when it sits in a
+ * notice that covers one of the step's controls (`noticeCoverCode`) and every control of a form it
+ * would submit sits in that notice too: some pages wrap the whole page in one form, notice
+ * included, and give the notice a button with no type. For that click alone, a capture listener
+ * on its window cancels the default action of every click that reaches the notice, so the page's
+ * own handler runs and nothing is submitted; the host removes it once the click ran. When the
+ * page's own code starts a navigation in the meantime, the call waits for the new document, and
+ * the next call finds the step's controls again before anything is typed.
  */
 const dismissCode = (selector: string) => `const notice = await locate(${JSON.stringify(selector)});
 if ("error" in notice)
@@ -386,7 +443,7 @@ for (const control of submit === null ? fields : [...fields, submit]) {
   const handle = await control.locator.elementHandle({ timeout: ${elementReadMs} }).catch(() => null);
   if (handle !== null && noticeFrame !== null && (await handle.ownerFrame()) === noticeFrame) own.push(handle);
 }
-const part = await notice.locator.evaluate((element, own) => {
+const verdict = await notice.locator.evaluate((element, own) => {
   // Open shadow roots count as part of their host: a host holds what its root holds.
   const parentOf = (node) => (node.parentNode instanceof ShadowRoot ? node.parentNode.host : node.parentNode);
   const holds = (outer, inner) => {
@@ -415,9 +472,15 @@ const part = await notice.locator.evaluate((element, own) => {
     "form" in control && control.form instanceof HTMLFormElement
       ? control.form
       : (ancestry(control).find((node) => node instanceof HTMLFormElement) ?? null);
-  if (own.some((control) => holds(control, element) || holds(element, control))) return "sign_in_control";
+  if (own.some((control) => holds(control, element) || holds(element, control)))
+    return { part: "sign_in_control", cancel: null };
+  // The covering notice that holds it, read only for a control in the sign-in's form or one that
+  // submits a form, which may then be clicked with its submission cancelled.
+  let cover;
+  const covering = () => (cover === undefined ? (cover = (${noticeCoverCode})(element, own)) : cover);
   const form = formOf(element);
-  if (form !== null && own.some((control) => formOf(control) === form)) return "sign_in_form";
+  const inSignInForm = form !== null && own.some((control) => formOf(control) === form);
+  if (inSignInForm && covering() === null) return { part: "sign_in_form", cancel: null };
   // What a click of it may reach: the element, what holds it and what it holds, since a click at
   // its centre lands on whatever it holds there, and the control a label among them clicks.
   const held = [...ancestry(element), ...within(element)];
@@ -425,12 +488,14 @@ const part = await notice.locator.evaluate((element, own) => {
     ...held,
     ...held.flatMap((node) => (node instanceof HTMLLabelElement && node.control !== null ? [node.control] : [])),
   ];
-  if (own.some((control) => reached.includes(control))) return "sign_in_control";
+  if (own.some((control) => reached.includes(control))) return { part: "sign_in_control", cancel: null };
   const submits = (node) =>
     ((node instanceof HTMLButtonElement && node.type === "submit") ||
       (node instanceof HTMLInputElement && ["submit", "image"].includes(node.type))) &&
     formOf(node) !== null;
-  if (reached.some(submits)) return "submits_form";
+  const submitting = reached.filter(submits);
+  if (submitting.length > 0 && (covering() === null || !submitting.every((node) => holds(cover, node))))
+    return { part: "submits_form", cancel: null };
   const here = new URL(element.ownerDocument.URL);
   here.hash = "";
   const opens = (node) => {
@@ -439,15 +504,68 @@ const part = await notice.locator.evaluate((element, own) => {
     to.hash = "";
     return to.protocol !== "javascript:" && to.href !== here.href;
   };
-  if (reached.some(opens)) return "opens_page";
-  return null;
+  if (reached.some(opens)) return { part: "opens_page", cancel: null };
+  return {
+    part: null,
+    cancel: inSignInForm ? "sign_in_form" : submitting.length > 0 ? "submits_form" : null,
+  };
 }, own, { timeout: ${elementReadMs} });
-if (part !== null) return { dismiss: "refused", part, url: primary.url() };
+if (verdict.part !== null) return { dismiss: "refused", part: verdict.part, url: primary.url() };
+// A click whose submission is cancelled: the listener goes on the notice's window just before the
+// click and comes off right after it, and notes whether the page's own code started a navigation.
+let disarm = null;
+if (verdict.cancel !== null) {
+  const arming = notice.handle === null
+    ? null
+    : await notice.handle
+        .evaluateHandle((element, own) => {
+          const cover = (${noticeCoverCode})(element, own);
+          if (cover === null) return null;
+          const scope = element.ownerDocument.defaultView;
+          let navigated = false;
+          const cancel = (event) => {
+            if (event.composedPath().includes(cover)) event.preventDefault();
+          };
+          const note = (event) => {
+            if (!event.destination.sameDocument) navigated = true;
+          };
+          scope.addEventListener("click", cancel, true);
+          scope.navigation?.addEventListener("navigate", note);
+          let armed = true;
+          const off = () => {
+            if (armed) {
+              scope.removeEventListener("click", cancel, true);
+              scope.navigation?.removeEventListener("navigate", note);
+              armed = false;
+            }
+            return navigated;
+          };
+          // Never left on, whatever becomes of the host's own call to take it off.
+          setTimeout(off, 10000);
+          return off;
+        }, own)
+        .catch(() => null);
+  const armed = arming === null ? false : await arming.evaluate((off) => typeof off === "function").catch(() => false);
+  if (!armed) return { dismiss: "refused", part: verdict.cancel, url: primary.url() };
+  disarm = arming;
+}
+const committed =
+  disarm === null
+    ? null
+    : primary
+        .waitForEvent("framenavigated", { predicate: (frame) => frame === noticeFrame, timeout: 5000 })
+        .then(() => true, () => false);
+let navigated = false;
 try {
   await notice.locator.click({ timeout: 5000 });
 } catch {
   return { dismiss: "failed", url: primary.url() };
+} finally {
+  // A document that left took the listener with it, and its navigation started.
+  if (disarm !== null) navigated = await disarm.evaluate((off) => off()).catch(() => true);
 }
+if (navigated && committed !== null && (await committed))
+  await primary.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => undefined);
 await notice.locator.waitFor({ state: "hidden", timeout: 2000 }).catch(() => undefined);
 return { dismiss: "clicked", url: primary.url() };`;
 
