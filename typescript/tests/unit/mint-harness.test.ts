@@ -568,6 +568,61 @@ it.each([
   },
 );
 
+// A review request over Guardian's model input limit fails the same way when resubmitted, so it
+// ends the attempt at once instead of offering resubmissions until the outage budget runs out.
+it.each([
+  {
+    kind: "execution review",
+    exampleFirst: false,
+    call: (turn: MintTurn) => turn.actions.execute({ ...execution, purpose: "explore" }),
+    failure: new MintFailure({
+      code: "ReviewUnavailable",
+      reviewFailure: "InputTooLarge",
+      reviewPhase: "review_computation",
+      reviewDispatch: "not_sent",
+    }),
+  },
+  {
+    kind: "publication review",
+    exampleFirst: true,
+    call: (turn: MintTurn) => turn.actions.finish(publication),
+    failure: new MintFailure({
+      code: "ReviewUnavailable",
+      reviewFailure: "InputTooLarge",
+      reviewPhase: "review_computation",
+    }),
+  },
+])(
+  "ends the attempt on a $kind over the model's input limit, without offering a retry",
+  async ({ exampleFirst, call, failure }) => {
+    let calls = 0;
+    const failing = () =>
+      Effect.suspend(() => {
+        calls++;
+        return Effect.fail(failure);
+      });
+    const f = await fixture(
+      (turn) =>
+        Effect.gen(function* () {
+          if (exampleFirst) yield* turn.actions.execute(execution);
+          const ended: unknown = JSON.parse(yield* call(turn));
+          expect(ended).toMatchObject({
+            status: "review_unavailable",
+            reviewFailure: "InputTooLarge",
+          });
+          expect(ended).not.toHaveProperty("retryable");
+          expect(turn.isComplete()).toBe(true);
+        }),
+      exampleFirst ? { publish: failing } : { reviewAndExecute: failing },
+    );
+    expect(await f.run()).toMatchObject({
+      build: "incomplete",
+      hostFailure: "review_unavailable",
+    });
+    expect(calls).toBe(1);
+  },
+);
+
 // An older checkpoint still carries the retired retention counter; a takeover restores it.
 it("decodes an older harness checkpoint that still carries its retention counter", () => {
   const checkpoint = {
@@ -1096,6 +1151,35 @@ it("lets report_blocked end blocked once a review outage outlasts its budget", a
     },
   );
   expect((await takeover.run()).blocked).toEqual({ reason: "site_lacks_capability" });
+});
+
+// A blocked explanation whose review request is over Guardian's model input limit would fail the
+// same way when resubmitted, so report_blocked ends blocked with the reason alone, as past the
+// outage budget.
+it("lets report_blocked end blocked when its review is over the model's input limit", async () => {
+  let reviews = 0;
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        const reportBlocked = turn.actions.reportBlocked;
+        if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+        expect(JSON.parse(yield* reportBlocked(blockedReport))).toMatchObject({
+          status: "blocked",
+          explanationShown: false,
+        });
+      }),
+    {
+      reviewQuestion: () =>
+        Effect.suspend(() => {
+          reviews++;
+          return Effect.fail(
+            new MintFailure({ code: "ReviewUnavailable", reviewFailure: "InputTooLarge" }),
+          );
+        }),
+    },
+  );
+  expect((await f.run()).blocked).toEqual({ reason: "site_lacks_capability" });
+  expect(reviews).toBe(1);
 });
 
 // Another review's outage is not the blocked explanation's: resubmit that call first.

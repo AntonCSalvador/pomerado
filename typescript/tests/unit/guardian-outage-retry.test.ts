@@ -480,7 +480,8 @@ const serverError = (code: string) =>
 it("fails a review over the model's context window once, without reviewing again", async () => {
   const review = await failingModelReview(() => serverError("context_length_exceeded"));
   expect(review.result).toMatchObject({ _tag: "Left", left: { code: "InputTooLarge" } });
-  // The same request can never fit, so the outage retry neither waits nor sends it again.
+  // The request is over the model's input limit, so the outage retry neither waits nor sends it
+  // again.
   expect(review.calls).toBe(1);
   expect(review.retried).toEqual([]);
 });

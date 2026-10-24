@@ -398,8 +398,8 @@ const withheldFromObserver = (
 };
 
 /**
- * The provider refused the request as larger than the model's context window, by its own code.
- * Sending the same request again cannot succeed.
+ * The provider refused the request as over the model's input limit, its context window, by its own
+ * code. That is no outage, and the same request fails the same way.
  */
 const overContextWindow = (finite: ModelFailureMetadata) =>
   finite.code === "context_length_exceeded" || finite.providerCode === "context_length_exceeded";

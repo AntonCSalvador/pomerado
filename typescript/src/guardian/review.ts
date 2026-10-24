@@ -215,8 +215,9 @@ export class ReviewFailure extends Data.TaggedError("ReviewFailure")<{
      */
     | "ModelCallStalled"
     /**
-     * The model provider refused the review's request as larger than the model's context window.
-     * The same request can never fit, so it is never retried as an outage.
+     * The model provider refused the review's request as over the model's input limit, its context
+     * window. That is no outage, and the same request fails the same way, so it is never retried as
+     * one.
      */
     | "InputTooLarge"
     /**
