@@ -570,7 +570,8 @@ const pickerPageCode = String.raw`(element, args) => {
  * `pickRefusal(outcome, field)` (`InvalidInput` with `field` and `available`, which for options
  * that tie is `matches`), or ask the caller to choose among `matches`. In a tool that takes the
  * first of options that tie instead (each tool decides), pass `tie: "first"`, so the picker takes
- * the first of them in the site's order and returns the one it used. Success is
+ * the first of them in the site's order and returns the one it used, which the tool returns in
+ * its output. Success is
  * `{ picked: true, kind, label, value, rank, refills }`, plus `tied`, the options that tied, when
  * `tie: "first"` took one.
  * Everything else throws an Error named `PickerFailure` whose message is a fixed reason, never a
