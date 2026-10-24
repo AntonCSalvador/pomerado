@@ -5,7 +5,8 @@
  * third-party/playwright/LICENSE and third-party/playwright/NOTICE.
  * Modified by Pomerado. It is rewritten as one self-contained page function that keeps what was
  * typed out of a name as far as page code can tell: never a field's value or placeholder, an
- * editable element's text, or CSS generated text that holds an attribute value or a typed value.
+ * editable element's text, or CSS generated text that holds an attribute value or a value typed in
+ * this document or its open shadow roots (not other frames).
  */
 
 /**
@@ -22,11 +23,12 @@
  * or a control that holds a value, such as a text box, list box or slider, adds nothing to a name it
  * sits in, where Playwright would add its value or text; an editable control is never named by its
  * own words; and a placeholder never names a field. CSS generated text adds nothing when it holds,
- * at two characters or more, one of its element's attribute values, as `attr()` reads them, or a
- * value that a text field or editable element on the page holds now, since a page may draw what was
- * typed from an attribute, a custom property or a rule its script adds. Those values are read only
- * to compare. Text a page draws from a value no field holds any more is not caught, so the host
- * still screens names for typed values. Names come back as the page has them, never trimmed or
+ * at two characters or more, one of its element's attribute values other than its class, id or
+ * style, as `attr()` reads them, or a value that a text field or editable element holds now in this
+ * document or its open shadow roots, since a page may draw what was typed from an attribute, a
+ * custom property or a rule its script adds. Those values are read only to compare. Text a page
+ * draws from a value no such field holds any more, or holds in another frame, is not caught, so the
+ * host still screens names for typed values. Names come back as the page has them, never trimmed or
  * collapsed.
  *
  * It is self-contained: `pageControlsCode` embeds this same function. The reader keeps computed
@@ -172,24 +174,28 @@ export const accessibleNames = (): ((target: Element) => string) => {
     return implicitRoles[tag] ?? "";
   };
 
-  // What the page holds as typed now: each text field's value and each editable element's text,
-  // trimmed, when two characters or more (one turns up in any text by chance). Read once, when
-  // generated text first needs it, and only to compare.
+  // What this document and its open shadow roots hold as typed now: each text field's value and
+  // each editable element's text, trimmed, when two characters or more (one turns up in any text by
+  // chance). Read once, when generated text first needs it, and only to compare.
   const untyped = new Set(["checkbox", "radio", "button", "submit", "reset", "image", "hidden", "file", "color", "range"]);
   let typedValues: string[] | undefined;
   const typed = () => {
     if (typedValues === undefined) {
       typedValues = [];
-      for (const source of Array.from(document.querySelectorAll("input, textarea, [contenteditable]"))) {
-        const value =
-          source instanceof HTMLInputElement
-            ? untyped.has(source.type) ? "" : source.value
-            : source instanceof HTMLTextAreaElement
-              ? source.value
-              : source instanceof HTMLElement && source.isContentEditable
-                ? (source.textContent ?? "")
-                : "";
-        if (value.trim().length >= 2) typedValues.push(value.trim());
+      const roots: (Document | ShadowRoot)[] = [document];
+      for (let index = 0; index < roots.length; index += 1) {
+        for (const source of Array.from(roots[index]?.querySelectorAll("*") ?? [])) {
+          if (source.shadowRoot !== null) roots.push(source.shadowRoot);
+          const value =
+            source instanceof HTMLInputElement
+              ? untyped.has(source.type) ? "" : source.value
+              : source instanceof HTMLTextAreaElement
+                ? source.value
+                : source instanceof HTMLElement && source.hasAttribute("contenteditable") && source.isContentEditable
+                  ? (source.textContent ?? "")
+                  : "";
+          if (value.trim().length >= 2) typedValues.push(value.trim());
+        }
       }
     }
     return typedValues;
@@ -199,7 +205,8 @@ export const accessibleNames = (): ((target: Element) => string) => {
   // either when it holds, at two characters or more, one of the element's own attribute values, as
   // attr() reads them, or a value typed on the page: a page may draw what was typed from an
   // attribute, a custom property or a rule its script adds, and the browser gives each already
-  // resolved, as a quoted string.
+  // resolved, as a quoted string. Its class and id are left out, since generated text often repeats
+  // a class such as "required"; a typed value copied there is still in its field.
   const readGenerated = (element: Element, pseudo: "::before" | "::after" | null) => {
     const computed = pseudo === null ? style(element) : getComputedStyle(element, pseudo);
     const content = computed.content;
@@ -250,7 +257,8 @@ export const accessibleNames = (): ((target: Element) => string) => {
     const text = kept.map((token) => token.text ?? "").join("");
     const copied =
       Array.from(element.attributes).some(
-        ({ name, value }) => name !== "style" && value.trim().length >= 2 && text.includes(value.trim()),
+        ({ name, value }) =>
+          !["class", "id", "style"].includes(name) && value.trim().length >= 2 && text.includes(value.trim()),
       ) || typed().some((value) => text.includes(value));
     if (copied) return undefined;
     return pseudo !== null && (computed.display || "inline") !== "inline" ? " " + text + " " : text;
