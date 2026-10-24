@@ -567,9 +567,10 @@ const pickerPageCode = String.raw`(element, args) => {
  * `{ picked: false, reason, wanted, available, matches }`, where `reason` is `option_missing`,
  * `option_ambiguous` (`matches` lists the options that tie) or `option_disabled`, and
  * `available` every enabled option it listed. Decode with `PickOutcome` and throw
- * `pickRefusal(outcome, field)` (`InvalidInput` with `field` and `available`), or, on a write, ask
- * the caller to choose among `matches`. On a read, pass `tie: "first"`, so the picker takes the
- * first of the tied options in the site's order and returns the one it used. Success is
+ * `pickRefusal(outcome, field)` (`InvalidInput` with `field` and `available`), or, for options
+ * that tie in a tool that asks, ask the caller to choose among `matches`. In a tool that takes the
+ * first instead (each tool decides), pass `tie: "first"`, so the picker takes the first of the
+ * tied options in the site's order and returns the one it used. Success is
  * `{ picked: true, kind, label, value, rank, refills }`, plus `tied`, the options that tied, when
  * `tie: "first"` took one.
  * Everything else throws an Error named `PickerFailure` whose message is a fixed reason, never a

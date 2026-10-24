@@ -114,11 +114,12 @@ picking again when the page reverts it. A read of a category or term, such as a 
 Dentist and Dentistry, and returns the option it used. Leave it off for names of people and places,
 and on writes, which ask the caller or list the options instead. A value the picker lacks, or several options that tie,
 comes back as `{ picked: false, reason, available, matches }`: decode it with `PickOutcome` and
-throw `pickRefusal(outcome, field)`, or, on a write, ask the caller to choose among `matches`. On
-a write, a single suggestion for a free-text value the caller typed is the site's correction
-instead, never for a picker that selects a record: take it as the writes skill says. On a read,
-pass `tie: "first"`, so the picker takes the first of the tied options in the site's order and
-returns the one it used. Handle a site's quirk with the helper's options, such as `query`,
+throw `pickRefusal(outcome, field)`, or, for options that tie in a tool that asks, ask the caller
+to choose among `matches`. On a write, a single suggestion for a free-text value the caller typed
+is the site's correction instead, never for a picker that selects a record: take it as the writes
+skill says. In a tool that takes the first instead (each tool decides, core skill), pass
+`tie: "first"`, so the picker takes the first of the tied options in the site's order and returns
+the one it used. Handle a site's quirk with the helper's options, such as `query`,
 `answered`, `committed`, `commit: "keyboard"` or `blur: "tab"`, never with a picker of your own.
 `references/picker.ts` picks a typeahead value and refuses a missing one,
 `references/dates-and-dropdowns.ts` fills a split date and `references/selection.ts` a native
