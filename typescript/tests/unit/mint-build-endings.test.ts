@@ -179,6 +179,98 @@ it("ends a build whose site is temporarily down as site_unavailable", async () =
   expect(f.requests).toHaveLength(1);
 });
 
+/** A request that orders a stop on contradictory facts, with the fact it names in its input. */
+const stopOnConflict = {
+  intent:
+    "Create the order from the record. If the record's facts contradict each other or their cited source, stop before creating anything.",
+  businessInput: {
+    record: { order: { deliveryDate: "2026-01-02", sourceExcerpt: "2019-05-14" } },
+  },
+};
+const conflictExplanation =
+  "The record's delivery date differs from the excerpt it cites. Correct the date in the record and build again.";
+
+// The caller's own request stops the build: its facts conflict and it orders a stop. That ends
+// under its own reason, never as a site that lacks the capability.
+it("ends a build its caller's own request stops as caller_input, citing the field", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("report_blocked", {
+          reason: "caller_input",
+          explanation: conflictExplanation,
+          intent: "The field delivery_date differs from the excerpt cited as its source.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {},
+    stopOnConflict,
+  );
+  expect(await f.run()).toMatchObject({
+    build: "incomplete",
+    blocked: { reason: "caller_input", explanation: conflictExplanation },
+    stopReason: "caller_input",
+  });
+  expect(f.requests).toHaveLength(1);
+});
+
+it("refuses caller_input whose intent cites nothing in the request, then takes a quoted instruction", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call(
+          "report_blocked",
+          {
+            reason: "caller_input",
+            explanation: conflictExplanation,
+            intent: "The data looks inconsistent, so the build stops.",
+          },
+          "uncited",
+        ),
+        call(
+          "report_blocked",
+          {
+            reason: "caller_input",
+            explanation: conflictExplanation,
+            intent:
+              "The request says that if the record's facts contradict their cited source, stop before creating anything.",
+          },
+          "quoted",
+        ),
+      ][index] ?? prose("Stopping."),
+    {},
+    stopOnConflict,
+  );
+  const outcome = await f.run();
+  expect(JSON.stringify(f.requests[1]?.input)).toContain("caller_input_not_cited");
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    blocked: { reason: "caller_input", explanation: conflictExplanation },
+    stopReason: "caller_input",
+  });
+});
+
+// A real site gap keeps its own reason, with no citation, beside a request that could stop itself.
+it("still ends a site gap as site_lacks_capability", async () => {
+  const explanation = "The site offers no way to create this kind of order.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("report_blocked", {
+          reason: "site_lacks_capability",
+          explanation,
+          intent: "The catalogue lists no product for it.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {},
+    stopOnConflict,
+  );
+  expect(await f.run()).toMatchObject({
+    build: "incomplete",
+    blocked: { reason: "site_lacks_capability", explanation },
+    stopReason: "site_lacks_capability",
+  });
+});
+
 // Guardian's refusal stays a policy block, even when a question also went unanswered.
 it("keeps a policy block that stands on a Guardian refusal", async () => {
   const explanation = "Guardian refused the only way to reach the requested page.";
