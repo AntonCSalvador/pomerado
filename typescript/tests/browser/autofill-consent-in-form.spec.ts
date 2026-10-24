@@ -56,13 +56,20 @@ function postBack(target) {
 }
 </script>`;
 
-/** Serves the sign-in page and keeps each form the site received. */
+/**
+ * Serves the sign-in page and keeps each form the site received. A form the notice's own code
+ * posts gets the sign-in page back, as a server form's postback does.
+ */
 const serve = async (page: Page, body = loginPage()) => {
   const received: Record<string, string>[] = [];
   await page.route(`${site}/**`, async (route) => {
     if (route.request().method() === "POST") {
-      received.push(Object.fromEntries(new URLSearchParams(route.request().postData() ?? "")));
-      await route.fulfill({ contentType: "text/html", body: '<p id="account">Signed in</p>' });
+      const form = Object.fromEntries(new URLSearchParams(route.request().postData() ?? ""));
+      received.push(form);
+      await route.fulfill({
+        contentType: "text/html",
+        body: form["target"] === "accept" ? body : '<p id="account">Signed in</p>',
+      });
     } else await route.fulfill({ contentType: "text/html", body });
   });
   await page.goto(`${site}/login`);
@@ -107,6 +114,22 @@ const fill = async (hosted: Awaited<ReturnType<typeof host>>, step: AutofillStep
   );
 
 const signedIn = { target: "login", username, password };
+/** The form the notice's own code posts with submit(): the fields emptied, nothing typed. */
+const acceptedEmpty = { target: "accept", username: "", password: "" };
+
+/** The step sent again after its fill was blocked, as the host clicks a blocked screen again. */
+const resubmit = async (hosted: Awaited<ReturnType<typeof host>>) =>
+  Effect.runPromise(
+    resubmitAutofillStep({
+      step: dismissed,
+      inspection: await inspect(hosted, dismissed),
+      page: hosted.page,
+      settleMs: 1_000,
+    }),
+  );
+
+/** What the notice's own handler read of each field when it ran: lengths only. */
+const seenAtAccept = `sessionStorage.setItem("seen", [document.getElementById("username").value.length, document.getElementById("password").value.length].join(","));`;
 
 test("a covering notice's own control that would submit the sign-in form is clicked with its submission cancelled: the notice hides, nothing is sent, and the sign-in posts once", async ({
   page,
@@ -145,6 +168,23 @@ test("on Patchright too, the covering notice's own control is clicked with its s
   }
 });
 
+test("on Patchright too, a notice that caught the click after typing is dismissed with the fields emptied first, and its handler's own submit() sends nothing typed", async () => {
+  const browser = await patchright.launch({ headless: true });
+  try {
+    const page = (await browser.newPage()) as unknown as Page;
+    const received = await serve(page, loginPage({ accepted: `${seenAtAccept} postBack('accept');` }));
+    const hosted = await host(page, { patchright: true });
+    expect(await fill(hosted, signInStep)).toMatchObject({ outcome: "filled", submit: "blocked" });
+    expect(await resubmit(hosted)).toMatchObject({ outcome: "filled", submit: "not_attempted" });
+    expect(await page.evaluate(() => sessionStorage.getItem("seen"))).toBe("0,0");
+    expect(received).toEqual([acceptedEmpty]);
+    expect(await fill(hosted, dismissed)).toMatchObject({ outcome: "filled", submit: "clicked" });
+    expect(received).toEqual([acceptedEmpty, signedIn]);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("a fresh browser shows the notice again, and the same step dismisses it and signs in with one post", async ({
   browser,
 }) => {
@@ -164,26 +204,57 @@ test("a fresh browser shows the notice again, and the same step dismisses it and
   }
 });
 
-test("a notice that caught the sign-in's click is dismissed with its submission cancelled, and the submit is clicked once more without typing", async ({
+test("a notice that caught the sign-in's click after typing is dismissed with the fields emptied first and its submission cancelled; the screen filled again posts once", async ({
   page,
 }) => {
-  const received = await serve(page);
+  const received = await serve(page, loginPage({ accepted: seenAtAccept }));
   const hosted = await host(page);
   const blocked = await fill(hosted, signInStep);
   expect(blocked).toMatchObject({ outcome: "filled", submit: "blocked", blockedBy: { tag: "div", role: "dialog" } });
   expect(received).toEqual([]);
 
-  const report = await Effect.runPromise(
-    resubmitAutofillStep({
-      step: dismissed,
-      inspection: await inspect(hosted, dismissed),
-      page: hosted.page,
-      settleMs: 1_000,
-    }),
-  );
+  // The click again finds the fields it emptied, so it clicks nothing, and the screen is filled
+  // again, as a refill.
+  const again = await resubmit(hosted);
+  expect(again).toMatchObject({ outcome: "filled", submit: "not_attempted" });
+  expect(await page.evaluate(() => sessionStorage.getItem("seen"))).toBe("0,0");
+  expect(await page.evaluate(() => localStorage.getItem("cookies"))).toBe("accepted");
+  expect(received).toEqual([]);
+
+  const report = await fill(hosted, dismissed);
   expect(report).toMatchObject({ outcome: "filled", submit: "clicked" });
   expect(received).toEqual([signedIn]);
-  expect(hosted.typed).toEqual([username, password]);
+  expect(hosted.typed).toEqual([username, password, username, password]);
+});
+
+test("a notice drawn only once the fields hold input, inside the sign-in form, is dismissed with the fields emptied first, and the host types them again and submits once", async ({
+  page,
+}) => {
+  const received = await serve(
+    page,
+    loginPage({ noticeStyle: "display:none", accepted: seenAtAccept }).replace(
+      "</script>",
+      `document.getElementById("password").addEventListener("input", () => {
+  if (localStorage.getItem("cookies") !== "accepted")
+    notice.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:10";
+}, { once: true });
+</script>`,
+    ),
+  );
+  const hosted = await host(page);
+  const report = await fill(hosted, dismissed);
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: [
+      { slot: "username", status: "filled" },
+      { slot: "password", status: "filled" },
+    ],
+    submit: "clicked",
+  });
+  expect(await page.evaluate(() => sessionStorage.getItem("seen"))).toBe("0,0");
+  expect(received).toEqual([signedIn]);
+  expect(hosted.typed).toEqual([username, password, username, password]);
+  expectNotCarried(hosted.page.calls, password);
 });
 
 test("a notice whose own handler loads the page again is dismissed, and the fields are found again before typing", async ({
@@ -200,6 +271,48 @@ test("a notice whose own handler loads the page again is dismissed, and the fiel
   expect(loads).toEqual([`${site}/login`, `${site}/login`]);
   expect(received).toEqual([signedIn]);
   expect(hosted.typed).toEqual([username, password]);
+});
+
+for (const [named, accepted, early] of [
+  // submit() fires no submit event, so the form goes out, with the fields the host emptied.
+  ["posts the form from script with submit()", "postBack('accept');", [acceptedEmpty]],
+  ["submits the form with requestSubmit()", "document.forms.main.requestSubmit();", []],
+] as const) {
+  test(`a notice whose own handler ${named} before typing sends nothing typed, and the step's own submit posts once`, async ({
+    page,
+  }) => {
+    const received = await serve(page, loginPage({ accepted }));
+    const hosted = await host(page);
+    const report = await fill(hosted, dismissed);
+    expect(report).toMatchObject({ outcome: "filled", submit: "clicked" });
+    expect(received).toEqual([...early, signedIn]);
+  });
+
+  test(`a notice whose own handler ${named} after typing never sends what was typed, and the step's own submit later posts exactly once`, async ({
+    page,
+  }) => {
+    const received = await serve(page, loginPage({ accepted: `${seenAtAccept} ${accepted}` }));
+    const hosted = await host(page);
+    expect(await fill(hosted, signInStep)).toMatchObject({ outcome: "filled", submit: "blocked" });
+    expect(await resubmit(hosted)).toMatchObject({ outcome: "filled", submit: "not_attempted" });
+    expect(await page.evaluate(() => sessionStorage.getItem("seen"))).toBe("0,0");
+    expect(received).toEqual(early);
+    expect(await fill(hosted, dismissed)).toMatchObject({ outcome: "filled", submit: "clicked" });
+    expect(received).toEqual([...early, signedIn]);
+    expect(hosted.typed).toEqual([username, password, username, password]);
+  });
+}
+
+test("a notice whose own handler submits the form later, after the click, never sends what was typed: the fields were emptied before the click", async ({
+  page,
+}) => {
+  const received = await serve(page, loginPage({ accepted: "setTimeout(() => postBack('accept'), 300);" }));
+  const hosted = await host(page);
+  expect(await fill(hosted, signInStep)).toMatchObject({ outcome: "filled", submit: "blocked" });
+  expect(await resubmit(hosted)).toMatchObject({ outcome: "filled", submit: "not_attempted" });
+  await expect.poll(() => received.length).toBe(1);
+  // The page's own late submission is out of the host's reach, but carries nothing typed.
+  expect(received).toEqual([acceptedEmpty]);
 });
 
 test("the cancelled submission is the dismiss click's alone: once the notice is gone, the form's own submit still posts", async ({

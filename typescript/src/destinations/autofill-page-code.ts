@@ -428,11 +428,17 @@ const noticeCoverCode = `(element, own) => {
  * One that sits in the sign-in's form, or would submit a form, is still clicked when it sits in a
  * notice that covers one of the step's controls (`noticeCoverCode`) and every control of a form it
  * would submit sits in that notice too: some pages wrap the whole page in one form, notice
- * included, and give the notice a button with no type. For that click alone, a capture listener
- * on its window cancels the default action of every click that reaches the notice, so the page's
- * own handler runs and nothing is submitted; the host removes it once the click ran. When the
- * page's own code starts a navigation in the meantime, the call waits for the new document, and
- * the next call finds the step's controls again before anything is typed.
+ * included, and give the notice a button with no type. First the step's fields are emptied
+ * (`emptied`), so nothing typed sits in the form while the page's own code runs, and the host
+ * types them again; a field it cannot empty keeps the notice unclicked (`failed`). For that click
+ * alone, capture listeners on its window cancel the default action of every click that reaches the
+ * notice and every submit event, so the page's own handler runs and neither the click nor the
+ * handler's own requestSubmit submits a form; the host removes them once the tasks the click
+ * queued ran. What the page's own code sends regardless, by a form's submit(), fetch or XHR, or
+ * once the listeners are off, holds nothing typed, as the fields are empty until the host types
+ * them again. When the page's own code starts a navigation in the meantime, such as a reload or
+ * that submit(), the call waits for the new document, and the next call finds the step's controls
+ * again before anything is typed.
  */
 const dismissCode = (selector: string) => `const notice = await locate(${JSON.stringify(selector)});
 if ("error" in notice)
@@ -511,8 +517,8 @@ const verdict = await notice.locator.evaluate((element, own) => {
   };
 }, own, { timeout: ${elementReadMs} });
 if (verdict.part !== null) return { dismiss: "refused", part: verdict.part, url: primary.url() };
-// A click whose submission is cancelled: the listener goes on the notice's window just before the
-// click and comes off right after it, and notes whether the page's own code started a navigation.
+// A click whose submission is cancelled: the listeners go on the notice's window just before the
+// click and come off right after it, and note whether the page's own code started a navigation.
 let disarm = null;
 if (verdict.cancel !== null) {
   const arming = notice.handle === null
@@ -526,15 +532,20 @@ if (verdict.cancel !== null) {
           const cancel = (event) => {
             if (event.composedPath().includes(cover)) event.preventDefault();
           };
+          // A form the page's own handler submits with requestSubmit sends nothing either. One it
+          // submits with submit() fires no submit event and goes out, with the fields emptied.
+          const cancelSubmit = (event) => event.preventDefault();
           const note = (event) => {
             if (!event.destination.sameDocument) navigated = true;
           };
           scope.addEventListener("click", cancel, true);
+          scope.addEventListener("submit", cancelSubmit, true);
           scope.navigation?.addEventListener("navigate", note);
           let armed = true;
           const off = () => {
             if (armed) {
               scope.removeEventListener("click", cancel, true);
+              scope.removeEventListener("submit", cancelSubmit, true);
               scope.navigation?.removeEventListener("navigate", note);
               armed = false;
             }
@@ -556,18 +567,38 @@ const committed =
         .waitForEvent("framenavigated", { predicate: (frame) => frame === noticeFrame, timeout: 5000 })
         .then(() => true, () => false);
 let navigated = false;
+let emptied = false;
 try {
+  // Before such a click the step's fields are emptied, so nothing typed is in the form while the
+  // page's own code runs, and the host types them again. One it cannot empty, or read, keeps the
+  // notice unclicked.
+  if (disarm !== null)
+    for (const { locator } of fields) {
+      const holding = () =>
+        locator
+          .evaluate((element) => typeof element.value === "string" && element.value.length > 0, undefined, { timeout: ${elementReadMs} })
+          .catch(() => null);
+      const holds = await holding();
+      if (holds === false) continue;
+      if (holds === true) await locator.fill("", { timeout: 5000 }).catch(() => undefined);
+      if ((await holding()) !== false) return { dismiss: "failed", ...(emptied ? { emptied } : {}), url: primary.url() };
+      emptied = true;
+    }
   await notice.locator.click({ timeout: 5000 });
 } catch {
-  return { dismiss: "failed", url: primary.url() };
+  return { dismiss: "failed", ...(emptied ? { emptied } : {}), url: primary.url() };
 } finally {
   // A document that left took the listener with it, and its navigation started.
-  if (disarm !== null) navigated = await disarm.evaluate((off) => off()).catch(() => true);
+  // Off once the tasks the click queued ran, such as a navigation the page's own code planned.
+  if (disarm !== null)
+    navigated = await disarm
+      .evaluate((off) => new Promise((resolve) => setTimeout(() => resolve(off()), 0)))
+      .catch(() => true);
 }
 if (navigated && committed !== null && (await committed))
   await primary.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => undefined);
 await notice.locator.waitFor({ state: "hidden", timeout: 2000 }).catch(() => undefined);
-return { dismiss: "clicked", url: primary.url() };`;
+return { dismiss: "clicked", ...(emptied ? { emptied } : {}), url: primary.url() };`;
 
 const fillCallBody = (call: AutofillFillCall) => {
   if (call.kind === "dismiss") return dismissCode(call.selector);
