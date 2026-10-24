@@ -123,12 +123,12 @@ export interface RunnerChannels {
 
 /**
  * What spent an attempt's sign-ins: its one extra sign-in after a verified one, the sign-ins it
- * allows on a recovery's new profile, its one retry of a sign-in that submitted the login but
- * never verified and was not rejected, the host's identical refusals in a row while typing into
- * a sign-in screen (`maximumHostRefusals`), which no correction of the step got past, Guardian's
- * correctable denials in a row of one unchanged sign-in step (`maximumSignInDenials`), or the
- * caller's refusal to trust the origin off the site that the site's sign-in sent the login to,
- * so no sign-in of the site can verify.
+ * allows on a recovery's new profile, the retries the host allows of a sign-in that submitted the
+ * login but never verified and was not rejected, the host's identical refusals in a row while
+ * typing into a sign-in screen (`maximumHostRefusals`), which no correction of the step got past,
+ * Guardian's correctable denials in a row of one unchanged sign-in step (`maximumSignInDenials`),
+ * or the caller's refusal to trust the origin off the site that the site's sign-in sent the login
+ * to, so no sign-in of the site can verify.
  */
 export type SpentSignIn =
   | "relogin_spent"
