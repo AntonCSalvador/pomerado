@@ -253,6 +253,16 @@ const signInOrLoginInUseAnswer = (
 const taskUpdateDigest = (request: TaskUpdateRequest) =>
   createHash("sha256").update(JSON.stringify(request), "utf8").digest("hex");
 
+/**
+ * Live tests the host refuses while Guardian's denial of the latest publication stands, as a
+ * `host_refused` report reads them: the attempt ran out of live tests and no batch fits now.
+ * `reservedFor` names the cases the host's reserve past its batch cap would still run; while it
+ * names any, the tests are not spent.
+ */
+interface LiveTestsRefusal {
+  readonly reservedFor: readonly string[];
+}
+
 type AgentQuestion = (typeof AgentRequest.Type)["questions"][number];
 /** The agent's question as its caller reads it, with each caller-visible text redacted. */
 const callerVisibleQuestion = (
@@ -3260,13 +3270,22 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         reason: (typeof BuildBlocked.Type)["reason"],
         screenedExplanation: string,
         now: number,
+        liveTestsRefusal: LiveTestsRefusal | undefined,
       ):
-        | { readonly reason: (typeof BuildBlocked.Type)["reason"] }
+        | {
+            readonly reason: (typeof BuildBlocked.Type)["reason"];
+            readonly basis?: "live_tests_spent";
+          }
         | { readonly refusal: string } => {
-        const refused = (reason: string, instruction: string) => ({
+        const refused = (
+          reason: string,
+          instruction: string,
+          details: Readonly<Record<string, unknown>> = {},
+        ) => ({
           refusal: JSON.stringify({
             status: "blocked_refused",
             reason,
+            ...details,
             userInputRequired: false,
             instruction,
           }),
@@ -3304,7 +3323,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // finish_build got past to Guardian's review, or on a sign-in screen the host refused
         // because the password's fills are spent, while they still are, or at its destination
         // check, until a later screen that takes a password or code passed it or a sign-in
-        // verified. Neither of those two answers is cleared by a finish_build. The owner's no to a
+        // verified. Neither of those two answers is cleared by a finish_build. It also stands on
+        // live tests the host refuses while Guardian's denial of the latest publication stands
+        // (`liveTestsRefusal`): the attempt ran out of them, no batch fits, and the host's reserve
+        // would run no case, so nothing left in the attempt can clear a failure the denial rests
+        // on. While the reserve would still run a case, the report waits for it. The owner's no to a
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
@@ -3318,8 +3341,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               typeof answer === "object" && "confirmed" in answer && !answer.confirmed,
           );
         const unanswered = noAnswerHandBacks > 0;
-        const hostRefusing =
+        const hostCheckRefusing =
           hostRefused || dependencies.signInRefillRefused?.() === true || signInDestinationRefused;
+        const liveTestsSpent =
+          liveTestsRefusal !== undefined && liveTestsRefusal.reservedFor.length === 0;
+        const hostRefusing = hostCheckRefusing || liveTestsSpent;
         if (reason === "owner_declined" && !ownerRefused)
           return refused(
             "owner_not_declined",
@@ -3335,6 +3361,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "owner_not_ended",
             "The owner gave no answer since this build's last step that could end it, so the build has not ended. Use owner_ended only right after the owner chose in an answer to end the build.",
           );
+        if (
+          reason === "host_refused" &&
+          !hostRefusing &&
+          liveTestsRefusal !== undefined &&
+          liveTestsRefusal.reservedFor.length > 0
+        )
+          return refused(
+            "live_tests_reserved",
+            `The host still keeps one reserved live test batch for the cases a failure is pending on: ${liveTestsRefusal.reservedFor.join(", ")}. host_refused stands on refused live tests only once no batch is left, so the build has not ended. Prefer to make your last edit, then run those cases together in that one batch, run the example last and call finish_build again.`,
+            { reservedFor: liveTestsRefusal.reservedFor },
+          );
         if (reason === "host_refused" && !hostRefusing && hostRefusalPassed)
           return refused(
             "host_refusal_passed",
@@ -3343,7 +3380,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         if (reason === "host_refused" && !hostRefusing)
           return refused(
             "host_not_refused",
-            "No host check refused a step in this attempt, so the build has not ended. host_refused needs a host check that refused a step the build needs, such as finish_build, a sign-in form or a site change.",
+            "No host check refused a step in this attempt, so the build has not ended. host_refused needs a host check that refused a step the build needs, such as finish_build, a sign-in form or a site change, or live tests the host refuses with no batch left while Guardian's denial of the last publication stands.",
           );
         if (
           reason === "policy" &&
@@ -3358,7 +3395,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "Nothing in this attempt refused this: Guardian made no final refusal of an execution, and refused no publication for privacy or authority or for a finding no correction gets past. Use host_refused when a host check refused a step the build needs and nothing left in this attempt can fix it. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, their choice to end the build is owner_ended, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
           );
         }
-        return { reason };
+        // A report that stands only on refused live tests names them, for the record.
+        return reason === "host_refused" && liveTestsSpent && !hostCheckRefusing
+          ? { reason, basis: "live_tests_spent" }
+          : { reason };
       };
       /**
        * Guardian's question review of a blocked explanation before any caller reads it, with the
@@ -4261,14 +4301,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               const stopped = attemptBound
                 ? "Too little of this attempt is left to run a batch"
                 : "This attempt has run every live test batch its host allows";
+              // A denial that rests on a failure no batch left can clear ends the build honestly.
+              const thenBlocked =
+                "If publication review then denies for a failure only a new batch could clear, and no batch is left, prefer report_blocked with reason host_refused, naming the refused live tests and the finding.";
               return JSON.stringify({
                 kind: "host_live_tests",
                 status: "no_time",
                 ...(reserved.length === 0 ? {} : { reservedFor: reserved }),
                 instruction:
                   reserved.length === 0
-                    ? `${stopped}. Run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out. Nothing was executed.`
-                    : `${stopped}, except one reserved batch for only the cases a failure is still pending on: ${reserved.join(", ")}. Prefer to make your last edit, then run those cases together in that one batch, and no other case, named in cases, so publication review reads their results on the source you publish. Then run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out. Nothing was executed.`,
+                    ? `${stopped}. Run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out. ${thenBlocked} Nothing was executed.`
+                    : `${stopped}, except one reserved batch for only the cases a failure is still pending on: ${reserved.join(", ")}. Prefer to make your last edit, then run those cases together in that one batch, and no other case, named in cases, so publication review reads their results on the source you publish. Then run the example last and publish, and say in coverage which cases did not run; the host's record says time ran out. ${thenBlocked} Nothing was executed.`,
               });
             }
           }
@@ -4586,6 +4629,40 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ...liveTestRecords.http.values(),
         ...liveTestReplaced,
       ];
+      /**
+       * Live tests the host refuses while Guardian's denial of the latest publication stands, for
+       * a `host_refused` report: the attempt ran out of live tests (`liveTestsOutOfTime`), no
+       * batch fits now, and the latest publication review was a denial. `reservedFor` names the
+       * cases the host's reserve would still run on any version this attempt tested
+       * (`reservedBatchCases`), none once it ran, without one, or with no time left for it.
+       * Undefined while a batch fits, with no denial standing, or before the attempt ran out.
+       */
+      const liveTestsRefusedForDenial: Effect.Effect<LiveTestsRefusal | undefined> = Effect.gen(
+        function* () {
+          const host = dependencies.liveTests;
+          if (host === undefined || !liveTestsOutOfTime || publicationDenial === undefined)
+            return undefined;
+          const { deadlineAt } = yield* liveTestDeadline;
+          if (yield* liveTestBatchFits(host, deadlineAt)) return undefined;
+          const read = yield* readCasesFile;
+          if (Either.isLeft(read)) return { reservedFor: [] };
+          const entrypoints = new Set(
+            currentLiveTests().flatMap((record) =>
+              record.entrypoint === undefined ? [] : [record.entrypoint],
+            ),
+          );
+          const reserved = yield* Effect.forEach(entrypoints, (entrypoint) =>
+            stepDigest(entrypoint).pipe(
+              Effect.flatMap((digest) =>
+                digest === undefined
+                  ? Effect.succeed([])
+                  : reservedBatchCases(host, deadlineAt, read.right, entrypoint, digest),
+              ),
+            ),
+          );
+          return { reservedFor: [...new Set(reserved.flat())] };
+        },
+      );
       const submissionKey = (proposed: PublicationRequest, paths: readonly string[]) =>
         Effect.forEach(paths, stepDigest).pipe(
           Effect.map((digests) =>
@@ -6141,10 +6218,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     const explanation = redactCallerText(
                       yield* screenMintText(dependencies, report.explanation),
                     );
+                    // Read only for a report that may stand on it.
+                    const liveTestsRefusal =
+                      report.reason === "host_refused"
+                        ? yield* liveTestsRefusedForDenial
+                        : undefined;
                     const ending = blockedEnding(
                       report.reason,
                       explanation,
                       yield* Clock.currentTimeMillis,
+                      liveTestsRefusal,
                     );
                     if ("refusal" in ending) return ending.refusal;
                     // An ending the checks above accepted, while the build's latest sign-in
@@ -6213,17 +6296,28 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       reason: submitted.reason,
                       ...(shown ? { explanation } : {}),
                     };
+                    // A report that stood on refused live tests names them and the standing
+                    // denial; the outcome keeps the denial's reason and category.
+                    const basis = "basis" in ending ? ending.basis : undefined;
+                    const denialParts = [publicationDenial?.reason, publicationDenial?.category]
+                      .filter((part) => part !== undefined)
+                      .join(", ");
+                    const spentTests =
+                      basis === "live_tests_spent"
+                        ? ` The host runs no further live test batch in this attempt, and Guardian's denial of the last publication${denialParts === "" ? "" : ` (${denialParts})`} still stands.`
+                        : "";
                     // The summary carries the explanation only where the caller may read it.
                     terminal = {
                       build: "incomplete",
                       blocked,
                       summary: shown
-                        ? `The build is blocked (${blocked.reason}): ${explanation}`
-                        : `The build is blocked (${blocked.reason}).`,
+                        ? `The build is blocked (${blocked.reason}): ${explanation}${spentTests}`
+                        : `The build is blocked (${blocked.reason}).${spentTests}`,
                     };
                     yield* diagnose({
                       phase: "blocked",
                       reason: blocked.reason,
+                      ...(basis === undefined ? {} : { basis }),
                       explanationReview: review.outcome,
                     });
                     return JSON.stringify({

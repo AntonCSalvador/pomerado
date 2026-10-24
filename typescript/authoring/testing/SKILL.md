@@ -245,7 +245,8 @@ input (`changedExpectationBy`) clears it only with a capture of the site's own a
 exact input, as above, named in its `purpose`. Relabelling a case, or rebuilding it under new ids,
 clears nothing and adds another retired failure each time. The record's `clearedBy` says what can
 clear each failure that still counts. When `live_tests` answers `no_time`, run the example last and publish; the record says time
-ran out.
+ran out. If publication review then denies for a failure only a new batch could clear, and no batch is left, prefer
+`report_blocked` with reason `host_refused`, naming the refused live tests and the finding.
 
 When the host offers no `live_tests`, a read runs its cases one input at a time instead: execute
 purpose `test`, target `liveBrowser`, with `testInput`, the tool's input as JSON text; the host
