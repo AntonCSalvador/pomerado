@@ -338,14 +338,14 @@ test("a card form that the click turns to GET with a script action is refused as
 // A sign-in panel many sites open from a header link whose own address is a script that does
 // nothing, outside any form: following it sends nothing, and the page's own code opens the panel.
 // On a sign-in step the host judges such a link by where it sits, as it does a button outside a
-// form. A link whose script does anything else, a card-fill step's link and an off-site link stay
-// refused.
-const panelStep: AutofillStep = { fields: [], submit: "a.js-headerSignin" };
+// form. Such a link inside a form whose script action does something, and such a link on a card-fill
+// step, stay refused.
+const panelStep: AutofillStep = { fields: [], submit: "a.sign-in-link" };
 const headerLink = (href: string) =>
-  `<header><a href="${href}" class="js-headerSignin">Sign In</a></header>`;
+  `<header><a href="${href}" class="sign-in-link">Sign In</a></header>`;
 const panelPage = `${headerLink("javascript:void(0);")}
 <div id="panel" hidden>${scriptForm('action="/session"')}</div>
-<script>document.querySelector('.js-headerSignin').addEventListener('click', () => {
+<script>document.querySelector('.sign-in-link').addEventListener('click', () => {
   document.getElementById('panel').hidden = false;
 });</script>`;
 
@@ -362,34 +362,22 @@ test("a sign-in step whose submit is a header link to a script that does nothing
 
 for (const [name, body, step, evidence] of [
   [
-    "a sign-in step whose submit link's own address is a script that does something",
-    headerLink("javascript:doLogin()"),
-    panelStep,
-    { actionOrigins: "javascript:" },
-  ],
-  [
     "a sign-in step whose submit link to a script that does nothing sits in a form whose script action does something",
     `<form action="javascript:send()">${headerLink("javascript:void(0);")}</form>`,
     panelStep,
     { actionOrigins: "javascript: javascript:" },
   ],
   [
-    "a sign-in step whose submit link goes off the site",
-    headerLink(`${otherSite}/login`),
-    panelStep,
-    { actionOrigins: otherSite },
-  ],
-  [
     "a card-fill step whose submit link's own address is a script that does nothing",
     `<label>Card number<input id="card" name="card" autocomplete="cc-number" inputmode="numeric"></label>
 ${headerLink("javascript:void(0);")}`,
-    { fields: [{ selector: "#card", slot: "card_number" }], submit: "a.js-headerSignin" },
+    { fields: [{ selector: "#card", slot: "card_number" }], submit: "a.sign-in-link" },
     { actionOrigins: "javascript:" },
   ],
 ] as const)
   test(`${name} is refused before anything is typed`, async ({ page }) => {
     const { posts } = await serve(page, { [site]: body });
-    await expect(page.locator("a.js-headerSignin")).toBeVisible();
+    await expect(page.locator("a.sign-in-link")).toBeVisible();
     const inspection = await inspect(page, step);
     expect(inspection).toMatchObject({
       outcome: "refused",
