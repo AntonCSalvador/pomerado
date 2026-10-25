@@ -243,6 +243,7 @@ const same = (found, expected, editable = true) =>
       JSON.stringify(found.ancestors ?? []) === JSON.stringify(expected.ancestors ?? []) &&
       (found.explicitGet ?? false) === (expected.explicitGet ?? false) &&
       (found.scriptAction ?? false) === (expected.scriptAction ?? false) &&
+      (found.scriptHref ?? false) === (expected.scriptHref ?? false) &&
       found.documentOrigin === expected.documentOrigin &&
       (!editable || found.editable === expected.editable) &&
       found.control === expected.control &&

@@ -217,9 +217,11 @@ for (const [name, control, reason] of [
     '<a id="continue" href="https://other.test/receive">Sign in</a>',
     "credential_target_refused",
   ],
+  // A link to a script that does nothing sends nothing itself, so it is judged by its form; one
+  // whose script does something runs what its address says.
   [
     "unsafe anchor",
-    '<a id="continue" href="javascript:void(0)">Sign in</a>',
+    '<a id="continue" href="javascript:send()">Sign in</a>',
     "credential_target_refused",
   ],
   // An inert control takes no interaction at all: it marks a form in the background, not one the
