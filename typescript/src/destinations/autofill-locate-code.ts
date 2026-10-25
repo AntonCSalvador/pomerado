@@ -164,7 +164,13 @@ const controlReadCode = `(element) => {
   // A link-style sign-in action may navigate instead of submitting its containing form.
   const href = element instanceof HTMLAnchorElement ? element.getAttribute("href") : null;
   if (href !== null) actions.push(new URL(href, document.baseURI).href);
-  for (const control of associated ? Array.from(formProperty("elements")) : [element]) {
+  // A form's elements leave out its image submits, so they are read beside them.
+  const images = associated
+    ? Array.from(associated.getRootNode().querySelectorAll("input[type=image]")).filter(
+        (input) => input.form === associated,
+      )
+    : [];
+  for (const control of associated ? [...formProperty("elements"), ...images] : [element]) {
     const action = control.getAttribute("formaction");
     if (action !== null) actions.push(new URL(action, document.baseURI).href);
     const method = control.getAttribute("formmethod");

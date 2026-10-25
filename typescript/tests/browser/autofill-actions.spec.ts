@@ -233,6 +233,24 @@ for (const [name, control, reason] of [
     expect(received).toEqual([]);
   });
 
+// A form's elements leave out an image submit, so its own formaction is read beside them.
+test("the host refuses a sign-in whose image submit posts off the site before any password is filled", async ({
+  page,
+}) => {
+  const received = await serve(
+    page,
+    '<input id="continue" type="image" alt="Sign in" formaction="https://other.test/receive">',
+  );
+  expect(await inspect(page)).toMatchObject({
+    outcome: "refused",
+    reason: "credential_target_refused",
+    target: 0,
+    failureDetail: { context: { part: "form_action", actionOrigins: `${site} https://other.test` } },
+  });
+  expect(await page.locator("#password").inputValue()).toBe("");
+  expect(received).toEqual([]);
+});
+
 const usernameAndPassword: AutofillStep = {
   fields: [
     { selector: "#username", slot: "username", accepts: ["username"] },
