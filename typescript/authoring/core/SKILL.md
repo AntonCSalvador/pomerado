@@ -545,6 +545,10 @@ that depends on them:
      time after a date, apply the input it depends on first and read `available` from that
      state, then drop the options the input alone rules out. Never list options read before
      the input they depend on applied.
+   - A venue or record page that says it takes no online booking, or not yet, and shows no
+     booking controls, such as "Reservations open November 1": the site says no to the whole
+     request (caller-input skill), so a read returns those words, preferably as a declared
+     refusal with `site_message`, never as no open times or an empty list.
    - A number on a scale the site steps, such as a price range slider or price boxes, is a
      number, not a choice: never refuse it because no label matches. Set the nearest step inside
      the caller's bound, down for a maximum and up for a minimum, so a maximum of 47 on steps of
