@@ -2073,12 +2073,6 @@ export interface MintHarnessSnapshot {
     readonly answer: AnsweredQuestion;
   }[];
   /**
-   * The question ids whose latest answered question asked whether to end the build
-   * (`ProposedConfirmQuestion.endsBuild`), so a takeover reads the owner's answer as it was meant.
-   * Optional for the same reason.
-   */
-  readonly endsBuildQuestions?: readonly string[];
-  /**
    * Sign-in is unavailable in this build and its outcome waits while a retained receipt may still
    * publish: the answer a later authenticate gets again, and that outcome. Optional, so a
    * rollout's old and new workers each restore the other's checkpoint.
@@ -2227,7 +2221,6 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
     Schema.Array(Schema.Struct({ id: Schema.String, answer: AnsweredQuestion })),
     { exact: true },
   ),
-  endsBuildQuestions: Schema.optionalWith(Schema.Array(Schema.String), { exact: true }),
   signInUnavailable: Schema.optionalWith(
     Schema.Struct({ answer: Schema.String, outcome: HarnessTerminal }),
     { exact: true },

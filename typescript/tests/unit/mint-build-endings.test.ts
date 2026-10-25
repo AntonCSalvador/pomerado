@@ -6,9 +6,9 @@ import {
 } from "../support/mint-fixtures.js";
 import { Usage } from "@openai/agents";
 import type { ModelRequest, ModelResponse } from "@openai/agents";
-import { Deferred, Effect, Fiber, Schema } from "effect";
+import { Deferred, Effect, Fiber } from "effect";
 import { afterEach, expect, it } from "vitest";
-import { MintFailure, MintHarnessSnapshot } from "../../src/mint/contracts.js";
+import { MintFailure } from "../../src/mint/contracts.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
 import { autofillRefusalFailure } from "../../src/mint/sign-in-failure.js";
 import { portableMintProjection } from "../support/portable-mint.js";
@@ -2156,60 +2156,4 @@ it("still ends a policy report on a plain confirm's no as owner_declined beside 
     blocked: { reason: "owner_declined" },
     stopReason: "owner_declined",
   });
-});
-
-// A worker that takes over keeps which questions asked whether to end the build.
-it("keeps the owner's no to ending the build as keep going after a takeover", async () => {
-  let capture: (() => MintHarnessSnapshot) | undefined;
-  let stored: unknown;
-  const first = await harnessFixture(
-    (turn) =>
-      Effect.gen(function* () {
-        yield* turn.actions.requestInput(confirmQuestion(true));
-        stored = JSON.parse(JSON.stringify(capture?.()));
-      }),
-    {
-      askInput: answered(false),
-      agentRecovery: {
-        bindHarness: (bound) =>
-          Effect.sync(() => {
-            capture = bound;
-          }),
-        save: () => Effect.void,
-      },
-    },
-  );
-  await first.run();
-  const harness = Schema.decodeUnknownSync(MintHarnessSnapshot)(stored);
-  const results: string[] = [];
-  const second = await harnessFixture(
-    (turn) =>
-      Effect.gen(function* () {
-        results.push(
-          yield* turn.actions.reportBlocked!({
-            reason: "owner_declined",
-            explanation: "The owner answered the stop question.",
-          }),
-        );
-      }),
-    {
-      agentRecovery: {
-        initial: {
-          agent: {
-            version: 1,
-            sdkVersion: "0.18.0",
-            sdkState: "",
-            modelCalls: 0,
-            finalsWithoutTool: 0,
-            tools: [],
-          },
-          harness,
-        },
-        save: () => Effect.void,
-      },
-    },
-  );
-  const outcome = await second.run();
-  expect(results[0]).toContain("owner_kept_going");
-  expect(outcome).not.toHaveProperty("blocked");
 });

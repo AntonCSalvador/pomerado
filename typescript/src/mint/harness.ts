@@ -1001,15 +1001,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       let ownerAnsweredLast = false;
       /**
-       * The question ids whose latest answered question asked whether to end the build
-       * (`endsBuild`): a no to one means keep going, so it is never `owner_declined`. A question
-       * still open when another worker takes over is read as a plain confirm.
+       * The ids of answered questions that asked whether to end the build (`endsBuild`), and whether
+       * the owner's latest answers said no to each such question there, which means keep going. A
+       * takeover reads earlier answers as plain confirms.
        */
-      const endsBuildQuestions = new Set<string>(recovered?.endsBuildQuestions ?? []);
-      /**
-       * Whether the owner's latest answers said no to every question there that asked whether to
-       * end the build, which means keep going: `owner_ended` never stands on them.
-       */
+      const endsBuildQuestions = new Set<string>();
       let ownerKeptGoing = false;
       // A write build's one live session: its first act step takes the example claim and the
       // step that records the site's confirmation closes it. A takeover restores this session;
@@ -3385,9 +3381,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // one of those takes its name, so neither ever ends as policy. `owner_ended` needs the
         // owner's latest answer with nothing run since, so a build that went on from an answer
         // never ends as the owner's choice.
-        // A no to a question that asked whether to end the build means keep going: it is never
-        // `owner_declined` (`stopDeclined`), and while Guardian's denial of the last publication
-        // stands, a policy report on it is refused, so the minter's stop ends with that denial.
+        // A no to a question that asked whether to end the build means keep going, never
+        // `owner_declined`; while Guardian's denial of the last publication stands, a policy report
+        // on it is refused, so the minter's stop ends with that denial.
         const declined = (ending: boolean) =>
           [...answeredQuestions].some(
             ([id, { answer }]) =>
@@ -6096,8 +6092,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     "Remove allowOther and allowNote from every question and ask again: the host lets the caller answer every choice and multi_choice in their own words.",
                 });
               const decoded = yield* decode(AgentRequest, input);
-              // Which questions ask whether to end the build. The mark stays the host's own:
-              // Guardian and the caller read a plain confirm.
+              // The mark stays the host's own: Guardian and the caller read a plain confirm.
               const endsBuild = new Set(
                 decoded.questions.flatMap((question) =>
                   question.type === "confirm" && question.endsBuild === true ? [question.id] : [],
@@ -7060,9 +7055,6 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           : {
               answeredQuestions: [...answeredQuestions].map(([id, answer]) => ({ id, answer })),
             }),
-        ...(endsBuildQuestions.size === 0
-          ? {}
-          : { endsBuildQuestions: [...endsBuildQuestions] }),
         ...(signInUnavailable === undefined ? {} : { signInUnavailable }),
         ...(publicationDenial === undefined ? {} : { publicationDenial }),
         ...(inputFeedbackReview === undefined ? {} : { inputFeedbackReview }),
