@@ -2327,6 +2327,25 @@ export interface DecisionLedger {
   };
   readonly testFailures: readonly LedgerTestFailure[];
   readonly omittedTestFailures?: number;
+  /**
+   * The host's latest refusals of a live test batch or an execution, such as a cap on live runs:
+   * the tool refused, the failure code or status, the screened reason and when, in ISO time.
+   */
+  readonly hostRefusals?: readonly {
+    readonly tool: "live_tests" | "execute";
+    readonly code: string;
+    readonly reason: string;
+    readonly atUtc: string;
+  }[];
+  /**
+   * Each no-match case's latest verdict, a pass included: a case that expects no results, or one
+   * marked `noMatch`, with a short screened excerpt of its output.
+   */
+  readonly noMatchCases?: readonly {
+    readonly caseId: string;
+    readonly verdict: LiveTestRecord["verdict"];
+    readonly excerpt?: string;
+  }[];
 }
 
 /**

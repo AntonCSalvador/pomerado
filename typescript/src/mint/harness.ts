@@ -409,7 +409,8 @@ const actRefusalsForPolicy = 5;
 const reviewedLiveTestBatches = 4;
 /**
  * The bounds of a blocked explanation review's decision ledger: the latest denials, each one's
- * rationale and finding explanations capped, and the latest failing live test cases.
+ * rationale and finding explanations capped, the latest failing live test cases, and the latest
+ * host refusals and no-match cases.
  */
 const ledgerBounds = {
   denials: 12,
@@ -417,6 +418,8 @@ const ledgerBounds = {
   findings: 4,
   findingChars: 300,
   testFailures: 20,
+  hostRefusals: 8,
+  noMatchCases: 8,
   messageChars: 300,
   errorClassChars: 120,
   gotChars: 120,
@@ -1298,6 +1301,24 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             ledgerDenials.splice(0, over);
             omittedLedgerDenials += over;
           }
+        });
+      /**
+       * The host's refusals of a live test batch or an execution in this attempt, the latest kept,
+       * for the same review. A takeover starts them again.
+       */
+      const ledgerHostRefusals: NonNullable<DecisionLedger["hostRefusals"]>[number][] = [];
+      const recordHostRefusal = (tool: "live_tests" | "execute", code: string, reason: unknown) =>
+        Effect.gen(function* () {
+          const screened = yield* screenMintText(dependencies, reason).pipe(
+            Effect.orElseSucceed(() => "[reason withheld]"),
+          );
+          ledgerHostRefusals.push({
+            tool,
+            code,
+            reason: capped(screened, ledgerBounds.rationaleChars),
+            atUtc: new Date(yield* Clock.currentTimeMillis).toISOString(),
+          });
+          if (ledgerHostRefusals.length > ledgerBounds.hostRefusals) ledgerHostRefusals.shift();
         });
       /** Unanswered questions handed back to the minter in this build, up to the limit. */
       let noAnswerHandBacks = recovered?.noAnswerHandBacks ?? 0;
@@ -3986,18 +4007,23 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ),
       );
       /**
-       * The blocked explanation review's decision ledger: this attempt's denials, each case's
-       * latest verdict counted, and the latest cases that did not pass, a replaced failure
-       * included. Undefined when there is nothing to record.
+       * The blocked explanation review's decision ledger: this attempt's denials and host
+       * refusals, each case's latest verdict counted, the latest cases that did not pass, a
+       * replaced failure included, and each no-match case's latest verdict. Undefined when there
+       * is nothing to record.
        */
       const decisionLedger = (): DecisionLedger | undefined => {
         const latest = [...liveTestRecords.playwright.values(), ...liveTestRecords.http.values()];
         const failing = [...liveTestReplaced, ...latest].filter(
           (record) => record.verdict !== "pass",
         );
+        const noMatch = latest
+          .filter((record) => record.expect === "empty" || record.noMatch === true)
+          .slice(-ledgerBounds.noMatchCases);
         if (
           !ledgerPartial &&
           ledgerDenials.length === 0 &&
+          ledgerHostRefusals.length === 0 &&
           latest.length === 0 &&
           liveTestReplaced.length === 0
         )
@@ -4044,6 +4070,19 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           ...(failing.length > shown.length
             ? { omittedTestFailures: failing.length - shown.length }
             : {}),
+          ...(ledgerHostRefusals.length === 0 ? {} : { hostRefusals: [...ledgerHostRefusals] }),
+          ...(noMatch.length === 0
+            ? {}
+            : {
+                noMatchCases: noMatch.map((record) => ({
+                  caseId: record.id,
+                  verdict: record.verdict,
+                  // Screened when the batch recorded it.
+                  ...(record.excerpt === undefined
+                    ? {}
+                    : { excerpt: capped(record.excerpt, ledgerBounds.messageChars) }),
+                })),
+              }),
         };
       };
       /**
@@ -4394,7 +4433,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             })),
             workers,
             deadlineAt,
-          });
+          }).pipe(
+            // The host's gate refused the batch, such as a cap on live runs.
+            Effect.tapError((error) =>
+              error.recoveryGate === undefined
+                ? Effect.void
+                : recordHostRefusal("live_tests", error.code, error.recoveryGate.reason),
+            ),
+          );
           if (result.status === "review_denied") {
             const rationale = yield* screenRationale(result.rationale);
             yield* recordDenial({
@@ -5070,6 +5116,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 ),
               );
               yield* observeExecution(submitted, evidence, allowed, evidence.status);
+              if (evidence.status === "unsupported")
+                yield* recordHostRefusal("execute", evidence.status, evidence.observations);
               const result = yield* executionResult(evidence, submitted.purpose);
               // The first passing example settles the schemas: its receipt reminds the agent to
               // design and run its cases.
