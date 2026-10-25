@@ -1000,6 +1000,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * is never kept.
        */
       let ownerAnsweredLast = false;
+      /**
+       * The question ids whose latest answered question asked whether to end the build
+       * (`endsBuild`): a no to one means keep going, so it is never `owner_declined`. A question
+       * still open when another worker takes over is read as a plain confirm.
+       */
+      const endsBuildQuestions = new Set<string>(recovered?.endsBuildQuestions ?? []);
+      /**
+       * Whether the owner's latest answers said no to every question there that asked whether to
+       * end the build, which means keep going: `owner_ended` never stands on them.
+       */
+      let ownerKeptGoing = false;
       // A write build's one live session: its first act step takes the example claim and the
       // step that records the site's confirmation closes it. A takeover restores this session;
       // an unrelated attempt with an existing claim keeps it closed.
@@ -1612,7 +1623,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * Keeps each answered question as Guardian reads it, by id, so a later `mint_update` can cite
        * the caller's real answer as confirmation. A protected answer is never kept.
        */
-      const keepAnswers = (submitted: AgentInputRequest, answers: ValidAnswers) =>
+      const keepAnswers = (
+        submitted: AgentInputRequest,
+        answers: ValidAnswers,
+        endsBuild: ReadonlySet<string>,
+      ) =>
         Effect.forEach(submitted.questions, (question) =>
           answersForReview({ questions: [question] }, answers, (text) =>
             screenMintText(dependencies, text),
@@ -1622,15 +1637,27 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 if (entry === undefined) return;
                 answeredQuestions.delete(question.id);
                 answeredQuestions.set(question.id, entry);
+                if (endsBuild.has(question.id)) endsBuildQuestions.add(question.id);
+                else endsBuildQuestions.delete(question.id);
                 ownerAnsweredLast = true;
               }),
             ),
           ),
         );
-      const inputResult = (submitted: AgentInputRequest, answers: ValidAnswers) =>
+      const inputResult = (
+        submitted: AgentInputRequest,
+        answers: ValidAnswers,
+        endsBuild: ReadonlySet<string> = new Set(),
+      ) =>
         Effect.gen(function* () {
           const askAgain = yield* recordInputAnswer(submitted, answers);
-          yield* keepAnswers(submitted, answers);
+          yield* keepAnswers(submitted, answers, endsBuild);
+          const stopAnswers = submitted.questions.flatMap((question) =>
+            endsBuild.has(question.id) ? [answers[question.id]] : [],
+          );
+          ownerKeptGoing =
+            stopAnswers.length > 0 &&
+            stopAnswers.every((answer) => answer?.type === "confirm" && !answer.value.confirmed);
           const visibleAnswers = yield* answersForModel(answers);
           acceptedAnswers.push({
             questions: submitted.questions.map((question) => question.prompt),
@@ -3358,17 +3385,31 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // one of those takes its name, so neither ever ends as policy. `owner_ended` needs the
         // owner's latest answer with nothing run since, so a build that went on from an answer
         // never ends as the owner's choice.
-        const ownerRefused =
-          loginDeclined !== undefined ||
-          [...answeredQuestions.values()].some(
-            ({ answer }) =>
-              typeof answer === "object" && "confirmed" in answer && !answer.confirmed,
+        // A no to a question that asked whether to end the build means keep going: it is never
+        // `owner_declined` (`stopDeclined`), and while Guardian's denial of the last publication
+        // stands, a policy report on it is refused, so the minter's stop ends with that denial.
+        const declined = (ending: boolean) =>
+          [...answeredQuestions].some(
+            ([id, { answer }]) =>
+              endsBuildQuestions.has(id) === ending &&
+              typeof answer === "object" &&
+              "confirmed" in answer &&
+              !answer.confirmed,
+          );
+        const ownerRefused = loginDeclined !== undefined || declined(false);
+        const stopDeclined = declined(true);
+        const keptGoing = (ending: "owner_declined" | "owner_ended") =>
+          refused(
+            "owner_kept_going",
+            `The owner's no answered whether to end the build, which means keep going, so it is not ${ending} and the build has not ended.${publicationDenial === undefined ? "" : " If Guardian's latest decision asks for evidence nobody can supply, stop: the build ends with Guardian's decision."}`,
           );
         const unanswered = noAnswerHandBacks > 0;
         const hostCheckRefusing =
           hostRefused || dependencies.signInRefillRefused?.() === true || signInDestinationRefused;
         const liveTestsSpent = liveTestsRefusal !== undefined && !liveTestsRefusal.reserveOpen;
         const hostRefusing = hostCheckRefusing || liveTestsSpent;
+        if (reason === "owner_declined" && !ownerRefused && stopDeclined)
+          return keptGoing(reason);
         if (reason === "owner_declined" && !ownerRefused)
           return refused(
             "owner_not_declined",
@@ -3379,6 +3420,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "no_question_unanswered",
             "No question went unanswered in this build, so the build has not ended. Use question_unanswered only after a question you asked came back as no answer and the build cannot go on without it.",
           );
+        if (reason === "owner_ended" && ownerAnsweredLast && ownerKeptGoing)
+          return keptGoing(reason);
         if (reason === "owner_ended" && !ownerAnsweredLast)
           return refused(
             "owner_not_ended",
@@ -3420,6 +3463,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ) {
           if (ownerRefused) return { reason: "owner_declined" };
           if (unanswered) return { reason: "question_unanswered" };
+          if (stopDeclined && publicationDenial !== undefined) return keptGoing("owner_declined");
           return refused(
             "policy_not_refused",
             "Nothing in this attempt refused this: Guardian made no final refusal of an execution, and refused no publication for privacy or authority or for a finding no correction gets past. Use host_refused when a host check refused a step the build needs and nothing left in this attempt can fix it. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, their choice to end the build is owner_ended, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
@@ -6051,8 +6095,23 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   instruction:
                     "Remove allowOther and allowNote from every question and ask again: the host lets the caller answer every choice and multi_choice in their own words.",
                 });
+              const decoded = yield* decode(AgentRequest, input);
+              // Which questions ask whether to end the build. The mark stays the host's own:
+              // Guardian and the caller read a plain confirm.
+              const endsBuild = new Set(
+                decoded.questions.flatMap((question) =>
+                  question.type === "confirm" && question.endsBuild === true ? [question.id] : [],
+                ),
+              );
               const proposed = callerVisibleRequest(
-                yield* decode(AgentRequest, input),
+                {
+                  ...decoded,
+                  questions: decoded.questions.map((question) => {
+                    if (question.type !== "confirm") return question;
+                    const { endsBuild: _mark, ...asked } = question;
+                    return asked;
+                  }),
+                },
                 redactCallerText,
               );
               const submitted = {
@@ -6190,7 +6249,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 requestId,
                 ...(reviewId === undefined ? {} : { reviewId }),
               });
-              return yield* inputResult(submitted, answers);
+              return yield* inputResult(submitted, answers, endsBuild);
             }).pipe(
               Effect.catchIf(
                 (error) => error.noResponse !== undefined,
@@ -7001,6 +7060,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           : {
               answeredQuestions: [...answeredQuestions].map(([id, answer]) => ({ id, answer })),
             }),
+        ...(endsBuildQuestions.size === 0
+          ? {}
+          : { endsBuildQuestions: [...endsBuildQuestions] }),
         ...(signInUnavailable === undefined ? {} : { signInUnavailable }),
         ...(publicationDenial === undefined ? {} : { publicationDenial }),
         ...(inputFeedbackReview === undefined ? {} : { inputFeedbackReview }),

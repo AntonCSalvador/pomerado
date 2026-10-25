@@ -6,9 +6,9 @@ import {
 } from "../support/mint-fixtures.js";
 import { Usage } from "@openai/agents";
 import type { ModelRequest, ModelResponse } from "@openai/agents";
-import { Deferred, Effect, Fiber } from "effect";
+import { Deferred, Effect, Fiber, Schema } from "effect";
 import { afterEach, expect, it } from "vitest";
-import { MintFailure } from "../../src/mint/contracts.js";
+import { MintFailure, MintHarnessSnapshot } from "../../src/mint/contracts.js";
 import { makeOpenAIMinter } from "../../src/mint/openai.js";
 import { autofillRefusalFailure } from "../../src/mint/sign-in-failure.js";
 import { portableMintProjection } from "../support/portable-mint.js";
@@ -2031,4 +2031,185 @@ it("names a restored login-check ending host_unavailable", async () => {
     },
   });
   expect((await f.run()).stopReason).toBe("host_unavailable");
+});
+
+// A no to a question that asks whether to end the build means keep going, never a declined step.
+// The minter marks such a confirm with `endsBuild`: its yes ends the build as owner_ended, and its
+// no is no basis for owner_declined or owner_ended. While Guardian's denial of the last publication
+// stands, a policy report that stood only on that no is refused, and the minter's stop ends with
+// Guardian's decision instead.
+const evidenceDenied = new MintFailure({
+  code: "ReviewDenied",
+  review: {
+    outcome: "deny",
+    reason: "evidence",
+    reviewId: "review_evidence",
+    rationale: "The live tests do not show the conditional field.",
+    findings: [],
+  },
+});
+const confirmQuestion = (endsBuild?: true) => ({
+  questions: [
+    {
+      id: endsBuild ? "end" : "go",
+      type: "confirm",
+      prompt: endsBuild ? "End this build without publishing?" : "May the build open the account page?",
+      ...(endsBuild ? { endsBuild } : {}),
+    },
+  ],
+});
+const answered = (confirmed: boolean) => (request: { readonly questions: readonly { readonly id: string }[] }) =>
+  Effect.succeed(
+    Object.fromEntries(
+      request.questions.map((question) => [
+        question.id,
+        { type: "confirm" as const, value: { confirmed } },
+      ]),
+    ),
+  );
+
+it("refuses to read a no to ending the build as owner_declined, and ends with Guardian's denial when the minter stops", async () => {
+  const asked: unknown[] = [];
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", pureExample),
+        call("finish_build", finishBuild),
+        call("request_input", confirmQuestion(true)),
+        call("report_blocked", {
+          reason: "policy",
+          explanation: "Guardian wants evidence nobody can supply.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      publish: () => Effect.fail(evidenceDenied),
+      askInput: (request) => {
+        asked.push(request);
+        return answered(false)(request);
+      },
+    },
+  );
+  const outcome = await f.run();
+  // The host never sends the flag on: the question the owner reads is a plain confirm.
+  expect(asked).toEqual([
+    { questions: [{ id: "end", type: "confirm", prompt: "End this build without publishing?" }] },
+  ]);
+  expect(JSON.stringify(f.requests[4]?.input)).toContain("owner_kept_going");
+  expect(JSON.stringify(f.requests[4]?.input)).toContain("the build ends with Guardian's decision");
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(outcome).toMatchObject({ build: "incomplete", publicationDenial: { reason: "evidence" } });
+});
+
+it.each(["owner_declined", "owner_ended"] as const)(
+  "refuses %s on the owner's no to ending the build",
+  async (reason) => {
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("request_input", confirmQuestion(true)),
+          call("report_blocked", { reason, explanation: "The owner answered the stop question." }),
+        ][index] ?? prose("Stopping."),
+      { askInput: answered(false) },
+    );
+    const outcome = await f.run();
+    const refusal = JSON.stringify(f.requests[2]?.input);
+    expect(refusal).toContain("owner_kept_going");
+    expect(refusal).toContain(`so it is not ${reason}`);
+    // No denial stands, so the refusal points at none.
+    expect(refusal).not.toContain("Guardian's decision");
+    expect(outcome).not.toHaveProperty("blocked");
+  },
+);
+
+it("ends the owner's yes to ending the build as owner_ended", async () => {
+  const explanation = "You chose to end the build without publishing.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("request_input", confirmQuestion(true)),
+        call("report_blocked", { reason: "owner_ended", explanation }),
+      ][index] ?? prose("Stopping."),
+    { askInput: answered(true) },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "owner_ended", explanation },
+    stopReason: "owner_ended",
+  });
+});
+
+// A plain confirm keeps its meaning: its no is a declined step, a denial on record or not.
+it("still ends a policy report on a plain confirm's no as owner_declined beside Guardian's denial", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", pureExample),
+        call("finish_build", finishBuild),
+        call("request_input", confirmQuestion()),
+        call("report_blocked", {
+          reason: "policy",
+          explanation: "The owner did not allow the account page.",
+        }),
+      ][index] ?? prose("Stopping."),
+    { publish: () => Effect.fail(evidenceDenied), askInput: answered(false) },
+  );
+  expect(await f.run()).toMatchObject({
+    blocked: { reason: "owner_declined" },
+    stopReason: "owner_declined",
+  });
+});
+
+// A worker that takes over keeps which questions asked whether to end the build.
+it("keeps the owner's no to ending the build as keep going after a takeover", async () => {
+  let capture: (() => MintHarnessSnapshot) | undefined;
+  let stored: unknown;
+  const first = await harnessFixture(
+    (turn) =>
+      Effect.gen(function* () {
+        yield* turn.actions.requestInput(confirmQuestion(true));
+        stored = JSON.parse(JSON.stringify(capture?.()));
+      }),
+    {
+      askInput: answered(false),
+      agentRecovery: {
+        bindHarness: (bound) =>
+          Effect.sync(() => {
+            capture = bound;
+          }),
+        save: () => Effect.void,
+      },
+    },
+  );
+  await first.run();
+  const harness = Schema.decodeUnknownSync(MintHarnessSnapshot)(stored);
+  const results: string[] = [];
+  const second = await harnessFixture(
+    (turn) =>
+      Effect.gen(function* () {
+        results.push(
+          yield* turn.actions.reportBlocked!({
+            reason: "owner_declined",
+            explanation: "The owner answered the stop question.",
+          }),
+        );
+      }),
+    {
+      agentRecovery: {
+        initial: {
+          agent: {
+            version: 1,
+            sdkVersion: "0.18.0",
+            sdkState: "",
+            modelCalls: 0,
+            finalsWithoutTool: 0,
+            tools: [],
+          },
+          harness,
+        },
+        save: () => Effect.void,
+      },
+    },
+  );
+  const outcome = await second.run();
+  expect(results[0]).toContain("owner_kept_going");
+  expect(outcome).not.toHaveProperty("blocked");
 });

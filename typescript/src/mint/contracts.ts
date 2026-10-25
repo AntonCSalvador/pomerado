@@ -1604,6 +1604,17 @@ export interface BuildAssumption {
 }
 
 /**
+ * A confirm question as the minting agent proposes it. `endsBuild` marks one that asks whether to
+ * end the build: its yes is the owner's choice to end it (`owner_ended`), and its no means keep
+ * going, never a declined step (`owner_declined`). The host keeps the mark to itself, so the request
+ * Guardian and the caller read is a plain confirm.
+ */
+export const ProposedConfirmQuestion = Schema.Struct({
+  ...ConfirmQuestion.fields,
+  endsBuild: Schema.optional(Schema.Boolean),
+});
+
+/**
  * What the agent may ask with request_input: typed questions of every kind but a login, which
  * only the host raises. The request's own checks (unique ids, bounds) run when the host asks it.
  * The caller may answer any choice in their own words, so the agent never decides it
@@ -1615,7 +1626,7 @@ export const AgentRequest = Schema.Struct({
       ProposedChoiceQuestion,
       ProposedMultiChoiceQuestion,
       TextQuestion,
-      ConfirmQuestion,
+      ProposedConfirmQuestion,
       SecretQuestion,
     ),
   ).pipe(Schema.minItems(1), Schema.maxItems(8)),
@@ -2062,6 +2073,12 @@ export interface MintHarnessSnapshot {
     readonly answer: AnsweredQuestion;
   }[];
   /**
+   * The question ids whose latest answered question asked whether to end the build
+   * (`ProposedConfirmQuestion.endsBuild`), so a takeover reads the owner's answer as it was meant.
+   * Optional for the same reason.
+   */
+  readonly endsBuildQuestions?: readonly string[];
+  /**
    * Sign-in is unavailable in this build and its outcome waits while a retained receipt may still
    * publish: the answer a later authenticate gets again, and that outcome. Optional, so a
    * rollout's old and new workers each restore the other's checkpoint.
@@ -2210,6 +2227,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
     Schema.Array(Schema.Struct({ id: Schema.String, answer: AnsweredQuestion })),
     { exact: true },
   ),
+  endsBuildQuestions: Schema.optionalWith(Schema.Array(Schema.String), { exact: true }),
   signInUnavailable: Schema.optionalWith(
     Schema.Struct({ answer: Schema.String, outcome: HarnessTerminal }),
     { exact: true },
