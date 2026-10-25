@@ -142,9 +142,9 @@ export const noOpScriptCode = String.raw`(address) => {
 /**
  * Page code: what a step call reads of one control it found (`readControls`): every form action
  * and method it could submit with, its form's own action first, whether that action is a script
- * that does nothing (`scriptAction`, `noOpScriptCode`), its link destination, whether it is
- * disabled, inert or editable, whether it is empty, its shape and the words that label it, never
- * its value.
+ * that does nothing (`scriptAction`, `noOpScriptCode`), its link destination and whether that is a
+ * script that does nothing (`scriptHref`), whether it is disabled, inert or editable, whether it is
+ * empty, its shape and the words that label it, never its value.
  */
 const controlReadCode = `(element) => {
   const associated =
@@ -164,6 +164,8 @@ const controlReadCode = `(element) => {
   // A link-style sign-in action may navigate instead of submitting its containing form.
   const href = element instanceof HTMLAnchorElement ? element.getAttribute("href") : null;
   if (href !== null) actions.push(new URL(href, document.baseURI).href);
+  // Whether the link's own address is a script that does nothing, which sends nothing by itself.
+  const scriptHref = href !== null && (${noOpScriptCode})(actions[actions.length - 1]);
   // A form's elements leave out its image submits, so they are read beside them.
   const images = associated
     ? Array.from(associated.getRootNode().querySelectorAll("input[type=image]")).filter(
@@ -206,7 +208,7 @@ const controlReadCode = `(element) => {
     disabled,
     inert,
     shape: (${controlShapeCode})(element),
-    target: { documentOrigin: self.origin, actions, scriptAction, methods, explicitGet, submitMethod, editable, empty },
+    target: { documentOrigin: self.origin, actions, scriptAction, scriptHref, methods, explicitGet, submitMethod, editable, empty },
     described: {
       role: element.getAttribute("role"),
       formMethod: methods.join(",") || null,
