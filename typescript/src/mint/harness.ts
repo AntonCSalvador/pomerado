@@ -324,6 +324,14 @@ const callerVisibleRequest = <R extends typeof AgentRequest.Type>(
   ...(request.notice === undefined ? {} : { notice: redact(request.notice) }),
   questions: request.questions.map((question) => callerVisibleQuestion(question, redact)),
 });
+/** The ids of the agent's confirm questions that ask whether to end the build (`endsBuild`). */
+const endsBuildIds = (request: typeof AgentRequest.Type): ReadonlySet<string> =>
+  new Set(
+    request.questions.flatMap((question) =>
+      question.type === "confirm" && question.endsBuild === true ? [question.id] : [],
+    ),
+  );
+const decodeAgentRequestJson = Schema.decodeUnknownEither(Schema.parseJson(AgentRequest));
 
 /** How the minter removes an account reference from the named part of a tool's definition. */
 const definitionFix = (section: string | undefined) =>
@@ -409,7 +417,8 @@ const actRefusalsForPolicy = 5;
 const reviewedLiveTestBatches = 4;
 /**
  * The bounds of a blocked explanation review's decision ledger: the latest denials, each one's
- * rationale and finding explanations capped, and the latest failing live test cases.
+ * rationale and finding explanations capped, the latest failing live test cases, and the latest
+ * host refusals and no-match cases.
  */
 const ledgerBounds = {
   denials: 12,
@@ -417,6 +426,8 @@ const ledgerBounds = {
   findings: 4,
   findingChars: 300,
   testFailures: 20,
+  hostRefusals: 8,
+  noMatchCases: 8,
   messageChars: 300,
   errorClassChars: 120,
   gotChars: 120,
@@ -1000,6 +1011,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * is never kept.
        */
       let ownerAnsweredLast = false;
+      /**
+       * The ids of answered questions that asked whether to end the build (`endsBuild`), and whether
+       * the owner's latest answers said no to each such question there, which means keep going. A
+       * takeover reads answers from before it as plain confirms; a question the build resumes on
+       * keeps its mark.
+       */
+      const endsBuildQuestions = new Set<string>();
+      let ownerKeptGoing = false;
       // A write build's one live session: its first act step takes the example claim and the
       // step that records the site's confirmation closes it. A takeover restores this session;
       // an unrelated attempt with an existing claim keeps it closed.
@@ -1298,6 +1317,24 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             ledgerDenials.splice(0, over);
             omittedLedgerDenials += over;
           }
+        });
+      /**
+       * The host's refusals of a live test batch or an execution in this attempt, the latest kept,
+       * for the same review. A takeover starts them again.
+       */
+      const ledgerHostRefusals: NonNullable<DecisionLedger["hostRefusals"]>[number][] = [];
+      const recordHostRefusal = (tool: "live_tests" | "execute", code: string, reason: unknown) =>
+        Effect.gen(function* () {
+          const screened = yield* screenMintText(dependencies, reason).pipe(
+            Effect.orElseSucceed(() => "[reason withheld]"),
+          );
+          ledgerHostRefusals.push({
+            tool,
+            code,
+            reason: capped(screened, ledgerBounds.rationaleChars),
+            atUtc: new Date(yield* Clock.currentTimeMillis).toISOString(),
+          });
+          if (ledgerHostRefusals.length > ledgerBounds.hostRefusals) ledgerHostRefusals.shift();
         });
       /** Unanswered questions handed back to the minter in this build, up to the limit. */
       let noAnswerHandBacks = recovered?.noAnswerHandBacks ?? 0;
@@ -1612,7 +1649,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * Keeps each answered question as Guardian reads it, by id, so a later `mint_update` can cite
        * the caller's real answer as confirmation. A protected answer is never kept.
        */
-      const keepAnswers = (submitted: AgentInputRequest, answers: ValidAnswers) =>
+      const keepAnswers = (
+        submitted: AgentInputRequest,
+        answers: ValidAnswers,
+        endsBuild: ReadonlySet<string>,
+      ) =>
         Effect.forEach(submitted.questions, (question) =>
           answersForReview({ questions: [question] }, answers, (text) =>
             screenMintText(dependencies, text),
@@ -1622,15 +1663,27 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 if (entry === undefined) return;
                 answeredQuestions.delete(question.id);
                 answeredQuestions.set(question.id, entry);
+                if (endsBuild.has(question.id)) endsBuildQuestions.add(question.id);
+                else endsBuildQuestions.delete(question.id);
                 ownerAnsweredLast = true;
               }),
             ),
           ),
         );
-      const inputResult = (submitted: AgentInputRequest, answers: ValidAnswers) =>
+      const inputResult = (
+        submitted: AgentInputRequest,
+        answers: ValidAnswers,
+        endsBuild: ReadonlySet<string>,
+      ) =>
         Effect.gen(function* () {
           const askAgain = yield* recordInputAnswer(submitted, answers);
-          yield* keepAnswers(submitted, answers);
+          yield* keepAnswers(submitted, answers, endsBuild);
+          const stopAnswers = submitted.questions.flatMap((question) =>
+            endsBuild.has(question.id) ? [answers[question.id]] : [],
+          );
+          ownerKeptGoing =
+            stopAnswers.length > 0 &&
+            stopAnswers.every((answer) => answer?.type === "confirm" && !answer.value.confirmed);
           const visibleAnswers = yield* answersForModel(answers);
           acceptedAnswers.push({
             questions: submitted.questions.map((question) => question.prompt),
@@ -3358,17 +3411,31 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // one of those takes its name, so neither ever ends as policy. `owner_ended` needs the
         // owner's latest answer with nothing run since, so a build that went on from an answer
         // never ends as the owner's choice.
-        const ownerRefused =
-          loginDeclined !== undefined ||
-          [...answeredQuestions.values()].some(
-            ({ answer }) =>
-              typeof answer === "object" && "confirmed" in answer && !answer.confirmed,
+        // A no to a question that asked whether to end the build means keep going, never
+        // `owner_declined`; while Guardian's denial of the last publication stands, a policy report
+        // on it is refused, so the minter's stop ends with that denial.
+        const declined = (ending: boolean) =>
+          [...answeredQuestions].some(
+            ([id, { answer }]) =>
+              endsBuildQuestions.has(id) === ending &&
+              typeof answer === "object" &&
+              "confirmed" in answer &&
+              !answer.confirmed,
+          );
+        const ownerRefused = loginDeclined !== undefined || declined(false);
+        const stopDeclined = declined(true);
+        const keptGoing = (ending: "owner_declined" | "owner_ended") =>
+          refused(
+            "owner_kept_going",
+            `The owner's no answered whether to end the build, which means keep going, so it is not ${ending} and the build has not ended.${publicationDenial === undefined ? "" : " If Guardian's latest decision asks for evidence nobody can supply, stop: the build ends with Guardian's decision."}`,
           );
         const unanswered = noAnswerHandBacks > 0;
         const hostCheckRefusing =
           hostRefused || dependencies.signInRefillRefused?.() === true || signInDestinationRefused;
         const liveTestsSpent = liveTestsRefusal !== undefined && !liveTestsRefusal.reserveOpen;
         const hostRefusing = hostCheckRefusing || liveTestsSpent;
+        if (reason === "owner_declined" && !ownerRefused && stopDeclined)
+          return keptGoing(reason);
         if (reason === "owner_declined" && !ownerRefused)
           return refused(
             "owner_not_declined",
@@ -3379,6 +3446,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "no_question_unanswered",
             "No question went unanswered in this build, so the build has not ended. Use question_unanswered only after a question you asked came back as no answer and the build cannot go on without it.",
           );
+        if (reason === "owner_ended" && ownerAnsweredLast && ownerKeptGoing)
+          return keptGoing(reason);
         if (reason === "owner_ended" && !ownerAnsweredLast)
           return refused(
             "owner_not_ended",
@@ -3420,6 +3489,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ) {
           if (ownerRefused) return { reason: "owner_declined" };
           if (unanswered) return { reason: "question_unanswered" };
+          if (stopDeclined && publicationDenial !== undefined) return keptGoing("owner_declined");
           return refused(
             "policy_not_refused",
             "Nothing in this attempt refused this: Guardian made no final refusal of an execution, and refused no publication for privacy or authority or for a finding no correction gets past. Use host_refused when a host check refused a step the build needs and nothing left in this attempt can fix it. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, their choice to end the build is owner_ended, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
@@ -3986,18 +4056,23 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ),
       );
       /**
-       * The blocked explanation review's decision ledger: this attempt's denials, each case's
-       * latest verdict counted, and the latest cases that did not pass, a replaced failure
-       * included. Undefined when there is nothing to record.
+       * The blocked explanation review's decision ledger: this attempt's denials and host
+       * refusals, each case's latest verdict counted, the latest cases that did not pass, a
+       * replaced failure included, and each no-match case's latest verdict. Undefined when there
+       * is nothing to record.
        */
       const decisionLedger = (): DecisionLedger | undefined => {
         const latest = [...liveTestRecords.playwright.values(), ...liveTestRecords.http.values()];
         const failing = [...liveTestReplaced, ...latest].filter(
           (record) => record.verdict !== "pass",
         );
+        const noMatch = latest
+          .filter((record) => record.expect === "empty" || record.noMatch === true)
+          .slice(-ledgerBounds.noMatchCases);
         if (
           !ledgerPartial &&
           ledgerDenials.length === 0 &&
+          ledgerHostRefusals.length === 0 &&
           latest.length === 0 &&
           liveTestReplaced.length === 0
         )
@@ -4044,6 +4119,19 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           ...(failing.length > shown.length
             ? { omittedTestFailures: failing.length - shown.length }
             : {}),
+          ...(ledgerHostRefusals.length === 0 ? {} : { hostRefusals: [...ledgerHostRefusals] }),
+          ...(noMatch.length === 0
+            ? {}
+            : {
+                noMatchCases: noMatch.map((record) => ({
+                  caseId: record.id,
+                  verdict: record.verdict,
+                  // Screened when the batch recorded it.
+                  ...(record.excerpt === undefined
+                    ? {}
+                    : { excerpt: capped(record.excerpt, ledgerBounds.messageChars) }),
+                })),
+              }),
         };
       };
       /**
@@ -4394,7 +4482,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             })),
             workers,
             deadlineAt,
-          });
+          }).pipe(
+            // The host's gate refused the batch, such as a cap on live runs.
+            Effect.tapError((error) =>
+              error.recoveryGate === undefined
+                ? Effect.void
+                : recordHostRefusal("live_tests", error.code, error.recoveryGate.reason),
+            ),
+          );
           if (result.status === "review_denied") {
             const rationale = yield* screenRationale(result.rationale);
             yield* recordDenial({
@@ -5070,6 +5165,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 ),
               );
               yield* observeExecution(submitted, evidence, allowed, evidence.status);
+              if (evidence.status === "unsupported")
+                yield* recordHostRefusal("execute", evidence.status, evidence.observations);
               const result = yield* executionResult(evidence, submitted.purpose);
               // The first passing example settles the schemas: its receipt reminds the agent to
               // design and run its cases.
@@ -6051,8 +6148,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   instruction:
                     "Remove allowOther and allowNote from every question and ask again: the host lets the caller answer every choice and multi_choice in their own words.",
                 });
+              const decoded = yield* decode(AgentRequest, input);
+              // The mark stays the host's own: Guardian and the caller read a plain confirm.
+              const endsBuild = endsBuildIds(decoded);
               const proposed = callerVisibleRequest(
-                yield* decode(AgentRequest, input),
+                {
+                  ...decoded,
+                  questions: decoded.questions.map((question) => {
+                    if (question.type !== "confirm") return question;
+                    const { endsBuild: _mark, ...asked } = question;
+                    return asked;
+                  }),
+                },
                 redactCallerText,
               );
               const submitted = {
@@ -6190,7 +6297,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 requestId,
                 ...(reviewId === undefined ? {} : { reviewId }),
               });
-              return yield* inputResult(submitted, answers);
+              return yield* inputResult(submitted, answers, endsBuild);
             }).pipe(
               Effect.catchIf(
                 (error) => error.noResponse !== undefined,
@@ -7024,7 +7131,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                             if (recoveredTool === undefined) return undefined;
                             if (recoveredTool.input !== undefined) {
                               const { request: asked, answers } = recoveredTool.input;
-                              const result = yield* inputResult(asked, answers);
+                              // The started call still holds the mark the host kept to itself.
+                              const started = decodeAgentRequestJson(call.arguments);
+                              const result = yield* inputResult(
+                                asked,
+                                answers,
+                                started._tag === "Right" ? endsBuildIds(started.right) : new Set(),
+                              );
                               return { result: recoveredTool.result ?? result };
                             }
                             if (recoveredTool.publication !== undefined) {

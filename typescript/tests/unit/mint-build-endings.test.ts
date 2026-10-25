@@ -2032,3 +2032,59 @@ it("names a restored login-check ending host_unavailable", async () => {
   });
   expect((await f.run()).stopReason).toBe("host_unavailable");
 });
+
+// A no to a question that asks whether to end the build means keep going, never a declined step.
+// While Guardian's denial of the last publication stands, a policy report that stood only on that
+// no is refused, and the minter's stop ends with Guardian's decision instead.
+it("refuses to read a no to ending the build as owner_declined, and ends with Guardian's denial when the minter stops", async () => {
+  const asked: unknown[] = [];
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", pureExample),
+        call("finish_build", finishBuild),
+        call("request_input", {
+          questions: [
+            {
+              id: "end",
+              type: "confirm",
+              prompt: "End this build without publishing?",
+              endsBuild: true,
+            },
+          ],
+        }),
+        call("report_blocked", {
+          reason: "policy",
+          explanation: "Guardian wants evidence nobody can supply.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      publish: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: {
+              outcome: "deny",
+              reason: "evidence",
+              reviewId: "review_evidence",
+              rationale: "The live tests do not show the conditional field.",
+              findings: [],
+            },
+          }),
+        ),
+      askInput: (request) => {
+        asked.push(request);
+        return Effect.succeed({ end: { type: "confirm" as const, value: { confirmed: false } } });
+      },
+    },
+  );
+  const outcome = await f.run();
+  // The host never sends the flag on: the question the owner reads is a plain confirm.
+  expect(asked).toEqual([
+    { questions: [{ id: "end", type: "confirm", prompt: "End this build without publishing?" }] },
+  ]);
+  expect(JSON.stringify(f.requests[4]?.input)).toContain("owner_kept_going");
+  expect(JSON.stringify(f.requests[4]?.input)).toContain("the build ends with Guardian's decision");
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(outcome).toMatchObject({ build: "incomplete", publicationDenial: { reason: "evidence" } });
+});
