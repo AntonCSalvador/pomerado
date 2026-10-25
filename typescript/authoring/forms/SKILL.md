@@ -121,9 +121,9 @@ writes skill says. In a tool that takes the first of options that tie instead (e
 core skill), pass `tie: "first"`, so the picker takes the first of them in the site's order and
 returns the one it used, and return that option's label in the tool's output. In a read whose
 typed field is the site's own search, when `pickValue` returns `option_missing` with an empty
-`available`, prefer a person's fallback: type the caller's own text into the field again,
-never a query derived from it, submit the search with the site's Search button or Enter, and
-read the results page as any search's. Prefer refusing on the site's own no-results words there
+`available`, prefer a person's fallback: type the caller's own text into the field again, then
+run the search as after a pick, with the site's Search button or Enter, and read the results
+page as any search's. Prefer refusing on the site's own words that it found nothing for that text
 over `pickRefusal`. Never use this fallback in a write. Handle a site's quirk with the helper's options, such as `query`,
 `answered`, `committed`, `commit: "keyboard"` or `blur: "tab"`, never with a picker of your own.
 `references/picker.ts` picks a typeahead value and refuses a missing one,
