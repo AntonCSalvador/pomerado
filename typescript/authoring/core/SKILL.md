@@ -87,7 +87,9 @@ answers `{ success, result, error, stderr }`. Throw
 - For a search step, wait for either the site's results or its own no-match state, and return the
   site's no-match answer with its message rather than waiting on results that may never appear.
   Prefer refusing a typed value on that no-match state, quoting it, over an empty suggestion list
-  read before the site answered, which is still loading.
+  read before the site answered, which is still loading. Prefer refusing a requested date only on
+  what the site's own calendar shows for that day once its month has loaded, such as a greyed-out,
+  disabled or missing day, quoting it, over a calendar read before it filled.
 - Wait for a change (`waitForChange`, or a settle of your own) only after a step that changed the
   page or should have, such as a click, fill or navigation that loads new results. Skip it when no
   step changed the page since the last wait, such as after closing a panel without picking

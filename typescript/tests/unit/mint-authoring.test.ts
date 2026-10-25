@@ -863,7 +863,7 @@ it("has a write take the site's rewrite of a typed value and note whether it cha
  */
 it("has a search step wait for the site's results or its own no-match state", async () => {
   const line =
-    "- For a search step, wait for either the site's results or its own no-match state, and return the site's no-match answer with its message rather than waiting on results that may never appear. Prefer refusing a typed value on that no-match state, quoting it, over an empty suggestion list read before the site answered, which is still loading.";
+    "- For a search step, wait for either the site's results or its own no-match state, and return the site's no-match answer with its message rather than waiting on results that may never appear. Prefer refusing a typed value on that no-match state, quoting it, over an empty suggestion list read before the site answered, which is still loading. Prefer refusing a requested date only on what the site's own calendar shows for that day once its month has loaded, such as a greyed-out, disabled or missing day, quoting it, over a calendar read before it filled.";
   const root = await authoringCopy((_path, text) => text.replace(sectionMarker, ""));
   try {
     const hosts = [
@@ -1230,7 +1230,7 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["6d75d421992c0937d7af7dadd9a05df9ff885f18f5d1e80ce058bd60e878329c", "core"],
+    ["af492176af61cced32699203a64175b7adfca3591a4dad39fe65b305151f9636", "core"],
     ["a896a59d7b924a2940a90437b8d4488cd515c4f4afc70da9fe14953b1583dd93", "search"],
     ["1b7d4195a350f19b2eee83ba2ae48f2c4dc68dc0d5c4a4f395e54d34ada30068", "auth"],
     ["ead4c4ffc04505a9951a6f24ec69ff795019f0142adf63c7bf7e4f66e74527d9", "testing"],
