@@ -91,7 +91,6 @@ const inspectCode = `await keep(observed, {
 const buttons = [];
 for (const frame of primary.frames()) {
   const candidates = frame.locator('button, input[type="submit"], input[type="button"], input[type="image"], a, [role~="button"], [role~="link"], [role~="menuitem"], [role~="radio"]');
-  // A frame that detaches during the read is skipped with its buttons, as locate skips one.
   const read = [];
   try {
     const count = Math.min(await candidates.count(), 50);
@@ -102,7 +101,8 @@ for (const frame of primary.frames()) {
       read.push(words ?? "(unlabelled button)");
     }
   } catch (error) {
-    if (detached(frame)) continue;
+    // A frame the page took away mid-read is skipped with its buttons.
+    if (frame.isDetached()) continue;
     throw error;
   }
   buttons.push(...read);

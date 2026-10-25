@@ -235,17 +235,6 @@ const controlReadCode = `(element) => {
  * many it searched, or, with no one visible match, each frame that matched and how often.
  */
 const findCode = `${clipCode}
-// A frame the page took away during a search over the frames, as an ad slot or a widget that
-// reloads itself does, holds nothing to find or type into: a search whose read of it fails skips it,
-// with what it read there, and reads the rest. A read that fails in a frame still attached fails the
-// call. A frame that cannot say whether it is detached counts as attached.
-const detached = (frame) => {
-  try {
-    return frame.isDetached() === true;
-  } catch {
-    return false;
-  }
-};
 // Questions are explicit observed locators, never inferred from names or routes.
 const readQuestion = async (frame, selector) => {
   if (selector == null || selector.includes(">>") || selector.includes("internal:")) return undefined;
@@ -277,7 +266,8 @@ const locate = async (selector, questionSelector) => {
         for (let index = 0; index < count; index++)
           if (await located.nth(index).isVisible()) shown.push(located.nth(index));
     } catch (error) {
-      if (detached(frame)) continue;
+      // A frame the page took away mid-search, such as an ad slot, is skipped with what it read.
+      if (frame.isDetached()) continue;
       throw error;
     }
     const match = { frameUrl: where(frame.url(), false), count, visible: shown.length };
