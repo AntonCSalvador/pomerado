@@ -2312,18 +2312,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           noAnswerHandBacks += 1;
           handedBackQuestion = requestId;
         }).pipe(
-        Effect.zipRight(
-          reportBestEffort(
-            dependencies.diagnostics?.emit("mint.question_handed_back", {}) ?? Effect.void,
-            {
-              component: "mint",
-              operation: "diagnostics.emit",
-              phase: "mint.question_handed_back",
-              correlation: dependencies.reportCorrelation ?? "process",
-            },
+          Effect.zipRight(
+            reportBestEffort(
+              dependencies.diagnostics?.emit("mint.question_handed_back", {}) ?? Effect.void,
+              {
+                component: "mint",
+                operation: "diagnostics.emit",
+                phase: "mint.question_handed_back",
+                correlation: dependencies.reportCorrelation ?? "process",
+              },
+            ),
           ),
-        ),
-      );
+        );
       /**
        * The minter's question went unanswered and the build goes on. It stays unanswered: no
        * `mint_update` can cite it, and no review reads an answer from it.
@@ -2395,6 +2395,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         });
       /** The id of the question the minter is asking, while it waits for the answer. */
       let askingId: string | undefined;
+      /**
+       * Whether that question asks whether to end the build (`endsBuild`). Its later answer could
+       * not keep that mark through a rejoined report, so such a question is never offered to
+       * `suspendHandedBack`.
+       */
+      let askingEndsBuild = false;
       /**
        * The build's owner left a question that decides what it may do unanswered: it ends, unless
        * the host suspends it to resume later.
@@ -6317,6 +6323,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   });
               }
               askingId = requestId;
+              askingEndsBuild = endsBuild.size > 0;
               handedBackQuestion = undefined;
               const answers = yield* dependencies.askInput(submitted, {
                 requestId,
@@ -6329,7 +6336,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 // An owner's cancel is a choice to stop, never a question to decide without.
                 (error) =>
                   error.ownerCancelled !== true && handsBackNoAnswer()
-                    ? noAnswer(askingId)
+                    ? noAnswer(askingEndsBuild ? undefined : askingId)
                     : unanswered(error, "asking a question", {
                         step: "question",
                         ...(askingId === undefined ? {} : { requestId: askingId }),
@@ -6338,6 +6345,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
               Effect.ensuring(
                 Effect.sync(() => {
                   askingId = undefined;
+                  askingEndsBuild = false;
                 }),
               ),
               // error-reporting-allow: typed-recovery an invalid request is the model's to correct, told as its result

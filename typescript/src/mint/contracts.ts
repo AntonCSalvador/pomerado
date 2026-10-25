@@ -2526,8 +2526,9 @@ export interface MintDependencies {
   /**
    * Lets the host suspend the build where the minter ends it with `report_blocked` reason
    * `question_unanswered` after its own question went back to it as no answer. The harness offers
-   * the latest such question (`step` `question`), when no other question was asked since; the host
-   * declines one it no longer holds open. It answers as `suspendUnanswered` does, except that the
+   * the latest such question (`step` `question`), when no other question was asked since, and
+   * never one that asks whether to end the build (`endsBuild`); the host declines one it no
+   * longer holds open. It answers as `suspendUnanswered` does, except that the
    * call that stays unreturned is the report: a resumed attempt rejoins it through
    * `agentRecovery.recoverTool` with the owner's answer as `input`, and the minter reads that
    * answer as the report's result, with the build going on. Absent, or on any answer but

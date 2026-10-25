@@ -487,14 +487,20 @@ it("offers the host a build its minter ends on a handed-back question, and resum
       call("finish_build", publication, "publish"),
     ][index] ?? prose();
 
-  // A host without the hook ends it blocked, as before.
+  // A host without the hook ends it blocked, as before, and its other hook is never offered it.
+  let offers = 0;
   const today = await fixture((_request, index) => givesUp(index), {
-    suspendUnanswered: () => Effect.die("A handed-back question is not offered here"),
+    suspendUnanswered: () =>
+      Effect.sync(() => {
+        offers++;
+        return "suspended" as const;
+      }),
   });
   expect(await today.run()).toMatchObject({
     build: "incomplete",
     blocked: { reason: "question_unanswered" },
   });
+  expect(offers).toBe(0);
 
   const store = recoveryStore();
   const model = scriptedModel(givesUp);
