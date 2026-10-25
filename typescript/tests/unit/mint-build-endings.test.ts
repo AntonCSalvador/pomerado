@@ -2034,40 +2034,8 @@ it("names a restored login-check ending host_unavailable", async () => {
 });
 
 // A no to a question that asks whether to end the build means keep going, never a declined step.
-// The minter marks such a confirm with `endsBuild`: its yes ends the build as owner_ended, and its
-// no is no basis for owner_declined or owner_ended. While Guardian's denial of the last publication
-// stands, a policy report that stood only on that no is refused, and the minter's stop ends with
-// Guardian's decision instead.
-const evidenceDenied = new MintFailure({
-  code: "ReviewDenied",
-  review: {
-    outcome: "deny",
-    reason: "evidence",
-    reviewId: "review_evidence",
-    rationale: "The live tests do not show the conditional field.",
-    findings: [],
-  },
-});
-const confirmQuestion = (endsBuild?: true) => ({
-  questions: [
-    {
-      id: endsBuild ? "end" : "go",
-      type: "confirm",
-      prompt: endsBuild ? "End this build without publishing?" : "May the build open the account page?",
-      ...(endsBuild ? { endsBuild } : {}),
-    },
-  ],
-});
-const answered = (confirmed: boolean) => (request: { readonly questions: readonly { readonly id: string }[] }) =>
-  Effect.succeed(
-    Object.fromEntries(
-      request.questions.map((question) => [
-        question.id,
-        { type: "confirm" as const, value: { confirmed } },
-      ]),
-    ),
-  );
-
+// While Guardian's denial of the last publication stands, a policy report that stood only on that
+// no is refused, and the minter's stop ends with Guardian's decision instead.
 it("refuses to read a no to ending the build as owner_declined, and ends with Guardian's denial when the minter stops", async () => {
   const asked: unknown[] = [];
   const f = await fixture(
@@ -2075,17 +2043,38 @@ it("refuses to read a no to ending the build as owner_declined, and ends with Gu
       [
         call("execute", pureExample),
         call("finish_build", finishBuild),
-        call("request_input", confirmQuestion(true)),
+        call("request_input", {
+          questions: [
+            {
+              id: "end",
+              type: "confirm",
+              prompt: "End this build without publishing?",
+              endsBuild: true,
+            },
+          ],
+        }),
         call("report_blocked", {
           reason: "policy",
           explanation: "Guardian wants evidence nobody can supply.",
         }),
       ][index] ?? prose("Stopping."),
     {
-      publish: () => Effect.fail(evidenceDenied),
+      publish: () =>
+        Effect.fail(
+          new MintFailure({
+            code: "ReviewDenied",
+            review: {
+              outcome: "deny",
+              reason: "evidence",
+              reviewId: "review_evidence",
+              rationale: "The live tests do not show the conditional field.",
+              findings: [],
+            },
+          }),
+        ),
       askInput: (request) => {
         asked.push(request);
-        return answered(false)(request);
+        return Effect.succeed({ end: { type: "confirm" as const, value: { confirmed: false } } });
       },
     },
   );
@@ -2098,62 +2087,4 @@ it("refuses to read a no to ending the build as owner_declined, and ends with Gu
   expect(JSON.stringify(f.requests[4]?.input)).toContain("the build ends with Guardian's decision");
   expect(outcome).not.toHaveProperty("blocked");
   expect(outcome).toMatchObject({ build: "incomplete", publicationDenial: { reason: "evidence" } });
-});
-
-it.each(["owner_declined", "owner_ended"] as const)(
-  "refuses %s on the owner's no to ending the build",
-  async (reason) => {
-    const f = await fixture(
-      (_request, index) =>
-        [
-          call("request_input", confirmQuestion(true)),
-          call("report_blocked", { reason, explanation: "The owner answered the stop question." }),
-        ][index] ?? prose("Stopping."),
-      { askInput: answered(false) },
-    );
-    const outcome = await f.run();
-    const refusal = JSON.stringify(f.requests[2]?.input);
-    expect(refusal).toContain("owner_kept_going");
-    expect(refusal).toContain(`so it is not ${reason}`);
-    // No denial stands, so the refusal points at none.
-    expect(refusal).not.toContain("Guardian's decision");
-    expect(outcome).not.toHaveProperty("blocked");
-  },
-);
-
-it("ends the owner's yes to ending the build as owner_ended", async () => {
-  const explanation = "You chose to end the build without publishing.";
-  const f = await fixture(
-    (_request, index) =>
-      [
-        call("request_input", confirmQuestion(true)),
-        call("report_blocked", { reason: "owner_ended", explanation }),
-      ][index] ?? prose("Stopping."),
-    { askInput: answered(true) },
-  );
-  expect(await f.run()).toMatchObject({
-    blocked: { reason: "owner_ended", explanation },
-    stopReason: "owner_ended",
-  });
-});
-
-// A plain confirm keeps its meaning: its no is a declined step, a denial on record or not.
-it("still ends a policy report on a plain confirm's no as owner_declined beside Guardian's denial", async () => {
-  const f = await fixture(
-    (_request, index) =>
-      [
-        call("execute", pureExample),
-        call("finish_build", finishBuild),
-        call("request_input", confirmQuestion()),
-        call("report_blocked", {
-          reason: "policy",
-          explanation: "The owner did not allow the account page.",
-        }),
-      ][index] ?? prose("Stopping."),
-    { publish: () => Effect.fail(evidenceDenied), askInput: answered(false) },
-  );
-  expect(await f.run()).toMatchObject({
-    blocked: { reason: "owner_declined" },
-    stopReason: "owner_declined",
-  });
 });

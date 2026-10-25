@@ -324,6 +324,14 @@ const callerVisibleRequest = <R extends typeof AgentRequest.Type>(
   ...(request.notice === undefined ? {} : { notice: redact(request.notice) }),
   questions: request.questions.map((question) => callerVisibleQuestion(question, redact)),
 });
+/** The ids of the agent's confirm questions that ask whether to end the build (`endsBuild`). */
+const endsBuildIds = (request: typeof AgentRequest.Type): ReadonlySet<string> =>
+  new Set(
+    request.questions.flatMap((question) =>
+      question.type === "confirm" && question.endsBuild === true ? [question.id] : [],
+    ),
+  );
+const decodeAgentRequestJson = Schema.decodeUnknownEither(Schema.parseJson(AgentRequest));
 
 /** How the minter removes an account reference from the named part of a tool's definition. */
 const definitionFix = (section: string | undefined) =>
@@ -1003,7 +1011,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       /**
        * The ids of answered questions that asked whether to end the build (`endsBuild`), and whether
        * the owner's latest answers said no to each such question there, which means keep going. A
-       * takeover reads earlier answers as plain confirms.
+       * takeover reads answers from before it as plain confirms; a question the build resumes on
+       * keeps its mark.
        */
       const endsBuildQuestions = new Set<string>();
       let ownerKeptGoing = false;
@@ -1643,7 +1652,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const inputResult = (
         submitted: AgentInputRequest,
         answers: ValidAnswers,
-        endsBuild: ReadonlySet<string> = new Set(),
+        endsBuild: ReadonlySet<string>,
       ) =>
         Effect.gen(function* () {
           const askAgain = yield* recordInputAnswer(submitted, answers);
@@ -6093,11 +6102,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 });
               const decoded = yield* decode(AgentRequest, input);
               // The mark stays the host's own: Guardian and the caller read a plain confirm.
-              const endsBuild = new Set(
-                decoded.questions.flatMap((question) =>
-                  question.type === "confirm" && question.endsBuild === true ? [question.id] : [],
-                ),
-              );
+              const endsBuild = endsBuildIds(decoded);
               const proposed = callerVisibleRequest(
                 {
                   ...decoded,
@@ -7078,7 +7083,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                             if (recoveredTool === undefined) return undefined;
                             if (recoveredTool.input !== undefined) {
                               const { request: asked, answers } = recoveredTool.input;
-                              const result = yield* inputResult(asked, answers);
+                              // The started call still holds the mark the host kept to itself.
+                              const started = decodeAgentRequestJson(call.arguments);
+                              const result = yield* inputResult(
+                                asked,
+                                answers,
+                                started._tag === "Right" ? endsBuildIds(started.right) : new Set(),
+                              );
                               return { result: recoveredTool.result ?? result };
                             }
                             if (recoveredTool.publication !== undefined) {
