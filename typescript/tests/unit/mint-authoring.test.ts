@@ -1230,8 +1230,8 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["15e41dd2e0d7fd3c870bba5752ee2a9d1a2743910bf9fcffb714e85e660ad537", "core"],
-    ["a896a59d7b924a2940a90437b8d4488cd515c4f4afc70da9fe14953b1583dd93", "search"],
+    ["603d207b84010f65061e7a043b2cb1a3076df41dc5e2bca62f3ab3b05565166e", "core"],
+    ["83c4ce3eb148b059bce98580c3174dbec655d26dac3e2a7da3e26a03374ec24b", "search"],
     ["1b7d4195a350f19b2eee83ba2ae48f2c4dc68dc0d5c4a4f395e54d34ada30068", "auth"],
     ["ead4c4ffc04505a9951a6f24ec69ff795019f0142adf63c7bf7e4f66e74527d9", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
@@ -1360,7 +1360,7 @@ it("renders the search URL fast path only when a host turns it on", async () => 
     ...on.digests.filter(([, name]) => name === "search"),
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
-    ["ea3c3bc8472c8c9db7aa9dd9b99b682f525f5ab55c091b944946dcf75f5ec83e", "search"],
+    ["9481ac81f1799e8714c6b5fa34f6d9370b74d353568e57a559d075137c2a5210", "search"],
     ["b8de1a1430d36ce8cab3e6191dec38f63789446b0237ffef06f9ed0843982b42", "workspace/AGENTS.md"],
   ]);
   expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(
