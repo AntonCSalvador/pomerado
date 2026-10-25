@@ -235,6 +235,17 @@ const controlReadCode = `(element) => {
  * many it searched, or, with no one visible match, each frame that matched and how often.
  */
 const findCode = `${clipCode}
+// A frame the page took away during a search over the frames, as an ad slot or a widget that
+// reloads itself does, holds nothing to find or type into: a search whose read of it fails skips it,
+// with what it read there, and reads the rest. A read that fails in a frame still attached fails the
+// call. A frame that cannot say whether it is detached counts as attached.
+const detached = (frame) => {
+  try {
+    return frame.isDetached() === true;
+  } catch {
+    return false;
+  }
+};
 // Questions are explicit observed locators, never inferred from names or routes.
 const readQuestion = async (frame, selector) => {
   if (selector == null || selector.includes(">>") || selector.includes("internal:")) return undefined;
@@ -258,15 +269,21 @@ const locate = async (selector, questionSelector) => {
   const matches = [];
   for (const frame of frames) {
     const located = frame.locator(selector);
-    const count = await located.count();
-    const match = { frameUrl: where(frame.url(), false), count, visible: 0 };
+    let count;
+    const shown = [];
+    try {
+      count = await located.count();
+      if (count <= 100)
+        for (let index = 0; index < count; index++)
+          if (await located.nth(index).isVisible()) shown.push(located.nth(index));
+    } catch (error) {
+      if (detached(frame)) continue;
+      throw error;
+    }
+    const match = { frameUrl: where(frame.url(), false), count, visible: shown.length };
     if (count > 0) matches.push(match);
     if (count > 100) return { error: "ambiguous_match", searched: { frames: frames.length, matches } };
-    for (let index = 0; index < count; index++)
-      if (await located.nth(index).isVisible()) {
-        match.visible++;
-        visible.push({ frame, locator: located.nth(index) });
-      }
+    for (const locator of shown) visible.push({ frame, locator });
   }
   if (visible.length !== 1)
     return { error: visible.length === 0 ? "not_found" : "ambiguous_match", searched: { frames: frames.length, matches } };

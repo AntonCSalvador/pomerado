@@ -91,13 +91,21 @@ const inspectCode = `await keep(observed, {
 const buttons = [];
 for (const frame of primary.frames()) {
   const candidates = frame.locator('button, input[type="submit"], input[type="button"], input[type="image"], a, [role~="button"], [role~="link"], [role~="menuitem"], [role~="radio"]');
-  const count = Math.min(await candidates.count(), 50);
-  for (let index = 0; index < count && buttons.length < 20; index++) {
-    const candidate = candidates.nth(index);
-    if (!(await candidate.isVisible())) continue;
-    const words = clip(await candidate.evaluate((element) => element.getAttribute("aria-label") ?? (element instanceof HTMLInputElement ? (element.type === "image" ? element.alt : element.value) : element.textContent), undefined, { timeout: ${elementReadMs} }));
-    buttons.push(words ?? "(unlabelled button)");
+  // A frame that detaches during the read is skipped with its buttons, as locate skips one.
+  const read = [];
+  try {
+    const count = Math.min(await candidates.count(), 50);
+    for (let index = 0; index < count && buttons.length + read.length < 20; index++) {
+      const candidate = candidates.nth(index);
+      if (!(await candidate.isVisible())) continue;
+      const words = clip(await candidate.evaluate((element) => element.getAttribute("aria-label") ?? (element instanceof HTMLInputElement ? (element.type === "image" ? element.alt : element.value) : element.textContent), undefined, { timeout: ${elementReadMs} }));
+      read.push(words ?? "(unlabelled button)");
+    }
+  } catch (error) {
+    if (detached(frame)) continue;
+    throw error;
   }
+  buttons.push(...read);
 }
 ${codeBoxesCode}
 return {
