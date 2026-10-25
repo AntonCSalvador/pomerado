@@ -120,11 +120,11 @@ typed is the site's correction instead, never for a picker that selects a record
 writes skill says. In a tool that takes the first of options that tie instead (each tool decides,
 core skill), pass `tie: "first"`, so the picker takes the first of them in the site's order and
 returns the one it used, and return that option's label in the tool's output. In a read whose
-typed field is the site's own search, whose suggestions may not appear, prefer `onEmpty:
-"submit"`: when they stay empty, the picker submits the search with the caller's text, as a
-person would, and returns `reason: "submitted"` (decode with `PickOrSubmitOutcome`). Set the
-form's other inputs first, then read the results page as any search's, and refuse with the
-site's own no-results words, never `pickRefusal`. Never use it in a write. Handle a site's quirk with the helper's options, such as `query`,
+typed field is the site's own search, when `pickValue` returns `option_missing` with an empty
+`available`, prefer a person's fallback: type the caller's own text into the field again,
+never a query derived from it, submit the search with the site's Search button or Enter, and
+read the results page as any search's. Prefer refusing on the site's own no-results words there
+over `pickRefusal`. Never use this fallback in a write. Handle a site's quirk with the helper's options, such as `query`,
 `answered`, `committed`, `commit: "keyboard"` or `blur: "tab"`, never with a picker of your own.
 `references/picker.ts` picks a typeahead value and refuses a missing one,
 `references/picker-first.ts` takes the first of several equal matches and returns it,
