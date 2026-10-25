@@ -859,9 +859,7 @@ it("has a write take the site's rewrite of a typed value and note whether it cha
 /*
  * A read's search step waited only for the site's results, so a value the site did not recognise
  * timed out instead of returning the site's own no-match answer. Both hosts read the line once,
- * right after the core skill's bullet on waiting for every answer a step can give. A typed value
- * is refused only on that no-match state, never on a suggestion list read before the site
- * answered.
+ * right after the core skill's bullet on waiting for every answer a step can give.
  */
 it("has a search step wait for the site's results or its own no-match state", async () => {
   const line =
