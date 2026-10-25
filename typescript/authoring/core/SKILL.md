@@ -86,6 +86,10 @@ answers `{ success, result, error, stderr }`. Throw
   paste `waitCode` and call it.
 - For a search step, wait for either the site's results or its own no-match state, and return the
   site's no-match answer with its message rather than waiting on results that may never appear.
+  Prefer refusing a typed value on that no-match state, quoting it, over an empty suggestion list
+  read before the site answered, which is still loading. Prefer refusing a requested date only on
+  what the site's own calendar shows for that day once its month has loaded, such as a greyed-out,
+  disabled or missing day, quoting it, over a calendar read before it filled.
 - Wait for a change (`waitForChange`, or a settle of your own) only after a step that changed the
   page or should have, such as a click, fill or navigation that loads new results. Skip it when no
   step changed the page since the last wait, such as after closing a panel without picking
@@ -710,13 +714,17 @@ selector or repeat the action in a follow-up read.
 Import `waitCode` from the runtime (`outcomeWaitCode` declares `waitForOutcome` alone, for code
 written before; paste one, never both), paste it once at the top of the call's code, and wait with `waitForOutcome({ refused, failed, unavailable, empty,
 results }, { action, loading, region })`, one scoped locator per answer, each an element only
-that answer has, such as a results list that holds a
-row. The first listed wins when several show, so list a refusal, error or greyed-out choice
+that answer has and the step can cause, such as a results list that holds a
+row. Prefer closing a banner, tour or dialog that opens on its own with `waitForReady`'s
+`dismiss` over naming it as an answer, since `dismiss` also closes one that opens later, before
+the next action. The first listed wins when several show, so list a refusal, error or greyed-out choice
 first, then the empty state, then results. Pass the step itself as `action`, such as
 `() => apply.click()`: the wait runs it once, and an answer the page already showed before it counts
 only after staying unchanged for `unchangedMs`, 2 s by default, so a list the step has not yet
 re-rendered is not read while a step that leaves the same answer still resolves; a new or
-changed element counts at once. `waitForOutcome` returns the name of the answer that showed.
+changed element counts at once. Without an `action`, an answer already on the page wins on the
+first look, so prefer passing the step whenever the wait follows one, typing included.
+`waitForOutcome` returns the name of the answer that showed.
 An answer may also be `{ invalid: form }` (a field the site marked invalid), `{ gone: locator }`
 (a form or dialog that closed), `{ url }` (a navigation or route change), `{ response }`,
 `{ dialog }` (a native dialog, left open as `result.dialog`: keep it on `globalThis.dialog` and
@@ -764,12 +772,14 @@ every visible match as a list. After a search or a filter, use `waitForChange` o
 return, such as `{ ids: { locator: rowIds, all: true } }`, with the site's own loading sign as
 `loading` when it has one.
 After a step that reloads the page, such as choosing a city, prefer typing into the search box
-again when its suggestions don't appear.
+again when its suggestions still don't appear after the wait that passed the typing as `action`.
 Typing or choosing can reload part of the page once per key or choice, such as suggestions or a
 dependent list. The answers can land out of order, and the page may replace the element it
 updates. Prefer waiting until every answer has landed, then look that element up again rather
 than reading a node or handle found earlier, and check it shows the answer to the whole value.
-When it doesn't, prefer entering the value once more over waiting longer.
+When it doesn't, prefer entering the value once more over waiting longer, after the wait that
+passed the typing as `action` has ended, since typing again while the site is still answering
+can cancel that answer.
 <!-- pomerado:section core.site-origin -->After a probe reveals a challenge, inspect the retained Page in follow-up probes
 and wait for the intended page/control within the existing deadline and job budget;
 do not click the challenge, reload, or navigate to another route merely because
