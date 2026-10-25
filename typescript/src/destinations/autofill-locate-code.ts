@@ -258,15 +258,22 @@ const locate = async (selector, questionSelector) => {
   const matches = [];
   for (const frame of frames) {
     const located = frame.locator(selector);
-    const count = await located.count();
-    const match = { frameUrl: where(frame.url(), false), count, visible: 0 };
+    let count;
+    const shown = [];
+    try {
+      count = await located.count();
+      if (count <= 100)
+        for (let index = 0; index < count; index++)
+          if (await located.nth(index).isVisible()) shown.push(located.nth(index));
+    } catch (error) {
+      // A frame the page took away mid-search, such as an ad slot, is skipped with what it read.
+      if (frame.isDetached()) continue;
+      throw error;
+    }
+    const match = { frameUrl: where(frame.url(), false), count, visible: shown.length };
     if (count > 0) matches.push(match);
     if (count > 100) return { error: "ambiguous_match", searched: { frames: frames.length, matches } };
-    for (let index = 0; index < count; index++)
-      if (await located.nth(index).isVisible()) {
-        match.visible++;
-        visible.push({ frame, locator: located.nth(index) });
-      }
+    for (const locator of shown) visible.push({ frame, locator });
   }
   if (visible.length !== 1)
     return { error: visible.length === 0 ? "not_found" : "ambiguous_match", searched: { frames: frames.length, matches } };
