@@ -86,8 +86,8 @@ answers `{ success, result, error, stderr }`. Throw
   paste `waitCode` and call it.
 - For a search step, wait for either the site's results or its own no-match state, and return the
   site's no-match answer with its message rather than waiting on results that may never appear.
-  Prefer refusing a typed value only on that no-match state, quoting it. An empty suggestion list
-  read before the site answered is still loading.
+  Prefer refusing a typed value on that no-match state, quoting it, over an empty suggestion list
+  read before the site answered, which is still loading.
 - Wait for a change (`waitForChange`, or a settle of your own) only after a step that changed the
   page or should have, such as a click, fill or navigation that loads new results. Skip it when no
   step changed the page since the last wait, such as after closing a panel without picking
@@ -777,7 +777,7 @@ updates. Prefer waiting until every answer has landed, then look that element up
 than reading a node or handle found earlier, and check it shows the answer to the whole value.
 When it doesn't, prefer entering the value once more over waiting longer, after the wait that
 passed the typing as `action` has ended, since typing again while the site is still answering
-cancels that answer.
+can cancel that answer.
 <!-- pomerado:section core.site-origin -->After a probe reveals a challenge, inspect the retained Page in follow-up probes
 and wait for the intended page/control within the existing deadline and job budget;
 do not click the challenge, reload, or navigate to another route merely because
