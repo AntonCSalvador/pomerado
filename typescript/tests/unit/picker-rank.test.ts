@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { describe, expect, test } from "vitest";
-import { PickOutcome, pickRefusal } from "../../src/browser/picker.js";
+import { PickOrSubmitOutcome, PickOutcome, pickRefusal } from "../../src/browser/picker.js";
 import { rankChoices, type PickerChoice } from "../../src/browser/picker-rank.js";
 import { foldChoiceText } from "../../src/runtime/text.js";
 
@@ -230,5 +230,21 @@ describe("PickOutcome", () => {
     expect(Schema.decodeUnknownSync(PickOutcome)(picked)).toEqual(picked);
     const refused = { picked: false, reason: "option_ambiguous", wanted: "Springfield", available: ["Springfield", "Shelbyville"], matches: ["Springfield [spf-il]", "Springfield [spf-mo]"] };
     expect(Schema.decodeUnknownSync(PickOutcome)(refused)).toEqual(refused);
+  });
+});
+
+describe("PickOrSubmitOutcome", () => {
+  const submitted = { picked: false, reason: "submitted", wanted: "Trail Lamp", query: "Trail Lamp", via: "enter" } as const;
+
+  test("decodes a search the picker submitted, which PickOutcome refuses", () => {
+    expect(Schema.decodeUnknownSync(PickOrSubmitOutcome)(submitted)).toEqual(submitted);
+    expect(() => Schema.decodeUnknownSync(PickOutcome)(submitted)).toThrow();
+  });
+
+  test("still decodes a pick and a refusal", () => {
+    const picked = { picked: true, kind: "typeahead", label: "Trail Lamp", value: "", rank: "exact", refills: 0 };
+    const refused = { picked: false, reason: "option_missing", wanted: "Trail Lamp", available: [], matches: [] };
+    expect(Schema.decodeUnknownSync(PickOrSubmitOutcome)(picked)).toEqual(picked);
+    expect(Schema.decodeUnknownSync(PickOrSubmitOutcome)(refused)).toEqual(refused);
   });
 });

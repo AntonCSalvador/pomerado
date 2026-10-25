@@ -47,7 +47,7 @@ const pickerPageCode = String.raw`(element, args) => {
   };
   if (args.phase === "cleanup") {
     untag();
-    for (const name of ["data-pomerado-pick-popup", "data-pomerado-pick-search", "data-pomerado-pick-scroll", "data-pomerado-pick-go"])
+    for (const name of ["data-pomerado-pick-popup", "data-pomerado-pick-search", "data-pomerado-pick-scroll", "data-pomerado-pick-go", "data-pomerado-pick-submit"])
       for (const found of all("[" + name + "=" + JSON.stringify(token) + "]")) found.removeAttribute(name);
     return null;
   }
@@ -184,6 +184,81 @@ const pickerPageCode = String.raw`(element, args) => {
         value: chip.getAttribute("data-value") ?? "",
       };
     });
+  }
+  // The search the field belongs to, for a read whose suggestions stayed empty: its form, else a
+  // search landmark around it, else the nearest wrapper with a Search button. It counts only when
+  // it reads as a search (a search role, a search box, a form that says method="get", or a
+  // submit named Search, Find, Look up or Go) and holds nothing a write sends: a password, card,
+  // file, email or phone field, a name or address by its autocomplete, a text area, a card
+  // frame, another required field left empty, or a submit named for a write. Its Search button,
+  // else a form's first submit, is tagged for the page code to click.
+  if (args.phase === "submit") {
+    for (const found of all("[data-pomerado-pick-submit=" + JSON.stringify(token) + "]")) found.removeAttribute("data-pomerado-pick-submit");
+    const searchName = /^((search|find|look ?up)\b.*|go)$/i;
+    const writeName = /^(pay|buy|book|reserve|order|place order|check ?out|purchase|confirm|save|send|sign ?(in|up)|log ?in|login|register|subscribe|donate|publish|create|add to|delete|remove)\b/i;
+    const writeToken = /^(cc-.+|current-password|new-password|one-time-code|username|name|honorific-prefix|given-name|additional-name|family-name|honorific-suffix|nickname|email|tel(-.+)?|street-address|address-line[1-3]|postal-code|bday(-.+)?|sex|organization(-title)?|shipping|billing|transaction-.+)$/i;
+    const cardHint = /card.?(number|num)|cc.?(number|num|exp|csc)|cvc|cvv|security.?code|expir/i;
+    const names = (node) =>
+      [node.getAttribute("aria-label"), node.innerText, node instanceof win.HTMLInputElement || node instanceof win.HTMLButtonElement ? node.value : "", node.getAttribute("title")]
+        .map(clean)
+        .filter(Boolean);
+    const named = (node, pattern) => names(node).some((name) => pattern.test(name));
+    const usable = (node) => shown(node) && !node.disabled && node.getAttribute("aria-disabled") !== "true";
+    const around = (selector) => {
+      for (let at = element; at; at = up(at)) if (at instanceof win.Element && at.matches(selector)) return at;
+      return null;
+    };
+    const buttons = 'button, [role=button], input[type=submit], input[type=button], input[type=image]';
+    const form = element.form ?? around("form");
+    const landmark = around("[role=search], search");
+    let scope = form ?? landmark;
+    for (let at = up(element), depth = 0; !scope && at && depth < 6 && at !== doc.body; at = up(at)) {
+      if (!(at instanceof win.Element)) continue;
+      depth++;
+      if (all(buttons, at).some((node) => !holds(element, node) && usable(node) && named(node, searchName))) scope = at;
+    }
+    if (!scope) return { ok: false };
+    const submits = form
+      ? [...form.elements].filter((node) => (node instanceof win.HTMLButtonElement && node.type === "submit") || (node instanceof win.HTMLInputElement && /^(submit|image)$/i.test(node.type)))
+      : all(buttons, scope).filter((node) => !holds(element, node) && shown(node));
+    const fields = [
+      ...new Set([
+        ...(form ? [...form.elements] : []),
+        ...all('input, select, textarea, [contenteditable=""], [contenteditable="true"], [role=textbox]', scope),
+      ]),
+    ].filter(
+      (node) =>
+        (node === element || !holds(node, element)) && !node.disabled &&
+        !(node instanceof win.HTMLInputElement && /^(hidden|submit|button|image|reset)$/i.test(node.type)) &&
+        (node instanceof win.HTMLInputElement || node instanceof win.HTMLSelectElement || node instanceof win.HTMLTextAreaElement || node.isContentEditable || node.getAttribute("role") === "textbox"),
+    );
+    const writeField = (node) =>
+      node instanceof win.HTMLTextAreaElement ||
+      /^(password|file|email|tel)$/i.test(node.getAttribute("type") ?? "") ||
+      (node.getAttribute("autocomplete") ?? "").split(/\s+/).some((part) => writeToken.test(part)) ||
+      [node.getAttribute("name"), node.id, node.getAttribute("aria-label")].some((text) => text && cardHint.test(text));
+    const filled = (node) =>
+      node instanceof win.HTMLInputElement && node.type === "checkbox"
+        ? node.checked
+        : node instanceof win.HTMLInputElement && node.type === "radio"
+          ? fields.some((other) => other instanceof win.HTMLInputElement && other.type === "radio" && other.name === node.name && other.checked)
+          : node instanceof win.HTMLInputElement || node instanceof win.HTMLSelectElement || node instanceof win.HTMLTextAreaElement
+            ? node.value.trim() !== ""
+            : clean(node.innerText) !== "";
+    const requiredEmpty = (node) => node !== element && (node.required === true || node.getAttribute("aria-required") === "true") && !filled(node);
+    const cardFrame = all("iframe", scope).some((frame) => /card|payment|checkout|cvc|cvv/i.test([frame.title, frame.name, frame.getAttribute("src") ?? ""].join(" ")));
+    const searchSubmit = submits.find((node) => usable(node) && named(node, searchName));
+    const search =
+      Boolean(landmark || form?.matches("[role=search]")) ||
+      (element instanceof win.HTMLInputElement && element.type === "search") ||
+      element.getAttribute("role") === "searchbox" ||
+      (form !== null && (form.getAttribute("method") ?? "").trim().toLowerCase() === "get") ||
+      Boolean(searchSubmit);
+    if (!search || cardFrame || fields.some((node) => writeField(node) || requiredEmpty(node)) || submits.some((node) => named(node, writeName)))
+      return { ok: false };
+    const button = searchSubmit ?? (form ? submits.find(usable) : null);
+    if (button) button.setAttribute("data-pomerado-pick-submit", token);
+    return { ok: true, button: Boolean(button) };
   }
 
   // Popups, options and loading signs.
@@ -577,6 +652,24 @@ const pickerPageCode = String.raw`(element, args) => {
  * its output. Success is
  * `{ picked: true, kind, label, value, rank, refills }`, plus `tied`, the options that tied, when
  * `tie: "first"` took one.
+ *
+ * A read whose typed field is a site's search may pass `onEmpty: "submit"` (`pickValue` only).
+ * When the typing above leaves the suggestions empty, with no option listed at any step, it then
+ * searches as a person would: the field holds the caller's text (or `query`), it clicks the
+ * form's Search or submit control, else presses Enter in the field, waits up to 2 s for the
+ * page's requests to go quiet, and returns `{ picked: false, reason: "submitted", wanted, query,
+ * via }` (decode with `PickOrSubmitOutcome`; `via` is `"button"` or `"enter"`). The site's results
+ * page then holds the answer: read it as any search step's results, going on with the results and
+ * refusing with the site's own words when it says it found nothing, never with `pickRefusal`. It
+ * submits only a search: the field's form, else a search landmark around it, else the nearest
+ * wrapper with a Search button, which has a search role, a search box (`type=search` or
+ * `role=searchbox`) as the field, `method="get"` written on the form, or a submit named Search,
+ * Find, Look up or Go. It never submits one that holds a password, card, file, email or phone
+ * field, a name or address by its autocomplete, a text area, a card frame, another required field
+ * left empty, or a submit named for a write (pay, buy, book, reserve, order, check out, confirm,
+ * save, send, sign in or up, register and the like). Such a field, a list that showed other
+ * options, or a call without the option refuses as `option_missing`, as before. Never on a write.
+ *
  * Everything else throws an Error named `PickerFailure` whose message is a fixed reason, never a
  * value: `wanted_missing`, `popup_missing` (the control opened nothing), `options_loading` (still
  * loading, or more list to read, at the timeout), `not_committed` (the field never kept the
@@ -1258,6 +1351,35 @@ const pickerClose = async (s, field) => {
   await (field ?? s.control).press("Escape", s.act()).catch(() => undefined);
   if (s.kind === "dropdown" && (await open())) await s.control.click(s.act()).catch(() => undefined);
 };
+// Runs one action that should send the search. One that failed counts as sent once the page
+// reacted (a request it caused, or a new address), as when a click outlasts its wait for the
+// results page; one that never reached the page, such as a click another element caught, did not.
+const pickerSend = async (s, act) => {
+  const at = pickerMark(s);
+  const url = s.control.page().url();
+  try {
+    await act();
+    return true;
+  } catch (error) {
+    if (s.net.lastAt(at) > 0 || s.control.page().url() !== url) return true;
+    if (/Timeout|intercept/i.test(String(error?.message))) return false;
+    throw error;
+  }
+};
+// With onEmpty "submit", a typed value whose suggestions stayed empty is searched as a person
+// would: the field holds the caller's text (or the query hook's), and the form's Search or submit
+// control is clicked, else Enter is pressed in the field. Only for a field whose page code reads
+// its form as a search that sends nothing a write would; otherwise null, and the refusal stands.
+const pickerSubmit = async (s, wanted) => {
+  const query = s.options.query ? String(s.options.query) : wanted[0];
+  const scope = await pickerEval(s, "submit");
+  if (!scope?.ok) return null;
+  if ((await pickerFieldValue(s.control, s).catch(() => null)) !== query) await s.control.fill(query, s.act());
+  const clicked = scope.button && (await pickerSend(s, () => pickerTag(s, "data-pomerado-pick-submit", s.token).click({ timeout: Math.min(2000, s.left()) })));
+  if (!clicked && !(await pickerSend(s, () => s.control.press("Enter", s.act())))) throw pickerFailure("timeout");
+  await pickerPageQuiet(s, pickerLimits.quiet);
+  return { picked: false, reason: "submitted", wanted: wanted[0], query, via: clicked ? "button" : "enter" };
+};
 const pickerStart = (control, options) => pickerSession(control, options).catch((error) => { throw pickerTimedOut(error); });
 const pickValue = async (control, wanted, options = {}) => {
   const spellings = pickerWanted(wanted);
@@ -1273,6 +1395,11 @@ const pickValue = async (control, wanted, options = {}) => {
       const { method, blur } = pickerTry(options, attempt, switches);
       const found = await pickerFind(s, spellings);
       if (found.status === "refused") {
+        const empty = found.refusal.reason === "option_missing" && found.refusal.available.length === 0;
+        if (options.onEmpty === "submit" && s.kind === "typeahead" && empty) {
+          const submitted = await pickerSubmit(s, spellings);
+          if (submitted) return submitted;
+        }
         await pickerClose(s, found.field);
         return found.refusal;
       }
@@ -1492,6 +1619,24 @@ export const PickOutcome = Schema.Union(
   NotPicked,
 );
 export type PickOutcome = typeof PickOutcome.Type;
+
+/**
+ * What `pickValue` returns with `onEmpty: "submit"`: a `PickOutcome`, or the search it submitted
+ * when the field's suggestions stayed empty. `query` is the text it searched for, and `via` says
+ * whether it clicked the form's Search or submit control or pressed Enter. The site's results
+ * page now holds the answer: read it, and never throw `pickRefusal` for it.
+ */
+export const PickOrSubmitOutcome = Schema.Union(
+  ...PickOutcome.members,
+  Schema.Struct({
+    picked: Schema.Literal(false),
+    reason: Schema.Literal("submitted"),
+    wanted: Schema.String,
+    query: Schema.String,
+    via: Schema.Literal("button", "enter"),
+  }),
+);
+export type PickOrSubmitOutcome = typeof PickOrSubmitOutcome.Type;
 
 /**
  * What `pickValues` returns: each value and whether it was added or already chosen, and the
