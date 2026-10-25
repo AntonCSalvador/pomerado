@@ -399,10 +399,28 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   // most rows to pass and returns what is there after that.
   ["core", "After a search or a filter, use `waitForChange` on the rows you return"],
   // A reload after a choice such as a city can drop the search box's suggestions, so the tool
-  // types into the box again.
+  // types into the box again, once the wait for the typing's answer has ended.
   [
     "core",
-    "After a step that reloads the page, such as choosing a city, prefer typing into the search box again when its suggestions don't appear.",
+    "After a step that reloads the page, such as choosing a city, prefer typing into the search box again when its suggestions still don't appear after the wait that passed the typing as `action`.",
+  ],
+  // Typing again while the site is still answering cancels that answer, so the empty list read
+  // next looks like no match.
+  [
+    "core",
+    "When it doesn't, prefer entering the value once more over waiting longer, after the wait that passed the typing as `action` has ended, since typing again while the site is still answering cancels that answer.",
+  ],
+  // A wait with no `action` takes an answer already on the page at its first look, such as a
+  // banner that opened while the tool typed, and the tool then reads a list the site has not
+  // filled yet. A panel that opens on its own is closed by `dismiss` rather than named as an
+  // answer.
+  [
+    "core",
+    "each an element only that answer has and the step can cause, such as a results list that holds a row. Prefer closing a banner, tour or dialog that opens on its own with `waitForReady`'s `dismiss` over naming it as an answer, since `dismiss` also closes one that opens later, before the next action.",
+  ],
+  [
+    "core",
+    "Without an `action`, an answer already on the page wins on the first look, so prefer passing the step whenever the wait follows one, typing included.",
   ],
   // A preselected option that only shares the caller's data, tracks or signs up for marketing is
   // turned off on every run, with no input and no question.
@@ -859,11 +877,13 @@ it("has a write take the site's rewrite of a typed value and note whether it cha
 /*
  * A read's search step waited only for the site's results, so a value the site did not recognise
  * timed out instead of returning the site's own no-match answer. Both hosts read the line once,
- * right after the core skill's bullet on waiting for every answer a step can give.
+ * right after the core skill's bullet on waiting for every answer a step can give. A typed value
+ * is refused only on that no-match state, never on a suggestion list read before the site
+ * answered.
  */
 it("has a search step wait for the site's results or its own no-match state", async () => {
   const line =
-    "- For a search step, wait for either the site's results or its own no-match state, and return the site's no-match answer with its message rather than waiting on results that may never appear.";
+    "- For a search step, wait for either the site's results or its own no-match state, and return the site's no-match answer with its message rather than waiting on results that may never appear. Prefer refusing a typed value only on that no-match state, quoting it. An empty suggestion list read before the site answered is still loading.";
   const root = await authoringCopy((_path, text) => text.replace(sectionMarker, ""));
   try {
     const hosts = [
@@ -1230,7 +1250,7 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["238364be514356ff971c334be435977a857e9591faea97b0857e69f4baba2e56", "core"],
+    ["40b272c8ed96be7647b5cf4b8b198a2136b0070943558b516aa4b1dbaeefa7f7", "core"],
     ["a896a59d7b924a2940a90437b8d4488cd515c4f4afc70da9fe14953b1583dd93", "search"],
     ["1b7d4195a350f19b2eee83ba2ae48f2c4dc68dc0d5c4a4f395e54d34ada30068", "auth"],
     ["ead4c4ffc04505a9951a6f24ec69ff795019f0142adf63c7bf7e4f66e74527d9", "testing"],
