@@ -399,28 +399,10 @@ const sharedGuidance: readonly (readonly [string, string])[] = [
   // most rows to pass and returns what is there after that.
   ["core", "After a search or a filter, use `waitForChange` on the rows you return"],
   // A reload after a choice such as a city can drop the search box's suggestions, so the tool
-  // types into the box again, once the wait for the typing's answer has ended.
+  // types into the box again.
   [
     "core",
     "After a step that reloads the page, such as choosing a city, prefer typing into the search box again when its suggestions still don't appear after the wait that passed the typing as `action`.",
-  ],
-  // Typing again while the site is still answering cancels that answer, so the empty list read
-  // next looks like no match.
-  [
-    "core",
-    "When it doesn't, prefer entering the value once more over waiting longer, after the wait that passed the typing as `action` has ended, since typing again while the site is still answering cancels that answer.",
-  ],
-  // A wait with no `action` takes an answer already on the page at its first look, such as a
-  // banner that opened while the tool typed, and the tool then reads a list the site has not
-  // filled yet. A panel that opens on its own is closed by `dismiss` rather than named as an
-  // answer.
-  [
-    "core",
-    "each an element only that answer has and the step can cause, such as a results list that holds a row. Prefer closing a banner, tour or dialog that opens on its own with `waitForReady`'s `dismiss` over naming it as an answer, since `dismiss` also closes one that opens later, before the next action.",
-  ],
-  [
-    "core",
-    "Without an `action`, an answer already on the page wins on the first look, so prefer passing the step whenever the wait follows one, typing included.",
   ],
   // A preselected option that only shares the caller's data, tracks or signs up for marketing is
   // turned off on every run, with no input and no question.
