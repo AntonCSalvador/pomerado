@@ -1239,8 +1239,10 @@ export type PublicationRequest = typeof PublicationRequest.Type;
  *   or its cited sources, a file it needs is missing, or it rules out going on, such as a stop
  *   condition it set that cannot be met. A missing fact the caller could supply is asked instead.
  *   Its basis is the report's `intent` citing the request: a field its input holds or words of its
- *   instruction (`citesCallerRequest`). The explanation says what the caller should supply or
- *   change. Optional: no host has to handle it until its core reports it.
+ *   instruction (`citesCallerRequest`), or a task update the owner confirmed in an answer, by its
+ *   revision or its words (`citesConfirmedUpdate`), such as a stop condition the owner picked that
+ *   the build then met. The explanation says what the caller should supply or change. Optional:
+ *   no host has to handle it until its core reports it.
  * The host refuses each ending without its basis on record. A `policy` report whose only basis is
  * the owner's no or an unanswered question ends as `owner_declined` or `question_unanswered`. A
  * target on another registrable domain is never a reason by itself: Guardian reviews such work.
