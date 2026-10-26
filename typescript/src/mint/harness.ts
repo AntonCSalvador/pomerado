@@ -2425,6 +2425,24 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             instruction: "The build's owner did not answer in time. The host is ending this build.",
           });
         });
+      /**
+       * The minter's own question went unanswered, whether asked live or rejoined by a takeover:
+       * it goes back to the minter as no answer where it may, and otherwise the build ends, unless
+       * the host suspends it. An owner's cancel is a choice to stop, never a question to decide
+       * without. `requestId` is the question's id when the harness knows it, which a takeover's
+       * replayed call does not.
+       */
+      const questionUnanswered = (
+        error: MintFailure,
+        requestId: string | undefined,
+        endsBuild: boolean,
+      ) =>
+        error.ownerCancelled !== true && handsBackNoAnswer()
+          ? noAnswer(endsBuild ? undefined : requestId)
+          : unanswered(error, "asking a question", {
+              step: "question",
+              ...(requestId === undefined ? {} : { requestId }),
+            });
       const reviewFeedback = (error: MintFailure, signIn: boolean) =>
         Effect.gen(function* () {
           // A refusal Guardian marked correctable names a fix, so no policy block stands on it.
@@ -6337,14 +6355,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             }).pipe(
               Effect.catchIf(
                 (error) => error.noResponse !== undefined,
-                // An owner's cancel is a choice to stop, never a question to decide without.
-                (error) =>
-                  error.ownerCancelled !== true && handsBackNoAnswer()
-                    ? noAnswer(askingEndsBuild ? undefined : askingId)
-                    : unanswered(error, "asking a question", {
-                        step: "question",
-                        ...(askingId === undefined ? {} : { requestId: askingId }),
-                      }),
+                (error) => questionUnanswered(error, askingId, askingEndsBuild),
               ),
               Effect.ensuring(
                 Effect.sync(() => {
@@ -7177,8 +7188,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     : {
                         recoverTool: (call) =>
                           Effect.gen(function* () {
-                            const recoveredTool = yield* agentRecovery.recoverTool?.(call) ??
-                              Effect.succeed(undefined);
+                            const rejoined = yield* Effect.either(
+                              agentRecovery.recoverTool?.(call) ?? Effect.succeed(undefined),
+                            );
+                            if (rejoined._tag === "Left") {
+                              const error = rejoined.left;
+                              if (call.name !== "request_input" || error.noResponse === undefined)
+                                return yield* Effect.fail(error);
+                              // A rejoined question that went unanswered, such as one that expired
+                              // before the takeover, goes on as the live question would have.
+                              return { result: yield* questionUnanswered(error, undefined, false) };
+                            }
+                            const recoveredTool = rejoined.right;
                             if (recoveredTool === undefined) return undefined;
                             if (recoveredTool.input !== undefined) {
                               const { request: asked, answers } = recoveredTool.input;

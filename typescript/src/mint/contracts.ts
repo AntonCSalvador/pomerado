@@ -2403,6 +2403,8 @@ export interface MintDependencies {
      * Rejoins or reads a tool call a takeover found started but not returned. A recovered
      * execution's evidence must carry the `review` the host journaled, `action` included: a write
      * is tracked, and its repeat refused, only when its evidence says Guardian labelled it one.
+     * A `request_input` call it fails with `noResponse`, such as a question that expired before
+     * the takeover, goes on as an unanswered live question does (`suspendUnanswered`).
      */
     readonly recoverTool?: (call: RecoveryToolCall) => Effect.Effect<
       | {
@@ -2517,7 +2519,10 @@ export interface MintDependencies {
    *   it started; no further model call starts; and the run ends interrupted, as
    *   `attemptFinished` reports. A resumed attempt restores `agentRecovery.initial` and rejoins
    *   that call through `agentRecovery.recoverTool`, such as with the answer the owner gave
-   *   meanwhile. Recovered evidence that still carries `noResponse` is unanswered again.
+   *   meanwhile. Recovered evidence that still carries `noResponse` is unanswered again, and so
+   *   is a rejoined question that `recoverTool` fails with `noResponse`: it is offered with no
+   *   `requestId`, which the harness never learned, for the host to match to the question it
+   *   rejoined.
    * - `not_suspended`, or a failure, which is recorded: the build ends as `no_response`. So does
    *   `suspended` when the model run ended while the hook ran, which is recorded too.
    * Absent, every such build ends as `no_response`.
