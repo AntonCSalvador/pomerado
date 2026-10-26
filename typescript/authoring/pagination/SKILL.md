@@ -92,6 +92,18 @@ list that stalls while its control is still offered has more: the pager and `rea
 `has_more` true with a position that continues. Never step a control whose click could submit or
 change anything.
 
+## Rows that need a detail page
+
+When each row's fields come from the row's own detail page, prefer reading the list with
+`readList` over the rows the list itself shows, keyed as usual, and opening the detail page only
+for each row `readList` returns. Avoid opening detail pages inside `open`, `more` or `next`:
+`readList` asks them for every row from the start of the segment up to the cursor's position, so a
+later page would open every earlier row's detail page again.
+
+For a list that grows as you scroll or press Load more, `next` hands back every row loaded so far,
+not only the new ones. Prefer doing per-row work, such as expanding a row or opening its details,
+once per row key, and skip keys you have already handled.
+
 ## Changed lists
 
 Lists change between calls. `readList` reads from the segment that holds the last row the
