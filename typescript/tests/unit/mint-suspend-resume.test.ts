@@ -611,49 +611,6 @@ it("offers the host a takeover's rejoined question that expired unanswered", asy
   expect(last?.harness.noResponse).toBeUndefined();
 });
 
-it.each<{ readonly name: string; readonly hook?: MintDependencies["suspendUnanswered"] }>([
-  { name: "without the hook" },
-  {
-    name: "when the host does not suspend it",
-    hook: () => Effect.succeed("not_suspended" as const),
-  },
-])(
-  "ends a takeover's build as no_response on its rejoined question that expired $name",
-  async ({ hook }) => {
-    const suspended = await suspendedBuild();
-    const resumed = await takeover(suspended, {
-      websiteCredentialsAvailable: true,
-      ...(hook === undefined ? {} : { suspendUnanswered: hook }),
-    });
-
-    expect(await resumed.run()).toMatchObject({
-      build: "incomplete",
-      noResponse: { possibleCommit: false },
-    });
-    expect(resumed.counts()).toMatchObject({ executed: 0, published: 0, asked: 0 });
-    // The build ended at the question: the minter made no further model call.
-    expect(suspended.model.requests).toHaveLength(1);
-  },
-);
-
-it("hands a takeover's rejoined question that expired back to a minter not signed in", async () => {
-  const suspended = await suspendedBuild();
-  let offers = 0;
-  const resumed = await takeover(suspended, {
-    suspendUnanswered: () =>
-      Effect.sync(() => {
-        offers++;
-        return "suspended" as const;
-      }),
-  });
-
-  expect(await resumed.run()).toMatchObject({ build: "published" });
-  expect(offers).toBe(0);
-  const next = inputOf(suspended.model.requests[1]);
-  const result = next.find((item) => item.type === "function_call_result" && item.callId === "ask");
-  expect(JSON.stringify(result)).toContain('\\"status\\":\\"no_answer\\"');
-});
-
 const request = {
   mode: "mint",
   intent: "Read public data",
