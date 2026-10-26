@@ -635,7 +635,8 @@ element. Prefer values the list page already holds, in its rows or its embedded 
 site's own data request<!-- pomerado:section core.data-request-reference -->, to opening each record's page. When the tool must open
 each record's detail page, keep each to a few calls (open, wait, one read), and consider whether
 the request is better served as two tools, a search and a details read by identifier; say so in
-`coverage`.
+`coverage`. Prefer opening those detail pages only for the rows the call returns, after
+`readList`, not inside the list reader (pagination skill).
 Prefer the page's own structured data, its embedded JSON or the data response it renders from,
 to its rendered cards when it holds the same fields for the same records, and check on the
 example that it matches what the page shows. Embedded JSON holds the page as first rendered:
