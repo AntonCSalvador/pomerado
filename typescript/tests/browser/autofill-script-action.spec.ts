@@ -360,12 +360,57 @@ test("a sign-in step whose submit is a header link to a script that does nothing
   expect(posts).toEqual([]);
 });
 
+// A sign-in step that types nothing, such as a sign-in provider chooser whose links or buttons run
+// the page's own script to pick a provider, sends nothing of the login, so a script address of its
+// submit, its link's or its form's own, is not judged as a destination: the host judges the
+// control by where it sits and its other destinations, and the screen the click leads to is
+// inspected again before anything is typed there.
+const chooserStep: AutofillStep = { fields: [], submit: "#provider" };
+// The panel's form comes first: its script listens on the page's first form.
+const chooserPage = (control: string) => `<div id="panel" hidden>${scriptForm('action="/session"')}</div>
+${control}
+<script>window.chooseProvider = () => { document.getElementById('panel').hidden = false; };</script>`;
+
+for (const [name, control] of [
+  ["a link whose address runs a script", '<a id="provider" href="javascript:chooseProvider(\'corp\')">Company account</a>'],
+  [
+    "a button in a form whose script action does something",
+    '<form action="javascript:chooseProvider(\'corp\')"><button id="provider" type="submit">Company account</button></form>',
+  ],
+  [
+    "a link to a script that does nothing in a form whose script action does something",
+    `<form action="javascript:send()"><a id="provider" href="javascript:void(0)" onclick="chooseProvider('corp')">Company account</a></form>`,
+  ],
+  ["a button whose click handler runs a script", '<button id="provider" onclick="chooseProvider(\'corp\')">Company account</button>'],
+] as const)
+  test(`a sign-in step that types nothing clicks ${name}`, async ({ page }) => {
+    const { posts } = await serve(page, { [site]: chooserPage(control) });
+    const inspection = passed(await inspect(page, chooserStep));
+    const report = await fill(page, inspection, chooserStep, []);
+    expect(report).toMatchObject({ outcome: "filled", fields: [], submit: "clicked" });
+    await expect(page.locator("#username")).toBeVisible();
+    expect(posts).toEqual([]);
+  });
+
 for (const [name, body, step, evidence] of [
   [
-    "a sign-in step whose submit link to a script that does nothing sits in a form whose script action does something",
-    `<form action="javascript:send()">${headerLink("javascript:void(0);")}</form>`,
-    panelStep,
-    { actionOrigins: "javascript: javascript:" },
+    "a sign-in step that types nothing whose script link sits in a frame off the site",
+    `<iframe src="${otherSite}/choose"></iframe>`,
+    chooserStep,
+    { part: "frame", frameOrigin: otherSite },
+  ],
+  [
+    "a sign-in step that types nothing whose script link sits in a form that posts off the site",
+    `<form action="https://other.test/receive"><a id="provider" href="javascript:chooseProvider('corp')">Company account</a></form>`,
+    chooserStep,
+    { part: "submit_destination", actionOrigins: "https://other.test javascript:" },
+  ],
+  [
+    "a sign-in step that types a username and submits with a link whose address runs a script",
+    `<label>Email<input id="username" name="username" autocomplete="username"></label>
+<a id="provider" href="javascript:chooseProvider('corp')">Continue</a>`,
+    { fields: [{ selector: "#username", accepts: ["username"], slot: "username" }], submit: "#provider" },
+    { part: "submit_destination", actionOrigins: "javascript:" },
   ],
   [
     "a card-fill step whose submit link's own address is a script that does nothing",
@@ -376,8 +421,14 @@ ${headerLink("javascript:void(0);")}`,
   ],
 ] as const)
   test(`${name} is refused before anything is typed`, async ({ page }) => {
-    const { posts } = await serve(page, { [site]: body });
-    await expect(page.locator("a.sign-in-link")).toBeVisible();
+    const { posts } = await serve(page, {
+      [site]: body,
+      [otherSite]: chooserPage(
+        '<a id="provider" href="javascript:chooseProvider(\'corp\')">Company account</a>',
+      ),
+    });
+    const scope = body.includes("<iframe") ? page.frameLocator("iframe") : page;
+    await expect(scope.locator(step.submit ?? "")).toBeVisible();
     const inspection = await inspect(page, step);
     expect(inspection).toMatchObject({
       outcome: "refused",
