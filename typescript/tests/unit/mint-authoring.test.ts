@@ -1210,6 +1210,21 @@ it("asks for an access code with a private secret question", async () => {
   );
 });
 
+/*
+ * A case that cites the site's own answer names that capture by a path review can read, since a
+ * later look can drop an earlier snapshot from the capture index while its file stays readable.
+ */
+it("names a cited capture by its exact path, not by an execution ID alone", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
+  expect(text("testing")).toContain(
+    "review accepts the change only against it. Name a capture by its exact path, a snapshot listed in `captures/index.json` or `captures/results/<executionId>.json`, not by an execution ID alone: a later look can drop an earlier snapshot from the index, while its file stays readable by path. Prefer the snapshot that shows the site's own controls applying the input.",
+  );
+  expect(text("publication")).toContain(
+    "names the capture of that answer, such as the site's no-results page for that search, by its exact path in its `purpose` and in `coverage` (testing skill).",
+  );
+});
+
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /*
@@ -1233,13 +1248,13 @@ it("renders the pinned standalone authoring", async () => {
     ["7c354c75911208d7231700fbb2e0dae4118b60cc763723696e92505849e94f30", "core"],
     ["933e2daac360d31beeeb2a8aeabcf22ca8512cc0272f321b047106f4a2055ab3", "search"],
     ["1b7d4195a350f19b2eee83ba2ae48f2c4dc68dc0d5c4a4f395e54d34ada30068", "auth"],
-    ["ead4c4ffc04505a9951a6f24ec69ff795019f0142adf63c7bf7e4f66e74527d9", "testing"],
+    ["8e3d4b3b24fc1f97c57f75aa7d95e5cd7c4dfc2c8dc48e8141e3e0c6afdac6f4", "testing"],
     ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
     ["49373d05397797d5862f12f62101615c99257e025056c7385b2b9bb5ebcd5f7d", "forms"],
     ["7308f56f0ac66a427deac277366104e8e6e023aa83debdbd616d22b11ea3f95f", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["582b80d4f682d4c6af6d101515a3a12febb016e2e4c5d7f0fbf3f51b3aab4dbd", "caller-input"],
-    ["c6bcadcf0be7d9dc94fe00a7bf884efb261b0d8e5748340639e90615207f4656", "publication"],
+    ["f97bd6f6b23d4398107a0be052818877276e93fde7e941d967c886b165622afa", "publication"],
     ["69c1c6653100da9fcfdc1d25a1f4280ecd99fe795a7ebf638e49d45827d5b352", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
