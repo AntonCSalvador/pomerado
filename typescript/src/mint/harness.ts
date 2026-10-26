@@ -48,6 +48,8 @@ import {
   defaultLiveTestCaseMs,
   ExecutionRefusal,
   ExecutionRequest,
+  type HostRefusalBasis,
+  type HostRefusalSource,
   isReadOrWriteChoice,
   LiveTestsRequest,
   MintFailure,
@@ -515,6 +517,14 @@ const hostRefusalDecision = (
  * credentials may not, or somewhere it could not verify. An autofill refusal of another check,
  * such as a field the selector did not find or matched twice, is the minter's to correct.
  */
+/** A task update refusal's reason as a closed code: one core names, else `other`. */
+const taskUpdateRefusalCode = (reason: string): Extract<HostRefusalSource, { source: "task_update" }>["reason"] =>
+  reason === "intake_refused" ||
+  reason === "duplicate_tool" ||
+  reason === "site_unavailable" ||
+  reason === "change_unsupported"
+    ? reason
+    : "other";
 const hostSignInRefusal = (error: MintFailure) =>
   error.authentication?.code === "CredentialTargetRefused" ||
   error.authentication?.code === "CredentialTargetUnverified" ||
@@ -1273,6 +1283,15 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * review clears it, setting `hostRefusalPassed`.
        */
       let hostRefused = recovered?.hostRefused === true;
+      /** Which host check set `hostRefused`, its latest, by closed codes (`HostRefusalSource`). */
+      let hostRefusedBy: HostRefusalSource | undefined = hostRefused
+        ? recovered?.hostRefusedBy
+        : undefined;
+      /** Records a host check's refusal of a step the build needs, and which check it was. */
+      const refuseByHost = (source: HostRefusalSource) => {
+        hostRefused = true;
+        hostRefusedBy = source;
+      };
       /**
        * A host check refused a step earlier in this attempt, and a later finish_build got past the
        * host's checks to Guardian's review, so no host refusal stands until another is recorded.
@@ -2924,7 +2943,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       };
       const providerFeedback = (failed: MintFailure, now: number) => {
         const error = countHostRefusal(failed);
-        if (hostSignInRefusal(error)) hostRefused = true;
+        if (hostSignInRefusal(error))
+          refuseByHost({
+            source: "sign_in_step",
+            code: error.authentication?.code ?? "unknown",
+            ...(error.authentication?.hostRefusal?.check === undefined
+              ? {}
+              : { check: error.authentication.hostRefusal.check }),
+          });
         const runnerFailure = screenedRunnerFailure(error);
         // A capture the host could not produce or screen is a gap: the result is withheld, the
         // effect possible, and the build goes on.
@@ -3414,6 +3440,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         | {
             readonly reason: (typeof BuildBlocked.Type)["reason"];
             readonly basis?: "live_tests_spent";
+            /** What a `host_refused` ending stood on, each host check in force. */
+            readonly hostRefusals?: readonly HostRefusalBasis[];
+            /** A `host_refused` ending stood only on a refused password refill. */
+            readonly refillOnly?: true;
           }
         | { readonly refusal: string } => {
         const refused = (
@@ -3493,8 +3523,8 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             `The owner's no answered whether to end the build, which means keep going, so it is not ${ending} and the build has not ended.${publicationDenial === undefined ? "" : " If Guardian's latest decision asks for evidence nobody can supply, stop: the build ends with Guardian's decision."}`,
           );
         const unanswered = noAnswerHandBacks > 0;
-        const hostCheckRefusing =
-          hostRefused || dependencies.signInRefillRefused?.() === true || signInDestinationRefused;
+        const refillRefused = dependencies.signInRefillRefused?.() === true;
+        const hostCheckRefusing = hostRefused || refillRefused || signInDestinationRefused;
         const liveTestsSpent = liveTestsRefusal !== undefined && !liveTestsRefusal.reserveOpen;
         const hostRefusing = hostCheckRefusing || liveTestsSpent;
         if (reason === "owner_declined" && !ownerRefused && stopDeclined)
@@ -3562,10 +3592,24 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "Nothing in this attempt refused this: Guardian made no final refusal of an execution, and refused no publication for privacy or authority or for a finding no correction gets past. Use host_refused when a host check refused a step the build needs and nothing left in this attempt can fix it. A publication denial or escalation that names a correction or missing evidence is not a refusal: fix every finding and gather each missing item its rationale names, then call finish_build again. Your instructions are not a refusal either, so the build has not ended. Continue through the page's own controls. Ask the owner with request_input when only they can decide; their no is owner_declined, their choice to end the build is owner_ended, and a question left unanswered is question_unanswered. Use site_lacks_capability only when the site does not offer what the task needs.",
           );
         }
-        // A report that stands only on refused live tests names them, for the record.
-        return reason === "host_refused" && liveTestsSpent && !hostCheckRefusing
-          ? { reason, basis: "live_tests_spent" }
-          : { reason };
+        if (reason !== "host_refused") return { reason };
+        // A host_refused report names each host check it stands on, for the record; one that
+        // stands only on refused live tests names them as its basis too.
+        const hostRefusals: HostRefusalBasis[] = [
+          // A checkpoint from an older worker kept the refusal without its source.
+          ...(hostRefused ? [hostRefusedBy ?? { source: "unrecorded" as const }] : []),
+          ...(refillRefused ? [{ source: "sign_in_refill" as const }] : []),
+          ...(signInDestinationRefused ? [{ source: "sign_in_destination" as const }] : []),
+          ...(liveTestsSpent ? [{ source: "live_tests_spent" as const }] : []),
+        ];
+        return {
+          reason,
+          ...(liveTestsSpent && !hostCheckRefusing ? { basis: "live_tests_spent" as const } : {}),
+          hostRefusals,
+          ...(refillRefused && !hostRefused && !signInDestinationRefused && !liveTestsSpent
+            ? { refillOnly: true as const }
+            : {}),
+        };
       };
       /**
        * Guardian's question review of a blocked explanation before any caller reads it, with the
@@ -3952,7 +3996,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             // The host refused to apply the update, such as a site change, by its own check. The
             // harness's refusals before review, and one the host failed to apply, are no host
             // check refusing a step.
-            hostRefused = true;
+            refuseByHost({ source: "task_update", reason: taskUpdateRefusalCode(result.reason) });
             return taskUpdateAnswer("update_refused", {
               reason: result.reason,
               notice: yield* screenMintText(dependencies, result.notice),
@@ -5648,7 +5692,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 !publicationOutage(publication.left) &&
                 publication.left.reason !== "example_output_unavailable" &&
                 !askedOnceReasons.has(publication.left.reason ?? "");
-              if (hostChecksRefused) hostRefused = true;
+              if (hostChecksRefused)
+                refuseByHost({
+                  source: "publication",
+                  code: publication.left.code,
+                  ...(publication.left.reason === undefined
+                    ? {}
+                    : { reason: publication.left.reason }),
+                });
               if (publication._tag === "Right" || reviewDecided(publication.left)) {
                 yield* reviewCompleted;
                 // A completed review replaces the input feedback an earlier one returned.
@@ -5657,6 +5708,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 // host refusal no longer stands: what Guardian decided is what the build answers.
                 if (hostRefused && !hostChecksRefused) {
                   hostRefused = false;
+                  hostRefusedBy = undefined;
                   hostRefusalPassed = true;
                 }
               }
@@ -6493,10 +6545,16 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     // their choice to end the build keep their endings, a policy report renamed to
                     // one included. A host refusal a later finish_build got past is still a
                     // refusal on record.
+                    // A host_refused report keeps its reason, since the host's own check stopped
+                    // the build, unless it stands only on a refused password refill: the login
+                    // then reached the site twice and neither sign-in confirmed, so sign-in is
+                    // what failed.
+                    const hostRefusals = "hostRefusals" in ending ? ending.hostRefusals : undefined;
                     if (
                       ending.reason !== "owner_declined" &&
                       ending.reason !== "question_unanswered" &&
                       ending.reason !== "owner_ended" &&
+                      (ending.reason !== "host_refused" || ending.refillOnly === true) &&
                       (signInUnconfirmed ||
                         (signInRefusalOnly && !hostRefused && !hostRefusalPassed)) &&
                       unresolvedSignIn === undefined &&
@@ -6513,6 +6571,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                         phase: "blocked",
                         reason: "sign_in_unavailable",
                         reported: report.reason,
+                        ...(hostRefusals === undefined ? {} : { hostRefusals }),
                         ...(sessionLoss === undefined ? {} : { sessionLoss }),
                       });
                       return endedForSignIn;
@@ -6584,6 +6643,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       phase: "blocked",
                       reason: blocked.reason,
                       ...(basis === undefined ? {} : { basis }),
+                      ...(hostRefusals === undefined ? {} : { hostRefusals }),
                       explanationReview: review.outcome,
                     });
                     return JSON.stringify({
@@ -7162,6 +7222,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ...(guardianRefused ? { guardianRefused: true as const } : {}),
         ...(signInRefusalOnly ? { signInRefusalOnly: true as const } : {}),
         ...(hostRefused ? { hostRefused: true as const } : {}),
+        ...(hostRefused && hostRefusedBy !== undefined ? { hostRefusedBy } : {}),
         ...(hostRefusalPassed ? { hostRefusalPassed: true as const } : {}),
         ...(signInDestinationRefused ? { signInDestinationRefused: true as const } : {}),
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),

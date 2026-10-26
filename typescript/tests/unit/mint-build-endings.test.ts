@@ -450,17 +450,38 @@ it.each([
   );
   const outcome = await f.run();
   expect(lastResult(f.requests[1])).toContain("host_not_refused");
-  if (ends)
+  if (ends) {
     expect(outcome).toMatchObject({
       build: "incomplete",
       blocked: { reason: "host_refused", explanation },
       stopReason: "host_refused",
     });
-  else {
+    expect(blockedRecord(outcome)).toMatchObject({
+      hostRefusals: [
+        {
+          source: "publication",
+          code: "PublicationUnavailable",
+          reason: "autofill_recipe_not_verified",
+        },
+      ],
+    });
+  } else {
     expect(outcome).not.toHaveProperty("blocked");
     expect(lastResult(f.requests[3 + publish.length])).toContain("host_not_refused");
   }
 });
+
+/** What an accepted ending's `phase: "blocked"` diagnostic says the host refusal stood on. */
+const blockedRecord = (outcome: { readonly diagnostics: readonly string[] }) =>
+  outcome.diagnostics
+    .flatMap((entry) => {
+      try {
+        return [JSON.parse(entry) as Record<string, unknown>];
+      } catch {
+        return [];
+      }
+    })
+    .find((entry) => entry["phase"] === "blocked");
 
 /** The result of the call `callId` that the minter reads in `request`, parsed. */
 const resultOf = (request: ModelRequest | undefined, callId: string): unknown => {
@@ -603,9 +624,17 @@ const giveUpSignIn = call("abandon_sign_in", { intent: "The host refused the sig
 // The host's refusal of a sign-in or of a task update is on record too, and a policy report that
 // stands only on a host refusal is refused with the way to host_refused.
 it.each([
-  { basis: "a sign-in", steps: [signIn, giveUpSignIn] },
-  { basis: "a site change", steps: moveSite },
-])("ends as host_refused after the host refused $basis", async ({ steps }) => {
+  {
+    basis: "a sign-in",
+    steps: [signIn, giveUpSignIn],
+    record: { source: "sign_in_step", code: "CredentialTargetRefused" },
+  },
+  {
+    basis: "a site change",
+    steps: moveSite,
+    record: { source: "task_update", reason: "change_unsupported" },
+  },
+])("ends as host_refused after the host refused $basis", async ({ steps, record }) => {
   const explanation = "A Pomerado check refused the step this build needs.";
   const f = await fixture(
     (_request, index) =>
@@ -637,6 +666,7 @@ it.each([
     blocked: { reason: "host_refused", explanation },
     stopReason: "host_refused",
   });
+  expect(blockedRecord(outcome)).toMatchObject({ hostRefusals: [record] });
 });
 
 // A refusal of the minter's own request is no host check refusing a step the build needs: the
@@ -1118,9 +1148,8 @@ it("ends a site_declined report as sign-in unavailable after a sign-in that neve
 
 // Every ending that tells the caller to change the request, or that the site or a check ruled it
 // out, is no truer than site_declined while the sign-in never confirmed. A Guardian refusal of an
-// earlier sign-in step, as of a field label, made a policy block possible, and a host check that
-// refused a sign-in form a host_refused one; each ended the build that way after a refused login
-// whose message had gone.
+// earlier sign-in step, as of a field label, made a policy block possible; it ended the build that
+// way after a refused login whose message had gone.
 const refusedLabel = new MintFailure({
   code: "ReviewDenied",
   review: { outcome: "deny", reviewId: "review_label", rationale: "Wrong field label." },
@@ -1129,7 +1158,6 @@ const refusedForm = autofillRefused("destination");
 it.each([
   { reason: "site_lacks_capability", first: [] },
   { reason: "policy", first: [refusedLabel] },
-  { reason: "host_refused", first: [refusedForm] },
 ] as const)(
   "ends a $reason report as sign-in unavailable while the sign-in never confirmed",
   async ({ reason, first }) => {
@@ -1145,6 +1173,33 @@ it.each([
     });
   },
 );
+
+// A host_refused report keeps its reason while the sign-in never confirmed: the host's own check
+// refused the sign-in form, which the ending says, and the record names that check by its codes.
+it("keeps a host_refused report on a refused sign-in form while the sign-in never confirmed", async () => {
+  const f = await signInThenDecline([refusedForm, submittedScreen, rejectionUnconfirmed], {}, {
+    reason: "host_refused",
+    explanation: "The host would not type the login into the site's form.",
+  });
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({ build: "incomplete", blocked: { reason: "host_refused" } });
+  expect(outcome).not.toHaveProperty("recoveryReason");
+  expect(
+    outcome.diagnostics.flatMap((entry) => {
+      try {
+        return [JSON.parse(entry) as Record<string, unknown>];
+      } catch {
+        return [];
+      }
+    }),
+  ).toContainEqual(
+    expect.objectContaining({
+      phase: "blocked",
+      reason: "host_refused",
+      hostRefusals: [{ source: "sign_in_step", code: "AutofillRefused", check: "destination" }],
+    }),
+  );
+});
 
 // Guardian's final refusal of the sign-in itself, with nothing sent, is no reason the task is
 // impossible as asked: the build never got past signing in. A report that stands only on it ends as

@@ -160,6 +160,57 @@ export interface BrokenInput {
   readonly change: "removed" | "required" | "changed";
 }
 
+/**
+ * The host check that refused a step the build needs, which a `host_refused` ending stands on, by
+ * closed codes alone, never page text:
+ * - `publication`: the host's own publication checks refused a finish_build, with the failure's
+ *   code and its reason;
+ * - `sign_in_step`: the host refused a sign-in step, with the sign-in's code and the check that
+ *   refused it;
+ * - `task_update`: the host refused to apply a task update, with its reason, or `other` for one
+ *   core does not name.
+ */
+export const HostRefusalSource = Schema.Union(
+  Schema.Struct({
+    source: Schema.Literal("publication"),
+    code: Schema.String,
+    reason: Schema.optionalWith(Schema.String, { exact: true }),
+  }),
+  Schema.Struct({
+    source: Schema.Literal("sign_in_step"),
+    code: Schema.String,
+    check: Schema.optionalWith(Schema.String, { exact: true }),
+  }),
+  Schema.Struct({
+    source: Schema.Literal("task_update"),
+    reason: Schema.Literal(
+      "intake_refused",
+      "duplicate_tool",
+      "site_unavailable",
+      "change_unsupported",
+      "other",
+    ),
+  }),
+);
+export type HostRefusalSource = typeof HostRefusalSource.Type;
+
+/**
+ * What a `host_refused` ending stood on, in the blocked diagnostic: the source that set the
+ * attempt's host refusal (`HostRefusalSource`), a sign-in screen the host refused because the
+ * password's fills are spent (`sign_in_refill`), one it refused at its destination check
+ * (`sign_in_destination`), live tests the host refuses with no batch left (`live_tests_spent`), and
+ * a refusal an older worker's checkpoint kept without its source (`unrecorded`).
+ */
+export type HostRefusalBasis =
+  | HostRefusalSource
+  | {
+      readonly source:
+        | "sign_in_refill"
+        | "sign_in_destination"
+        | "live_tests_spent"
+        | "unrecorded";
+    };
+
 export class MintFailure extends Data.TaggedError("MintFailure")<{
   readonly rejectedCredential?: typeof CredentialRejectedField.Type;
   /** Sub-cause, operation, underlying error, stack and context; see ERROR-LOGGING-STANDARD.md. */
@@ -1998,6 +2049,11 @@ export interface MintHarnessSnapshot {
    */
   readonly hostRefused?: true;
   /**
+   * Which host check set `hostRefused`, its latest, by closed codes alone (`HostRefusalSource`).
+   * Optional, so an older worker ignores it and a newer one restores an older checkpoint without it.
+   */
+  readonly hostRefusedBy?: HostRefusalSource;
+  /**
    * A host check refused a step earlier in this attempt, and a later finish_build got past the
    * host's checks to Guardian's review, clearing `hostRefused`: a `host_refused` block is refused
    * as `host_refusal_passed` until a host check refuses a step again. Optional, so an older worker
@@ -2200,6 +2256,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   blockedReviewUnavailable: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   guardianRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   hostRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  hostRefusedBy: Schema.optionalWith(HostRefusalSource, { exact: true }),
   hostRefusalPassed: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   signInDestinationRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   noAnswerHandBacks: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),

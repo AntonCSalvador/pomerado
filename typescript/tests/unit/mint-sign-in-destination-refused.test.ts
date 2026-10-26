@@ -214,6 +214,16 @@ const stop: ModelResponse = {
   ],
 };
 
+/** The outcome's diagnostics that are JSON records. */
+const diagnosticsOf = (outcome: { readonly diagnostics?: readonly string[] }) =>
+  (outcome.diagnostics ?? []).flatMap((entry) => {
+    try {
+      return [JSON.parse(entry) as Record<string, unknown>];
+    } catch {
+      return [];
+    }
+  });
+
 /** The tool answer the model read for `callId`. */
 const answerTo = (request: ModelRequest | undefined, callId: string) => {
   const items = Array.isArray(request?.input) ? request.input : [];
@@ -256,6 +266,36 @@ it("ends a host_refused report as the host's refusal once the host refused a scr
     blocked: { reason: "host_refused" },
     stopReason: "host_refused",
   });
+});
+
+// A sign-in that already sent the login and never confirmed would end any other report as sign-in
+// unavailable, but a host_refused report keeps its reason: the host's own check refused the next
+// screen, and the ending says so, with which check it stood on.
+it("keeps a host_refused report as the host's refusal after an unconfirmed sign-in sent the login", async () => {
+  const site = signInSite();
+  const run = await fixture(
+    (_request, index) =>
+      [authenticate("first", "#password"), authenticate("outside", outsideForm), hostRefused("report")][
+        index
+      ] ?? stop,
+    site.dependencies,
+    { effect: "read", siteOrigin: origin },
+  );
+  const outcome = await run.run();
+  expect(site.fills()).toBe(1);
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    blocked: { reason: "host_refused" },
+    stopReason: "host_refused",
+  });
+  expect(outcome).not.toHaveProperty("recoveryReason");
+  expect(diagnosticsOf(outcome)).toContainEqual(
+    expect.objectContaining({
+      phase: "blocked",
+      reason: "host_refused",
+      hostRefusals: [{ source: "sign_in_destination" }],
+    }),
+  );
 });
 
 it("refuses a host_refused report when the only refusal was a selector the minter can correct", async () => {
@@ -339,10 +379,10 @@ it("keeps a destination refusal through a later identifier screen that passed th
   );
   const outcome = await run.run();
   // The identifier screen passed and was sent; the report still stood on the refused form and
-  // ended the build at once, as sign-in unavailable since the identifier went out unconfirmed.
+  // ended the build at once as the host's refusal, though the identifier went out unconfirmed.
   expect(site.fills()).toBe(1);
   expect(run.requests).toHaveLength(3);
-  expect(outcome).toMatchObject({ build: "incomplete", recoveryReason: "sign_in_unavailable" });
+  expect(outcome).toMatchObject({ build: "incomplete", blocked: { reason: "host_refused" } });
 });
 
 const scripted = makeMintHarnessFixture(

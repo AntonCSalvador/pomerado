@@ -206,6 +206,20 @@
   - Migrate a host by handling `changed` in any exhaustive check on a filled report's field `status`; a host that wraps the keyboard by passing its third argument through, or it reads nothing back; and a host with its own sign-in rules by refusing the step to the agent when a field is `changed`, with `changedPhoneNotice`. A keyboard of a host's own that reads nothing back never answers `changed`.
 ### Other changes
 
+- An accepted `host_refused` blocked report keeps its reason while the build's latest sign-in never confirmed, or while the only Guardian refusal on record is of a sign-in step. Before, the harness rewrote it to `sign_in_unavailable`, so a build the host's own check stopped read as the site's sign-in being unavailable. A report that stands only on a refused password refill (`signInRefillRefused`) still ends as `sign_in_unavailable`: the login reached the site twice and neither sign-in confirmed, so sign-in is what failed.
+  - The `phase: "blocked"` diagnostic of a `host_refused` report, and of one rewritten to `sign_in_unavailable`, names what it stood on as `hostRefusals` (`HostRefusalBasis`), by closed codes alone, never page text. Each entry is one of these:
+    - `publication`, with the failure's code and reason;
+    - `sign_in_step`, with the sign-in's code and the check that refused it;
+    - `task_update`, with its reason, or `other` for one core does not name;
+    - `sign_in_refill`;
+    - `sign_in_destination`;
+    - `live_tests_spent`;
+    - `unrecorded`, for a refusal an older worker's checkpoint kept without its source.
+
+    The existing `basis: "live_tests_spent"` is unchanged.
+  - `MintHarnessSnapshot` adds the optional `hostRefusedBy` (`HostRefusalSource`), the source of the latest host refusal, so a takeover keeps it. An older worker ignores it.
+  - Migrate a host that reads a `host_refused` ending's source from elsewhere by reading `hostRefusals` from the blocked diagnostic.
+
 - The forms skill says what to do when a site's Download or Share button only prints the page, through `window.print` or a print frame, and offers no file. The minter prefers checking the site's code or page before clicking such a button live, since its print dialog can stop the page from answering, and, when the site offers no file, returning the details the page shows and saying the site offers no downloadable file, over asking the owner to change how it's delivered. Guidance only; no runtime change.
   - A recorded minter response keyed on the exact forms skill text needs recording again.
 - Each publication refusal's `PublicationDecision` keeps the instruction `finish_build` gave the minter, as the new optional `instruction`, screened like the decision ledger's host refusals and capped at 1,600 characters, so its last step survives. A question review, a blocked-explanation review and a task update review read it in `publicationDecisions`, and their policies say it is the host's own description of what that refusal requires, a host fact. Before, Guardian saw each refusal only as its code, reason, failed checks and recovery, so it could refuse a question that relied on what the refusal requires, such as a declared refusal's `reason` being a stable lowercase code.
