@@ -11,6 +11,7 @@ import type {
 } from "../../src/destinations/autofill-step.js";
 import {
   hostAuthentication,
+  MintFailure,
   MintHarnessSnapshot,
   type MintDependencies,
   type SignInStep,
@@ -460,5 +461,95 @@ it.each([
   "keeps a destination refusal across a takeover from $checkpoint checkpoint",
   async ({ edit, status }) => {
     expect(await hostRefusedAfterTakeover(edit)).toEqual([expect.objectContaining({ status })]);
+  },
+);
+
+/**
+ * A takeover's host_refused report after its predecessor's host refused a sign-in step outright,
+ * having typed nothing, from the predecessor's checkpoint as `edit` leaves it: the reply, and the
+ * takeover's outcome.
+ */
+const afterRefusedSignInTakeover = async (edit: (checkpoint: Record<string, unknown>) => void) => {
+  let capture: (() => MintHarnessSnapshot) | undefined;
+  const refusedSignIn = new MintFailure({
+    code: "Unavailable",
+    authentication: {
+      phase: "credential_submit",
+      code: "CredentialTargetRefused",
+      nothingSubmitted: true,
+    },
+  });
+  const first = await scripted(
+    (turn) =>
+      Effect.asVoid(
+        Effect.either(turn.actions.execute({ ...authenticateStep, signInStep: screen("#password") })),
+      ),
+    {
+      autofillSignIn: true,
+      reviewAndExecute: () => Effect.fail(refusedSignIn),
+      agentRecovery: {
+        bindHarness: (bound) =>
+          Effect.sync(() => {
+            capture = bound;
+          }),
+        save: () => Effect.void,
+      },
+    },
+  );
+  await first.run();
+  const checkpoint = JSON.parse(JSON.stringify(capture?.())) as Record<string, unknown>;
+  edit(checkpoint);
+  const harness = Schema.decodeUnknownSync(MintHarnessSnapshot)(checkpoint);
+  const replies: unknown[] = [];
+  const takeover = await scripted(
+    (turn) =>
+      Effect.gen(function* () {
+        const reportBlocked = turn.actions.reportBlocked;
+        if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+        replies.push(JSON.parse(yield* reportBlocked(hostRefusedReport)));
+      }),
+    {
+      ...signInSite().dependencies,
+      agentRecovery: { initial: { agent: freshAgent, harness }, save: () => Effect.void },
+    },
+  );
+  const outcome = await takeover.run();
+  return { checkpoint, replies, outcome };
+};
+
+// A takeover keeps which host check refused the step, and a checkpoint from an older worker, which
+// kept the refusal without it, names it `unrecorded`. A source a later release adds, which this
+// worker cannot read, restores as unrecorded too, and never fails the checkpoint's decode.
+it.each([
+  {
+    checkpoint: "this worker's",
+    edit: () => undefined,
+    recorded: { source: "sign_in_step", code: "CredentialTargetRefused" },
+  },
+  {
+    checkpoint: "an older worker's",
+    edit: (checkpoint: Record<string, unknown>) => {
+      delete checkpoint["hostRefusedBy"];
+    },
+    recorded: { source: "unrecorded" },
+  },
+  {
+    checkpoint: "a later release's",
+    edit: (checkpoint: Record<string, unknown>) => {
+      checkpoint["hostRefusedBy"] = { source: "a_later_check", code: "LaterCode" };
+    },
+    recorded: { source: "unrecorded" },
+  },
+])(
+  "records the host check a host_refused ending stood on across a takeover from $checkpoint checkpoint",
+  async ({ edit, recorded }) => {
+    const { checkpoint, replies, outcome } = await afterRefusedSignInTakeover(edit);
+    expect(checkpoint["hostRefused"]).toBe(true);
+    expect(replies).toEqual([expect.objectContaining({ status: "blocked" })]);
+    expect(
+      diagnosticsOf(outcome as { readonly diagnostics?: readonly string[] }),
+    ).toContainEqual(
+      expect.objectContaining({ phase: "blocked", reason: "host_refused", hostRefusals: [recorded] }),
+    );
   },
 );

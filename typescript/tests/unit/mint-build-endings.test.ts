@@ -1174,31 +1174,84 @@ it.each([
   },
 );
 
-// A host_refused report keeps its reason while the sign-in never confirmed: the host's own check
-// refused the sign-in form, which the ending says, and the record names that check by its codes.
-it("keeps a host_refused report on a refused sign-in form while the sign-in never confirmed", async () => {
-  const f = await signInThenDecline([refusedForm, submittedScreen, rejectionUnconfirmed], {}, {
-    reason: "host_refused",
-    explanation: "The host would not type the login into the site's form.",
-  });
-  const outcome = await f.run();
-  expect(outcome).toMatchObject({ build: "incomplete", blocked: { reason: "host_refused" } });
-  expect(outcome).not.toHaveProperty("recoveryReason");
-  expect(
-    outcome.diagnostics.flatMap((entry) => {
+/** What an accepted or rewritten ending's `phase: "blocked"` diagnostic records. */
+const blockedDiagnostic = (outcome: { readonly diagnostics: readonly string[] }) =>
+  outcome.diagnostics
+    .flatMap((entry) => {
       try {
         return [JSON.parse(entry) as Record<string, unknown>];
       } catch {
         return [];
       }
-    }),
-  ).toContainEqual(
-    expect.objectContaining({
-      phase: "blocked",
-      reason: "host_refused",
-      hostRefusals: [{ source: "sign_in_step", code: "AutofillRefused", check: "destination" }],
-    }),
+    })
+    .find((entry) => entry["phase"] === "blocked");
+
+// A host refusal before the login went out is no longer the latest sign-in event: the host
+// refused a sign-in form, then a later screen sent the login and nothing confirmed it. The report
+// ends as sign-in unavailable, and its record still names the check that refused the form.
+it("ends a host_refused report on a form refused before the login went out as sign-in unavailable", async () => {
+  const f = await signInThenDecline([refusedForm, submittedScreen, rejectionUnconfirmed], {}, {
+    reason: "host_refused",
+    explanation: "The host would not type the login into the site's form.",
+  });
+  const outcome = await f.run();
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(outcome).toMatchObject({ recoveryReason: "sign_in_unavailable", stopReason: "sign_in_failed" });
+  expect(blockedDiagnostic(outcome)).toMatchObject({
+    reason: "sign_in_unavailable",
+    reported: "host_refused",
+    hostRefusals: [{ source: "sign_in_step", code: "AutofillRefused", check: "destination" }],
+  });
+});
+
+// The login went out and the site silently refused it; publication then refused a recipe nothing
+// verified. That refusal follows from the unconfirmed sign-in, so a host_refused report on it ends
+// as sign-in unavailable, as before, with the publication check on record.
+it("ends a host_refused report on a publication refused after an unconfirmed sign-in as sign-in unavailable", async () => {
+  const steps = [submittedScreen, rejectionUnconfirmed];
+  let executions = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        ...steps.map((_, step) => call("execute", authenticate, `sign_in_${step}`)),
+        call("execute", pureExample, "example"),
+        call("finish_build", finishBuild, "finish"),
+        call("report_blocked", {
+          reason: "host_refused",
+          explanation: "A Pomerado check refused publication, so no tool was published.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: (submitted, beforeDispatch = () => Effect.void) => {
+        const dispatched = beforeDispatch({
+          reviewId: "review_step",
+          action: submitted.purpose === "authenticate" ? "authentication" : "read",
+        });
+        if (submitted.purpose !== "authenticate")
+          return dispatched.pipe(
+            Effect.as({
+              executionId: "execution_one",
+              status: "completed" as const,
+              effect: "verified" as const,
+              resultRef: "example_result",
+              observations: { result: "fixture" },
+            }),
+          );
+        return dispatched.pipe(Effect.as(steps[executions++] ?? submittedScreen));
+      },
+      publish: () => Effect.fail(hostCheckRefused),
+    },
   );
+  const outcome = await f.run();
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(outcome).toMatchObject({ recoveryReason: "sign_in_unavailable" });
+  expect(blockedDiagnostic(outcome)).toMatchObject({
+    reason: "sign_in_unavailable",
+    reported: "host_refused",
+    hostRefusals: [
+      { source: "publication", code: "PublicationUnavailable", reason: "autofill_recipe_not_verified" },
+    ],
+  });
 });
 
 // Guardian's final refusal of the sign-in itself, with nothing sent, is no reason the task is

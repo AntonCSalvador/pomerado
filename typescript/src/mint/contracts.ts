@@ -170,16 +170,32 @@ export interface BrokenInput {
  * - `task_update`: the host refused to apply a task update, with its reason, or `other` for one
  *   core does not name.
  */
+/**
+ * A closed code as core writes one: snake_case (`autofill_recipe_not_verified`) or PascalCase
+ * (`CredentialTargetRefused`), at most 64 characters, so no page text fits. Each code comes from
+ * a closed type where it is set (a `MintFailure` reason, a sign-in failure code, a host check);
+ * the checkpoint checks its shape rather than listing every code, so a code a later release adds
+ * still reads.
+ */
+const ClosedCode = Schema.String.pipe(
+  Schema.pattern(/^(?:[a-z][a-z0-9]*(?:_[a-z0-9]+)*|[A-Z][A-Za-z0-9]*)$/u),
+  Schema.maxLength(64),
+);
 export const HostRefusalSource = Schema.Union(
   Schema.Struct({
     source: Schema.Literal("publication"),
-    code: Schema.String,
-    reason: Schema.optionalWith(Schema.String, { exact: true }),
+    // Only the host's own publication checks set it, which fail as this code.
+    code: Schema.Literal("PublicationUnavailable"),
+    reason: Schema.optionalWith(ClosedCode, { exact: true }),
   }),
   Schema.Struct({
     source: Schema.Literal("sign_in_step"),
-    code: Schema.String,
-    check: Schema.optionalWith(Schema.String, { exact: true }),
+    code: Schema.Literal(
+      "CredentialTargetRefused",
+      "CredentialTargetUnverified",
+      "AutofillRefused",
+    ),
+    check: Schema.optionalWith(ClosedCode, { exact: true }),
   }),
   Schema.Struct({
     source: Schema.Literal("task_update"),
@@ -2049,10 +2065,19 @@ export interface MintHarnessSnapshot {
    */
   readonly hostRefused?: true;
   /**
-   * Which host check set `hostRefused`, its latest, by closed codes alone (`HostRefusalSource`).
-   * Optional, so an older worker ignores it and a newer one restores an older checkpoint without it.
+   * Which host check set `hostRefused`, its latest (`HostRefusalSource`). Optional, so an older
+   * worker ignores it and a newer one restores an older checkpoint without it. Unknown here and
+   * decoded leniently when restored: a `source` or reason a later release adds would otherwise
+   * fail an older worker's decode of the whole checkpoint during a rollout, so one it cannot read
+   * restores as no source (`unrecorded`).
    */
-  readonly hostRefusedBy?: HostRefusalSource;
+  readonly hostRefusedBy?: unknown;
+  /**
+   * A later authenticate may have sent the login since the host refused a sign-in step, so that
+   * refusal no longer keeps a `host_refused` ending apart from an unconfirmed sign-in. Optional,
+   * so an older worker ignores it and a newer one restores an older checkpoint.
+   */
+  readonly hostRefusalBeforeSignIn?: true;
   /**
    * A host check refused a step earlier in this attempt, and a later finish_build got past the
    * host's checks to Guardian's review, clearing `hostRefused`: a `host_refused` block is refused
@@ -2256,7 +2281,8 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   blockedReviewUnavailable: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   guardianRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   hostRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
-  hostRefusedBy: Schema.optionalWith(HostRefusalSource, { exact: true }),
+  hostRefusedBy: Schema.optionalWith(Schema.Unknown, { exact: true }),
+  hostRefusalBeforeSignIn: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   hostRefusalPassed: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   signInDestinationRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   noAnswerHandBacks: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),

@@ -49,7 +49,7 @@ import {
   ExecutionRefusal,
   ExecutionRequest,
   type HostRefusalBasis,
-  type HostRefusalSource,
+  HostRefusalSource,
   isReadOrWriteChoice,
   LiveTestsRequest,
   MintFailure,
@@ -517,19 +517,40 @@ const hostRefusalDecision = (
  * credentials may not, or somewhere it could not verify. An autofill refusal of another check,
  * such as a field the selector did not find or matched twice, is the minter's to correct.
  */
+const hostSignInRefusalCode = (
+  error: MintFailure,
+): Extract<HostRefusalSource, { source: "sign_in_step" }>["code"] | undefined => {
+  const code = error.authentication?.code;
+  return code === "CredentialTargetRefused" ||
+    code === "CredentialTargetUnverified" ||
+    (code === "AutofillRefused" && error.authentication?.hostRefusal?.check === "destination")
+    ? code
+    : undefined;
+};
+const hostSignInRefusal = (error: MintFailure) => hostSignInRefusalCode(error) !== undefined;
 /** A task update refusal's reason as a closed code: one core names, else `other`. */
-const taskUpdateRefusalCode = (reason: string): Extract<HostRefusalSource, { source: "task_update" }>["reason"] =>
+const taskUpdateRefusalCode = (
+  reason: string,
+): Extract<HostRefusalSource, { source: "task_update" }>["reason"] =>
   reason === "intake_refused" ||
   reason === "duplicate_tool" ||
   reason === "site_unavailable" ||
   reason === "change_unsupported"
     ? reason
     : "other";
-const hostSignInRefusal = (error: MintFailure) =>
-  error.authentication?.code === "CredentialTargetRefused" ||
-  error.authentication?.code === "CredentialTargetUnverified" ||
-  (error.authentication?.code === "AutofillRefused" &&
-    error.authentication.hostRefusal?.check === "destination");
+/**
+ * Whether a host refusal a `host_refused` report stands on is apart from an unconfirmed sign-in,
+ * so the report keeps its reason: a sign-in screen the host refused at its destination check,
+ * which a later password or code screen that passes clears; a sign-in step the host refused with
+ * no login sent since (`beforeSignIn` false); and a task update the host refused. A publication or
+ * live tests refused while the sign-in never confirmed may be its consequence, such as a recipe
+ * nothing verified, as may a refused refill, and a refusal an older checkpoint kept without its
+ * source is unknown: none of them keeps the reason.
+ */
+const hostRefusalApartFromSignIn = (refusal: HostRefusalBasis, beforeSignIn: boolean) =>
+  refusal.source === "sign_in_destination" ||
+  refusal.source === "task_update" ||
+  (refusal.source === "sign_in_step" && !beforeSignIn);
 /**
  * A failure's code as diagnostics and publication evidence name it. A review whose outcome
  * Guardian kept refusing fails as `ReviewUnavailable`, but it is a verdict that did not form, not
@@ -1184,7 +1205,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           if (authentication?.state === "authenticated") {
             signInUnconfirmed = false;
             signInRefusalOnly = false;
-          } else if (effect !== "not_sent") signInUnconfirmed = true;
+          } else if (effect !== "not_sent") {
+            signInUnconfirmed = true;
+            if (hostRefused) hostRefusalBeforeSignIn = true;
+          }
           return;
         }
         // One that failed past its dispatch fence may have sent the login, unless it says it
@@ -1196,8 +1220,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           failure?.loginDeclined === undefined &&
           failure?.authentication?.nothingSubmitted !== true &&
           failure?.execution?.dispatch !== "not_sent"
-        )
+        ) {
           signInUnconfirmed = true;
+          // The host's own refusal of this authenticate is no later login sent after it.
+          if (hostRefused && !(failure !== undefined && hostSignInRefusal(failure)))
+            hostRefusalBeforeSignIn = true;
+        }
       };
       /**
        * The host's identical refusals in a row while typing into a sign-in screen: the latest
@@ -1284,13 +1312,21 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       let hostRefused = recovered?.hostRefused === true;
       /** Which host check set `hostRefused`, its latest, by closed codes (`HostRefusalSource`). */
+      // Decoded leniently: a source a newer release added reads as none, so as `unrecorded`.
       let hostRefusedBy: HostRefusalSource | undefined = hostRefused
-        ? recovered?.hostRefusedBy
+        ? Option.getOrUndefined(Schema.decodeUnknownOption(HostRefusalSource)(recovered?.hostRefusedBy))
         : undefined;
+      /**
+       * A later authenticate may have sent the login since the host refused a sign-in step
+       * (`hostRefusedBy` source `sign_in_step`), so that refusal is no longer the latest sign-in
+       * event: an unconfirmed sign-in after it ends the build as sign-in unavailable.
+       */
+      let hostRefusalBeforeSignIn = hostRefused && recovered?.hostRefusalBeforeSignIn === true;
       /** Records a host check's refusal of a step the build needs, and which check it was. */
       const refuseByHost = (source: HostRefusalSource) => {
         hostRefused = true;
         hostRefusedBy = source;
+        hostRefusalBeforeSignIn = false;
       };
       /**
        * A host check refused a step earlier in this attempt, and a later finish_build got past the
@@ -2943,10 +2979,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       };
       const providerFeedback = (failed: MintFailure, now: number) => {
         const error = countHostRefusal(failed);
-        if (hostSignInRefusal(error))
+        const signInRefusal = hostSignInRefusalCode(error);
+        if (signInRefusal !== undefined)
           refuseByHost({
             source: "sign_in_step",
-            code: error.authentication?.code ?? "unknown",
+            code: signInRefusal,
             ...(error.authentication?.hostRefusal?.check === undefined
               ? {}
               : { check: error.authentication.hostRefusal.check }),
@@ -3442,8 +3479,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             readonly basis?: "live_tests_spent";
             /** What a `host_refused` ending stood on, each host check in force. */
             readonly hostRefusals?: readonly HostRefusalBasis[];
-            /** A `host_refused` ending stood only on a refused password refill. */
-            readonly refillOnly?: true;
+            /**
+             * A `host_refused` ending stands on a host refusal apart from an unconfirmed sign-in
+             * (`hostRefusalApartFromSignIn`), so it keeps its reason.
+             */
+            readonly apartFromSignIn?: true;
           }
         | { readonly refusal: string } => {
         const refused = (
@@ -3606,8 +3646,10 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           reason,
           ...(liveTestsSpent && !hostCheckRefusing ? { basis: "live_tests_spent" as const } : {}),
           hostRefusals,
-          ...(refillRefused && !hostRefused && !signInDestinationRefused && !liveTestsSpent
-            ? { refillOnly: true as const }
+          ...(hostRefusals.some((refusal) =>
+            hostRefusalApartFromSignIn(refusal, hostRefusalBeforeSignIn),
+          )
+            ? { apartFromSignIn: true as const }
             : {}),
         };
       };
@@ -6545,16 +6587,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     // their choice to end the build keep their endings, a policy report renamed to
                     // one included. A host refusal a later finish_build got past is still a
                     // refusal on record.
-                    // A host_refused report keeps its reason, since the host's own check stopped
-                    // the build, unless it stands only on a refused password refill: the login
-                    // then reached the site twice and neither sign-in confirmed, so sign-in is
-                    // what failed.
+                    // A host_refused report keeps its reason when a host check stopped the build
+                    // apart from the sign-in (`hostRefusalApartFromSignIn`), such as a sign-in
+                    // screen refused at its destination after the login went out. One that stands
+                    // only on what may follow from the unconfirmed sign-in, such as a refused
+                    // refill or a publication of a recipe nothing verified, ends as sign-in
+                    // unavailable, its record naming the checks.
                     const hostRefusals = "hostRefusals" in ending ? ending.hostRefusals : undefined;
                     if (
                       ending.reason !== "owner_declined" &&
                       ending.reason !== "question_unanswered" &&
                       ending.reason !== "owner_ended" &&
-                      (ending.reason !== "host_refused" || ending.refillOnly === true) &&
+                      !("apartFromSignIn" in ending && ending.apartFromSignIn === true) &&
                       (signInUnconfirmed ||
                         (signInRefusalOnly && !hostRefused && !hostRefusalPassed)) &&
                       unresolvedSignIn === undefined &&
@@ -7223,6 +7267,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ...(signInRefusalOnly ? { signInRefusalOnly: true as const } : {}),
         ...(hostRefused ? { hostRefused: true as const } : {}),
         ...(hostRefused && hostRefusedBy !== undefined ? { hostRefusedBy } : {}),
+        ...(hostRefused && hostRefusalBeforeSignIn ? { hostRefusalBeforeSignIn: true as const } : {}),
         ...(hostRefusalPassed ? { hostRefusalPassed: true as const } : {}),
         ...(signInDestinationRefused ? { signInDestinationRefused: true as const } : {}),
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),
