@@ -1492,6 +1492,137 @@ it.each([
   expect(JSON.stringify(f.requests[steps.length + 1]?.input ?? null)).toContain("owner_not_ended");
 });
 
+// A stop condition the owner picked in an answer, which the minter recorded with mint_update and
+// then had to check, is the caller's own request too: once the check meets it, caller_input stands
+// on that update when the intent cites it, though owner_ended no longer can.
+const searchRequest = {
+  intent: "Search the store's catalog by keyword and return each product's title and price.",
+  businessInput: { keyword: "kettle" },
+};
+const redirectChoice = {
+  questions: [
+    {
+      id: "store",
+      type: "choice",
+      prompt: "The store sends this browser to its sister store. Where should the tool search?",
+      options: [
+        { id: "sister", label: "Search the sister store instead" },
+        {
+          id: "stop",
+          label: "Keep the main store only, and stop without searching if it redirects",
+        },
+      ],
+    },
+  ],
+};
+const stopRequirement =
+  "Search only the main store, and stop without searching when it redirects to the sister store.";
+const recordStop = (confirmedBy: readonly string[]) =>
+  call(
+    "mint_update",
+    {
+      summary: "Stop without searching when the store redirects.",
+      changes: [{ setting: "requirement", change: "add", text: stopRequirement }],
+      confirmedBy,
+      recommend: "update",
+      intent: "The owner picked the stop option.",
+    },
+    "update",
+  );
+const originCheck = call("execute", { ...pureExample, purpose: "explore", target: "liveBrowser" });
+const redirectedPage = {
+  executionId: "origin_check",
+  status: "completed" as const,
+  effect: "not_sent" as const,
+  resultRef: "origin_result",
+  observations: { url: "https://sister.example.test/" },
+};
+const redirectExplanation =
+  "The store redirected to its sister store, and you asked to stop then, so nothing was searched.";
+/** The recorded turns: ask, record the owner's stop, check the page, report, then prose. */
+const stopOnRedirect = async (confirmedBy: readonly string[], intent: string) => {
+  let asked = 0;
+  let executed = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("request_input", redirectChoice),
+        recordStop(confirmedBy),
+        originCheck,
+        call("report_blocked", {
+          reason: "caller_input",
+          explanation: redirectExplanation,
+          intent,
+        }),
+      ][index] ?? prose("The store redirected, so I stopped."),
+    {
+      askInput: () =>
+        Effect.sync(() => {
+          asked++;
+          return { store: { type: "choice", value: "stop" } } as const;
+        }),
+      reviewAndExecute: (_input, beforeDispatch = () => Effect.void) =>
+        beforeDispatch(readAllow).pipe(
+          Effect.zipRight(
+            Effect.sync(() => {
+              executed++;
+              return redirectedPage;
+            }),
+          ),
+        ),
+      reviewTaskUpdate: () =>
+        Effect.succeed({ outcome: "allow" as const, rationale: "Confirmed.", reviewId: "r1" }),
+      applyTaskUpdate: () => Effect.succeed({ outcome: "applied" as const }),
+    },
+    searchRequest,
+  );
+  return { f, outcome: await f.run(), counts: () => ({ asked, executed }) };
+};
+
+it.each([
+  ["its revision", "Task revision 1 requires stopping on this redirect."],
+  [
+    "the words of its requirement",
+    "The update says to stop without searching when it redirects to the sister store.",
+  ],
+  [
+    "the words of the option the owner picked",
+    "The owner chose to keep the main store only, and the page redirected.",
+  ],
+])(
+  "ends caller_input on a stop condition the owner confirmed in an answer, citing %s",
+  async (_citation, intent) => {
+    const { f, outcome, counts } = await stopOnRedirect(["store"], intent);
+    expect(JSON.stringify(f.requests[2]?.input)).toContain('\\"status\\":\\"updated\\"');
+    expect(outcome).toMatchObject({
+      build: "incomplete",
+      blocked: { reason: "caller_input", explanation: redirectExplanation },
+      stopReason: "caller_input",
+    });
+    // It ends at its first report: the owner is asked once, and nothing runs after the check.
+    expect(f.requests).toHaveLength(4);
+    expect(counts()).toEqual({ asked: 1, executed: 1 });
+  },
+);
+
+it.each([
+  {
+    basis: "an update no answer confirmed, cited by its revision",
+    confirmedBy: [],
+    intent: "Task revision 1 requires stopping on this redirect.",
+  },
+  {
+    basis: "a confirmed update while the intent cites only the minter's notes",
+    confirmedBy: ["store"],
+    intent: "My notes say a redirect ends this build.",
+  },
+])("refuses caller_input on $basis", async ({ confirmedBy, intent }) => {
+  const { f, outcome } = await stopOnRedirect(confirmedBy, intent);
+  expect(JSON.stringify(f.requests[2]?.input)).toContain('\\"status\\":\\"updated\\"');
+  expect(JSON.stringify(f.requests[4]?.input)).toContain("caller_input_not_cited");
+  expect(outcome).not.toHaveProperty("blocked");
+});
+
 // The owner's own choice to end the build keeps its ending, sign-in or not, as their no does.
 it("keeps owner_ended after an unconfirmed sign-in", async () => {
   const f = await fixture(
