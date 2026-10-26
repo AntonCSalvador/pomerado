@@ -796,6 +796,9 @@
 
 ### Fixes
 
+- A download that `files.collect` takes over the host's size caps, one file over the per-file cap (`too_large`) or over what the run's caps leave (`run_limit`), now fails the script with an `OperationFailure` that names the cap and may have sent something (`dispatch` `unknown`), instead of `InvalidInput`. The page made the file, so the limit is the host's and the caller has no other input to send, yet a host read such a run as the caller's bad input and told its caller to correct a request that was fine. `files.place` still throws `InvalidInput` for a caller's file over the caps, and every other refusal keeps its error.
+  - `pomerado.hostProtocol` stays 1, and no exported type changes. A tool built on an earlier release still throws `InvalidInput` for such a download, so a host that serves older tools and wants to tell its caller the same can note which file call the host refused, `place` or `collect`, on its own side of the file channel.
+
 - A sign-in or card-fill step's inspection, and each call of its fill, skips a frame the page takes away while the call searches the page's frames for the step's controls, such as an ad slot or a widget that reloads itself, and reads the rest. The search read each frame with no regard for one going away, so Playwright's `Frame was detached` failed the whole call: the inspection came back `page_unavailable` even when the step's fields showed in the page itself, and a fill call failed the same way. Now a frame whose read fails once it is detached counts for nothing, along with any match the search read in it before, so a field only in that frame is `not_found`, as when the page has not drawn it yet, and a field in the page is still its one visible match. The inspection's read of the screen's buttons skips such a frame too. A read that fails in a frame still attached fails the call as before.
   - `pomerado.hostProtocol` stays 1, and no exported type changes.
 
