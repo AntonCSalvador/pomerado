@@ -157,7 +157,7 @@ first:
   - in a read signed out, each declared input is used, or changed from its default, by a passing
     case, and a case whose expectation you changed because the site itself gave another answer
     for that input names the capture of that answer, such as the site's no-results page for that
-    search, in its `purpose` and in `coverage` (testing skill).
+    search, by its exact path in its `purpose` and in `coverage` (testing skill).
 - **Write options.** Each option on the path is an input even when the caller left the choice to
   you; the script never takes the first, the alphabetically first or a hard-wired value.
 - **Login URL.** A signed-in tool publishes the `loginUrl` you signed in from, and every run opens
