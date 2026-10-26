@@ -308,9 +308,9 @@ type LightRead = typeof LightRows.Type & { readonly hasNext: boolean };
 
 // Rows whose fields come from each row's own detail page, on a list the site shows whole on one
 // page (`offset`). `readList` reads only the light rows the list itself shows, keyed as usual, and
-// the tool then opens the detail page only for each row `readList` returned. Never open a detail
-// page inside `open` or `more`: `readList` asks them for every row from the start of the list up
-// to the cursor's position, so a later page would open every earlier row's page again.
+// the tool then opens the detail page only for each row `readList` returned. Avoid opening a
+// detail page inside `open` or `more`: `readList` asks them for every row from the start of the
+// list up to the cursor's position, so a later page would open every earlier row's page again.
 // Adapt every role, name and attribute from your own session's evidence.
 export const readItemDetails = defineOperation(
   {
@@ -342,6 +342,11 @@ ${code}`,
     };
     const navigate = (url: string) =>
       `await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: waitLimits.navigation });`;
+    const onSite = (url: URL) =>
+      siteDomain === undefined
+        ? url.origin === siteOrigin
+        : url.protocol === "https:" &&
+          (url.hostname === siteDomain || url.hostname.endsWith(`.${siteDomain}`));
     // The first `count` light rows of the list, after `steps` bring it.
     const readRows = async (steps: string, count: number): Promise<LightRead> => {
       const read = Schema.decodeUnknownSync(LightRows)(
@@ -367,7 +372,7 @@ return { rows: rows.map((row) => ({ id: row.key, name: row.name, href: new URL(r
     // Each returned row's own page, one call each, only for the rows this call returns.
     const items: Item[] = [];
     for (const row of page.rows) {
-      if (new URL(row.href).origin !== siteOrigin)
+      if (!onSite(new URL(row.href)))
         throw new errors.OperationFailure("An item's link leaves the site");
       const detail = Schema.decodeUnknownSync(Schema.Struct({ maker: Schema.NonEmptyTrimmedString }))(
         await run(`${navigate(row.href)}

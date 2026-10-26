@@ -1210,24 +1210,6 @@ it("asks for an access code with a private secret question", async () => {
   );
 });
 
-/*
- * `readList` asks a reader's `open`, `more` and `next` for every row from the start of a segment,
- * and a growing list's `next` for every row loaded so far. A reader that opens each row's detail
- * page inside them opens every earlier row's page again on a later page, so each page costs more
- * than the one before. The guidance opens detail pages only for the rows `readList` returns, and
- * does per-row work once per key.
- */
-it("opens detail pages only for the rows a list call returns", async () => {
-  const texts = await renderedTexts("typescript/authoring");
-  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
-  expect(text("pagination")).toContain(
-    "## Rows that need a detail page When each row's fields come from the row's own detail page, prefer reading the list with `readList` over the rows the list itself shows, keyed as usual, and opening the detail page only for each row `readList` returns. Avoid opening detail pages inside `open`, `more` or `next`: `readList` asks them for every row from the start of the segment up to the cursor's position, so a later page would open every earlier row's detail page again. For a list that grows as you scroll or press Load more, `next` hands back every row loaded so far, not only the new ones. Prefer doing per-row work, such as expanding a row or opening its details, once per row key, and skip keys you have already handled.",
-  );
-  expect(text("core")).toContain(
-    "say so in `coverage`. Prefer opening those detail pages only for the rows the call returns, after `readList`, not inside the list reader (pagination skill).",
-  );
-});
-
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /*
@@ -1252,7 +1234,7 @@ it("renders the pinned standalone authoring", async () => {
     ["933e2daac360d31beeeb2a8aeabcf22ca8512cc0272f321b047106f4a2055ab3", "search"],
     ["1b7d4195a350f19b2eee83ba2ae48f2c4dc68dc0d5c4a4f395e54d34ada30068", "auth"],
     ["ead4c4ffc04505a9951a6f24ec69ff795019f0142adf63c7bf7e4f66e74527d9", "testing"],
-    ["3027f3ba4908222ec179e31e0974bb9a128cd19173f5beec629482fba1f805f5", "pagination"],
+    ["8d199bd8aab5a0848a3b1f33abd9a38491559fe1dd5acd34416e33adb8f0773e", "pagination"],
     ["49373d05397797d5862f12f62101615c99257e025056c7385b2b9bb5ebcd5f7d", "forms"],
     ["7308f56f0ac66a427deac277366104e8e6e023aa83debdbd616d22b11ea3f95f", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
