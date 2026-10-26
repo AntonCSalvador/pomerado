@@ -288,7 +288,13 @@ export const checkWriteSession = <
     const unproven = (extracted.contract.write?.commits ?? [])
       .filter((name) => declaredUnproven.has(name))
       .map(String);
-    return unproven.length === 0
-      ? { extracted, declared }
-      : { extracted, declared, commitsUnproven: unproven };
+    const checked: {
+      readonly extracted: Extracted;
+      readonly declared: NonNullable<typeof declared>;
+      readonly commitsUnproven?: readonly string[];
+    } =
+      unproven.length === 0
+        ? { extracted, declared }
+        : { extracted, declared, commitsUnproven: unproven };
+    return checked;
   });
