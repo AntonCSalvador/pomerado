@@ -79,6 +79,8 @@ const FillAnswer = Schema.Union(
   Schema.Struct({
     /** `disabled`: the submit was disabled, so the call clicked nothing. */
     submit: Schema.Literal("clicked", "failed", "disabled", "none"),
+    /** A `clicked` submit the call pressed from the keyboard. */
+    via: Schema.optional(Schema.Literal("keyboard")),
     url: Schema.String,
     navigated: Schema.optional(PageNavigation),
     controls: Schema.optional(PageControls),
@@ -759,7 +761,10 @@ const afterFieldCall = (
  * submits refuses the submit as before.
  * A step that names `dismiss` clicks that covering notice's own control first, when the page shows
  * it, and refuses the step with nothing typed when it is no such control (`dismissNotice`). A
- * click another element caught, which never reached the submit, is `blocked`, with that element
+ * click another element caught, which never reached the submit, is pressed from the keyboard
+ * instead: the host focuses that same submit and presses Enter on it, only once focus landed on
+ * it, under the same guard, and reports it `clicked` with `via: "keyboard"`; the element over it is
+ * never clicked. When focus goes anywhere else it is `blocked`, with that element
  * (`blockedBy`): nothing was sent and the fields still hold what was typed. On a step that names
  * `dismiss`, a notice drawn only once the fields were typed is dismissed then, and the submit
  * clicked once more, with nothing typed again. A click that ran out of time while the next page
@@ -981,6 +986,7 @@ const submitStep = (
           });
     return {
       ...filledReport(step, progress, answer.submit, answer.url),
+      ...(answer.via === undefined ? {} : { via: answer.via }),
       ...(navigated === undefined ? {} : { navigated }),
       ...(answer.controls === undefined ? {} : { controls: answer.controls }),
     };
