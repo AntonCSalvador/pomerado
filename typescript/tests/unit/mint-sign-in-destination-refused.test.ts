@@ -529,14 +529,16 @@ it.each([
   {
     checkpoint: "an older worker's",
     edit: (checkpoint: Record<string, unknown>) => {
-      delete checkpoint["hostRefusedBy"];
+      delete checkpoint["hostRefusalSources"];
     },
     recorded: { source: "unrecorded" },
   },
   {
     checkpoint: "a later release's",
     edit: (checkpoint: Record<string, unknown>) => {
-      checkpoint["hostRefusedBy"] = { source: "a_later_check", code: "LaterCode" };
+      checkpoint["hostRefusalSources"] = [
+        { refusal: { source: "a_later_check", code: "LaterCode" } },
+      ];
     },
     recorded: { source: "unrecorded" },
   },
@@ -551,5 +553,94 @@ it.each([
     ).toContainEqual(
       expect.objectContaining({ phase: "blocked", reason: "host_refused", hostRefusals: [recorded] }),
     );
+  },
+);
+
+/**
+ * A takeover's reply to a host_refused report after its predecessor's host refused a sign-in step,
+ * typing nothing, and a later screen then sent the login, which nothing confirmed; from the
+ * predecessor's checkpoint as `edit` leaves it.
+ */
+const afterLoginSentTakeover = async (edit: (checkpoint: Record<string, unknown>) => void) => {
+  let capture: (() => MintHarnessSnapshot) | undefined;
+  let executions = 0;
+  const refusedSignIn = new MintFailure({
+    code: "Unavailable",
+    authentication: {
+      phase: "credential_submit",
+      code: "CredentialTargetRefused",
+      nothingSubmitted: true,
+    },
+  });
+  const first = await scripted(
+    (turn) =>
+      Effect.gen(function* () {
+        for (const field of ["#outside", "#password"])
+          yield* Effect.either(
+            turn.actions.execute({ ...authenticateStep, signInStep: screen(field) }),
+          );
+      }),
+    {
+      autofillSignIn: true,
+      reviewAndExecute: (_execution, beforeDispatch = () => Effect.void) =>
+        executions++ === 0
+          ? Effect.fail(refusedSignIn)
+          : beforeDispatch(hostAuthentication).pipe(
+              Effect.as({
+                executionId: "sign_in_sent",
+                status: "completed" as const,
+                effect: "possible" as const,
+                observations: { step: { outcome: "filled", submit: "clicked" } },
+              }),
+            ),
+      agentRecovery: {
+        bindHarness: (bound) =>
+          Effect.sync(() => {
+            capture = bound;
+          }),
+        save: () => Effect.void,
+      },
+    },
+  );
+  await first.run();
+  const checkpoint = JSON.parse(JSON.stringify(capture?.())) as Record<string, unknown>;
+  edit(checkpoint);
+  const harness = Schema.decodeUnknownSync(MintHarnessSnapshot)(checkpoint);
+  const replies: unknown[] = [];
+  const takeover = await scripted(
+    (turn) =>
+      Effect.gen(function* () {
+        const reportBlocked = turn.actions.reportBlocked;
+        if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+        replies.push(JSON.parse(yield* reportBlocked(hostRefusedReport)));
+      }),
+    {
+      ...signInSite().dependencies,
+      agentRecovery: { initial: { agent: freshAgent, harness }, save: () => Effect.void },
+    },
+  );
+  await takeover.run();
+  return { checkpoint, replies };
+};
+
+// The checkpoint keeps that a login went out after the host's refusal, so a successor ends the
+// report as sign-in unavailable, as its predecessor would have; without that mark, the refusal
+// would read as the latest sign-in event and keep the report's reason.
+it.each([
+  { checkpoint: "as kept", edit: () => undefined, status: "sign_in_unavailable" },
+  {
+    checkpoint: "without the mark that a login went out since",
+    edit: (checkpoint: Record<string, unknown>) => {
+      const sources = checkpoint["hostRefusalSources"] as Record<string, unknown>[];
+      for (const source of sources) delete source["beforeSignIn"];
+    },
+    status: "blocked",
+  },
+])(
+  "ends a takeover's host_refused report after a login sent since a refused sign-in step, from the checkpoint $checkpoint",
+  async ({ edit, status }) => {
+    const { checkpoint, replies } = await afterLoginSentTakeover(edit);
+    expect(checkpoint["signInUnconfirmed"]).toBe(true);
+    expect(replies).toEqual([expect.objectContaining({ status })]);
   },
 );

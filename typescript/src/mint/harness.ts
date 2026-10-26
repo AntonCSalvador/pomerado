@@ -547,6 +547,25 @@ const taskUpdateRefusalCode = (
  * nothing verified, as may a refused refill, and a refusal an older checkpoint kept without its
  * source is unknown: none of them keeps the reason.
  */
+/**
+ * The standing host refusals a checkpoint kept (`MintHarnessSnapshot.hostRefusalSources`), read
+ * entry by entry: a source this worker cannot decode, such as one a later release added, reads as
+ * none (`unrecorded`), and a checkpoint that kept none, from an older worker, as one unrecorded
+ * refusal.
+ */
+const restoredHostRefusals = (kept: unknown) => {
+  const entries = Array.isArray(kept) ? (kept as readonly unknown[]) : [];
+  const restored = entries.map((entry) => {
+    const record = typeof entry === "object" && entry !== null ? entry : {};
+    return {
+      refusal: Option.getOrUndefined(
+        Schema.decodeUnknownOption(HostRefusalSource)(Reflect.get(record, "refusal")),
+      ),
+      beforeSignIn: Reflect.get(record, "beforeSignIn") === true,
+    };
+  });
+  return restored.length > 0 ? restored : [{ refusal: undefined, beforeSignIn: false }];
+};
 const hostRefusalApartFromSignIn = (refusal: HostRefusalBasis, beforeSignIn: boolean) =>
   refusal.source === "sign_in_destination" ||
   refusal.source === "task_update" ||
@@ -1207,7 +1226,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             signInRefusalOnly = false;
           } else if (effect !== "not_sent") {
             signInUnconfirmed = true;
-            if (hostRefused) hostRefusalBeforeSignIn = true;
+            loginSentSinceHostRefusals();
           }
           return;
         }
@@ -1223,8 +1242,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ) {
           signInUnconfirmed = true;
           // The host's own refusal of this authenticate is no later login sent after it.
-          if (hostRefused && !(failure !== undefined && hostSignInRefusal(failure)))
-            hostRefusalBeforeSignIn = true;
+          if (!(failure !== undefined && hostSignInRefusal(failure))) loginSentSinceHostRefusals();
         }
       };
       /**
@@ -1311,22 +1329,32 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        * review clears it, setting `hostRefusalPassed`.
        */
       let hostRefused = recovered?.hostRefused === true;
-      /** Which host check set `hostRefused`, its latest, by closed codes (`HostRefusalSource`). */
-      // Decoded leniently: a source a newer release added reads as none, so as `unrecorded`.
-      let hostRefusedBy: HostRefusalSource | undefined = hostRefused
-        ? Option.getOrUndefined(Schema.decodeUnknownOption(HostRefusalSource)(recovered?.hostRefusedBy))
-        : undefined;
       /**
-       * A later authenticate may have sent the login since the host refused a sign-in step
-       * (`hostRefusedBy` source `sign_in_step`), so that refusal is no longer the latest sign-in
-       * event: an unconfirmed sign-in after it ends the build as sign-in unavailable.
+       * Each host check whose refusal `hostRefused` stands on, in the order they refused, once each
+       * (`MintHarnessSnapshot.hostRefusalSources`): the check, undefined when a checkpoint kept the
+       * refusal without a source this worker can read (`unrecorded`), and whether a later
+       * authenticate may have sent the login since (`beforeSignIn`), after which a sign-in step's
+       * refusal is no longer the latest sign-in event.
        */
-      let hostRefusalBeforeSignIn = hostRefused && recovered?.hostRefusalBeforeSignIn === true;
-      /** Records a host check's refusal of a step the build needs, and which check it was. */
-      const refuseByHost = (source: HostRefusalSource) => {
+      let standingHostRefusals: {
+        readonly refusal: HostRefusalSource | undefined;
+        beforeSignIn: boolean;
+      }[] = hostRefused ? restoredHostRefusals(recovered?.hostRefusalSources) : [];
+      /**
+       * Records a host check's refusal of a step the build needs. The same check refusing again
+       * moves to the end, as a refusal after any login sent since.
+       */
+      const refuseByHost = (refusal: HostRefusalSource) => {
         hostRefused = true;
-        hostRefusedBy = source;
-        hostRefusalBeforeSignIn = false;
+        const key = JSON.stringify(refusal);
+        standingHostRefusals = [
+          ...standingHostRefusals.filter((standing) => JSON.stringify(standing.refusal) !== key),
+          { refusal, beforeSignIn: false },
+        ];
+      };
+      /** A later authenticate may have sent the login after every host refusal standing now. */
+      const loginSentSinceHostRefusals = () => {
+        for (const standing of standingHostRefusals) standing.beforeSignIn = true;
       };
       /**
        * A host check refused a step earlier in this attempt, and a later finish_build got past the
@@ -3635,22 +3663,27 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         if (reason !== "host_refused") return { reason };
         // A host_refused report names each host check it stands on, for the record; one that
         // stands only on refused live tests names them as its basis too.
-        const hostRefusals: HostRefusalBasis[] = [
-          // A checkpoint from an older worker kept the refusal without its source.
-          ...(hostRefused ? [hostRefusedBy ?? { source: "unrecorded" as const }] : []),
+        // A refusal kept without a source this worker reads is `unrecorded`.
+        const standing = hostRefused
+          ? standingHostRefusals.map(({ refusal, beforeSignIn }) => ({
+              refusal: refusal ?? { source: "unrecorded" as const },
+              beforeSignIn,
+            }))
+          : [];
+        const others: HostRefusalBasis[] = [
           ...(refillRefused ? [{ source: "sign_in_refill" as const }] : []),
           ...(signInDestinationRefused ? [{ source: "sign_in_destination" as const }] : []),
           ...(liveTestsSpent ? [{ source: "live_tests_spent" as const }] : []),
         ];
+        const apart =
+          standing.some(({ refusal, beforeSignIn }) =>
+            hostRefusalApartFromSignIn(refusal, beforeSignIn),
+          ) || others.some((refusal) => hostRefusalApartFromSignIn(refusal, false));
         return {
           reason,
           ...(liveTestsSpent && !hostCheckRefusing ? { basis: "live_tests_spent" as const } : {}),
-          hostRefusals,
-          ...(hostRefusals.some((refusal) =>
-            hostRefusalApartFromSignIn(refusal, hostRefusalBeforeSignIn),
-          )
-            ? { apartFromSignIn: true as const }
-            : {}),
+          hostRefusals: [...standing.map(({ refusal }) => refusal), ...others],
+          ...(apart ? { apartFromSignIn: true as const } : {}),
         };
       };
       /**
@@ -5750,7 +5783,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 // host refusal no longer stands: what Guardian decided is what the build answers.
                 if (hostRefused && !hostChecksRefused) {
                   hostRefused = false;
-                  hostRefusedBy = undefined;
+                  standingHostRefusals = [];
                   hostRefusalPassed = true;
                 }
               }
@@ -7266,8 +7299,14 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         ...(guardianRefused ? { guardianRefused: true as const } : {}),
         ...(signInRefusalOnly ? { signInRefusalOnly: true as const } : {}),
         ...(hostRefused ? { hostRefused: true as const } : {}),
-        ...(hostRefused && hostRefusedBy !== undefined ? { hostRefusedBy } : {}),
-        ...(hostRefused && hostRefusalBeforeSignIn ? { hostRefusalBeforeSignIn: true as const } : {}),
+        ...(hostRefused && standingHostRefusals.length > 0
+          ? {
+              hostRefusalSources: standingHostRefusals.map(({ refusal, beforeSignIn }) => ({
+                ...(refusal === undefined ? {} : { refusal }),
+                ...(beforeSignIn ? { beforeSignIn: true as const } : {}),
+              })),
+            }
+          : {}),
         ...(hostRefusalPassed ? { hostRefusalPassed: true as const } : {}),
         ...(signInDestinationRefused ? { signInDestinationRefused: true as const } : {}),
         ...(noAnswerHandBacks === 0 ? {} : { noAnswerHandBacks }),

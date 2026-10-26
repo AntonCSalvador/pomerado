@@ -161,16 +161,6 @@ export interface BrokenInput {
 }
 
 /**
- * The host check that refused a step the build needs, which a `host_refused` ending stands on, by
- * closed codes alone, never page text:
- * - `publication`: the host's own publication checks refused a finish_build, with the failure's
- *   code and its reason;
- * - `sign_in_step`: the host refused a sign-in step, with the sign-in's code and the check that
- *   refused it;
- * - `task_update`: the host refused to apply a task update, with its reason, or `other` for one
- *   core does not name.
- */
-/**
  * A closed code as core writes one: snake_case (`autofill_recipe_not_verified`) or PascalCase
  * (`CredentialTargetRefused`), at most 64 characters, so no page text fits. Each code comes from
  * a closed type where it is set (a `MintFailure` reason, a sign-in failure code, a host check);
@@ -181,6 +171,16 @@ const ClosedCode = Schema.String.pipe(
   Schema.pattern(/^(?:[a-z][a-z0-9]*(?:_[a-z0-9]+)*|[A-Z][A-Za-z0-9]*)$/u),
   Schema.maxLength(64),
 );
+/**
+ * The host check that refused a step the build needs, which a `host_refused` ending stands on, by
+ * closed codes alone, never page text:
+ * - `publication`: the host's own publication checks refused a finish_build, with the failure's
+ *   code and its reason;
+ * - `sign_in_step`: the host refused a sign-in step, with the sign-in's code and the check that
+ *   refused it;
+ * - `task_update`: the host refused to apply a task update, with its reason, or `other` for one
+ *   core does not name.
+ */
 export const HostRefusalSource = Schema.Union(
   Schema.Struct({
     source: Schema.Literal("publication"),
@@ -2068,19 +2068,16 @@ export interface MintHarnessSnapshot {
    */
   readonly hostRefused?: true;
   /**
-   * Which host check set `hostRefused`, its latest (`HostRefusalSource`). Optional, so an older
-   * worker ignores it and a newer one restores an older checkpoint without it. Unknown here and
-   * decoded leniently when restored: a `source` or reason a later release adds would otherwise
-   * fail an older worker's decode of the whole checkpoint during a rollout, so one it cannot read
-   * restores as no source (`unrecorded`).
+   * Each host check whose refusal `hostRefused` stands on, in the order they refused, as
+   * `{ refusal, beforeSignIn }`: the check (`HostRefusalSource`), and `beforeSignIn: true` once a
+   * later authenticate may have sent the login, so a sign-in step's refusal no longer keeps a
+   * `host_refused` ending apart from an unconfirmed sign-in. Optional, so an older worker ignores
+   * it and a newer one restores an older checkpoint without it. Unknown here and decoded
+   * leniently when restored, entry by entry: a `source` or reason a later release adds would
+   * otherwise fail an older worker's decode of the whole checkpoint during a rollout, so an entry
+   * it cannot read restores as no source (`unrecorded`).
    */
-  readonly hostRefusedBy?: unknown;
-  /**
-   * A later authenticate may have sent the login since the host refused a sign-in step, so that
-   * refusal no longer keeps a `host_refused` ending apart from an unconfirmed sign-in. Optional,
-   * so an older worker ignores it and a newer one restores an older checkpoint.
-   */
-  readonly hostRefusalBeforeSignIn?: true;
+  readonly hostRefusalSources?: unknown;
   /**
    * A host check refused a step earlier in this attempt, and a later finish_build got past the
    * host's checks to Guardian's review, clearing `hostRefused`: a `host_refused` block is refused
@@ -2284,8 +2281,7 @@ export const MintHarnessSnapshot: Schema.Schema<MintHarnessSnapshot> = Schema.St
   blockedReviewUnavailable: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   guardianRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   hostRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
-  hostRefusedBy: Schema.optionalWith(Schema.Unknown, { exact: true }),
-  hostRefusalBeforeSignIn: Schema.optionalWith(Schema.Literal(true), { exact: true }),
+  hostRefusalSources: Schema.optionalWith(Schema.Unknown, { exact: true }),
   hostRefusalPassed: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   signInDestinationRefused: Schema.optionalWith(Schema.Literal(true), { exact: true }),
   noAnswerHandBacks: Schema.optionalWith(Schema.NonNegativeInt, { exact: true }),

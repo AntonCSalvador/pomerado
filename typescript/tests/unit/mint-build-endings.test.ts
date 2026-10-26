@@ -1207,6 +1207,119 @@ it("ends a host_refused report on a form refused before the login went out as si
 // The login went out and the site silently refused it; publication then refused a recipe nothing
 // verified. That refusal follows from the unconfirmed sign-in, so a host_refused report on it ends
 // as sign-in unavailable, as before, with the publication check on record.
+/**
+ * A build that signs in through `steps`, each an authenticate's result or failure, then, as asked,
+ * has the host refuse a site change (`update`) and publication (`publish`), and reports
+ * host_refused.
+ */
+const hostRefusedAfter = (
+  steps: readonly (object | MintFailure)[],
+  then: { readonly update?: boolean; readonly publish?: boolean } = {},
+) => {
+  let executions = 0;
+  return fixture(
+    (_request, index) =>
+      [
+        ...steps.map((_, step) => call("execute", authenticate, `sign_in_${step}`)),
+        ...(then.update === true ? moveSite : []),
+        ...(then.publish === true
+          ? [call("execute", pureExample, "example"), call("finish_build", finishBuild, "finish")]
+          : []),
+        call("report_blocked", {
+          reason: "host_refused",
+          explanation: "A Pomerado check refused the step this build needs.",
+        }),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: (submitted, beforeDispatch = () => Effect.void) => {
+        if (submitted.purpose !== "authenticate")
+          return beforeDispatch({ reviewId: "review_example", action: "read" }).pipe(
+            Effect.as({
+              executionId: "execution_one",
+              status: "completed" as const,
+              effect: "verified" as const,
+              resultRef: "example_result",
+              observations: { result: "fixture" },
+            }),
+          );
+        const step = steps[executions++] ?? submittedScreen;
+        if (step instanceof MintFailure) return Effect.fail(step);
+        return beforeDispatch({ reviewId: "review_sign_in", action: "authentication" }).pipe(
+          Effect.as(step as typeof submittedScreen),
+        );
+      },
+      askInput: () => Effect.succeed({ move: { type: "confirm", value: { confirmed: true } } }),
+      reviewTaskUpdate: () =>
+        Effect.succeed({ outcome: "allow" as const, rationale: "Same task.", reviewId: "r1" }),
+      applyTaskUpdate: () =>
+        Effect.succeed({
+          outcome: "refused" as const,
+          reason: "change_unsupported",
+          notice: "This build cannot move to that site.",
+        }),
+      publish: () => Effect.fail(hostCheckRefused),
+    },
+    { siteOrigin: "https://shop.example.test" },
+  );
+};
+const refusedFormRecord = { source: "sign_in_step", code: "AutofillRefused", check: "destination" };
+const refusedUpdateRecord = { source: "task_update", reason: "change_unsupported" };
+const refusedPublicationRecord = {
+  source: "publication",
+  code: "PublicationUnavailable",
+  reason: "autofill_recipe_not_verified",
+};
+
+// While the sign-in never confirmed, a host refusal apart from it keeps a host_refused report's
+// reason: a sign-in form the host refused after the login went out, or a site change it refused.
+// A later publication refusal, which may follow from the unconfirmed sign-in, neither hides it
+// nor ends the build as sign-in unavailable, and the record lists every check still standing.
+it.each([
+  {
+    basis: "a form refused after the login went out",
+    steps: [submittedScreen, refusedForm, signInCheck("failed")],
+    then: {},
+    recorded: [refusedFormRecord],
+  },
+  {
+    basis: "a form refused after the login went out, then a refused publication",
+    steps: [submittedScreen, refusedForm, signInCheck("failed")],
+    then: { publish: true },
+    recorded: [refusedFormRecord, refusedPublicationRecord],
+  },
+  {
+    basis: "a refused site change",
+    steps: [submittedScreen],
+    then: { update: true },
+    recorded: [refusedUpdateRecord],
+  },
+  {
+    basis: "a refused site change, then a refused publication",
+    steps: [submittedScreen],
+    then: { update: true, publish: true },
+    recorded: [refusedUpdateRecord, refusedPublicationRecord],
+  },
+  // The same form refused again after a later login went out is the latest sign-in event again.
+  {
+    basis: "a form refused again after a later login went out",
+    steps: [refusedForm, submittedScreen, refusedForm, signInCheck("failed")],
+    then: {},
+    recorded: [refusedFormRecord],
+  },
+])(
+  "keeps a host_refused report on $basis while the sign-in never confirmed",
+  async ({ steps, then, recorded }) => {
+    const f = await hostRefusedAfter(steps, then);
+    const outcome = await f.run();
+    expect(outcome).toMatchObject({ build: "incomplete", blocked: { reason: "host_refused" } });
+    expect(outcome).not.toHaveProperty("recoveryReason");
+    expect(blockedDiagnostic(outcome)).toMatchObject({
+      reason: "host_refused",
+      hostRefusals: recorded,
+    });
+  },
+);
+
 it("ends a host_refused report on a publication refused after an unconfirmed sign-in as sign-in unavailable", async () => {
   const steps = [submittedScreen, rejectionUnconfirmed];
   let executions = 0;
