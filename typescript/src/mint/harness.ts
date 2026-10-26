@@ -2070,10 +2070,23 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const settled = yield* Effect.either(answer);
           const pending = takePendingDecision();
           if (pending === undefined) return yield* settled;
-          const decision = yield* recordDecision(pending);
+          const parsed = settled._tag === "Left" ? undefined : decodeJsonObject(settled.right);
+          // A refusal keeps the instruction its answer gave the minter, so a later review reads
+          // what the refusal requires: screened and capped as the ledger's host refusals are. A
+          // screen that fails keeps none.
+          const told = parsed?._tag === "Right" ? parsed.right.instruction : undefined;
+          const instruction =
+            pending.outcome !== "refused" || typeof told !== "string"
+              ? undefined
+              : yield* screenMintText(dependencies, told).pipe(
+                  Effect.map((screened) => capped(screened.trim(), ledgerBounds.rationaleChars)),
+                  Effect.orElseSucceed(() => undefined),
+                );
+          const decision = yield* recordDecision(
+            instruction === undefined || instruction === "" ? pending : { ...pending, instruction },
+          );
           if (settled._tag === "Left") return yield* settled;
-          const parsed = decodeJsonObject(settled.right);
-          return parsed._tag === "Left"
+          return parsed === undefined || parsed._tag === "Left"
             ? settled.right
             : JSON.stringify({ ...parsed.right, decisionId: decision.decisionId });
         });
