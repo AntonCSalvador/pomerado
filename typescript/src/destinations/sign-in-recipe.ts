@@ -103,6 +103,8 @@ export interface RecordedSignInStep {
   readonly origin?: "workspace" | undefined;
   readonly popup?: AutofillPopup | undefined;
   readonly approval?: AutofillApproval | undefined;
+  /** A device approval's element that shows the number the owner picks on their device. */
+  readonly matchSelector?: string | undefined;
   readonly rejectedMarkers?: readonly RejectedMarker[] | undefined;
   /** With each identifier field's accepted kinds, never a value. */
   readonly fields: readonly AutofillField[];
@@ -149,6 +151,7 @@ const inStepOrder = (step: SignInRecipeStep): SignInRecipeStep => ({
   page: step.page,
   ...(step.anySegments === undefined ? {} : { anySegments: step.anySegments }),
   ...(step.approval === undefined ? {} : { approval: step.approval }),
+  ...(step.matchSelector === undefined ? {} : { matchSelector: step.matchSelector }),
   ...(step.popup === undefined ? {} : { popup: step.popup }),
   ...(step.rejectedMarkers === undefined ? {} : { rejectedMarkers: step.rejectedMarkers }),
   fields: step.fields.map((field) =>

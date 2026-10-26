@@ -696,7 +696,16 @@ export const SignInStep = Schema.Union(
       },
     ),
   ),
-  Schema.Struct({ approval: AutofillApproval, popup: Schema.optional(AutofillPopup) }),
+  Schema.Struct({
+    approval: AutofillApproval,
+    popup: Schema.optional(AutofillPopup),
+    matchSelector: Schema.optional(
+      SignInSelector.annotations({
+        description:
+          "On a device approval screen that shows a number the owner must pick on their device, the visible element that shows it; the host shows that number in the owner's confirmation",
+      }),
+    ),
+  }),
   // The site showed that the login's password or code was wrong: the host asks the owner
   // for a correction in place and never sends the rejected value again. Or, once the login was
   // sent, it showed the account itself locked or suspended (`account`), at the visible element

@@ -1,10 +1,36 @@
 import { Effect } from "effect";
 import type { YieldableError } from "effect/Cause";
+import { approvalNumberOf, type AutofillPopup } from "../destinations/autofill-contracts.js";
 import type { SignInRecipeStep } from "../destinations/sign-in-recipe.js";
 import { leftSignInScreens } from "./autofill-replay-pages.js";
 import { returnedCredential, type Replay } from "./autofill-replay-session.js";
 import type { AutofillReplayInput } from "./autofill-replay-steps.js";
+import type { AutofillHooks } from "./autofill-state.js";
 import type { AutofillLogin } from "./autofill-values.js";
+
+/**
+ * The number a device approval's screen shows for the owner to pick, read once from its
+ * `matchSelector` element: kept only when it is 1 to 3 digits (`approvalNumberOf`). None without a
+ * selector, from a host that can't read one, or when the read fails, and nothing else of the page
+ * is kept.
+ */
+export const approvalNumber = <E>(
+  hooks: Pick<AutofillHooks<E>, "approvalNumber">,
+  matchSelector: string | undefined,
+  page: string,
+  popup: AutofillPopup | undefined,
+) => {
+  const read = hooks.approvalNumber;
+  if (matchSelector === undefined || read === undefined) return Effect.succeed(undefined);
+  return Effect.suspend(() => read.call(hooks, matchSelector, page, popup)).pipe(
+    Effect.map(approvalNumberOf),
+    Effect.orElseSucceed(() => undefined),
+  );
+};
+
+/** A device approval's confirmation, naming the number to pick when its screen showed one. */
+export const withApprovalNumber = (prompt: string, number: string | undefined) =>
+  number === undefined ? prompt : `${prompt} If it asks you to choose a number, pick ${number}.`;
 
 /** A page's origin, scheme, host and port; none for an opaque one, which matches nothing. */
 const originOf = (page: string) => {

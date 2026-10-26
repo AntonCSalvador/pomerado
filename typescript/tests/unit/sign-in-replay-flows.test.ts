@@ -49,6 +49,8 @@ interface SiteScript {
   readonly fill: (page: string, values: readonly string[], count: number) => FillReply;
   /** The pages that show the signed-in marker once the session is signed in. */
   readonly signedInPages?: readonly string[];
+  /** The text each page's elements show, by page name and selector. */
+  readonly texts?: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
 /** A scripted site and the run's trace on it: page loads, fills and the owner's questions. */
@@ -153,6 +155,7 @@ const scriptedSite = (script: SiteScript) => {
         go(script.entry);
       }),
     markerVisible: (selector) => Effect.sync(() => state.markers.has(selector)),
+    approvalNumber: (selector) => Effect.sync(() => script.texts?.[state.page]?.[selector]),
   };
   return {
     browser,
@@ -757,11 +760,12 @@ it("reads the login before it picks a method on a recipe whose first screen is t
 });
 
 // An approval off the page: on another device, by an email link, or a push the owner picked.
-const approvalSite = (then: string) =>
+const approvalSite = (then: string, shown?: string) =>
   scriptedSite({
     entry: "login",
     screens: { login: loginScreen, approve: [], method: ["#by-push", "#by-text"], account: [] },
     fill: (page, values) => (page === "login" && signedLogin(values) ? { next: then } : { next: "approve" }),
+    ...(shown === undefined ? {} : { texts: { approve: { "#match": shown } } }),
   });
 
 it.each([
@@ -788,6 +792,24 @@ it("asks once for an approval shown on another page of its recorded origin", asy
   );
   expect(result).toEqual(Either.right({ alreadySignedIn: false }));
   expect(steps(fake)).toEqual(["ask:missing_credentials", "fill:login", "ask:approved"]);
+});
+
+// A number-matching approval: the owner picks on the device the number the approval screen shows.
+it.each([
+  ["#match", "42", " If it asks you to choose a number, pick 42."],
+  ["#match", "42 seconds", ""],
+  [undefined, "42", ""],
+] as const)("names the number %s shows (%j) only when it is 1 to 3 digits", async (matchSelector, shown, added) => {
+  const fake = approvalSite("approve", shown);
+  const approval = { page: `${origin}/approve`, fields: [], approval: "device" as const };
+  const { result, prompts } = await signIn(
+    recipe(loginStep, matchSelector === undefined ? approval : { ...approval, matchSelector }),
+    fake,
+  );
+  expect(result).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(prompts.at(-1)).toBe(
+    `Approve the sign-in request example.test sent to your device, then confirm here.${added}`,
+  );
 });
 
 it("fails RecipeFailed when the owner declines a recorded approval", async () => {
