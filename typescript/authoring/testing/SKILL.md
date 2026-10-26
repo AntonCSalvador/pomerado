@@ -8,12 +8,12 @@ description: Design and run a few combined live test cases for a read. A read si
 This skill is for reads. A write does the original task: it proves its tool with its act session
 (writes skill), designs no tests, runs no live test and builds no offline test suite<!-- pomerado:section testing.write-http-check -->. It still checks its
 composed script's read-back and comparison offline over what the session read (writes skill).
-A write whose build runs in test mode, because its caller confirmed the site account is a test
-account, prefers one no-match case in `test/cases.json` when it takes an item's id, key or URL:
-a made-up value in the site's own format that the site has no record of, expecting
-`invalid_input`, with `purpose` naming the capture of the site's not-found page. A host that runs
-it does so on the composed script with every commit mark settled, so it stops before any save;
-other hosts ignore it. A
+As the one exception, a write whose build runs in test mode, because its caller confirmed the
+site account is a test account, prefers one no-match case in `test/cases.json` when it takes an
+item's id, key or URL: a made-up value in the site's own format that the site has no record of,
+expecting `invalid_input`, with `purpose` naming the capture of the site's not-found page. A host
+that runs it does so on the composed script with every commit mark settled, so it stops before
+any save; other hosts ignore it. A
 read proves its operation with its example, run again after each fix as the core skill says, then tests what the example did not
 exercise with a few live cases, each designed to cover as much as it can. A read signed out runs a
 handful (below). A signed-in read runs at most four distinct inputs beyond its example
@@ -69,7 +69,7 @@ Where the host runs no signed-in live tests, `live_tests` answers `unavailable` 
 alone proves a signed-in read's tool. Otherwise a signed-in read runs at most four distinct
 inputs in a build or repair, beyond its example, each chosen for high value and broad coverage:
 its combined case first, the second case above where it needs one, and one no-match case,
-preferably a made-up key for an input that takes a record's own key, id or URL, else a query or
+preferably a made-up key for an input that takes a record's own id, key or URL, else a query or
 filter the site has no results for, as a read signed out runs it (below). The host enforces
 it: a batch or `testInput` that would add a fifth input is refused as `limit` and runs nothing.
 Running an input that already ran again, after a fix or on `src/tool-http.mjs`, is free, so
