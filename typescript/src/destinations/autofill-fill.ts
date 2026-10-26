@@ -41,6 +41,7 @@ import {
   type InsertionRefusal,
 } from "./credential-keyboard.js";
 import { PageControls } from "./page-controls.js";
+import { SiteNavigation } from "./sign-in-redirect.js";
 
 /** One fill call's answer: a control that moved, an empty field the host typed, or its own. */
 const FillAnswer = Schema.Union(
@@ -79,6 +80,7 @@ const FillAnswer = Schema.Union(
     /** `disabled`: the submit was disabled, so the call clicked nothing. */
     submit: Schema.Literal("clicked", "failed", "disabled", "none"),
     url: Schema.String,
+    navigated: Schema.optional(SiteNavigation),
     controls: Schema.optional(PageControls),
   }),
   /** Another element sat over the submit and caught the click, which never reached it. */
@@ -217,6 +219,21 @@ interface FillProgress {
   /** The origins `trustSignInUrl` trusted as the host judged again a control the page moved. */
   readonly trusted: Set<string>;
 }
+
+/**
+ * Whether an origin the page chose after typing holds a value this step typed, as typed or
+ * percent-encoded, in any case: a host then never reports where the page went, so no value leaves
+ * in it.
+ */
+const holdsTyped = (origins: readonly string[], values: readonly string[]) =>
+  origins.some((origin) => {
+    const read = origin.toLowerCase();
+    return values.some(
+      (value) =>
+        value !== "" &&
+        [value, encodeURIComponent(value)].some((form) => read.includes(form.toLowerCase())),
+    );
+  });
 
 /** The report's `trustedSignInOrigins`, when the fill's own judgments trusted any. */
 const trustedByHost = (progress: FillProgress) =>
@@ -784,7 +801,7 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
       if (ended !== undefined) return ended;
     }
     const boxes = codeBoxes(step, input.values);
-    const report = yield* submitStep(input, progress, boxes);
+    const report = yield* submitStep(input, progress, boxes, input.values);
     if (!isBlocked(report) || step.dismiss === undefined) return report;
     const again = yield* dismissNotice(input, progress);
     if (again.emptied) {
@@ -795,11 +812,11 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
         const ended = yield* fillField(input, progress, index);
         if (ended !== undefined) return ended;
       }
-      return yield* submitStep(input, progress, boxes);
+      return yield* submitStep(input, progress, boxes, input.values);
     }
     if (!again.dismissed) return report;
     progress.check = typedFields(step, progress);
-    return yield* submitStep(input, progress, boxes);
+    return yield* submitStep(input, progress, boxes, input.values);
   });
 
 /**
@@ -833,7 +850,7 @@ export const resubmitAutofillStep = (input: CallInput): Effect.Effect<AutofillSt
     if (notice.refusal !== undefined) return notice.refusal;
     progress.check = typedFields(step, progress);
     const codeFields = step.fields.flatMap((field, index) => (field.slot === "code" ? [index] : []));
-    return yield* submitStep(input, progress, codeFields.length > 1 ? codeFields : []);
+    return yield* submitStep(input, progress, codeFields.length > 1 ? codeFields : [], undefined);
   });
 
 /** The first of the step's selectors that reaches into another frame, its `dismiss` included. */
@@ -898,9 +915,16 @@ const dismissNotice = (
 /**
  * The step's submit, judged again, guarded and clicked once every field was typed
  * (`submitWhenEnabled`), and what became of it. `boxes` are the step's code boxes, each of which
- * must hold exactly one character before the click.
+ * must hold exactly one character before the click. A clicked submit reports where the page went
+ * (`navigated`) only when `values`, what this call typed, are known and no origin holds one: a
+ * click again types nothing and knows nothing of what was typed before, so it never reports it.
  */
-const submitStep = (input: CallInput, progress: FillProgress, boxes: readonly number[]) =>
+const submitStep = (
+  input: CallInput,
+  progress: FillProgress,
+  boxes: readonly number[],
+  values: readonly string[] | undefined,
+) =>
   Effect.gen(function* () {
     const { step } = input;
     // A re-judge never changes a method, so the submission's method is the one judged now.
@@ -952,6 +976,14 @@ const submitStep = (input: CallInput, progress: FillProgress, boxes: readonly nu
           ...foundEvidence(answer.url, undefined, evidenceOrigins(input, progress)),
         }),
       );
-    const report = filledReport(step, progress, answer.submit, answer.url);
-    return answer.controls === undefined ? report : { ...report, controls: answer.controls };
+    return {
+      ...filledReport(step, progress, answer.submit, answer.url),
+      ...(answer.submit !== "clicked" ||
+      answer.navigated === undefined ||
+      values === undefined ||
+      holdsTyped(answer.navigated.origins, values)
+        ? {}
+        : { navigated: answer.navigated }),
+      ...(answer.controls === undefined ? {} : { controls: answer.controls }),
+    };
   });

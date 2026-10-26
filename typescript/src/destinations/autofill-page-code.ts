@@ -119,6 +119,7 @@ return {
   ...(submitKey === null || submit === null ? {} : { keySubmit: { submitControls: submit.submitControls } }),
   ...(popupTargetId === undefined ? {} : { popupTargetId }),
   url: primary.url(),
+  document: await documentStart(),
 };`;
 
 /**
@@ -747,7 +748,17 @@ const noteRequest = (request) => {
 const noteCommit = (frame) => {
   if (frame === primary.mainFrame()) committed = true;
 };
+// The origin of each navigation of the main frame from the click until the page settled, in order,
+// server redirects included: where the page went on its own from the host's submit.
+const hops = [];
+const noteHop = (request) => {
+  try {
+    if (request.isNavigationRequest() && request.frame() === primary.mainFrame())
+      hops.push(new URL(request.url()).origin);
+  } catch {}
+};
 primary.on("request", noteRequest);
+primary.on("request", noteHop);
 primary.on("framenavigated", noteCommit);
 let late = false;
 try {
@@ -767,6 +778,7 @@ try {
     const blockedBy = intercepted
       ? await submit.locator.evaluate(${coveringCode}, undefined, { timeout: ${elementReadMs} }).catch(() => null)
       : null;
+    primary.off("request", noteHop);
     return blockedBy === null ? { submit: "failed", url: primary.url() } : { submit: "blocked", blockedBy, url: primary.url() };
   }
 } finally {
@@ -783,8 +795,10 @@ const lateCommit = !late
 let submission = await refusedSubmission();
 if (submission === null && ((await navigated) || (await lateCommit)))
   await primary.waitForLoadState("domcontentloaded", { timeout: ${call.settleMs} }).catch(() => undefined);
+primary.off("request", noteHop);
 submission ??= await refusedSubmission();
 if (submission !== null) return { submission, url: primary.url() };
+const settled = await documentStart();
 // What the page shows once the submit settled, never a value, for the minter's next step.
 const controls = await pageControls().catch(() => null);
 const newAlerts =
@@ -792,6 +806,7 @@ const newAlerts =
 return {
   submit: "clicked",
   url: primary.url(),
+  navigated: { origins: hops, ...(settled === undefined ? {} : { document: settled }) },
   ...(controls === null ? {} : { controls: newAlerts === null ? controls : { ...controls, newAlerts } }),
 };`;
 };
@@ -925,7 +940,7 @@ ${fill === undefined ? "" : `if (popupTargetId !== ${JSON.stringify(fill.popupTa
 }
 ${formControlsCode}
 ${locateCode}
-${fill === undefined ? "" : documentStartCode}
+${documentStartCode}
 const observed = ${JSON.stringify(observed)};
 const selectors = ${JSON.stringify(step.fields.map((field) => field.selector))};
 const questionSelectors = ${JSON.stringify(step.fields.map((field) => questionRead(field, fill === undefined)))};
