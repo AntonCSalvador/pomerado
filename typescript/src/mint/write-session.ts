@@ -207,11 +207,17 @@ export const sessionSentWrite = (session: { readonly steps: readonly WriteSessio
 const sessionRefusal = (
   reason: NonNullable<MintFailure["reason"]>,
   writePathMarks?: readonly string[],
+  publishesOnRefusal = false,
 ) =>
   new MintFailure({
     code: "PublicationUnavailable",
     reason,
     ...(writePathMarks === undefined ? {} : { writePathMarks }),
+    // The two refusals a minter meets when it has not yet published on the site's own no.
+    ...(publishesOnRefusal &&
+    (reason === "write_not_submitted" || reason === "commit_marks_unentered")
+      ? { publishesOnRefusal: true as const }
+      : {}),
   });
 
 /**
@@ -280,6 +286,8 @@ export const checkWriteSession = <
 }) =>
   Effect.gen(function* () {
     const { session, step } = check;
+    const refuse = (reason: NonNullable<MintFailure["reason"]>, writePathMarks?: readonly string[]) =>
+      sessionRefusal(reason, writePathMarks, check.publishOnRefusal === true);
     // The site's own no on the step named for publication, which saved and confirmed nothing.
     const siteRefusal =
       check.publishOnRefusal === true &&
@@ -288,13 +296,13 @@ export const checkWriteSession = <
         ? step.refused
         : undefined;
     if (siteRefusal === undefined && !sessionSentWrite(session))
-      return yield* sessionRefusal("write_not_submitted");
+      return yield* refuse("write_not_submitted");
     const enteredMarks = sessionEnteredMarks(session.steps);
     // The refusal ends the session (the host sets `refused` only on its last act step), so the
     // path's later marks stay unentered.
     const unrun =
       siteRefusal === undefined ? writePathRemaining(check.writePath, enteredMarks) : [];
-    if (unrun.length > 0) return yield* sessionRefusal("write_path_unfinished", unrun);
+    if (unrun.length > 0) return yield* refuse("write_path_unfinished", unrun);
     const extracted = yield* check.extract;
     const declared = extracted.contract.write?.confirmation;
     const refusal = writeContractRefusal(extracted.contract.write, extracted.inputDecodes, step, {
@@ -303,10 +311,10 @@ export const checkWriteSession = <
       ...(siteRefusal === undefined ? {} : { refused: true }),
     });
     if (refusal !== undefined || declared === undefined)
-      return yield* sessionRefusal(refusal ?? "confirmation_undeclared");
+      return yield* refuse(refusal ?? "confirmation_undeclared");
     const commits = extracted.contract.write?.commits ?? [];
     const undeclared = writePathRemaining(check.writePath, new Set(commits.map(String)));
-    if (undeclared.length > 0) return yield* sessionRefusal("write_path_undeclared", undeclared);
+    if (undeclared.length > 0) return yield* refuse("write_path_undeclared", undeclared);
     // A refusal the host cannot read ends its run as an unknown outcome, so it is fixed now.
     if (
       extracted.outputSchema !== undefined &&
@@ -314,13 +322,13 @@ export const checkWriteSession = <
       (check.registeredOutputSchema === undefined ||
         !unreadableRefusal(check.registeredOutputSchema))
     )
-      return yield* sessionRefusal("refusal_unreadable");
+      return yield* refuse("refusal_unreadable");
     // The example's refusal stands for the tool only when the composed script declares it too.
     if (
       siteRefusal !== undefined &&
       !declaredRefusalReasons(extracted.outputSchema).has(siteRefusal.reason)
     )
-      return yield* sessionRefusal("write_not_submitted");
+      return yield* refuse("write_not_submitted");
     // A run accepts a confirm popup without asking only at the action the build accepted it at,
     // so the composed script must run each such action under the session's action id.
     if (check.confirms !== undefined) {
