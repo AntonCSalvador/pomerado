@@ -101,7 +101,9 @@ export interface WriteSessionMarks {
   /**
    * The refusal this step returned in a shape its own output schema declares, while its runner
    * showed it entered no commit mark and recorded no confirmation (`returnedRefusal`): the site's
-   * own no to the session's input, such as a product it does not offer for these facts.
+   * own no to the session's input, such as a product it does not offer for these facts. A host
+   * sets it only on the session's last act step, and only when no other step may have sent a write
+   * without entering a mark, since the check reads it on the step named for publication alone.
    */
   readonly refused?: DeclaredRefusal;
 }
@@ -282,13 +284,14 @@ export const checkWriteSession = <
     const siteRefusal =
       check.publishOnRefusal === true &&
       step.confirmation === undefined &&
-      (step.enteredMarks ?? []).length === 0
+      step.enteredMarks?.length === 0
         ? step.refused
         : undefined;
     if (siteRefusal === undefined && !sessionSentWrite(session))
       return yield* sessionRefusal("write_not_submitted");
     const enteredMarks = sessionEnteredMarks(session.steps);
-    // The refusal ended the session, so the path's later marks stay unentered.
+    // The refusal ends the session (the host sets `refused` only on its last act step), so the
+    // path's later marks stay unentered.
     const unrun =
       siteRefusal === undefined ? writePathRemaining(check.writePath, enteredMarks) : [];
     if (unrun.length > 0) return yield* sessionRefusal("write_path_unfinished", unrun);

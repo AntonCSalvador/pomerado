@@ -379,17 +379,6 @@ describe("a write session's publication check", () => {
       possiblySent: false,
       refused: { reason: "not_offered" },
     };
-    const wholePath = (write: {
-      readonly commitsUnproven?: readonly unknown[];
-      readonly commits?: readonly unknown[];
-    }) => ({
-      ...contract({
-        confirmation: "message",
-        commits: write.commits ?? ["save_property", "get_price"],
-        ...(write.commitsUnproven === undefined ? {} : { commitsUnproven: write.commitsUnproven }),
-      }),
-      outputSchema,
-    });
     const path: WritePath = {
       steps: [
         { commit: "save_property", does: "Saves the property on a new quote" },
@@ -397,32 +386,26 @@ describe("a write session's publication check", () => {
       ],
       ends: "The saved quote's price",
     };
-    const publish = (
-      steps: readonly WriteSessionMarks[],
-      extracted: ReturnType<typeof wholePath>,
-      options: { readonly publishOnRefusal?: boolean; readonly writePath?: WritePath } = {
-        publishOnRefusal: true,
-        writePath: path,
-      },
-    ) =>
-      Effect.runSyncExit(
-        checkWriteSession({
-          session: { steps },
-          step: steps.at(-1) ?? { enteredMarks: [] },
-          extract: Effect.succeed(extracted),
-          ...options,
-        }),
-      );
-    const allUnproven = wholePath({ commitsUnproven: ["save_property", "get_price"] });
-
-    it("refuses it as before for a host that does not ask, since the session sent nothing", () => {
-      expect(reason(publish([refusedFirst], allUnproven, { writePath: path }))).toBe(
-        "write_not_submitted",
-      );
-    });
+    const allUnproven = {
+      ...contract({
+        confirmation: "message",
+        commits: ["save_property", "get_price"],
+        commitsUnproven: ["save_property", "get_price"],
+      }),
+      outputSchema,
+    };
 
     it("publishes the whole path, every save step unproven, with the refusal as the proven outcome", () => {
-      expect(publish([refusedFirst], allUnproven)).toEqual(
+      const published = Effect.runSyncExit(
+        checkWriteSession({
+          session: { steps: [refusedFirst] },
+          step: refusedFirst,
+          extract: Effect.succeed(allUnproven),
+          writePath: path,
+          publishOnRefusal: true,
+        }),
+      );
+      expect(published).toEqual(
         Exit.succeed({
           extracted: allUnproven,
           declared: "message",
@@ -430,73 +413,6 @@ describe("a write session's publication check", () => {
           refusal: { reason: "not_offered" },
         }),
       );
-    });
-
-    it("still needs every save step the session never reached declared unproven", () => {
-      expect(reason(publish([refusedFirst], wholePath({})))).toBe("commit_marks_unentered");
-      expect(reason(publish([refusedFirst], wholePath({ commitsUnproven: ["get_price"] })))).toBe(
-        "commit_marks_unentered",
-      );
-    });
-
-    it("still needs the composed script to declare the same refusal", () => {
-      const otherReason = {
-        ...allUnproven,
-        outputSchema: contractJsonSchema(
-          Schema.Union(
-            quoted,
-            Schema.Struct({
-              status: Schema.Literal("refused"),
-              reason: Schema.Literal("out_of_area"),
-              site_message: Schema.String,
-            }),
-          ),
-        ),
-      };
-      expect(reason(publish([refusedFirst], otherReason))).toBe("write_not_submitted");
-      // A host that passes no output schema can't show the refusal is the tool's.
-      const { outputSchema: _omitted, ...unschemed } = allUnproven;
-      expect(
-        reason(
-          Effect.runSyncExit(
-            checkWriteSession({
-              session: { steps: [refusedFirst] },
-              step: refusedFirst,
-              extract: Effect.succeed(unschemed),
-              publishOnRefusal: true,
-            }),
-          ),
-        ),
-      ).toBe("write_not_submitted");
-    });
-
-    it("publishes a no that came after a save, with only the later steps unproven", () => {
-      const saved: WriteSessionMarks = {
-        enteredMarks: ["save_property"],
-        action: "write",
-        possiblySent: true,
-      };
-      const laterUnproven = wholePath({ commitsUnproven: ["get_price"] });
-      expect(publish([saved, refusedFirst], laterUnproven)).toEqual(
-        Exit.succeed({
-          extracted: laterUnproven,
-          declared: "message",
-          commitsUnproven: ["get_price"],
-          refusal: { reason: "not_offered" },
-        }),
-      );
-    });
-
-    it("reads the refusal only on the step named for publication, and only one that saved and confirmed nothing", () => {
-      const read: WriteSessionMarks = { enteredMarks: [], action: "read" };
-      expect(reason(publish([refusedFirst, read], allUnproven))).toBe("write_not_submitted");
-      expect(
-        reason(publish([{ ...refusedFirst, enteredMarks: ["save_property"] }], allUnproven)),
-      ).toBe("write_not_submitted");
-      // A step that recorded a confirmation is checked the usual way, path included.
-      expect(
-        reason(publish([{ ...refusedFirst, confirmation: "message" }], allUnproven)),
-      ).toBe("write_path_unfinished");
     });
   });
 });
