@@ -557,6 +557,103 @@ it("offers the host a build its minter ends on a handed-back question, and resum
   expect(JSON.stringify(rejoined)).toContain("Annual");
 });
 
+/** A takeover's host rejoins the started question and finds it expired, unanswered. */
+const expiredRejoin = () =>
+  Effect.fail(new MintFailure({ code: "Unavailable", noResponse: { possibleCommit: false } }));
+
+/**
+ * A takeover restores the suspended build's last checkpoint, whose question is still started, and
+ * its host's rejoin of that question finds it expired.
+ */
+const takeover = async (
+  suspended: Awaited<ReturnType<typeof suspendedBuild>>,
+  overrides: Partial<MintDependencies>,
+) => {
+  const checkpoint = suspended.store.checkpoints.at(-1);
+  if (checkpoint === undefined) throw new Error("No checkpoint");
+  return fixture(() => prose(), {
+    model: makeOpenAIMinter(
+      suspended.model.provider,
+      "medium",
+      {},
+      { recoveryFactory: suspended.store.factory(checkpoint.agent) },
+    ),
+    agentRecovery: { save: suspended.store.save, initial: checkpoint, recoverTool: expiredRejoin },
+    ...overrides,
+  });
+};
+
+// Fails when a takeover's rejoined question that expired unanswered fails the model run, which
+// ends the build with no recorded cause, instead of being offered for a suspension.
+it("offers the host a takeover's rejoined question that expired unanswered", async () => {
+  const suspended = await suspendedBuild();
+  const offered: UnansweredQuestion[] = [];
+  const resumed = await takeover(suspended, {
+    websiteCredentialsAvailable: true,
+    suspendUnanswered: (unanswered) =>
+      Effect.sync(() => {
+        offered.push(unanswered);
+        return "suspended" as const;
+      }),
+  });
+
+  const ended = await resumed.run().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  expect(interrupted(ended)).toBe(true);
+  // The harness never learned the replayed question's id: the host knows which one it rejoined.
+  expect(offered).toEqual([{ step: "question", possibleCommit: false }]);
+  // The call stays started for the next resume, and no further model call was made.
+  expect(suspended.model.requests).toHaveLength(1);
+  const last = suspended.store.checkpoints.at(-1);
+  expect(last?.agent.tools).toEqual([expect.objectContaining({ callId: "ask", state: "started" })]);
+  expect(last?.harness.noResponse).toBeUndefined();
+});
+
+it.each<{ readonly name: string; readonly hook?: MintDependencies["suspendUnanswered"] }>([
+  { name: "without the hook" },
+  {
+    name: "when the host does not suspend it",
+    hook: () => Effect.succeed("not_suspended" as const),
+  },
+])(
+  "ends a takeover's build as no_response on its rejoined question that expired $name",
+  async ({ hook }) => {
+    const suspended = await suspendedBuild();
+    const resumed = await takeover(suspended, {
+      websiteCredentialsAvailable: true,
+      ...(hook === undefined ? {} : { suspendUnanswered: hook }),
+    });
+
+    expect(await resumed.run()).toMatchObject({
+      build: "incomplete",
+      noResponse: { possibleCommit: false },
+    });
+    expect(resumed.counts()).toMatchObject({ executed: 0, published: 0, asked: 0 });
+    // The build ended at the question: the minter made no further model call.
+    expect(suspended.model.requests).toHaveLength(1);
+  },
+);
+
+it("hands a takeover's rejoined question that expired back to a minter not signed in", async () => {
+  const suspended = await suspendedBuild();
+  let offers = 0;
+  const resumed = await takeover(suspended, {
+    suspendUnanswered: () =>
+      Effect.sync(() => {
+        offers++;
+        return "suspended" as const;
+      }),
+  });
+
+  expect(await resumed.run()).toMatchObject({ build: "published" });
+  expect(offers).toBe(0);
+  const next = inputOf(suspended.model.requests[1]);
+  const result = next.find((item) => item.type === "function_call_result" && item.callId === "ask");
+  expect(JSON.stringify(result)).toContain('\\"status\\":\\"no_answer\\"');
+});
+
 const request = {
   mode: "mint",
   intent: "Read public data",
