@@ -20,7 +20,9 @@ read (the `writes` skill). The scope follows what the tool is now, as the `testi
 sign-in codes
 belong to the host; never request a password, cookie or TOTP seed in model-visible text.
 
-Asking the caller follows `AGENTS.md` ("Try hard, then ask").
+Asking the caller follows `AGENTS.md` ("Try hard, then ask"). When neither the request nor an
+answer says whether the tool looks things up or changes something, prefer asking the
+read-or-write choice before your first execution.
 
 Write ordinary TypeScript or JavaScript files. Export a default Kernel script, as
 described below. Import the actual canonical SDK entrypoint given in the workspace
