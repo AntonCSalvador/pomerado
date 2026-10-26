@@ -617,6 +617,9 @@ export const notingHostTrust = (
         return trusts;
       };
 
+/** Whether an address a control reports is a script, whatever it runs. */
+const isScriptAddress = (url: string) => URL.parse(url)?.protocol === "javascript:";
+
 /**
  * The first control that sits or submits off the site and its configured sign-in origins, or a
  * field still to be typed (from index `from`) that takes no typing: where its own frame, document,
@@ -629,7 +632,11 @@ export const notingHostTrust = (
  * destinations: navigating to such an action sends nothing, and the page's code, which can read the
  * field anyway, does the sending. A sign-in step's link whose own address is such a script
  * (`scriptHref`) is likewise judged by its frame, document and other destinations: following it
- * sends nothing. A card-fill step's never is, nor any other script action or link.
+ * sends nothing. A sign-in step that types nothing, such as a sign-in provider chooser, on a
+ * browser the host has typed nothing into yet (`judgedBeforeTyping` unset) judges its submit by its
+ * frame, document and destinations other than scripts, whatever a script runs: no script can send
+ * a typed value, and the next screen is inspected before anything is typed there.
+ * A card-fill step's never is, nor any other script action or link.
  */
 export const untrustedTarget = (
   targets: typeof Targets.Type,
@@ -639,12 +646,16 @@ export const untrustedTarget = (
     readonly authenticationOrigins: readonly string[];
     readonly paymentFrameOrigins?: readonly string[] | undefined;
     readonly trustSignInUrl?: ((url: URL) => boolean) | undefined;
+    readonly judgedBeforeTyping?: readonly string[] | undefined;
   },
   from: number,
   named?: ReadonlySet<string>,
 ) => {
   const predicate = signInUrlTrust(trust, step);
   const signIn = !step.fields.some((field) => isCardSlot(field.slot));
+  // Nothing typed on this browser yet either, so no script can carry a typed value anywhere.
+  const typesNothing =
+    signIn && step.fields.length === 0 && trust.judgedBeforeTyping === undefined;
   const trusted = (url: string, card: boolean) =>
     trustedUrl(trust.siteOrigin, trust.authenticationOrigins, url) ||
     (card && onPaymentFrameOrigin(url, trust.paymentFrameOrigins ?? [])) ||
@@ -652,6 +663,13 @@ export const untrustedTarget = (
   const untrustedPart = (target: Target, action: string, card = false) => {
     if (!trusted(target.ownerUrl ?? "", card)) return "frame";
     if (!trusted(target.documentOrigin, card)) return "document_origin";
+    // A sign-in step that types nothing sends nothing of the login: any script address among its
+    // control's destinations is the page's own code, not where a value goes, and the screen its
+    // click leads to is judged again before anything is typed there.
+    if (typesNothing)
+      return target.actions.every((url) => isScriptAddress(url) || trusted(url, card))
+        ? undefined
+        : action;
     // A sign-in form's own action that is a script doing nothing sends nothing itself; its other
     // destinations still count.
     const script = signIn && target.scriptAction === true && target.actions[0] === "javascript:";
@@ -784,7 +802,9 @@ const carriedRedirect = (
  * destination are on the site's registrable domain or a configured sign-in origin; a sign-in
  * form's own action that is a script doing nothing, which sends nothing itself, is judged by where
  * the field sits and the form's other destinations, and a sign-in submit link whose own address is
- * such a script by where it sits and its other destinations. A form that
+ * such a script by where it sits and its other destinations. A sign-in step that types nothing,
+ * before anything was typed on the browser, judges any script address of its submit that way,
+ * whatever the script runs. A form that
  * submits by GET is allowed when it is clearly the login form, which Guardian judges; its values
  * land in a URL that stays byte-exact. Once the host typed into the page
  * (`judgedBeforeTyping` given), a refusal names only the origins `namedAfterTyping` allows.
