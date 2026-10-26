@@ -607,6 +607,9 @@ never with final text, which the host treats as unfinished work:
   condition it set that cannot be met. Prefer asking with `request_input` for a missing fact the
   caller could supply. Cite the field or instruction in `intent`, and say in `explanation` what
   the caller should supply or change.
+- `caller_input`: the caller's own request, or a rule the owner confirmed in an answer and you
+  recorded with `mint_update`, rules out going on, such as a stop condition that has now been met.
+  In `intent`, prefer citing the request field or the update's revision, or quote its words.
 - `owner_declined`: the owner answered no to a `confirm` question, or declined to sign in, and
   the build needs that step.
 - `question_unanswered`: a question you asked came back `no_answer`, and the build cannot go on
