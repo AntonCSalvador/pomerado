@@ -539,15 +539,6 @@ const taskUpdateRefusalCode = (
     ? reason
     : "other";
 /**
- * Whether a host refusal a `host_refused` report stands on is apart from an unconfirmed sign-in,
- * so the report keeps its reason: a sign-in screen the host refused at its destination check,
- * which a later password or code screen that passes clears; a sign-in step the host refused with
- * no login sent since (`beforeSignIn` false); and a task update the host refused. A publication or
- * live tests refused while the sign-in never confirmed may be its consequence, such as a recipe
- * nothing verified, as may a refused refill, and a refusal an older checkpoint kept without its
- * source is unknown: none of them keeps the reason.
- */
-/**
  * The standing host refusals a checkpoint kept (`MintHarnessSnapshot.hostRefusalSources`), read
  * entry by entry: a source this worker cannot decode, such as one a later release added, reads as
  * none (`unrecorded`), and a checkpoint that kept none, from an older worker, as one unrecorded
@@ -566,6 +557,15 @@ const restoredHostRefusals = (kept: unknown) => {
   });
   return restored.length > 0 ? restored : [{ refusal: undefined, beforeSignIn: false }];
 };
+/**
+ * Whether a host refusal a `host_refused` report stands on is apart from an unconfirmed sign-in,
+ * so the report keeps its reason: a sign-in screen the host refused at its destination check,
+ * which a later password or code screen that passes clears; a sign-in step the host refused with
+ * no login sent since (`beforeSignIn` false); and a task update the host refused. A publication or
+ * live tests refused while the sign-in never confirmed may be its consequence, such as a recipe
+ * nothing verified, as may a refused refill, and a refusal an older checkpoint kept without its
+ * source is unknown: none of them keeps the reason.
+ */
 const hostRefusalApartFromSignIn = (refusal: HostRefusalBasis, beforeSignIn: boolean) =>
   refusal.source === "sign_in_destination" ||
   refusal.source === "task_update" ||

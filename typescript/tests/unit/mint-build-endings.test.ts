@@ -1204,22 +1204,33 @@ it("ends a host_refused report on a form refused before the login went out as si
   });
 });
 
-// The login went out and the site silently refused it; publication then refused a recipe nothing
-// verified. That refusal follows from the unconfirmed sign-in, so a host_refused report on it ends
-// as sign-in unavailable, as before, with the publication check on record.
 /**
- * A build that signs in through `steps`, each an authenticate's result or failure, then, as asked,
- * has the host refuse a site change (`update`) and publication (`publish`), and reports
- * host_refused.
+ * A build that, as asked, first has the host refuse a site change and Guardian deny a publication
+ * that passed the host's checks (`before`), then signs in through `steps`, each an authenticate's
+ * result or failure, then has the host refuse a site change (`update`) and publication
+ * (`publish`), and reports host_refused.
  */
 const hostRefusedAfter = (
   steps: readonly (object | MintFailure)[],
-  then: { readonly update?: boolean; readonly publish?: boolean } = {},
+  then: {
+    readonly update?: boolean;
+    readonly publish?: boolean;
+    readonly before?: { readonly update: true; readonly guardianDenied: true };
+  } = {},
 ) => {
   let executions = 0;
+  let published = 0;
+  const publications = then.before === undefined ? [] : [guardianCorrection];
   return fixture(
     (_request, index) =>
       [
+        ...(then.before === undefined
+          ? []
+          : [
+              ...moveSite,
+              call("execute", pureExample, "example_before"),
+              call("finish_build", finishBuild, "finish_before"),
+            ]),
         ...steps.map((_, step) => call("execute", authenticate, `sign_in_${step}`)),
         ...(then.update === true ? moveSite : []),
         ...(then.publish === true
@@ -1257,7 +1268,7 @@ const hostRefusedAfter = (
           reason: "change_unsupported",
           notice: "This build cannot move to that site.",
         }),
-      publish: () => Effect.fail(hostCheckRefused),
+      publish: () => Effect.fail(publications[published++] ?? hostCheckRefused),
     },
     { siteOrigin: "https://shop.example.test" },
   );
@@ -1320,6 +1331,28 @@ it.each([
   },
 );
 
+// A publication that passed the host's checks and that Guardian then denied ends the host refusals
+// standing before it: what Guardian decided is what the build answers. A refused site change
+// before it therefore no longer keeps the reason of a host_refused report on a publication the
+// host refused after a login the site silently rejected, which ends as sign-in unavailable.
+it("ends host refusals once a publication passes the host's checks", async () => {
+  const f = await hostRefusedAfter([submittedScreen, rejectionUnconfirmed], {
+    before: { update: true, guardianDenied: true },
+    publish: true,
+  });
+  const outcome = await f.run();
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(outcome).toMatchObject({ recoveryReason: "sign_in_unavailable", stopReason: "sign_in_failed" });
+  expect(blockedDiagnostic(outcome)).toMatchObject({
+    reason: "sign_in_unavailable",
+    reported: "host_refused",
+    hostRefusals: [refusedPublicationRecord],
+  });
+});
+
+// The login went out and the site silently refused it; publication then refused a recipe nothing
+// verified. That refusal follows from the unconfirmed sign-in, so a host_refused report on it ends
+// as sign-in unavailable, as before, with the publication check on record.
 it("ends a host_refused report on a publication refused after an unconfirmed sign-in as sign-in unavailable", async () => {
   const steps = [submittedScreen, rejectionUnconfirmed];
   let executions = 0;
