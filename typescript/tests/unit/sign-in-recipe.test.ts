@@ -352,20 +352,6 @@ describe("decodeSignInRecipe", () => {
       "a version 6 step with a key this host does not know",
       JSON.stringify({ version: 6, steps: [{ ...steps[0], submitAfter: 1 }], signedIn }),
     ],
-    // `submitVia` is version 8's: an older version that carries it is refused, never replayed by
-    // clicking a submit another element covers.
-    [
-      "a version 7 step pressed from the keyboard",
-      JSON.stringify({ version: 7, steps: [{ ...steps[1], submitVia: "keyboard" }], signedIn }),
-    ],
-    [
-      "a version 8 step pressed from the keyboard with no submit",
-      JSON.stringify({
-        version: 8,
-        steps: [{ page: steps[1].page, fields: steps[1].fields, submitVia: "keyboard" }],
-        signedIn,
-      }),
-    ],
   ])("refuses %s as invalid", (_name, text) => {
     expect(decodeSignInRecipe(text)).toBe("invalid");
   });

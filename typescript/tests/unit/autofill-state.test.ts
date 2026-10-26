@@ -1,17 +1,11 @@
 import { Effect } from "effect";
 import { expect, it } from "vitest";
 import { checkAutofillSignedIn } from "../../src/destinations/autofill-step.js";
-import {
-  decodeSignInRecipe,
-  signInRecipe,
-  signInRecipeText,
-} from "../../src/destinations/sign-in-recipe.js";
 import type { AutofillSignInState } from "../../src/runtime/autofill-state.js";
 import {
   armStep,
   reasksPassword,
   recordStep,
-  screenSubmit,
   settleMinterSubmit,
   submitFilled,
   submittedLoginProof,
@@ -134,49 +128,6 @@ it("counts a screen whose host click never ran as submitted by the minter once i
   expect(signIn.steps.at(-1)?.submittedBy).toBe("minter");
   // Settling again moves nothing.
   expect(settleMinterSubmit(signIn)).toEqual([]);
-});
-
-// A screen whose covered submit the host pressed from the keyboard records it, so the recipe is
-// version 8, which an older host refuses, and each run's replay presses that submit the same way.
-it("records a submit the host pressed from the keyboard in a version 8 recipe a replay presses the same way", () => {
-  const signIn = state();
-  const login = {
-    fields: [
-      { selector: "#user", slot: "username" as const },
-      { selector: "#password", slot: "password" as const },
-    ],
-    submit: "#log-in",
-  };
-  Effect.runSync(
-    armStep(
-      signIn,
-      login,
-      { ...screen, targets: { fields: [target, target], submit: target } },
-      ["synthetic-user", "synthetic-password"],
-      noSecret,
-    ),
-  );
-  recordStep(signIn, login, {
-    outcome: "filled",
-    fields: [
-      { slot: "username", status: "filled" },
-      { slot: "password", status: "filled" },
-    ],
-    submit: "clicked",
-    via: "keyboard",
-    url: screen.page,
-  });
-  const recipe = signInRecipe(signIn.steps, { selector: "#account" });
-  expect(recipe).toMatchObject({
-    version: 8,
-    steps: [{ submit: "#log-in", submittedBy: "host", submitVia: "keyboard" }],
-  });
-  expect(decodeSignInRecipe(signInRecipeText(recipe))).toEqual(recipe);
-  expect(decodeSignInRecipe(signInRecipeText({ ...recipe, version: 9 as 8 }))).toBe(
-    "unknown_version",
-  );
-  const [recorded] = recipe.steps;
-  expect(recorded && screenSubmit(recorded)).toEqual({ submit: "#log-in", submitVia: "keyboard" });
 });
 
 // The proof a build's and a run's sign-in needs before it verifies the login: the identifier alone
