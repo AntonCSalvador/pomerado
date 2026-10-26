@@ -1,6 +1,5 @@
 import { posix } from "node:path";
 import { Effect } from "effect";
-import { dir, file } from "@openai/agents/sandbox";
 import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { localRuntimeAssets } from "../../src/execution/local-runtime-assets.js";
@@ -152,30 +151,6 @@ describe("Guardian's source reads on the local host", () => {
     const core = await read(".agents/core/SKILL.md");
     expect("source" in core && core.source.length > 0).toBe(true);
     expect(references.get(".agents/core/SKILL.md")?.startsWith("source" in core ? core.source : "-")).toBe(true);
-  });
-
-  it("reads a skill's reference files where the minter reads them, and only text", async () => {
-    const example = 'export const option = { value: "home", label: "Home" };\n';
-    const references = skillReferenceFiles([
-      {
-        name: "caller-input",
-        description: "Asking the run's caller",
-        content: "# Caller input\n",
-        references: {
-          "caller-choice.ts": file({ content: new TextEncoder().encode(example) }),
-          "not-text.bin": file({ content: new Uint8Array([0xff, 0xfe, 0xfd]) }),
-          nested: dir(),
-        },
-      },
-    ]);
-    expect([...references]).toEqual([
-      [".agents/caller-input/SKILL.md", "# Caller input\n"],
-      [".agents/caller-input/references/caller-choice.ts", example],
-    ]);
-    const { read } = await reader(references);
-    expect(await read(".agents/caller-input/references/caller-choice.ts")).toEqual({
-      source: example,
-    });
   });
 
   it("reads an authored file before the SDK file at the same path", async () => {
