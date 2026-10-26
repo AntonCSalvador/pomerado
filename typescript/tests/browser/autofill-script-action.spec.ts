@@ -8,6 +8,9 @@ import {
   type FillSlot,
 } from "../../src/destinations/autofill-step.js";
 import { fillAutofillStep } from "../../src/destinations/autofill-fill.js";
+import { runCardFill } from "../../src/destinations/card-fill.js";
+import { makeSecretHandles } from "../../src/mint/secret-handles.js";
+import { makeSignInBrowser, type SessionTyping } from "../../src/standalone/authentication.js";
 import { expectOriginsOnly, hostKeyboard, hostPage } from "./autofill-host-page.js";
 
 // A sign-in form whose own action is a script that does nothing (`javascript:`,
@@ -411,6 +414,78 @@ test("a sign-in step that types nothing is refused a link whose address runs a s
     failureDetail: { context: { check: "destination", part: "submit_destination" } },
   });
   expectOriginsOnly(inspection);
+  expect(posts).toEqual([]);
+});
+
+test("a sign-in step that types nothing is refused a do-nothing link in a form whose script action does something once something was typed on the browser", async ({
+  page,
+}) => {
+  const { posts } = await serve(page, {
+    [site]: chooserPage(
+      `<form action="javascript:send()"><a id="provider" href="javascript:void(0)" onclick="chooseProvider('corp')">Company account</a></form>`,
+    ),
+  });
+  const inspection = await inspect(page, chooserStep, [site]);
+  expect(inspection).toMatchObject({
+    outcome: "refused",
+    reason: "credential_target_refused",
+    target: "submit",
+    failureDetail: { context: { check: "destination", part: "submit_destination" } },
+  });
+  expectOriginsOnly(inspection);
+  expect(posts).toEqual([]);
+});
+
+// The host's sign-in browser reads the browser's shared record of typing as it stands at each
+// inspection, so a card fill on the same browser after the sign-in browser was made counts too.
+test("a sign-in step that types nothing is refused a script link once a card fill typed on the browser", async ({
+  page,
+}) => {
+  const { posts } = await serve(page, {
+    [site]: `<label>Card number<input id="card" name="card" autocomplete="cc-number" inputmode="numeric"></label>
+${chooserPage('<a id="provider" href="javascript:chooseProvider(\'corp\')">Company account</a>')}`,
+  });
+  const host = await hostPage(page);
+  const { keyboard } = await hostKeyboard(page);
+  const typing: SessionTyping = { typed: false };
+  const signIn = makeSignInBrowser({
+    page: host,
+    keyboard,
+    siteOrigin: site,
+    authenticationOrigins: [],
+    typing,
+  });
+  const handles = makeSecretHandles();
+  const answers = handles.issue(
+    { number: { type: "secret", value: "4242424242424242" } },
+    { number: "card_number" },
+  );
+  const handle = answers["number"];
+  if (handle?.type !== "secret") throw new Error("Not a secret");
+  const filled = await Effect.runPromise(
+    runCardFill({
+      step: { fields: [{ selector: "#card", handle: handle.value }] },
+      handles,
+      page: host,
+      keyboard,
+      siteOrigin: site,
+      review: () => Effect.void,
+      // As the local host's card fill does: the browser's shared record of typing.
+      beforeTyping: () =>
+        Effect.sync(() => {
+          typing.typed = true;
+        }),
+    }),
+  );
+  expect(filled).toMatchObject({ status: "filled" });
+  expect(typing.typed).toBe(true);
+  const inspection = await Effect.runPromise(signIn.inspect(chooserStep));
+  expect(inspection).toMatchObject({
+    outcome: "refused",
+    reason: "credential_target_refused",
+    target: "submit",
+    failureDetail: { context: { check: "destination", part: "submit_destination" } },
+  });
   expect(posts).toEqual([]);
 });
 
