@@ -30,6 +30,7 @@ import { sameSite, siteDomain } from "../runtime/same-site.js";
 import { trustableSignInUrl, trustedUrl } from "../runtime/sign-in-origins.js";
 import { type CardSlot, isCardSlot, onPaymentFrameOrigin } from "./payment-frames.js";
 import type { PageControls } from "./page-controls.js";
+import { redirectCandidate, type SiteNavigation } from "./sign-in-redirect.js";
 import type {
   AutofillPopup,
   DateControl,
@@ -38,6 +39,8 @@ import type {
   RejectedMarker,
   SubmitKey,
 } from "./autofill-contracts.js";
+
+export { SiteNavigation } from "./sign-in-redirect.js";
 
 /** A kind of sign-in identifier: what an identifier field may accept. */
 export type IdentifierKind = "username" | "email" | "phone" | "account_number";
@@ -334,6 +337,8 @@ const Located = Schema.Union(
     keySubmit: Schema.optional(Schema.Struct({ submitControls: Schema.Number })),
     popupTargetId: Schema.optional(Schema.String),
     url: Schema.String,
+    /** When the primary page's document began loading (`performance.timeOrigin`). */
+    document: Schema.optional(Schema.Number),
   }),
 );
 /** Why the host typed and clicked nothing. Nothing of the step reached the site. */
@@ -406,6 +411,12 @@ export interface AutofillInspection {
   readonly trustedSignInOrigins?: readonly string[] | undefined;
   /** The payment frame origins a card field may also sit in, for a card-fill step only. */
   readonly paymentFrameOrigins?: readonly string[] | undefined;
+  /**
+   * Host-only: the origin this inspection trusted because the sign-in carried its trust along the
+   * site's own redirect and the host's review said yes (`inspectAutofillStep`'s `redirect`); it is
+   * also in `authenticationOrigins`, so each fill call trusts it too.
+   */
+  readonly carriedSignInOrigin?: string | undefined;
   readonly screen: {
     /**
      * The origin of the frame the host found the step's controls in, its submit's or, when it
@@ -507,6 +518,14 @@ export type AutofillStepReport =
        * page moved, as `AutofillInspection.trustedSignInOrigins` names them.
        */
       readonly trustedSignInOrigins?: readonly string[];
+      /**
+       * Host-only, on a `clicked` submit of a fill whose host said what it typed before
+       * (`typedBefore`): where the page went on its own from the click until it settled
+       * (`SiteNavigation`), which the next step's inspection may carry the sign-in's trust along
+       * (`inspectAutofillStep`'s `redirect`). The page chose all of it after typing: the host never
+       * logs, keeps or forwards it, and strips it from any report it forwards, as to a minter.
+       */
+      readonly navigated?: SiteNavigation;
       /**
        * Host-only: the page's controls once a clicked submit settled, never a value, with names as
        * the page has them. The host screens them, shortens them (`presentControls`) and saves them
@@ -710,6 +729,72 @@ export const untrustedTarget = (
 };
 
 /**
+ * A new sign-in origin the site's own redirect led to, for its host's review: the origin and path
+ * of the screen the sign-in submitted, which the host trusted, the origin the page settled on with
+ * that page's path and title, and each navigation between them in order. No path holds a query or
+ * fragment, and none of it holds a value the sign-in typed (`reportedNavigation`), yet the page
+ * chose it after the host typed, so the host screens it as it would the page's own text before it
+ * shows or forwards it.
+ */
+export interface SignInRedirect {
+  readonly from: string;
+  readonly fromPathname?: string | undefined;
+  readonly candidate: string;
+  readonly candidatePathname?: string | undefined;
+  readonly candidateTitle?: string | undefined;
+  readonly chain: readonly string[];
+}
+
+/**
+ * The origin a sign-in step's inspection may trust along the site's own redirect
+ * (`inspectAutofillStep`'s `redirect`), once the host's review said yes; undefined otherwise.
+ */
+const carriedRedirect = (
+  input: Parameters<typeof inspectAutofillStep>[0],
+  found: { readonly url: string; readonly document?: number | undefined },
+  targets: typeof Targets.Type,
+  named: ReadonlySet<string> | undefined,
+) =>
+  Effect.gen(function* () {
+    const { redirect, step } = input;
+    // Only a primary tab's step, never a popup's. A card-fill step needs no rule of its own: its
+    // page must be on the site's own registrable domain (`top_document`), already trusted, so the
+    // live origin it could carry adds nothing to what its controls are judged against.
+    if (redirect === undefined || step.popup !== undefined) return undefined;
+    const predicate = signInUrlTrust(input, step);
+    // The screen the sign-in left must be one the host trusted for it.
+    const from = redirect.from;
+    if (
+      !trustedUrl(input.siteOrigin, input.authenticationOrigins, from) &&
+      !hostTrusts(predicate, from)
+    )
+      return undefined;
+    const candidate = redirectCandidate({
+      from,
+      navigated: redirect.navigated,
+      live: { url: found.url, document: found.document },
+    });
+    if (candidate === undefined) return undefined;
+    // Every control sits and submits on the new origin or one already trusted.
+    const widened = {
+      ...input,
+      authenticationOrigins: [...input.authenticationOrigins, candidate],
+      trustSignInUrl: predicate,
+    };
+    if (untrustedTarget(targets, step, widened, 0, named) !== undefined) return undefined;
+    const { navigated } = redirect;
+    const allowed = yield* redirect.review({
+      from: navigated.from,
+      ...(navigated.fromPathname === undefined ? {} : { fromPathname: navigated.fromPathname }),
+      candidate,
+      ...(navigated.pathname === undefined ? {} : { candidatePathname: navigated.pathname }),
+      ...(navigated.title === undefined ? {} : { candidateTitle: navigated.title }),
+      chain: navigated.origins,
+    });
+    return allowed ? candidate : undefined;
+  });
+
+/**
  * Finds the step's controls on the live browser's primary tab and judges where they submit, before
  * any value is typed. The contract is Kernel's vault fill, with our own
  * vault and our own fill: the minter found the fields, and this trusted controller authorizes the
@@ -757,9 +842,30 @@ export const inspectAutofillStep = (input: {
    * typed, so the host screens it as it would the page's own text before it shows or forwards it.
    */
   readonly trustSignInUrl?: ((url: URL) => boolean) | undefined;
+  /**
+   * The sign-in's last submitted screen, for a host that lets a sign-in keep the trust it gave a
+   * screen along the redirect the site starts from that screen's submit (`SignInRedirect`). Asked
+   * only of a sign-in step's primary tab, with no popup, whose controls a destination check
+   * refused: when `from` was trusted for this sign-in, the live page is where the site's own
+   * navigation from the host's click on `from` settled with nothing navigating it since
+   * (`redirectCandidate`), and every control sits and submits on that origin or one already
+   * trusted, the host's `review` judges the new origin in context. Only its yes trusts the origin,
+   * for this inspection and its fill (`carriedSignInOrigin`). Unset, or the review says no, the
+   * step is refused as before.
+   */
+  readonly redirect?:
+    | {
+        /** The page of the screen the host last submitted in this sign-in. */
+        readonly from: string;
+        /** Where that submit's click went (`AutofillStepReport`'s `navigated`). */
+        readonly navigated: SiteNavigation;
+        readonly review: (redirect: SignInRedirect) => Effect.Effect<boolean>;
+      }
+    | undefined;
 }): Effect.Effect<AutofillRefusal | AutofillInspection> =>
   Effect.gen(function* () {
-    const { step, page, siteOrigin, authenticationOrigins } = input;
+    const { step, page, siteOrigin } = input;
+    let { authenticationOrigins } = input;
     const predicate = signInUrlTrust(input, step);
     const trustedByHost = new Set<string>();
     const asking = notingHostTrust(predicate, trustedByHost);
@@ -805,11 +911,14 @@ export const inspectAutofillStep = (input: {
       submit: found.submit === null ? null : found.submit.target,
     };
     const untrusted = untrustedTarget(targets, step, { ...input, trustSignInUrl: asking }, 0, named);
-    if (untrusted)
+    const carried =
+      untrusted === undefined ? undefined : yield* carriedRedirect(input, found, targets, named);
+    if (untrusted && carried === undefined)
       return withEvidence(
         untrusted,
         foundEvidence(found.url, foundFor(found.located, untrusted.target), named),
       );
+    if (carried !== undefined) authenticationOrigins = [...authenticationOrigins, carried];
     // A submit key submits its last field's form, so a field in no form has nothing it submits.
     if (step.submitKey !== undefined && (targets.submit?.submitMethod ?? null) === null)
       return withCheck(refused("credential_target_refused", "submit"), "submit_key", {
@@ -829,6 +938,7 @@ export const inspectAutofillStep = (input: {
       authenticationOrigins,
       ...(predicate === undefined ? {} : { trustSignInUrl: predicate }),
       ...(trustedByHost.size === 0 ? {} : { trustedSignInOrigins: [...trustedByHost].sort() }),
+      ...(carried === undefined ? {} : { carriedSignInOrigin: carried }),
       ...(input.paymentFrameOrigins === undefined
         ? {}
         : { paymentFrameOrigins: input.paymentFrameOrigins }),
