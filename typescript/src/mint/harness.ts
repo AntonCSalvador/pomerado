@@ -79,7 +79,7 @@ import { finiteCaptureGap, finiteRunnerFailure } from "./runner-failure.js";
 import { isSecretHandle } from "./secret-handles.js";
 import { fileReadbackRule } from "./file-readback.js";
 import { cardReadbackRule } from "./card-readback.js";
-import { citesCallerRequest } from "./caller-citation.js";
+import { citesCallerRequest, citesConfirmedUpdate } from "./caller-citation.js";
 import type {
   AcceptedTaskUpdate,
   AllowedExecution,
@@ -2425,6 +2425,24 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             instruction: "The build's owner did not answer in time. The host is ending this build.",
           });
         });
+      /**
+       * The minter's own question went unanswered, whether asked live or rejoined by a takeover:
+       * it goes back to the minter as no answer where it may, and otherwise the build ends, unless
+       * the host suspends it. An owner's cancel is a choice to stop, never a question to decide
+       * without. `requestId` is the question's id when the harness knows it, which a takeover's
+       * replayed call does not.
+       */
+      const questionUnanswered = (
+        error: MintFailure,
+        requestId: string | undefined,
+        endsBuild: boolean,
+      ) =>
+        error.ownerCancelled !== true && handsBackNoAnswer()
+          ? noAnswer(endsBuild ? undefined : requestId)
+          : unanswered(error, "asking a question", {
+              step: "question",
+              ...(requestId === undefined ? {} : { requestId }),
+            });
       const reviewFeedback = (error: MintFailure, signIn: boolean) =>
         Effect.gen(function* () {
           // A refusal Guardian marked correctable names a fix, so no policy block stands on it.
@@ -3492,14 +3510,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           );
         }
         // A caller_input ending stands on its intent citing the caller's own request: a field the
-        // task's input holds, or words of the request's instruction.
+        // task's input holds, or words of the request's instruction. A task update the owner
+        // confirmed in an answer is that request too, as the effective task every later review
+        // reads, so the intent may cite it instead, by its revision or its words: a stop condition
+        // the owner picked, which the build then checked and met, ends as the caller's own rule.
         if (
           reason === "caller_input" &&
-          !citesCallerRequest(intent, request.intent, taskState.businessInput)
+          !citesCallerRequest(intent, request.intent, taskState.businessInput) &&
+          !citesConfirmedUpdate(intent, taskState.updates)
         )
           return refused(
             "caller_input_not_cited",
-            "caller_input needs the caller's own request as its basis, so the build has not ended. In intent, name the request field that stops the build, or quote the words of the caller's instruction, then call report_blocked again. Prefer another reason when the site, the owner or a host check stopped it.",
+            "caller_input needs the caller's own request, or a task update the owner confirmed, as its basis, so the build has not ended. In intent, name the request field or the update's revision that stops the build, or quote the words of the caller's instruction or of that update, then call report_blocked again. Prefer another reason when the site or a host check stopped it.",
           );
         if (reason === "host_refused" && !hostRefusing && hostRefusalPassed)
           return refused(
@@ -6333,14 +6355,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             }).pipe(
               Effect.catchIf(
                 (error) => error.noResponse !== undefined,
-                // An owner's cancel is a choice to stop, never a question to decide without.
-                (error) =>
-                  error.ownerCancelled !== true && handsBackNoAnswer()
-                    ? noAnswer(askingEndsBuild ? undefined : askingId)
-                    : unanswered(error, "asking a question", {
-                        step: "question",
-                        ...(askingId === undefined ? {} : { requestId: askingId }),
-                      }),
+                (error) => questionUnanswered(error, askingId, askingEndsBuild),
               ),
               Effect.ensuring(
                 Effect.sync(() => {
@@ -7173,8 +7188,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     : {
                         recoverTool: (call) =>
                           Effect.gen(function* () {
-                            const recoveredTool = yield* agentRecovery.recoverTool?.(call) ??
-                              Effect.succeed(undefined);
+                            const rejoined = yield* Effect.either(
+                              agentRecovery.recoverTool?.(call) ?? Effect.succeed(undefined),
+                            );
+                            if (rejoined._tag === "Left") {
+                              const error = rejoined.left;
+                              if (call.name !== "request_input" || error.noResponse === undefined)
+                                return yield* Effect.fail(error);
+                              // A rejoined question that went unanswered, such as one that expired
+                              // before the takeover, goes on as the live question would have.
+                              return { result: yield* questionUnanswered(error, undefined, false) };
+                            }
+                            const recoveredTool = rejoined.right;
                             if (recoveredTool === undefined) return undefined;
                             if (recoveredTool.input !== undefined) {
                               const { request: asked, answers } = recoveredTool.input;
