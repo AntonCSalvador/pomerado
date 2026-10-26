@@ -1466,7 +1466,8 @@ it("records each publication decision, refused and published, through the host's
       decidedAt: expect.any(Number),
       failedChecks: ["write_not_submitted"],
       recovery: "write_completion",
-      instruction: expect.any(String),
+      // Whole, so a review reads the instruction's last step too.
+      instruction: Reflect.get(Object(answers[0]), "instruction"),
     },
     {
       decisionId: expect.any(String),
