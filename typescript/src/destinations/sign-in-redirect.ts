@@ -33,7 +33,7 @@ export const SiteNavigation = Schema.Struct({
   document: Schema.optional(Schema.Number),
   /** The settled page's path, without its query or fragment. */
   pathname: Schema.optional(Schema.String),
-  /** The settled page's title, at most `titleLimit` characters. */
+  /** The settled page's title, at most `titleLimit` code points. */
   title: Schema.optional(Schema.String),
 });
 export type SiteNavigation = typeof SiteNavigation.Type;
@@ -41,7 +41,7 @@ export type SiteNavigation = typeof SiteNavigation.Type;
 /** The most navigations a redirect chain may hold for a sign-in to carry its trust along it. */
 export const maximumRedirectHops = 10;
 
-/** The most characters of the settled page's title a host reports. */
+/** The most code points of the settled page's title a host reports. */
 export const titleLimit = 200;
 
 /** `text` with each percent-encoded run decoded, three times over; a malformed run stays. */
@@ -93,16 +93,27 @@ const hostForms = (origin: string) => {
 };
 
 /**
- * Whether the clicked page's own address, past its origin, names a host the chain went to other
- * than its own or one already trusted, as an open redirect's parameter (`?next=`, `#return=`) does.
+ * Whether the clicked page's own address, past its origin, spells a host the chain went to other
+ * than its own or one already trusted, as an open redirect's parameter (`?next=`, `#return=`) does:
+ * as written, or by its letters and digits alone, so a fullwidth host, an ideographic full stop or
+ * escaped dots still count. A destination chosen any other way, by a form field, a cookie, a script
+ * or the server's own state, is not spelled there, so this never shows the site chose the host.
  */
 const namesHop = (clicked: URL, origins: readonly string[], trusted: readonly string[]) => {
-  const rest = decoded(`${clicked.pathname}${clicked.search}${clicked.hash}`).toLowerCase();
+  const rest = decoded(`${clicked.pathname}${clicked.search}${clicked.hash}`);
+  const lower = rest.toLowerCase();
+  const letters = squeezed(rest);
   return origins.some((origin) => {
     const url = URL.parse(origin);
     if (url === null) return true;
     if (url.hostname === clicked.hostname || trusted.includes(url.origin)) return false;
-    return (hostForms(origin) ?? []).some((form) => rest.includes(form.toLowerCase()));
+    return (hostForms(origin) ?? []).some((form) => {
+      const squeezedForm = squeezed(form);
+      return (
+        lower.includes(form.toLowerCase()) ||
+        (squeezedForm !== "" && letters.includes(squeezedForm))
+      );
+    });
   });
 };
 
@@ -112,11 +123,11 @@ const namesHop = (clicked: URL, origins: readonly string[], trusted: readonly st
  * this browser so far (`typed`); undefined, so nothing carries, when:
  * - a host of the chain holds a typed value in any form `holdsValue` reads, its Unicode form for an
  *   internationalized name included;
- * - or the clicked page's own address names a host the chain went to other than its own and those
- *   in `trusted`: a destination the address chose is an open redirect's, not the site's own
- *   sign-in handing the account on, so it never reaches a host's review.
- * A path or title that holds a typed value is left out on its own. Neither path keeps a query or
- * fragment.
+ * - or the clicked page's own address spells a host the chain went to other than its own and
+ *   those in `trusted` (`namesHop`): a destination the address chose is an open redirect's, so it
+ *   never reaches a host's review. One chosen any other way still does.
+ * A path or title that holds a typed value is left out on its own; a title is checked whole before
+ * it is cut to `titleLimit` code points. Neither path keeps a query or fragment.
  */
 export const reportedNavigation = (input: {
   readonly page: PageNavigation;
@@ -135,7 +146,9 @@ export const reportedNavigation = (input: {
     text === undefined || text === "" || holdsValue(text, typed) ? undefined : text;
   const fromPathname = shown(clicked.pathname);
   const pathname = shown(URL.parse(input.url)?.pathname);
-  const title = shown(page.title?.trim().slice(0, titleLimit));
+  // Checked whole, then cut by code point, so a value across the cut leaves no piece of itself.
+  const whole = shown(page.title?.trim());
+  const title = whole === undefined ? undefined : Array.from(whole).slice(0, titleLimit).join("");
   return {
     from: clicked.origin,
     ...(fromPathname === undefined ? {} : { fromPathname }),

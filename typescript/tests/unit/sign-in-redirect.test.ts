@@ -3,6 +3,7 @@ import {
   maximumRedirectHops,
   redirectCandidate,
   reportedNavigation,
+  titleLimit,
 } from "../../src/destinations/sign-in-redirect.js";
 
 // Core's gates before a host's review of a new sign-in origin the site's own redirect led to.
@@ -138,6 +139,9 @@ describe("reportedNavigation", () => {
     ["a fragment", `${from}#return=auth.example.org`],
     ["its path", `${site}/out/auth.example.org/password`],
     ["an intermediate hop", `${from}?next=https://hop.example.com`],
+    ["a fullwidth host", `${from}?next=%EF%BD%81uth.example.org`],
+    ["a host with ideographic full stops", `${from}?next=auth%E3%80%82example%E3%80%82org`],
+    ["a host with escaped dots", `${from}?next=auth%5C.example%5C.org`],
   ])("reports nothing when the clicked page's own address names a hop in %s", (_, clicked) => {
     expect(report({ clicked, origins: [site, "https://hop.example.com", idp] })).toBeUndefined();
   });
@@ -146,6 +150,16 @@ describe("reportedNavigation", () => {
     expect(
       report({ clicked: `${from}?return=https%3A%2F%2Flogin.example.net%2Fhome` }),
     ).toMatchObject({ from: site, origins: chain });
+  });
+
+  it("checks a title whole before it cuts it, so a typed value across the cut leaves no piece", () => {
+    const value = "synthetic-long-identifier";
+    // The value starts 10 code points before the cut, and an astral character sits before it.
+    const title = `${"\u{1F512}"}${"x".repeat(titleLimit - 11)} ${value}`;
+    expect(report({ title, typed: [value] })).not.toHaveProperty("title");
+    const kept = report({ title, typed: ["unrelated-value"] })?.title ?? "";
+    expect(Array.from(kept)).toHaveLength(titleLimit);
+    expect(kept.startsWith("\u{1F512}")).toBe(true);
   });
 
   it("leaves out a path or title that holds a typed value, and reports the rest", () => {

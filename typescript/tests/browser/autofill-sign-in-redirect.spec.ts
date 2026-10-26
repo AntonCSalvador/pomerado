@@ -299,21 +299,6 @@ test("a fill whose host does not say what the sign-in typed before never reports
   expect(report).not.toHaveProperty("navigated");
 });
 
-test("a card-fill step on the page the redirect led to never carries, and the review is never asked", async ({
-  page,
-}) => {
-  await serve(page);
-  const navigated = named(await submitUsername(page));
-  const { asked, review } = reviewing(true);
-  const inspection = await inspect(
-    page,
-    { fields: [{ selector: "#password", slot: "card_number" }], submit: "#sign-in" },
-    { from: `${site}/login`, navigated, review },
-  );
-  expect(inspection).toMatchObject({ outcome: "refused" });
-  expect(asked).toEqual([]);
-});
-
 test("a popup step never carries, and the review is never asked", async ({ page }) => {
   await serve(page);
   const navigated = named(await submitUsername(page));

@@ -729,9 +729,10 @@ const carriedRedirect = (
 ) =>
   Effect.gen(function* () {
     const { redirect, step } = input;
-    // Only a sign-in step's primary tab: never a popup's, nor a card-fill step's.
+    // Only a primary tab's step, never a popup's. A card-fill step needs no rule of its own: its
+    // page must be on the site's own registrable domain (`top_document`), already trusted, so the
+    // live origin it could carry adds nothing to what its controls are judged against.
     if (redirect === undefined || step.popup !== undefined) return undefined;
-    if (step.fields.some((field) => isCardSlot(field.slot))) return undefined;
     const predicate = signInUrlTrust(input, step);
     // The screen the sign-in left must be one the host trusted for it.
     const from = redirect.from;
