@@ -118,9 +118,11 @@ During the session:
   refusal (`InvalidInput` with `available`) or a failure (`OperationFailure`), not the write's
   output. While building, a limit the session meets is the
   owner's to settle first: ask them to revise or stop, and end with `report_blocked` when they
-  stop, as the cart skill's "Minimums and refusals" says. When they stop, or the session cannot
+  stop, as the cart skill's "Minimums and refusals" says. <!-- pomerado:section writes.site-declined:start
+When they stop, or the session cannot
   reach the task's end, end with `report_blocked` (`site_declined` when the site refused this
   example). A build whose session never reached the end publishes nothing.
+pomerado:section writes.site-declined:end -->
 - When the caller's own task asks for whatever the site ends up with, such as the product a
   quote ended up on, follow the site's preselected substitute and return the value the site
   used instead of throwing `InvalidInput`. Only the caller's task text counts this way; an

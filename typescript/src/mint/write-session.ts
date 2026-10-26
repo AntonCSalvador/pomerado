@@ -1,6 +1,11 @@
 import { Effect } from "effect";
 import { confirmActionUnmatched } from "../browser/dialogs/expected.js";
-import { unreadableRefusal, type CommitEvidence } from "../runtime/run-outcome.js";
+import {
+  declaredRefusalReasons,
+  unreadableRefusal,
+  type CommitEvidence,
+  type DeclaredRefusal,
+} from "../runtime/run-outcome.js";
 import { MintFailure, type ExecutionRequest, type WritePath } from "./contracts.js";
 import { entrypointImportClosure } from "./operation-source.js";
 import { writeContractRefusal } from "./write-contract.js";
@@ -93,6 +98,12 @@ export interface WriteSessionMarks {
   readonly action?: GuardianAction;
   /** The outcome review's newest finding for this step's write, when it has one. */
   readonly assessment?: OutcomeAssessment["outcome"];
+  /**
+   * The refusal this step returned in a shape its own output schema declares, while its runner
+   * showed it entered no commit mark and recorded no confirmation (`returnedRefusal`): the site's
+   * own no to the session's input, such as a product it does not offer for these facts.
+   */
+  readonly refused?: DeclaredRefusal;
 }
 
 /**
@@ -212,6 +223,13 @@ const sessionRefusal = (
  * script is never run. Its result names, as `commitsUnproven` in the order `commits` declares
  * them, the commit steps the contract declares unproven, after the last one the session entered,
  * which no run has shown yet; it leaves the key out when there are none.
+ *
+ * A host that publishes a write whose example ended in the site's own no sets `publishOnRefusal`.
+ * Then, when the step named for publication entered no commit mark, recorded no confirmation and
+ * returned a declared refusal (`refused`), the refusal is the session's proven outcome: the check
+ * skips the sent and write path checks, and the composed script must declare that refusal's reason
+ * in its output schema and name every commit step after the last one the session entered (all of
+ * them when it entered none) in `commitsUnproven`. The result carries the refusal as `refusal`.
  */
 export const checkWriteSession = <
   Extracted extends {
@@ -231,7 +249,9 @@ export const checkWriteSession = <
 >(check: {
   readonly session: { readonly steps: readonly WriteSessionMarks[] };
   /** The act step named for publication. */
-  readonly step: { readonly confirmation?: "message" | "readback" };
+  readonly step: Pick<WriteSessionMarks, "confirmation" | "refused"> & {
+    readonly enteredMarks?: readonly string[];
+  };
   readonly extract: Effect.Effect<Extracted, E, R>;
   /**
    * The steps the session's act steps accepted confirm popups at, and the composed script's
@@ -250,18 +270,34 @@ export const checkWriteSession = <
    * so a tool published before the refusal check is never refused for the shape it has.
    */
   readonly registeredOutputSchema?: unknown;
+  /**
+   * Set by a host that publishes a write whose example ended in the site's own declared no. A
+   * host that leaves it unset refuses such a session as before.
+   */
+  readonly publishOnRefusal?: boolean;
 }) =>
   Effect.gen(function* () {
     const { session, step } = check;
-    if (!sessionSentWrite(session)) return yield* sessionRefusal("write_not_submitted");
+    // The site's own no on the step named for publication, which saved and confirmed nothing.
+    const siteRefusal =
+      check.publishOnRefusal === true &&
+      step.confirmation === undefined &&
+      (step.enteredMarks ?? []).length === 0
+        ? step.refused
+        : undefined;
+    if (siteRefusal === undefined && !sessionSentWrite(session))
+      return yield* sessionRefusal("write_not_submitted");
     const enteredMarks = sessionEnteredMarks(session.steps);
-    const unrun = writePathRemaining(check.writePath, enteredMarks);
+    // The refusal ended the session, so the path's later marks stay unentered.
+    const unrun =
+      siteRefusal === undefined ? writePathRemaining(check.writePath, enteredMarks) : [];
     if (unrun.length > 0) return yield* sessionRefusal("write_path_unfinished", unrun);
     const extracted = yield* check.extract;
     const declared = extracted.contract.write?.confirmation;
     const refusal = writeContractRefusal(extracted.contract.write, extracted.inputDecodes, step, {
       confirmed: sessionConfirmed(session.steps),
       enteredMarks,
+      ...(siteRefusal === undefined ? {} : { refused: true }),
     });
     if (refusal !== undefined || declared === undefined)
       return yield* sessionRefusal(refusal ?? "confirmation_undeclared");
@@ -276,6 +312,12 @@ export const checkWriteSession = <
         !unreadableRefusal(check.registeredOutputSchema))
     )
       return yield* sessionRefusal("refusal_unreadable");
+    // The example's refusal stands for the tool only when the composed script declares it too.
+    if (
+      siteRefusal !== undefined &&
+      !declaredRefusalReasons(extracted.outputSchema).has(siteRefusal.reason)
+    )
+      return yield* sessionRefusal("write_not_submitted");
     // A run accepts a confirm popup without asking only at the action the build accepted it at,
     // so the composed script must run each such action under the session's action id.
     if (check.confirms !== undefined) {
@@ -292,9 +334,12 @@ export const checkWriteSession = <
       readonly extracted: Extracted;
       readonly declared: NonNullable<typeof declared>;
       readonly commitsUnproven?: readonly string[];
-    } =
-      unproven.length === 0
-        ? { extracted, declared }
-        : { extracted, declared, commitsUnproven: unproven };
+      readonly refusal?: DeclaredRefusal;
+    } = {
+      extracted,
+      declared,
+      ...(unproven.length === 0 ? {} : { commitsUnproven: unproven }),
+      ...(siteRefusal === undefined ? {} : { refusal: siteRefusal }),
+    };
     return checked;
   });
