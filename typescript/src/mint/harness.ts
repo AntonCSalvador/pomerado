@@ -423,6 +423,8 @@ const reviewedLiveTestBatches = 4;
 const ledgerBounds = {
   denials: 12,
   rationaleChars: 800,
+  /** A publication refusal's instruction, kept whole: its last step is what a review checks. */
+  instructionChars: 1_600,
   findings: 4,
   findingChars: 300,
   testFailures: 20,
@@ -2070,10 +2072,23 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           const settled = yield* Effect.either(answer);
           const pending = takePendingDecision();
           if (pending === undefined) return yield* settled;
-          const decision = yield* recordDecision(pending);
+          const parsed = settled._tag === "Left" ? undefined : decodeJsonObject(settled.right);
+          // A refusal keeps the instruction its answer gave the minter, so a later review reads
+          // what the refusal requires: screened as the ledger's host refusals are, and capped. A
+          // screen that fails keeps none.
+          const told = parsed?._tag === "Right" ? parsed.right.instruction : undefined;
+          const instruction =
+            pending.outcome !== "refused" || typeof told !== "string"
+              ? undefined
+              : yield* screenMintText(dependencies, told).pipe(
+                  Effect.map((screened) => capped(screened.trim(), ledgerBounds.instructionChars)),
+                  Effect.orElseSucceed(() => undefined),
+                );
+          const decision = yield* recordDecision(
+            instruction === undefined || instruction === "" ? pending : { ...pending, instruction },
+          );
           if (settled._tag === "Left") return yield* settled;
-          const parsed = decodeJsonObject(settled.right);
-          return parsed._tag === "Left"
+          return parsed === undefined || parsed._tag === "Left"
             ? settled.right
             : JSON.stringify({ ...parsed.right, decisionId: decision.decisionId });
         });
@@ -4295,7 +4310,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         });
       const emptyCases: LiveTestCasesFile = { cases: [] };
       /** What a signed-in read designs, in place of a read signed out's suite. */
-      const signedInPlanInstruction = `This read signed in, so it runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, as the testing skill says: one combined case in ${liveTestCasesPath} that sets every optional input and filter the example left unset, with values the site shows (a picker's options, or values in the example's own rows, never a person's or record's name, number or email). Choose each value so at least one example row fails it while some rows still pass every filter, since a value every example row already satisfies passes even when the tool ignores it, and name in purpose the row each value excludes. Set next_page true when the tool pages. Add a second case only for inputs that cannot be set with the others, and one made-up key for an input that takes a record's own key (testing skill). Then run it with live_tests action run and check that every row it returns satisfies each input it set, that the excluded rows are gone, and that page two holds new rows. Running it again after a fix, or on src/tool-http.mjs, is free.`;
+      const signedInPlanInstruction = `This read signed in, so it runs live tests on at most ${signedInTestInputLimit} distinct inputs beyond its example, as the testing skill says: one combined case in ${liveTestCasesPath} that sets every optional input and filter the example left unset, with values the site shows (a picker's options, or values in the example's own rows, never a person's or record's name, number or email). Choose each value so at least one example row fails it while some rows still pass every filter, since a value every example row already satisfies passes even when the tool ignores it, and name in purpose the row each value excludes. Set next_page true when the tool pages. Add a second case only for inputs that cannot be set with the others, and one no-match case, a made-up key for an input that takes a record's own id, key or URL, else a query or filter the site has no results for (testing skill). Then run it with live_tests action run and check that every row it returns satisfies each input it set, that the excluded rows are gone, and that page two holds new rows. Running it again after a fix, or on src/tool-http.mjs, is free.`;
       /** What the agent reads about its tests: its cases and their results. */
       const liveTestPlanView = (
         entrypoint: string,
