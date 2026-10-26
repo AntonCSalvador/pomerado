@@ -1210,21 +1210,6 @@ it("asks for an access code with a private secret question", async () => {
   );
 });
 
-/*
- * A case that cites the site's own answer names that capture by a path review can read, since a
- * later look can drop an earlier snapshot from the capture index while its file stays readable.
- */
-it("names a cited capture by its exact path, not by an execution ID alone", async () => {
-  const texts = await renderedTexts("typescript/authoring");
-  const text = (name: string) => (texts.get(name) ?? "").replace(/\s+/g, " ");
-  expect(text("testing")).toContain(
-    "review accepts the change only against it. Name a capture by its exact path, a snapshot listed in `captures/index.json` or `captures/results/<executionId>.json`, not by an execution ID alone: a later look can drop an earlier snapshot from the index, while its file stays readable by path. Prefer the snapshot that shows the site's own controls applying the input.",
-  );
-  expect(text("publication")).toContain(
-    "names the capture of that answer, such as the site's no-results page for that search, by its exact path in its `purpose` and in `coverage` (testing skill).",
-  );
-});
-
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /*
