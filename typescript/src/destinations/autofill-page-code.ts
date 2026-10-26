@@ -749,7 +749,9 @@ const noteCommit = (frame) => {
   if (frame === primary.mainFrame()) committed = true;
 };
 // The origin of each navigation of the main frame from the click until the page settled, in order,
-// server redirects included: where the page went on its own from the host's submit.
+// server redirects included, and the page's address at the click: where the page went on its own
+// from the host's submit, and from where.
+const clickedFrom = primary.url();
 const hops = [];
 const noteHop = (request) => {
   try {
@@ -799,6 +801,7 @@ primary.off("request", noteHop);
 submission ??= await refusedSubmission();
 if (submission !== null) return { submission, url: primary.url() };
 const settled = await documentStart();
+const settledTitle = await primary.title().catch(() => undefined);
 // What the page shows once the submit settled, never a value, for the minter's next step.
 const controls = await pageControls().catch(() => null);
 const newAlerts =
@@ -806,7 +809,12 @@ const newAlerts =
 return {
   submit: "clicked",
   url: primary.url(),
-  navigated: { origins: hops, ...(settled === undefined ? {} : { document: settled }) },
+  navigated: {
+    clicked: clickedFrom,
+    origins: hops,
+    ...(settled === undefined ? {} : { document: settled }),
+    ...(typeof settledTitle === "string" ? { title: settledTitle } : {}),
+  },
   ...(controls === null ? {} : { controls: newAlerts === null ? controls : { ...controls, newAlerts } }),
 };`;
 };

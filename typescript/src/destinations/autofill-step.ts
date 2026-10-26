@@ -509,10 +509,11 @@ export type AutofillStepReport =
        */
       readonly trustedSignInOrigins?: readonly string[];
       /**
-       * Host-only, on a `clicked` submit: where the page went on its own from the click until it
-       * settled (`SiteNavigation`), which the next step's inspection may carry the sign-in's trust
-       * along (`inspectAutofillStep`'s `redirect`). Its origins may hold part of what was typed:
-       * the host never logs, keeps or forwards them.
+       * Host-only, on a `clicked` submit of a fill whose host said what it typed before
+       * (`typedBefore`): where the page went on its own from the click until it settled
+       * (`SiteNavigation`), which the next step's inspection may carry the sign-in's trust along
+       * (`inspectAutofillStep`'s `redirect`). The page chose all of it after typing: the host never
+       * logs, keeps or forwards it, and strips it from any report it forwards, as to a minter.
        */
       readonly navigated?: SiteNavigation;
       /**
@@ -700,14 +701,19 @@ export const untrustedTarget = (
 };
 
 /**
- * A new sign-in origin the site's own redirect led to, for its host's review: the origin of the
- * screen the sign-in submitted, which the host trusted, the origin the page settled on, and each
- * navigation between them in order. The page chose these origins after the host typed, so the
- * host screens them as it would the page's own text before it shows or forwards them.
+ * A new sign-in origin the site's own redirect led to, for its host's review: the origin and path
+ * of the screen the sign-in submitted, which the host trusted, the origin the page settled on with
+ * that page's path and title, and each navigation between them in order. No path holds a query or
+ * fragment, and none of it holds a value the sign-in typed (`reportedNavigation`), yet the page
+ * chose it after the host typed, so the host screens it as it would the page's own text before it
+ * shows or forwards it.
  */
 export interface SignInRedirect {
   readonly from: string;
+  readonly fromPathname?: string | undefined;
   readonly candidate: string;
+  readonly candidatePathname?: string | undefined;
+  readonly candidateTitle?: string | undefined;
   readonly chain: readonly string[];
 }
 
@@ -747,10 +753,14 @@ const carriedRedirect = (
       trustSignInUrl: predicate,
     };
     if (untrustedTarget(targets, step, widened, 0, named) !== undefined) return undefined;
+    const { navigated } = redirect;
     const allowed = yield* redirect.review({
-      from: urlOrigin(from),
+      from: navigated.from,
+      ...(navigated.fromPathname === undefined ? {} : { fromPathname: navigated.fromPathname }),
       candidate,
-      chain: redirect.navigated.origins,
+      ...(navigated.pathname === undefined ? {} : { candidatePathname: navigated.pathname }),
+      ...(navigated.title === undefined ? {} : { candidateTitle: navigated.title }),
+      chain: navigated.origins,
     });
     return allowed ? candidate : undefined;
   });
@@ -806,11 +816,11 @@ export const inspectAutofillStep = (input: {
    * screen along the redirect the site starts from that screen's submit (`SignInRedirect`). Asked
    * only of a sign-in step's primary tab, with no popup, whose controls a destination check
    * refused: when `from` was trusted for this sign-in, the live page is where the site's own
-   * navigation from the host's click settled with nothing navigating it since
+   * navigation from the host's click on `from` settled with nothing navigating it since
    * (`redirectCandidate`), and every control sits and submits on that origin or one already
    * trusted, the host's `review` judges the new origin in context. Only its yes trusts the origin,
-   * for this inspection and its fill (`carriedSignInOrigin`); the host records the review's reason.
-   * Unset, or the review says no, the step is refused as before.
+   * for this inspection and its fill (`carriedSignInOrigin`). Unset, or the review says no, the
+   * step is refused as before.
    */
   readonly redirect?:
     | {
