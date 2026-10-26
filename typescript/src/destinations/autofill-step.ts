@@ -603,9 +603,10 @@ const isScriptAddress = (url: string) => URL.parse(url)?.protocol === "javascrip
  * destinations: navigating to such an action sends nothing, and the page's code, which can read the
  * field anyway, does the sending. A sign-in step's link whose own address is such a script
  * (`scriptHref`) is likewise judged by its frame, document and other destinations: following it
- * sends nothing. A sign-in step that types nothing, such as a sign-in provider chooser, judges
- * its submit by its frame, document and destinations other than scripts, whatever a script runs:
- * it sends nothing of the login, and the next screen is inspected before anything is typed there.
+ * sends nothing. A sign-in step that types nothing, such as a sign-in provider chooser, on a
+ * browser the host has typed nothing into yet (`judgedBeforeTyping` unset) judges its submit by its
+ * frame, document and destinations other than scripts, whatever a script runs: no script can send
+ * a typed value, and the next screen is inspected before anything is typed there.
  * A card-fill step's never is, nor any other script action or link.
  */
 export const untrustedTarget = (
@@ -616,13 +617,16 @@ export const untrustedTarget = (
     readonly authenticationOrigins: readonly string[];
     readonly paymentFrameOrigins?: readonly string[] | undefined;
     readonly trustSignInUrl?: ((url: URL) => boolean) | undefined;
+    readonly judgedBeforeTyping?: readonly string[] | undefined;
   },
   from: number,
   named?: ReadonlySet<string>,
 ) => {
   const predicate = signInUrlTrust(trust, step);
   const signIn = !step.fields.some((field) => isCardSlot(field.slot));
-  const typesNothing = signIn && step.fields.length === 0;
+  // Nothing typed on this browser yet either, so no script can carry a typed value anywhere.
+  const typesNothing =
+    signIn && step.fields.length === 0 && trust.judgedBeforeTyping === undefined;
   const trusted = (url: string, card: boolean) =>
     trustedUrl(trust.siteOrigin, trust.authenticationOrigins, url) ||
     (card && onPaymentFrameOrigin(url, trust.paymentFrameOrigins ?? [])) ||
@@ -703,8 +707,9 @@ export const untrustedTarget = (
  * destination are on the site's registrable domain or a configured sign-in origin; a sign-in
  * form's own action that is a script doing nothing, which sends nothing itself, is judged by where
  * the field sits and the form's other destinations, and a sign-in submit link whose own address is
- * such a script by where it sits and its other destinations. A sign-in step that types nothing
- * judges any script address of its submit that way, whatever the script runs. A form that
+ * such a script by where it sits and its other destinations. A sign-in step that types nothing,
+ * before anything was typed on the browser, judges any script address of its submit that way,
+ * whatever the script runs. A form that
  * submits by GET is allowed when it is clearly the login form, which Guardian judges; its values
  * land in a URL that stays byte-exact. Once the host typed into the page
  * (`judgedBeforeTyping` given), a refusal names only the origins `namedAfterTyping` allows.

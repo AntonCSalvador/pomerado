@@ -80,13 +80,18 @@ const serve = async (page: Page, pages: Readonly<Record<string, string>>) => {
   return { posts, requested };
 };
 
-const inspect = async (page: Page, step: AutofillStep<FillSlot> = signInStep) =>
+const inspect = async (
+  page: Page,
+  step: AutofillStep<FillSlot> = signInStep,
+  judgedBeforeTyping?: readonly string[],
+) =>
   Effect.runPromise(
     inspectAutofillStep({
       step,
       page: await hostPage(page),
       siteOrigin: site,
       authenticationOrigins: [],
+      ...(judgedBeforeTyping === undefined ? {} : { judgedBeforeTyping }),
     }),
   );
 
@@ -391,6 +396,23 @@ for (const [name, control] of [
     await expect(page.locator("#username")).toBeVisible();
     expect(posts).toEqual([]);
   });
+
+test("a sign-in step that types nothing is refused a link whose address runs a script once something was typed on the browser", async ({
+  page,
+}) => {
+  const { posts } = await serve(page, {
+    [site]: chooserPage('<a id="provider" href="javascript:chooseProvider(\'corp\')">Company account</a>'),
+  });
+  const inspection = await inspect(page, chooserStep, [site]);
+  expect(inspection).toMatchObject({
+    outcome: "refused",
+    reason: "credential_target_refused",
+    target: "submit",
+    failureDetail: { context: { check: "destination", part: "submit_destination" } },
+  });
+  expectOriginsOnly(inspection);
+  expect(posts).toEqual([]);
+});
 
 for (const [name, body, step, evidence] of [
   [
