@@ -1492,6 +1492,90 @@ it.each([
   expect(JSON.stringify(f.requests[steps.length + 1]?.input ?? null)).toContain("owner_not_ended");
 });
 
+// A stop condition the owner picked in an answer, which the minter recorded with mint_update and
+// then had to check, is the caller's own request too: once the check meets it, caller_input stands
+// on that update when the intent cites it, though owner_ended no longer can.
+it("ends caller_input on a stop condition the owner confirmed in an answer, citing its revision", async () => {
+  const explanation =
+    "The store redirected to its sister store, and you asked to stop then, so nothing was searched.";
+  let asked = 0;
+  let executed = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("request_input", {
+          questions: [
+            {
+              id: "store",
+              type: "choice",
+              prompt: "The store sends this browser to its sister store. Where should the tool search?",
+              options: [
+                { id: "sister", label: "Search the sister store instead" },
+                { id: "stop", label: "Keep the main store only, and stop if it redirects" },
+              ],
+            },
+          ],
+        }),
+        call("mint_update", {
+          summary: "Stop without searching when the store redirects.",
+          changes: [
+            {
+              setting: "requirement",
+              change: "add",
+              text: "Search only the main store, and stop when it redirects to the sister store.",
+            },
+          ],
+          confirmedBy: ["store"],
+          recommend: "update",
+          intent: "The owner picked the stop option.",
+        }),
+        call("execute", { ...pureExample, purpose: "explore", target: "liveBrowser" }),
+        call("report_blocked", {
+          reason: "caller_input",
+          explanation,
+          intent: "Task revision 1 requires stopping on this redirect.",
+        }),
+      ][index] ?? prose("The store redirected, so I stopped."),
+    {
+      askInput: () =>
+        Effect.sync(() => {
+          asked++;
+          return { store: { type: "choice", value: "stop" } } as const;
+        }),
+      reviewAndExecute: (_input, beforeDispatch = () => Effect.void) =>
+        beforeDispatch(readAllow).pipe(
+          Effect.zipRight(
+            Effect.sync(() => {
+              executed++;
+              return {
+                executionId: "origin_check",
+                status: "completed" as const,
+                effect: "not_sent" as const,
+                resultRef: "origin_result",
+                observations: { url: "https://sister.example.test/" },
+              };
+            }),
+          ),
+        ),
+      reviewTaskUpdate: () =>
+        Effect.succeed({ outcome: "allow" as const, rationale: "Confirmed.", reviewId: "r1" }),
+      applyTaskUpdate: () => Effect.succeed({ outcome: "applied" as const }),
+    },
+    {
+      intent: "Search the store's catalog by keyword and return each product's title and price.",
+      businessInput: { keyword: "kettle" },
+    },
+  );
+  expect(await f.run()).toMatchObject({
+    build: "incomplete",
+    blocked: { reason: "caller_input", explanation },
+    stopReason: "caller_input",
+  });
+  // It ends at its first report: the owner is asked once, and nothing runs after the check.
+  expect(f.requests).toHaveLength(4);
+  expect({ asked, executed }).toEqual({ asked: 1, executed: 1 });
+});
+
 // The owner's own choice to end the build keeps its ending, sign-in or not, as their no does.
 it("keeps owner_ended after an unconfirmed sign-in", async () => {
   const f = await fixture(
