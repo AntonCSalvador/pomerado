@@ -79,7 +79,7 @@ import { finiteCaptureGap, finiteRunnerFailure } from "./runner-failure.js";
 import { isSecretHandle } from "./secret-handles.js";
 import { fileReadbackRule } from "./file-readback.js";
 import { cardReadbackRule } from "./card-readback.js";
-import { citesCallerRequest } from "./caller-citation.js";
+import { citesCallerRequest, citesConfirmedUpdate } from "./caller-citation.js";
 import type {
   AcceptedTaskUpdate,
   AllowedExecution,
@@ -3510,14 +3510,18 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           );
         }
         // A caller_input ending stands on its intent citing the caller's own request: a field the
-        // task's input holds, or words of the request's instruction.
+        // task's input holds, or words of the request's instruction. A task update the owner
+        // confirmed in an answer is that request too, as the effective task every later review
+        // reads, so the intent may cite it instead, by its revision or its words: a stop condition
+        // the owner picked, which the build then checked and met, ends as the caller's own rule.
         if (
           reason === "caller_input" &&
-          !citesCallerRequest(intent, request.intent, taskState.businessInput)
+          !citesCallerRequest(intent, request.intent, taskState.businessInput) &&
+          !citesConfirmedUpdate(intent, taskState.updates)
         )
           return refused(
             "caller_input_not_cited",
-            "caller_input needs the caller's own request as its basis, so the build has not ended. In intent, name the request field that stops the build, or quote the words of the caller's instruction, then call report_blocked again. Prefer another reason when the site, the owner or a host check stopped it.",
+            "caller_input needs the caller's own request, or a task update the owner confirmed, as its basis, so the build has not ended. In intent, name the request field or the update's revision that stops the build, or quote the words of the caller's instruction or of that update, then call report_blocked again. Prefer another reason when the site or a host check stopped it.",
           );
         if (reason === "host_refused" && !hostRefusing && hostRefusalPassed)
           return refused(
