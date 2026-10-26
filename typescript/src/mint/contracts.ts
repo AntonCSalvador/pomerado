@@ -2261,7 +2261,8 @@ export type PublicationRecovery =
 /**
  * One publication decision, a refusal or a publication, as typed host evidence. The harness
  * writes it, never the agent, so a review reads what the host decided instead of the agent's
- * account of it. Every field is finite host metadata: no source, output or rationale text.
+ * account of it. Every field but `instruction` is finite host metadata: no source, output or
+ * rationale text.
  */
 export interface PublicationDecision {
   /** The harness's reference for this decision, unique in the build; tool results carry it. */
@@ -2287,6 +2288,12 @@ export interface PublicationDecision {
    */
   readonly failedChecks: readonly string[];
   readonly recovery: PublicationRecovery;
+  /**
+   * A refusal's instruction as `finish_build` gave it to the minter, the host's own account of
+   * what the refusal requires, screened and capped. Absent for a publication, a refusal the
+   * answer carried no instruction for, and a decision recorded before hosts kept it.
+   */
+  readonly instruction?: string;
 }
 
 /**

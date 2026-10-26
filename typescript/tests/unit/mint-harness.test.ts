@@ -1466,6 +1466,8 @@ it("records each publication decision, refused and published, through the host's
       decidedAt: expect.any(Number),
       failedChecks: ["write_not_submitted"],
       recovery: "write_completion",
+      // Whole, so a review reads the instruction's last step too.
+      instruction: Reflect.get(Object(answers[0]), "instruction"),
     },
     {
       decisionId: expect.any(String),
@@ -2112,6 +2114,48 @@ it("gives a later question review a refused-outcome publication as a revision, n
   await f.run();
   expect(reviewed).toEqual([
     expect.objectContaining({ outcome: "refused", recovery: "correct_source" }),
+  ]);
+});
+
+// A question review saw a publication refusal only as its code, reason, checks and recovery, so it
+// refused a question that relied on what the refusal's instruction requires.
+it("gives a later question review the instruction each publication refusal carried", async () => {
+  const recorded: PublicationDecision[] = [];
+  const reviewed: PublicationDecision[] = [];
+  let refusal: unknown;
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        yield* turn.actions.execute({ ...execution, purpose: "act" });
+        refusal = JSON.parse(yield* turn.actions.finish(publication));
+        yield* turn.actions.requestInput(textQuestion("May the refusal use a short code?"));
+      }),
+    {
+      publicationDecisions: {
+        record: (decision) =>
+          Effect.sync(() => {
+            recorded.push(decision);
+          }),
+        list: Effect.sync(() => recorded),
+      },
+      publish: () =>
+        Effect.fail(
+          new MintFailure({ code: "PublicationUnavailable", reason: "refusal_unreadable" }),
+        ),
+      reviewQuestion: (_request, options) =>
+        Effect.sync(() => {
+          reviewed.push(...(options?.publicationDecisions ?? []));
+          return { outcome: "allow_business" as const, rationale: "Plain." };
+        }),
+    },
+  );
+  await f.run({ ...request, effect: "write" });
+  expect(refusal).toMatchObject({ reason: "refusal_unreadable", instruction: expect.any(String) });
+  expect(reviewed).toEqual([
+    expect.objectContaining({
+      reason: "refusal_unreadable",
+      instruction: Reflect.get(Object(refusal), "instruction"),
+    }),
   ]);
 });
 
