@@ -136,6 +136,12 @@ export interface AutofillStep<Slot extends FillSlot = AutofillSlot> {
    * controls: the host then cancels that click's submission, so it submits nothing.
    */
   readonly dismiss?: string | undefined;
+  /**
+   * `keyboard`: the host presses the submit from the keyboard rather than clicking it first, as a
+   * recorded screen whose submit another element covered was sent (a recipe's `submitVia`). Never
+   * the minter's: a fill presses a covered submit from the keyboard by itself.
+   */
+  readonly submitVia?: "keyboard" | undefined;
 }
 
 /** Whether the host submits the step itself: it clicks its submit or presses its submit key. */
@@ -456,11 +462,13 @@ export type AutofillStepReport =
       /**
        * `clicked`: the host clicked the submit, or pressed the step's submit key in its last field,
        * counting a click or press that ran out of time while the next page loaded once a request
-       * for the page's main frame went out, as a form's submission sends.
+       * for the page's main frame went out, as a form's submission sends. With `via: "keyboard"`,
+       * another element caught the click, or the step said to (`submitVia`), and the host pressed
+       * Enter on that same submit instead, once focus landed on it.
        * `failed`: the click or press threw before any such request went out.
        * `blocked`: another element sat over the submit and caught the host's click (`blockedBy`),
-       * so the click never reached the submit and nothing was sent; the fields still hold what
-       * was typed.
+       * and focus would not land on the submit for a press from the keyboard, so nothing was sent;
+       * the fields still hold what was typed.
        * `refused`: after the fill the host refused a control where it then sat or submitted.
        * `stayed_disabled`: the submit stayed disabled after the fields were filled, through the
        * host's wait for the page to enable it, so the host never clicked it.
@@ -484,6 +492,8 @@ export type AutofillStepReport =
        * after the page's own handlers ran on the click, so what the step filled may have gone out.
        */
       readonly clicked?: true;
+      /** A `clicked` submit the host pressed from the keyboard: Enter on the submit itself. */
+      readonly via?: "keyboard";
       /** What caught a `blocked` click, by its markup's own names, never its text or a value. */
       readonly blockedBy?: typeof CoveringElement.Type;
       /** The primary page after the submit settled, byte-exact like every URL. */
