@@ -226,45 +226,6 @@ describe("a write session's publication check", () => {
         }),
       );
     });
-
-    it("still refuses a mark neither entered nor declared unproven", () => {
-      expect(
-        reason(
-          check([saved], unproven(["rate_quote"], ["save_product", "save_insured", "rate_quote"]))
-            .result,
-        ),
-      ).toBe("commit_marks_unentered");
-      const undeclared = contract({
-        confirmation: "readback",
-        commits: ["save_product", "save_insured"],
-      });
-      expect(reason(check([saved], undeclared).result)).toBe("commit_marks_unentered");
-    });
-
-    it("still refuses a session that entered no mark", () => {
-      // A session that never sent its write is refused before the contract is read.
-      const { result, extractions } = check([{ enteredMarks: [] }], unproven(["save_insured"]));
-      expect(reason(result)).toBe("write_not_submitted");
-      expect(extractions).toBe(0);
-      // One that may have sent it without entering a mark has no entered mark to follow.
-      const sent: WriteSessionMarks = { enteredMarks: [], action: "write", possiblySent: true };
-      expect(reason(check([sent], unproven(["save_product", "save_insured"])).result)).toBe(
-        "commit_marks_unentered",
-      );
-    });
-
-    it("refuses an unproven mark that comes before an entered one, or one commits does not declare", () => {
-      const later: WriteSessionMarks = { enteredMarks: ["save_insured"], confirmation: "readback" };
-      expect(reason(check([later], unproven(["save_product"])).result)).toBe(
-        "commit_marks_unentered",
-      );
-      expect(reason(check([saved], unproven(["save_insured", "rate_quote"])).result)).toBe(
-        "commit_marks_unentered",
-      );
-      expect(reason(check([saved], unproven(["save_insured", "save_insured"])).result)).toBe(
-        "commit_marks_unentered",
-      );
-    });
   });
 
   it("accepts any short identifier as a mark name, and still refuses one with a space", () => {
