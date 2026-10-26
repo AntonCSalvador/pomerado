@@ -426,7 +426,10 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
     | "confirmation_undeclared"
     /** A write session's composed script names none of its commit steps in `write.commits`. */
     | "commit_marks_undeclared"
-    /** The composed script declares a commit step no act step of the session ever entered. */
+    /**
+     * The composed script declares a commit step no act step of the session ever entered, and
+     * `write.commitsUnproven` does not name it as one after the last mark the session entered.
+     */
     | "commit_marks_unentered"
     /**
      * The session has not settled every commit mark of its recorded write path;
