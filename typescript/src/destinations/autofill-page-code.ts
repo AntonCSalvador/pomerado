@@ -119,6 +119,7 @@ return {
   ...(submitKey === null || submit === null ? {} : { keySubmit: { submitControls: submit.submitControls } }),
   ...(popupTargetId === undefined ? {} : { popupTargetId }),
   url: primary.url(),
+  document: await documentStart(),
 };`;
 
 /**
@@ -751,7 +752,24 @@ const noteRequest = (request) => {
 const noteCommit = (frame) => {
   if (frame === primary.mainFrame()) committed = true;
 };
+// The origin of each navigation of the main frame from the click until the page settled, in order,
+// server redirects included, and the page's address at the click: where the page went on its own
+// from the host's submit, and from where.
+const clickedFrom = primary.url();
+const hops = [];
+const noteHop = (request) => {
+  try {
+    if (request.isNavigationRequest() && request.frame() === primary.mainFrame())
+      hops.push(new URL(request.url()).origin);
+  } catch {}
+};
+// An answer the call returns before the page settled, once it stopped noting navigations.
+const unwatched = (answer) => {
+  primary.off("request", noteHop);
+  return answer;
+};
 primary.on("request", noteRequest);
+primary.on("request", noteHop);
 primary.on("framenavigated", noteCommit);
 let late = false;
 // "keyboard" once the host pressed Enter on the submit itself, which activates it as a click does
@@ -791,12 +809,12 @@ try {
     const blockedBy = intercepted
       ? await submit.locator.evaluate(${coveringCode}, undefined, { timeout: ${elementReadMs} }).catch(() => null)
       : null;
-    if (blockedBy === null) return { submit: "failed", url: primary.url() };
+    if (blockedBy === null) return unwatched({ submit: "failed", url: primary.url() });
     // The covered submit is pressed from the keyboard instead; the element over it is never clicked.
     try {
-      if (!(await pressSubmit())) return { submit: "blocked", blockedBy, url: primary.url() };
+      if (!(await pressSubmit())) return unwatched({ submit: "blocked", blockedBy, url: primary.url() });
     } catch {
-      if (!requested) return { submit: "failed", url: primary.url() };
+      if (!requested) return unwatched({ submit: "failed", url: primary.url() });
       late = true;
     }
   }
@@ -814,8 +832,11 @@ const lateCommit = !late
 let submission = await refusedSubmission();
 if (submission === null && ((await navigated) || (await lateCommit)))
   await primary.waitForLoadState("domcontentloaded", { timeout: ${call.settleMs} }).catch(() => undefined);
+primary.off("request", noteHop);
 submission ??= await refusedSubmission();
 if (submission !== null) return { submission, url: primary.url() };
+const settled = await documentStart();
+const settledTitle = await primary.title().catch(() => undefined);
 // What the page shows once the submit settled, never a value, for the minter's next step.
 const controls = await pageControls().catch(() => null);
 const newAlerts =
@@ -824,6 +845,12 @@ return {
   submit: "clicked",
   ...(via === null ? {} : { via }),
   url: primary.url(),
+  navigated: {
+    clicked: clickedFrom,
+    origins: hops,
+    ...(settled === undefined ? {} : { document: settled }),
+    ...(typeof settledTitle === "string" ? { title: settledTitle } : {}),
+  },
   ...(controls === null ? {} : { controls: newAlerts === null ? controls : { ...controls, newAlerts } }),
 };`;
 };
@@ -958,7 +985,7 @@ ${fill === undefined ? "" : `if (popupTargetId !== ${JSON.stringify(fill.popupTa
 }
 ${formControlsCode}
 ${locateCode}
-${fill === undefined ? "" : documentStartCode}
+${documentStartCode}
 const observed = ${JSON.stringify(observed)};
 const selectors = ${JSON.stringify(step.fields.map((field) => field.selector))};
 const questionSelectors = ${JSON.stringify(step.fields.map((field) => questionRead(field, fill === undefined)))};
