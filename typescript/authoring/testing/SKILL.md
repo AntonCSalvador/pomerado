@@ -191,7 +191,11 @@ form refusing that input, with its own validation message or, where the captures
 responses, a 400, 413, 414 or 422 response to the request its form sent. A refusal of the request
 your tool made proves nothing, since that request can be wrong, and neither does a 401, 403, 404,
 405, 429 or 5xx. Then change the expectation to what the site shows, and name that capture in the
-case's `purpose` and in `coverage`; review accepts the change only against it. Where the site
+case's `purpose` and in `coverage`; review accepts the change only against it. Name a capture by
+its exact path, a snapshot listed in `captures/index.json` or
+`captures/results/<executionId>.json`, not by an execution ID alone: a later look can drop an
+earlier snapshot from the index, while its file stays readable by path. Prefer the snapshot that
+shows the site's own controls applying the input. Where the site
 itself bounds a value, such as its own field's maximum length, put that bound in the input schema
 rather than a case. Before you run again,
 fix everything the batch revealed: read every failure and every output, and batch as many fixes
