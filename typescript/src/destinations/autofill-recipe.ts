@@ -89,10 +89,18 @@ export const LegacyAutofillRecipe = Schema.Struct({
     openPath: Schema.optional(Schema.String.pipe(Schema.maxLength(2_000))),
   }),
 });
+/**
+ * A version 2 step may also name `matchSelector` on a device approval: the element its screen shows
+ * a number in for the owner to pick on their device, which a replay reads again and shows the owner
+ * when it is 1 to 3 digits. It rides in every version from 2 without one of its own. A host that
+ * predates it ignores it in a version 2 recipe and refuses a version 4 to 8 recipe that has it, as
+ * a host that predates `refills` refuses one with that.
+ */
 const PopupRecipeStep = Schema.Struct({
   ...RecipeStep.fields,
   popup: Schema.optional(AutofillPopup),
   approval: Schema.optional(AutofillApproval),
+  matchSelector: Schema.optional(Selector),
 });
 /** Version 2 keeps a host that does not know it from dropping popup metadata and filling the primary tab. */
 export const PopupAutofillRecipe = Schema.Struct({
@@ -431,6 +439,8 @@ interface RecordedRecipeStep {
   readonly origin?: "workspace" | undefined;
   readonly popup?: AutofillRecipeStep["popup"] | undefined;
   readonly approval?: AutofillRecipeStep["approval"] | undefined;
+  /** A device approval's element that shows the number the owner picks on their device. */
+  readonly matchSelector?: string | undefined;
   readonly rejectedMarkers?: AutofillRecipeStep["rejectedMarkers"] | undefined;
   /** With each identifier field's accepted kinds, never a value. */
   readonly fields: readonly AutofillField[];
@@ -463,6 +473,7 @@ export const recipeStep = (step: RecordedRecipeStep): AutofillRecipeStep => ({
   page: step.page,
   ...((step.anySegments ?? []).length === 0 ? {} : { anySegments: step.anySegments }),
   ...(step.approval === undefined ? {} : { approval: step.approval }),
+  ...(step.matchSelector === undefined ? {} : { matchSelector: step.matchSelector }),
   ...(step.popup === undefined ? {} : { popup: step.popup }),
   ...(step.rejectedMarkers === undefined ? {} : { rejectedMarkers: step.rejectedMarkers }),
   fields: step.fields.map((field) =>

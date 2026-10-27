@@ -94,6 +94,17 @@ export interface AutofillHooks<E = unknown, V extends string = string> {
     popup?: AutofillStep["popup"],
   ) => Effect.Effect<boolean, E>;
   /**
+   * The number a device approval's screen shows for the owner to pick on their device: the trimmed
+   * text of the first visible element `selector` names on the screen's page, or undefined. The
+   * shared code keeps it only when it is 1 to 3 digits (`approvalNumberOf`). A host without it
+   * asks for the approval with no number.
+   */
+  readonly approvalNumber?: (
+    selector: string,
+    screenPage: string,
+    popup?: AutofillStep["popup"],
+  ) => Effect.Effect<string | undefined, E>;
+  /**
    * Lets a replay that sent the login cleanly and ended on a page that can't tell, such as an
    * account picker the site shows before the marker, go on signed in. A host may check the
    * identifiers the sign-in used, binding nothing. Absent, such a replay fails its sign-in check.
@@ -162,6 +173,8 @@ export interface SecurityAnswerFills {
 interface AutofillRecordedStep {
   readonly popup?: AutofillRecipeStep["popup"];
   readonly approval?: AutofillRecipeStep["approval"];
+  /** A device approval's element that shows the number the owner picks on their device. */
+  readonly matchSelector?: string;
   readonly rejectedMarkers?: AutofillRecipeStep["rejectedMarkers"];
   /**
    * With each identifier field's accepted, held and sent kinds, never a value, and what named each
