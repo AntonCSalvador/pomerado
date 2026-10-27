@@ -123,7 +123,7 @@ When the site applied a context the caller did not set, such as a location it pi
 as the segment's `context`, so a different one sets `list_changed`. Never promise a snapshot the
 site does not keep.
 
-No case needs to show a changed list: a build can't make the site's list change, and the publication review counts these fields as core's, so prefer leaving it out of `notTested` and asking no question about it.
+No case needs to show a changed list: a build can't make the site's list change, and the publication review counts list_changed and the other paging fields core adds as core's, so prefer leaving it out of `notTested` and asking no question about it.
 
 ## Stop
 

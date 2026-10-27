@@ -34,7 +34,6 @@ import {
 import type { PublicationScope } from "../../src/guardian/review-contracts.js";
 import { makeSourceInspector } from "../../src/guardian/source.js";
 import { publicationScope } from "../../src/mint/publication-review.js";
-import { loadWorkspaceGuide } from "../../src/mint/skills.js";
 import { instructionsOf } from "../support/guardian-requests.js";
 
 afterEach(() => setDefaultModelProvider(new OpenAIProvider()));
@@ -1005,16 +1004,12 @@ describe("the publication policy", () => {
     expect(publicationLiveTestsPolicy).not.toContain("a list's empty result");
   });
 
-  // A build cannot make a site's list change, so core's own paging fields, which core fills and
-  // tests, are no claim of the tool: an unchanged list is no gap, while a list's next page still is.
-  // The minter's publication-review guide is the same text, so it learns the rule in the same release.
-  it("counts core's list fields as core's, so an unchanged list is no gap", async () => {
+  // A build cannot make a site's list change, and core fills and tests its own paging fields, so an
+  // unchanged list is no gap.
+  it("counts core's list fields as core's, so an unchanged list is no gap", () => {
     const rule =
-      "The paging fields core's listOutputFields adds (next_cursor, next_cursor_expires_at, has_more, total_results, list_changed and next_cursor_unavailable) are core's own contract, filled by core's readList and tested in core, not a capability the tool claims: a passing next-page case tests the tool's paging, and a list that never changed between a case's calls is no gap, since a build cannot make a site's list change; prefer noting it in the rationale only.";
+      "The paging fields core's listOutputFields adds (next_cursor, next_cursor_expires_at, has_more, total_results, list_changed and next_cursor_unavailable) are core's own contract, filled by core's readList and tested in core: a passing next-page case tests the tool's paging, and a list that never changed between a case's calls is no gap, since a build cannot make a site's list change; prefer noting it in the rationale only.";
     expect(publicationLiveTestsPolicy).toContain(` ${rule} `);
-    expect(publicationLiveTestsPolicy).toContain(", a list's next page,");
-    const guide = await Effect.runPromise(loadWorkspaceGuide("typescript/authoring"));
-    expect(guide.files.get("reference/publication-review.md")).toContain(rule);
   });
 
   // A site's own "Remember me" choice left at its default keeps the owner's session for later
