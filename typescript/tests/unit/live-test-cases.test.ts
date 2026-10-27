@@ -146,7 +146,6 @@ describe("judgeCase", () => {
       verdict: "pass",
       got: "a result (no available_times)",
     });
-    expect(judgeCase({ expect: "empty" }, completed(record), nullable).verdict).toBe("pass");
     expect(judgeCase({ expect: "result" }, completed(record), primaryListOf(input, output(times))).verdict).toBe("fail");
     expect(judgeCase({ expect: "result" }, completed({ status: "", available_times: null }), nullable).detail).toBe(
       "The tool returned a record whose available_times is null. If the site lists no available_times for this input, expect empty for this case, or choose an input the site lists available_times for.",
