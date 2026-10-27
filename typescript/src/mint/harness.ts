@@ -893,7 +893,7 @@ const loginRequestInstruction = (login: "held" | "supplied" | "inspect" | "unava
  * example's answer, and how to publish on it.
  */
 const siteRefusalPublication =
-  "If the site said no to the example's valid inputs before any save, such as a product it does not offer for these facts, that no is the example's answer: the act step returns it right after reading it, before entering any commit mark, as a refusal its output schema declares (`status` `\"refused\"`, a listed `reason` and `site_message`). Compose the whole path the request asks for, list every save step in write.commits and again in write.commitsUnproven each one the session never reached, and call finish_build naming that act step. Never change the caller's facts to get past the no.";
+  "If the site said in its own words that it declines the example's valid inputs before any save (not a field error on your fill, a failed page or a challenge), such as a product it does not offer for these facts, that no is the example's answer: the act step returns it right after reading it, before entering any commit mark, as a refusal its output schema declares (`status` `\"refused\"`, a listed `reason` and `site_message`). Compose the whole path the request asks for, with that refusal in its output schema, list every save step in write.commits and again in write.commitsUnproven each one the session never reached, and call finish_build naming that act step. Keep the caller's facts as given.";
 
 /** One coding flow. Durable dispatch claims, leases, authority and cleanup belong to the host. */
 export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure, MintServices> =>

@@ -286,15 +286,14 @@ export const checkWriteSession = <
 }) =>
   Effect.gen(function* () {
     const { session, step } = check;
-    const refuse = (reason: NonNullable<MintFailure["reason"]>, writePathMarks?: readonly string[]) =>
-      sessionRefusal(reason, writePathMarks, check.publishOnRefusal === true);
-    // The site's own no on the step named for publication, which saved and confirmed nothing.
-    const siteRefusal =
+    // The step named for publication saved and confirmed nothing, so the site's own no may stand.
+    const refusable =
       check.publishOnRefusal === true &&
       step.confirmation === undefined &&
-      step.enteredMarks?.length === 0
-        ? step.refused
-        : undefined;
+      step.enteredMarks?.length === 0;
+    const refuse = (reason: NonNullable<MintFailure["reason"]>, writePathMarks?: readonly string[]) =>
+      sessionRefusal(reason, writePathMarks, refusable);
+    const siteRefusal = refusable ? step.refused : undefined;
     if (siteRefusal === undefined && !sessionSentWrite(session))
       return yield* refuse("write_not_submitted");
     const enteredMarks = sessionEnteredMarks(session.steps);

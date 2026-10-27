@@ -276,8 +276,9 @@ export class MintFailure extends Data.TaggedError("MintFailure")<{
   readonly writePathMarks?: readonly string[];
   /**
    * Set on a `write_not_submitted` or `commit_marks_unentered` refusal when the host passed
-   * `checkWriteSession` its `publishOnRefusal`, so the minter hears how to publish on the site's
-   * own no to the example. Absent otherwise, and the minter hears what it always has.
+   * `checkWriteSession` its `publishOnRefusal` and the step named for publication entered no commit
+   * mark and recorded no confirmation, so the minter hears how to publish on the site's own no to
+   * the example. Absent otherwise, and the minter hears what it always has.
    */
   readonly publishesOnRefusal?: true;
   /** Where the input schema rejected the input a `contract_input_mismatch` refusal names. */
