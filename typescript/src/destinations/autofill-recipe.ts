@@ -92,8 +92,9 @@ export const LegacyAutofillRecipe = Schema.Struct({
 /**
  * A version 2 step may also name `matchSelector` on a device approval: the element its screen shows
  * a number in for the owner to pick on their device, which a replay reads again and shows the owner
- * when it is 1 to 3 digits. It rides in every version from 2 without one of its own: a host that
- * does not know it asks for the approval as before.
+ * when it is 1 to 3 digits. It rides in every version from 2 without one of its own. A host that
+ * predates it ignores it in a version 2 recipe and refuses a version 4 to 8 recipe that has it, as
+ * a host that predates `refills` refuses one with that.
  */
 const PopupRecipeStep = Schema.Struct({
   ...RecipeStep.fields,

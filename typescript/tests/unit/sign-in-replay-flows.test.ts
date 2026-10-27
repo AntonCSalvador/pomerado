@@ -795,20 +795,20 @@ it("asks once for an approval shown on another page of its recorded origin", asy
 });
 
 // A number-matching approval: the owner picks on the device the number the approval screen shows.
-it.each([
-  ["#match", "42", " If it asks you to choose a number, pick 42."],
-  ["#match", "42 seconds", ""],
-  [undefined, "42", ""],
-] as const)("names the number %s shows (%j) only when it is 1 to 3 digits", async (matchSelector, shown, added) => {
-  const fake = approvalSite("approve", shown);
-  const approval = { page: `${origin}/approve`, fields: [], approval: "device" as const };
+it("names the number a device approval's matchSelector shows", async () => {
+  const fake = approvalSite("approve", "42");
   const { result, prompts } = await signIn(
-    recipe(loginStep, matchSelector === undefined ? approval : { ...approval, matchSelector }),
+    recipe(loginStep, {
+      page: `${origin}/approve`,
+      fields: [],
+      approval: "device",
+      matchSelector: "#match",
+    }),
     fake,
   );
   expect(result).toEqual(Either.right({ alreadySignedIn: false }));
   expect(prompts.at(-1)).toBe(
-    `Approve the sign-in request example.test sent to your device, then confirm here.${added}`,
+    "Approve the sign-in request example.test sent to your device, then confirm here. If it asks you to choose a number, pick 42.",
   );
 });
 

@@ -1,9 +1,5 @@
 import { Effect, Schema } from "effect";
-import {
-  approvalNumberOf,
-  approvalNumberPattern,
-  type AutofillPopup,
-} from "./autofill-contracts.js";
+import { approvalNumberPattern, type AutofillPopup } from "./autofill-contracts.js";
 import { autofillPageCode } from "./autofill-page-code.js";
 import type { AutofillPage } from "./autofill-step.js";
 import { sameSite } from "../runtime/same-site.js";
@@ -62,9 +58,7 @@ for (const frame of primary.frames()) {
 return null;`,
       15,
     )
-    .pipe(
-      Effect.map((result) => approvalNumberOf(typeof result === "string" ? result : undefined)),
-    );
+    .pipe(Effect.map((result) => (typeof result === "string" ? result : undefined)));
 };
 
 /** Reads only whether a recorded rejection marker is visible on its screen's allowed frames. */

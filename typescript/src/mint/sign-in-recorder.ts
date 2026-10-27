@@ -670,7 +670,9 @@ export const makeSignInRecorder = (input: {
         page: screen.page,
         fields: [],
         approval: step.approval,
-        ...(step.matchSelector === undefined ? {} : { matchSelector: step.matchSelector }),
+        ...(step.approval === "device" && step.matchSelector !== undefined
+          ? { matchSelector: step.matchSelector }
+          : {}),
         ...(step.popup === undefined ? {} : { popup: step.popup }),
       });
       return {

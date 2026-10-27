@@ -134,7 +134,7 @@ its text. The host rereads the question before privately filling the answer. No 
 you, Guardian, generated code or the recipe. One-time and recovery codes keep their own slots.
 
 Every selector a `signInStep` sends, in `fields`, `submit`, `methods`, `questionSelector`,
-`dismiss`, `rejectedMarkers` and `signedIn`, is a Playwright selector string, not a locator call as probes and
+`dismiss`, `rejectedMarkers`, `matchSelector` and `signedIn`, is a Playwright selector string, not a locator call as probes and
 the examples write. Prefer a stable `#id`, `[name=...]` or `data-testid=` selector. A role selector
 writes its options as attributes:
 
@@ -325,11 +325,11 @@ password again without a code is no such screen: treat it as a possible rejectio
 When an observed screen asks the caller to follow an email link or approve on another device,
 submit `signInStep: { approval: "email_link" }` or `{ approval: "device" }`, with the same popup
 relation if that screen is in the popup. When an approval screen shows a number the owner must
-pick on their device, name it with matchSelector; the host shows that number in the owner's
-confirmation. The host asks the caller through a protected confirmation after the identifier was
-submitted. Never ask an ordinary question for this approval or request the link, code or device
-contents. After confirmation, explore the account page and submit its signed-in indicator;
-confirmation alone does not verify the session.
+pick on their device, name the element that shows it as `matchSelector`; the host shows that
+number in the owner's confirmation. The host asks the caller through a protected confirmation
+after the identifier was submitted. Never ask an ordinary question for this approval or request
+the link, code or device contents. After confirmation, explore the account page and submit its
+signed-in indicator; confirmation alone does not verify the session.
 
 Never accept optional setup the site offers during or right after sign-in, such as creating a
 passkey, adding a phone number or turning on two-factor. Record its decline control ("Not now",

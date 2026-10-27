@@ -22,7 +22,7 @@ export const approvalNumber = <E>(
 ) => {
   const read = hooks.approvalNumber;
   if (matchSelector === undefined || read === undefined) return Effect.succeed(undefined);
-  return Effect.suspend(() => read.call(hooks, matchSelector, page, popup)).pipe(
+  return read.call(hooks, matchSelector, page, popup).pipe(
     Effect.map(approvalNumberOf),
     Effect.orElseSucceed(() => undefined),
   );
