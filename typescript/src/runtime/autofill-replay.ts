@@ -19,7 +19,7 @@ import {
 import { alreadySignedIn, makeReplay, type Replay, workspaceOf } from "./autofill-replay-session.js";
 import { endsAtCodeScreen, lastScreenGone } from "./autofill-replay-code-screen.js";
 import { admitScreen, noteExactSent } from "./autofill-replay-workspace.js";
-import { approvalScreen } from "./autofill-replay-approval.js";
+import { approvalNumber, approvalScreen, withApprovalNumber } from "./autofill-replay-approval.js";
 import { settleCarried } from "./autofill-replay-fill.js";
 import {
   codeScreenOf,
@@ -211,13 +211,26 @@ const runScreen = <E extends YieldableError, V extends string, L extends Autofil
       );
       if (approval === "signed_in") return approval;
       if (approval === "screen_changed") return replay.outcome(approval);
+      // A device approval may have the owner pick the number its screen shows (`matchSelector`).
+      const number =
+        recorded.approval === "device"
+          ? yield* approvalNumber(
+              input.hooks,
+              recorded.matchSelector,
+              inspection.page,
+              recorded.popup,
+            )
+          : undefined;
       const answer = yield* askOne(input, {
         id: "approved",
         type: "confirm",
         prompt:
           recorded.approval === "email_link"
             ? `Open the sign-in link ${input.site} emailed you, then confirm here.`
-            : `Approve the sign-in request ${input.site} sent to your device, then confirm here.`,
+            : withApprovalNumber(
+                `Approve the sign-in request ${input.site} sent to your device, then confirm here.`,
+                number,
+              ),
       });
       if (answer?.type !== "confirm" || !answer.value.confirmed)
         return replay.outcome("approval_declined");
@@ -225,6 +238,7 @@ const runScreen = <E extends YieldableError, V extends string, L extends Autofil
         page: inspection.page,
         fields: [],
         approval: recorded.approval,
+        ...(recorded.matchSelector === undefined ? {} : { matchSelector: recorded.matchSelector }),
         ...(recorded.popup === undefined ? {} : { popup: recorded.popup }),
       });
       return "continue" as const;
